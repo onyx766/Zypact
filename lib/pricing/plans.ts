@@ -70,7 +70,7 @@ export const PRICING_PLANS: Record<PlanKey, PricingPlan> = {
       "Competitor recommendation preview",
       "Gap Map 2D preview",
       "One priority visibility gap",
-      "No saved projects",
+      "Keep your snapshot in your account",
     ],
   },
 

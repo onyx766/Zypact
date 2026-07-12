@@ -1,0 +1,17 @@
+node_modules
+.next
+.env
+.env.local
+.env.*.local
+.DS_Store
+legacy-backups
+*.backup-*.tsx
+*.backup-*.css
+*.before-design-pass-*.tsx
+*.before-design-pass-*.css
+*.tailwind-broken-*.tsx
+*.with-signin-*.tsx
+tailwind.config.broken-*.ts
+tailwind.config.disabled-*.ts
+postcss.config.disabled-*.js
+postcss.config.disabled-*.mjs

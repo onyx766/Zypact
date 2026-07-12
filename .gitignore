@@ -15,3 +15,6 @@ tailwind.config.broken-*.ts
 tailwind.config.disabled-*.ts
 postcss.config.disabled-*.js
 postcss.config.disabled-*.mjs
+.vercel
+.env*
+tsconfig.tsbuildinfo

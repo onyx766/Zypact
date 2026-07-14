@@ -36,6 +36,7 @@ interface Args {
   domain: string;
   category: string;
   userId: string;
+  projectId?: string;
   prompts: number;
   runs: number;
   promptsFile?: string;
@@ -110,6 +111,7 @@ function parseArgs(argv: string[]): Args {
     "category",
     "userId",
     "user-id",
+    "project-id",
     "prompts",
     "runs",
     "prompts-file",
@@ -154,6 +156,22 @@ function parseArgs(argv: string[]): Args {
   const promptsFile = get("prompts-file")?.trim();
   const competitors = parseCsv(get("competitors"));
   const allowUnguardedFrame = has("allow-unguarded-frame");
+  const projectId = get("project-id")?.trim();
+
+  if (
+    projectId &&
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      projectId
+    )
+  ) {
+    fail("--project-id must be a valid UUID.");
+  }
+
+  if (projectId && has("force-new-project")) {
+    fail(
+      "--project-id cannot be combined with --force-new-project."
+    );
+  }
 
   if (promptsFile && competitors.length === 0 && !allowUnguardedFrame) {
     fail("Missing --competitors. Custom prompts require an explicit competitor frame. Use --allow-unguarded-frame only for internal tests.");
@@ -168,6 +186,7 @@ function parseArgs(argv: string[]): Args {
     domain,
     category,
     userId: get("userId")?.trim() || get("user-id")?.trim() || DEFAULT_USER_ID,
+    projectId,
     prompts: parsePositiveInt(get("prompts"), DEFAULT_PROMPTS, "--prompts"),
     runs: parsePositiveInt(get("runs"), DEFAULT_RUNS, "--runs"),
     promptsFile,
@@ -277,6 +296,31 @@ function estimatedCost(liveProbeCalls: number): number {
 }
 
 async function findExistingProject(args: Args): Promise<Project | null> {
+  if (args.projectId) {
+    const project =
+      await getDb().getProject(args.projectId);
+
+    if (!project) {
+      throw new Error(
+        `Reserved project ${args.projectId} was not found.`
+      );
+    }
+
+    const requestedDomain =
+      hostnameOf(args.domain).toLowerCase();
+
+    const projectDomain =
+      hostnameOf(project.domain).toLowerCase();
+
+    if (projectDomain !== requestedDomain) {
+      throw new Error(
+        `Reserved project domain ${projectDomain} does not match requested domain ${requestedDomain}.`
+      );
+    }
+
+    return project;
+  }
+
   if (args.forceNewProject) return null;
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -284,18 +328,26 @@ async function findExistingProject(args: Args): Promise<Project | null> {
   if (!url || !key) return null;
 
   const host = hostnameOf(args.domain);
-  const supabase = createClient(url, key, { auth: { persistSession: false } });
+  const supabase = createClient(url, key, {
+    auth: {
+      persistSession: false,
+    },
+  });
+
   const { data, error } = await supabase
     .from("projects")
     .select("id")
     .eq("user_id", args.userId)
     .eq("domain", host)
-    .order("created_at", { ascending: false })
+    .order("created_at", {
+      ascending: false,
+    })
     .limit(1)
     .maybeSingle();
 
   if (error) throw error;
   if (!data?.id) return null;
+
   return getDb().getProject(data.id);
 }
 
@@ -466,32 +518,119 @@ async function runMissingProbes(args: Args, project: Project, promptTargets: Gen
   return { attempted, saved, usedMock };
 }
 
-async function ensureProject(args: Args): Promise<{ project: Project; created: boolean }> {
-  const existing = await findExistingProject(args);
+async function ensureProject(
+  args: Args
+): Promise<{
+  project: Project;
+  created: boolean;
+}> {
+  const existing =
+    await findExistingProject(args);
+
   if (existing) {
-    if (args.category && existing.category !== args.category) {
-      await getDb().updateProjectCategory(existing.id, args.category);
-      return { project: { ...existing, category: args.category }, created: false };
+    const mirror =
+      await getDb().getMirrorProfile(
+        existing.id
+      );
+
+    if (!mirror && args.projectId) {
+      const scan = await runMirrorScan({
+        websiteUrl:
+          normalizeWebsiteUrl(args.domain),
+        companyName: args.brand,
+        userId: existing.userId,
+        projectId: existing.id,
+      });
+
+      if (!scan.ok) {
+        throw new Error(
+          `Mirror scan failed: ${scan.error}`
+        );
+      }
+
+      if (
+        args.category &&
+        scan.project.category !==
+          args.category
+      ) {
+        await getDb().updateProjectCategory(
+          scan.project.id,
+          args.category
+        );
+      }
+
+      return {
+        project: {
+          ...scan.project,
+          category:
+            args.category ||
+            scan.project.category,
+        },
+        created: false,
+      };
     }
-    return { project: existing, created: false };
+
+    if (
+      args.category &&
+      existing.category !== args.category
+    ) {
+      await getDb().updateProjectCategory(
+        existing.id,
+        args.category
+      );
+
+      return {
+        project: {
+          ...existing,
+          category: args.category,
+        },
+        created: false,
+      };
+    }
+
+    return {
+      project: existing,
+      created: false,
+    };
   }
 
   const scan = await runMirrorScan({
-    websiteUrl: normalizeWebsiteUrl(args.domain),
+    websiteUrl:
+      normalizeWebsiteUrl(args.domain),
     companyName: args.brand,
     userId: args.userId,
   });
-  if (!scan.ok) throw new Error(`Mirror scan failed: ${scan.error}`);
-  if (args.category) await getDb().updateProjectCategory(scan.project.id, args.category);
-  return { project: { ...scan.project, category: args.category || scan.project.category }, created: true };
+
+  if (!scan.ok) {
+    throw new Error(
+      `Mirror scan failed: ${scan.error}`
+    );
+  }
+
+  if (args.category) {
+    await getDb().updateProjectCategory(
+      scan.project.id,
+      args.category
+    );
+  }
+
+  return {
+    project: {
+      ...scan.project,
+      category:
+        args.category ||
+        scan.project.category,
+    },
+    created: true,
+  };
 }
 
 async function ensureMirrorProfile(project: Project): Promise<"run" | "reuse"> {
   const mirror = await getDb().getMirrorProfile(project.id);
   if (mirror) return "reuse";
-  // Existing projects created outside this runner but missing a mirror profile
-  // cannot be resumed by the old runMirrorScan API without creating a new project.
-  throw new Error(`Project ${project.id} has no Mirror Profile. Create a fresh scan for this domain/user.`);
+  throw new Error(
+    `Project ${project.id} has no Mirror Profile after project preparation.`
+  );
 }
 
 async function ensurePrompts(args: Args, project: Project): Promise<"generate" | "reuse" | "file"> {
@@ -662,6 +801,11 @@ function printPlan(args: Args, plan: StagePlan, outputPath: string, missingProbe
   console.log(`domain         : ${hostnameOf(args.domain)}`);
   console.log(`category       : ${args.category}`);
   console.log(`userId         : ${args.userId}`);
+  if (args.projectId) {
+    console.log(
+      `reserved project: ${args.projectId}`
+    );
+  }
   console.log(`probe mode     : ${args.probeMode}`);
   if (args.forceNewProject) console.log(`force new      : yes`);
   if (args.promptsFile) {

@@ -15,12 +15,45 @@ function check(name: string, ok: boolean) {
 }
 
 const script = readFileSync("scripts/mvp-scan.ts", "utf-8");
+const clientFlow = readFileSync(
+  "scripts/run-mvp-client-flow.ts",
+  "utf-8"
+);
 const pkg = JSON.parse(readFileSync("package.json", "utf-8")) as { scripts?: Record<string, string> };
 
 check("mvp:scan npm command is registered", pkg.scripts?.["mvp:scan"] === "tsx scripts/mvp-scan.ts");
 check("runner supports --dry-run", script.includes('has("dry-run")'));
 check("runner supports --probe-mode live|simulated", script.includes('probeModeRaw !== "live"') && script.includes('probeModeRaw !== "simulated"'));
 check("runner supports --prompts and --runs", script.includes('get("prompts")') && script.includes('get("runs")'));
+check(
+  "runner supports an explicit reserved project",
+  script.includes('"project-id"') &&
+    script.includes("args.projectId")
+);
+check(
+  "runner rejects conflicting project creation flags",
+  script.includes(
+    "--project-id cannot be combined with --force-new-project."
+  )
+);
+check(
+  "runner validates the reserved project domain",
+  script.includes(
+    "does not match requested domain"
+  )
+);
+check(
+  "runner passes the reserved project into Mirror Scan",
+  script.includes(
+    "projectId: existing.id"
+  )
+);
+check(
+  "client flow forwards the reserved project",
+  clientFlow.includes(
+    'scanArgs.push(\n      "--project-id",'
+  )
+);
 check("runner has a budget guard", script.includes("Budget guard stopped scan before paid probes"));
 check("runner resumes by counting existing prompt/run rows", script.includes("existingRunCount") && script.includes("missing = Math.max"));
 check("runner persists rawProbeRequest", script.includes("rawProbeRequest: live.rawProbeRequest") && script.includes("rawProbeRequest: prompt.prompt"));

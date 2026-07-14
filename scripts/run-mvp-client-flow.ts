@@ -38,6 +38,7 @@ function usage(): never {
     --scan-out <scan-report.md> \\
     --package-out <client-package-dir> \\
     [--prompts-file <prompts.txt>] \\
+    [--project-id <reserved-project-uuid>] \\
     [--force-new-project] \\
     [--probe-mode live|simulated] \\
     [--budget-usd 2] \\
@@ -114,6 +115,18 @@ function main(): void {
   const packageOut = required(args, "package-out");
 
   const promptsFile = optional(args, "prompts-file");
+  const projectId = optional(args, "project-id");
+
+  if (
+    projectId &&
+    has(args, "force-new-project")
+  ) {
+    console.error(
+      "--project-id cannot be combined with --force-new-project."
+    );
+    process.exit(1);
+  }
+
   if (promptsFile && !fs.existsSync(promptsFile)) {
     console.error(`Prompts file not found: ${promptsFile}`);
     console.error("Create the file first, with one buyer prompt per line.");
@@ -191,6 +204,13 @@ function main(): void {
     "--prompts", prompts,
     "--out", scanOut,
   ];
+
+  if (projectId) {
+    scanArgs.push(
+      "--project-id",
+      projectId
+    );
+  }
 
   if (promptsFile) {
     scanArgs.push("--prompts-file", promptsFile);

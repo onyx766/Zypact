@@ -602,8 +602,6 @@ export const supabaseAdapter: DbAdapter = {
         p_request_id: input.requestId,
         p_token_hash: input.tokenHash,
         p_expires_at: input.expiresAt,
-        p_invite_code_hash:
-          input.inviteCodeHash ?? null,
       }
     );
 
@@ -613,17 +611,13 @@ export const supabaseAdapter: DbAdapter = {
   },
 
   async consumeSnapshotRequestVerification(
-    tokenHash: string,
-    validInviteCodeHash:
-      string | null = null
+    tokenHash: string
   ): Promise<SnapshotRequest | null> {
     const { data, error } = await getClient()
       .rpc(
         "consume_snapshot_request_verification",
         {
           p_token_hash: tokenHash,
-          p_valid_invite_hash:
-            validInviteCodeHash,
         }
       )
       .maybeSingle<SnapshotRequestDbRow>();

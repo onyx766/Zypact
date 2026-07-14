@@ -6,10 +6,6 @@ import {
   generateSnapshotEmailVerificationToken,
 } from "@/lib/snapshot-requests/email-verification";
 import {
-  hashSnapshotFiInviteCode,
-  readSnapshotFiInviteConfiguration,
-} from "@/lib/snapshot-requests/fi-invite";
-import {
   extractRequestIp,
   hashRequestIp,
   parseSnapshotRequestSubmission,
@@ -186,15 +182,11 @@ export async function POST(request: Request) {
   const emailFlow =
     readEmailFlowConfiguration();
 
-  const fiInvite =
-    readSnapshotFiInviteConfiguration();
-
   if (
     !ipHashSecret ||
     ipHashSecret.length < 32 ||
     !turnstileSecret ||
-    !emailFlow ||
-    fiInvite.kind === "invalid"
+    !emailFlow
   ) {
     console.error(
       JSON.stringify({
@@ -284,14 +276,6 @@ export async function POST(request: Request) {
       );
     }
 
-    const inviteCodeHash =
-      fiInvite.kind === "enabled"
-        ? hashSnapshotFiInviteCode(
-            submission.inviteCode,
-            fiInvite.hashSecret
-          )
-        : null;
-
     const requestIpHash =
       hashRequestIp(
         requestIp,
@@ -322,7 +306,6 @@ export async function POST(request: Request) {
             verification.tokenHash,
           expiresAt:
             verification.expiresAt,
-          inviteCodeHash,
         });
     } catch (error) {
       await safelyFailDelivery(

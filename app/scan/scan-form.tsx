@@ -42,7 +42,6 @@ const EMPTY_VALUES: SnapshotRequestFormValues = {
   companyName: "",
   websiteUrl: "",
   buyerCategory: "",
-  inviteCode: "",
 };
 
 interface ScanFormProps {
@@ -269,9 +268,9 @@ export function ScanForm({
 
         <p>
           We sent a private verification link.
-          After verification, your request will
-          enter the scan queue or wait for
-          approval. No AI scan has started yet.
+          Your request will wait for approval
+          after verification. No AI scan has
+          started yet.
         </p>
 
         <p className="scan-privacy-note">
@@ -462,55 +461,6 @@ export function ScanForm({
               className="scan-field-error"
             >
               {fieldErrors.buyerCategory[0]}
-            </p>
-          ) : null}
-        </div>
-
-        <div className="scan-field">
-          <label htmlFor="inviteCode">
-            Invitation code (optional)
-          </label>
-
-          <input
-            id="inviteCode"
-            name="inviteCode"
-            type="text"
-            autoComplete="off"
-            maxLength={120}
-            spellCheck={false}
-            value={values.inviteCode || ""}
-            onChange={(event) =>
-              updateField(
-                "inviteCode",
-                event.target.value
-              )
-            }
-            aria-invalid={
-              Boolean(fieldErrors.inviteCode)
-            }
-            aria-describedby={
-              fieldErrors.inviteCode
-                ? "inviteCode-error"
-                : "inviteCode-help"
-            }
-            placeholder="Founder Institute code"
-          />
-
-          <p
-            id="inviteCode-help"
-            className="scan-field-help"
-          >
-            Leave this blank unless Zypact or
-            Founder Institute gave you a code.
-            Email verification is still required.
-          </p>
-
-          {fieldErrors.inviteCode ? (
-            <p
-              id="inviteCode-error"
-              className="scan-field-error"
-            >
-              {fieldErrors.inviteCode[0]}
             </p>
           ) : null}
         </div>

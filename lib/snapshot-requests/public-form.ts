@@ -3,7 +3,6 @@ export interface SnapshotRequestFormValues {
   companyName: string;
   websiteUrl: string;
   buyerCategory: string;
-  inviteCode?: string;
 }
 
 export type SnapshotRequestFormField =
@@ -97,17 +96,11 @@ export function buildSnapshotRequestPayload(
   values: SnapshotRequestFormValues,
   turnstileToken: string
 ) {
-  const inviteCode =
-    values.inviteCode?.trim();
-
   return {
     workEmail: values.workEmail.trim(),
     companyName: values.companyName.trim(),
     websiteUrl: values.websiteUrl.trim(),
     buyerCategory: values.buyerCategory.trim(),
-    ...(inviteCode
-      ? { inviteCode }
-      : {}),
     turnstileToken,
   };
 }

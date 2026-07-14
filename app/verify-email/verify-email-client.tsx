@@ -29,11 +29,6 @@ export function VerifyEmailClient() {
   const [view, setView] =
     useState<VerificationView>("loading");
 
-  const [successStatus, setSuccessStatus] =
-    useState<
-      "pending_approval" | "queued" | null
-    >(null);
-
   useEffect(() => {
     // React development Strict Mode may execute effects twice.
     // Without this guard, the first execution removes the token
@@ -82,7 +77,6 @@ export function VerifyEmailClient() {
 
     if (result.ok) {
       setToken(null);
-      setSuccessStatus(result.status);
       setView("success");
       return;
     }
@@ -130,15 +124,13 @@ export function VerifyEmailClient() {
         </p>
 
         <h1 className="verification-title">
-          {successStatus === "queued"
-            ? "Your snapshot request is in the scan queue."
-            : "Your snapshot request is waiting for approval."}
+          Your snapshot request is waiting for approval.
         </h1>
 
         <p className="verification-copy">
-          {successStatus === "queued"
-            ? "Your email and invitation code were confirmed. No AI scan has started yet. Zypact will process the request from the protected queue."
-            : "Your email has been confirmed. No AI scan has started yet. Zypact will review the request before placing it in the scan queue."}
+          Your email has been confirmed. No AI scan
+          has started yet. Zypact will review the
+          request before placing it in the scan queue.
         </p>
 
         <div className="verification-actions">
@@ -206,9 +198,8 @@ export function VerifyEmailClient() {
 
       <p className="verification-copy">
         Continue your Zypact snapshot request. After
-        verification, it will enter the protected
-        scan queue or wait for approval. No AI scan
-        begins from this page.
+        verification, the request will wait for
+        approval before any AI scan begins.
       </p>
 
       {feedback ? (

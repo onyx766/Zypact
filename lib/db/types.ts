@@ -385,6 +385,9 @@ export interface DbAdapter {
   consumeSnapshotRequestVerification(
     tokenHash: string
   ): Promise<SnapshotRequest | null>;
+  failSnapshotVerificationDelivery(
+    requestId: string
+  ): Promise<boolean>;
   createProject(input: CreateProjectInput): Promise<Project>;
   updateProjectCategory(projectId: string, category: string): Promise<void>;
   saveSitePages(

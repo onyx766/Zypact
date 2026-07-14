@@ -251,6 +251,48 @@ export const memoryAdapter: DbAdapter = {
     return { ...verifiedRequest };
   },
 
+  async failSnapshotVerificationDelivery(
+    requestId: string
+  ): Promise<boolean> {
+    const store = getStore();
+    const request = store.snapshotRequests.get(requestId);
+
+    if (
+      !request ||
+      request.status !== "pending_verification"
+    ) {
+      return false;
+    }
+
+    const tokenHash =
+      store.snapshotVerificationHashByRequest.get(
+        requestId
+      );
+
+    if (tokenHash) {
+      store.snapshotVerificationsByHash.delete(
+        tokenHash
+      );
+
+      store.snapshotVerificationHashByRequest.delete(
+        requestId
+      );
+    }
+
+    const failedRequest: SnapshotRequest = {
+      ...request,
+      status: "failed",
+      updatedAt: new Date().toISOString(),
+    };
+
+    store.snapshotRequests.set(
+      requestId,
+      failedRequest
+    );
+
+    return true;
+  },
+
   async createProject(input: CreateProjectInput): Promise<Project> {
     const project: Project = {
       id: randomUUID(),

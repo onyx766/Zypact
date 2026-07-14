@@ -627,6 +627,21 @@ export const supabaseAdapter: DbAdapter = {
     return data ? mapSnapshotRequest(data) : null;
   },
 
+  async failSnapshotVerificationDelivery(
+    requestId: string
+  ): Promise<boolean> {
+    const { data, error } = await getClient().rpc(
+      "fail_snapshot_verification_delivery",
+      {
+        p_request_id: requestId,
+      }
+    );
+
+    if (error) throw error;
+
+    return data === true;
+  },
+
   async createProject(input: CreateProjectInput): Promise<Project> {
     const { data, error } = await getClient()
       .from("projects")

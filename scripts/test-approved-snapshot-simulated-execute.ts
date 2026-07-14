@@ -163,7 +163,9 @@ async function main() {
       error: requestError,
     } = await client
       .from("snapshot_requests")
-      .select("status,project_id")
+      .select(
+        "status,project_id,progress_stage,progress_updated_at"
+      )
       .eq("id", requestId)
       .single();
 
@@ -178,6 +180,19 @@ async function main() {
 
     assert.ok(
       storedRequest.project_id
+    );
+
+    assert.equal(
+      storedRequest.progress_stage,
+      "quality_review"
+    );
+
+    assert.ok(
+      storedRequest.progress_updated_at
+    );
+
+    console.log(
+      "✓ real progress reached quality_review"
     );
 
     projectId =
@@ -312,7 +327,7 @@ async function main() {
     );
 
     console.log(
-      "\n6/6 checks passed. Approved snapshot simulated execution PASSED."
+      "\n7/7 checks passed. Approved snapshot simulated execution PASSED."
     );
   } finally {
     let cleanupProjectId =

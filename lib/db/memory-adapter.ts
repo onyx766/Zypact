@@ -137,6 +137,8 @@ export const memoryAdapter: DbAdapter = {
       status: "pending_verification",
       requestIpHash: input.requestIpHash ?? null,
       projectId: null,
+      progressStage: null,
+      progressUpdatedAt: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -377,6 +379,8 @@ export const memoryAdapter: DbAdapter = {
       ...request,
       status: "running",
       projectId,
+      progressStage: "reserved",
+      progressUpdatedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
 
@@ -386,6 +390,64 @@ export const memoryAdapter: DbAdapter = {
     );
 
     return { ...runningRequest };
+  },
+
+  async updateSnapshotRequestProgress(
+    requestId,
+    projectId,
+    stage
+  ) {
+    const store = getStore();
+    const request =
+      store.snapshotRequests.get(requestId);
+
+    if (
+      !request ||
+      request.status !== "running" ||
+      request.projectId !== projectId
+    ) {
+      return null;
+    }
+
+    const ranks = {
+      reserved: 1,
+      crawling: 2,
+      analyzing_site: 3,
+      generating_questions: 4,
+      checking_ai_visibility: 5,
+      building_diagnosis: 6,
+      quality_review: 7,
+    } as const;
+
+    const currentRank =
+      request.progressStage
+        ? ranks[request.progressStage]
+        : 0;
+
+    const nextRank = ranks[stage];
+
+    if (nextRank < currentRank) {
+      return null;
+    }
+
+    const now = new Date().toISOString();
+
+    const updated: SnapshotRequest = {
+      ...request,
+      progressStage: stage,
+      progressUpdatedAt:
+        request.progressStage === stage
+          ? request.progressUpdatedAt
+          : now,
+      updatedAt: now,
+    };
+
+    store.snapshotRequests.set(
+      requestId,
+      updated
+    );
+
+    return { ...updated };
   },
 
   async createProject(input: CreateProjectInput): Promise<Project> {

@@ -13,7 +13,14 @@ import { dirname, resolve } from "node:path";
 import { createClient } from "@supabase/supabase-js";
 
 import { getDb } from "@/lib/db";
-import type { GeneratedPrompt, ProbeMode, ProbeResult, Project, QaReportRow } from "@/lib/db/types";
+import type {
+  GeneratedPrompt,
+  ProbeMode,
+  ProbeResult,
+  Project,
+  QaReportRow,
+  SnapshotProgressStage,
+} from "@/lib/db/types";
 import { runMirrorScan } from "@/lib/pipeline/run-mirror-scan";
 import { generateBuyerPrompts } from "@/lib/pipeline/generate-buyer-prompts";
 import { getOrCreateEvidenceBank } from "@/lib/pipeline/get-or-create-evidence-bank";
@@ -540,6 +547,12 @@ async function ensureProject(
         companyName: args.brand,
         userId: existing.userId,
         projectId: existing.id,
+        onStage: async (stage) => {
+          await updateSnapshotProgress(
+            args,
+            stage
+          );
+        },
       });
 
       if (!scan.ok) {
@@ -847,6 +860,39 @@ function scorecardLine(rows: ProbeResult[], project: Project, mirrorJson: unknow
 }
 
 
+async function updateSnapshotProgress(
+  args: Args,
+  stage: SnapshotProgressStage
+): Promise<void> {
+  const requestId =
+    process.env.SNAPSHOT_REQUEST_ID?.trim();
+
+  if (!requestId) return;
+
+  if (!args.projectId) {
+    throw new Error(
+      "Snapshot progress requires an explicit reserved project."
+    );
+  }
+
+  const updated =
+    await getDb().updateSnapshotRequestProgress(
+      requestId,
+      args.projectId,
+      stage
+    );
+
+  if (!updated) {
+    throw new Error(
+      `Snapshot progress update failed for stage ${stage}.`
+    );
+  }
+
+  console.log(
+    `snapshot progress : ${stage}`
+  );
+}
+
 function validatePromptFilePlaceholdersBeforeScan(
   promptsFile: string | undefined,
   dryRun: boolean,
@@ -913,16 +959,65 @@ async function main(): Promise<void> {
   const ensuredProject = await ensureProject(args);
   const project = ensuredProject.project;
   await ensureMirrorProfile(project);
+
+  await updateSnapshotProgress(
+    args,
+    "generating_questions"
+  );
+
   await ensurePrompts(args, project);
   await ensureEvidenceBank(project.id);
 
-  const prompts = await getDb().getGeneratedPrompts(project.id);
-  const targets = pickPromptTargets(prompts, args.prompts);
-  const probeRun = await runMissingProbes(args, project, targets);
+  const prompts =
+    await getDb().getGeneratedPrompts(
+      project.id
+    );
 
-  const afterProbes = await getDb().getProbeResultsByProject(project.id);
-  if (afterProbes.length > 0) await regenerateRecommendations(project.id);
-  const outputAbs = await exportReport(args, project, dry.outputPath);
+  const targets =
+    pickPromptTargets(
+      prompts,
+      args.prompts
+    );
+
+  await updateSnapshotProgress(
+    args,
+    "checking_ai_visibility"
+  );
+
+  const probeRun =
+    await runMissingProbes(
+      args,
+      project,
+      targets
+    );
+
+  await updateSnapshotProgress(
+    args,
+    "building_diagnosis"
+  );
+
+  const afterProbes =
+    await getDb().getProbeResultsByProject(
+      project.id
+    );
+
+  if (afterProbes.length > 0) {
+    await regenerateRecommendations(
+      project.id
+    );
+  }
+
+  const outputAbs =
+    await exportReport(
+      args,
+      project,
+      dry.outputPath
+    );
+
+  await updateSnapshotProgress(
+    args,
+    "quality_review"
+  );
 
   const [mirror, competitors, gaps, fixBriefs, finalProbes] = await Promise.all([
     getDb().getMirrorProfile(project.id),

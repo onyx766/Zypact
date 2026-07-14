@@ -204,6 +204,8 @@ async function main() {
       status: "running",
       requestIpHash: null,
       projectId: null,
+      progressStage: null,
+      progressUpdatedAt: null,
       createdAt: oldCreatedAt,
       updatedAt: oldCreatedAt,
     };

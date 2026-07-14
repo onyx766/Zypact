@@ -25,6 +25,9 @@ export interface RunMirrorScanInput {
   companyName?: string;
   planId?: PlanId;
   projectId?: string;
+  onStage?: (
+    stage: "crawling" | "analyzing_site"
+  ) => Promise<void>;
   /**
    * Owner of the newly-created project. Passed by the API route from the
    * authenticated user (Sprint 10.5). May be `null` only for internal CLI
@@ -165,6 +168,8 @@ export async function runMirrorScan(
     resolvedProject.project;
 
   try {
+    await input.onStage?.("crawling");
+
     const crawl = await withPipelineStep(
       { projectId: project.id, agent: "crawler" },
       () => crawlSite({ websiteUrl: input.websiteUrl, maxPages })
@@ -181,6 +186,10 @@ export async function runMirrorScan(
         content: p.text,
         pageType: p.pageType,
       }))
+    );
+
+    await input.onStage?.(
+      "analyzing_site"
     );
 
     const reader = await withPipelineStep(

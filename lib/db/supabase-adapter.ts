@@ -68,6 +68,8 @@ interface SnapshotRequestDbRow {
   status: string;
   request_ip_hash: string | null;
   project_id: string | null;
+  progress_stage: string | null;
+  progress_updated_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -286,6 +288,10 @@ function mapSnapshotRequest(r: SnapshotRequestDbRow): SnapshotRequest {
     status: r.status as SnapshotRequest["status"],
     requestIpHash: r.request_ip_hash,
     projectId: r.project_id,
+    progressStage:
+      r.progress_stage as SnapshotRequest["progressStage"],
+    progressUpdatedAt:
+      r.progress_updated_at,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -671,6 +677,29 @@ export const supabaseAdapter: DbAdapter = {
         "reserve_snapshot_request_project",
         {
           p_request_id: requestId,
+        }
+      )
+      .maybeSingle<SnapshotRequestDbRow>();
+
+    if (error) throw error;
+
+    return data
+      ? mapSnapshotRequest(data)
+      : null;
+  },
+
+  async updateSnapshotRequestProgress(
+    requestId,
+    projectId,
+    stage
+  ) {
+    const { data, error } = await getClient()
+      .rpc(
+        "update_snapshot_request_progress",
+        {
+          p_request_id: requestId,
+          p_project_id: projectId,
+          p_progress_stage: stage,
         }
       )
       .maybeSingle<SnapshotRequestDbRow>();

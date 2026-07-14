@@ -496,7 +496,11 @@ async function executeScan(
     ],
     {
       cwd: process.cwd(),
-      env: process.env,
+      env: {
+        ...process.env,
+        SNAPSHOT_REQUEST_ID:
+          request.id,
+      },
       stdio: "inherit",
     }
   );

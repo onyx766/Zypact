@@ -322,6 +322,15 @@ export type SnapshotRequestStatus =
   | "rejected"
   | "expired";
 
+export type SnapshotProgressStage =
+  | "reserved"
+  | "crawling"
+  | "analyzing_site"
+  | "generating_questions"
+  | "checking_ai_visibility"
+  | "building_diagnosis"
+  | "quality_review";
+
 export type SnapshotRequestLimitCode =
   | "email_30d"
   | "domain_30d"
@@ -349,6 +358,8 @@ export interface SnapshotRequest {
   status: SnapshotRequestStatus;
   requestIpHash: string | null;
   projectId: string | null;
+  progressStage: SnapshotProgressStage | null;
+  progressUpdatedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -394,6 +405,11 @@ export interface DbAdapter {
   ): Promise<SnapshotRequest | null>;
   reserveSnapshotRequestProject(
     requestId: string
+  ): Promise<SnapshotRequest | null>;
+  updateSnapshotRequestProgress(
+    requestId: string,
+    projectId: string,
+    stage: SnapshotProgressStage
   ): Promise<SnapshotRequest | null>;
   createProject(input: CreateProjectInput): Promise<Project>;
   updateProjectCategory(projectId: string, category: string): Promise<void>;

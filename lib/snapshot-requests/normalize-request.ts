@@ -14,6 +14,12 @@ const requestFieldsSchema = z
 
 const submissionSchema = requestFieldsSchema
   .extend({
+    inviteCode: z
+      .string()
+      .trim()
+      .max(120)
+      .optional()
+      .default(""),
     turnstileToken: z
       .string()
       .trim()
@@ -138,6 +144,7 @@ export function normalizeSnapshotRequestInput(
 
 export function parseSnapshotRequestSubmission(raw: unknown): {
   input: CreateSnapshotRequestInput;
+  inviteCode: string | null;
   turnstileToken: string;
 } {
   const parsed = submissionSchema.safeParse(raw);
@@ -150,7 +157,10 @@ export function parseSnapshotRequestSubmission(raw: unknown): {
 
   return {
     input: normalizeFields(parsed.data),
-    turnstileToken: parsed.data.turnstileToken,
+    inviteCode:
+      parsed.data.inviteCode || null,
+    turnstileToken:
+      parsed.data.turnstileToken,
   };
 }
 

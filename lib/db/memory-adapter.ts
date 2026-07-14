@@ -47,6 +47,7 @@ interface MemorySnapshotVerification {
   requestId: string;
   tokenHash: string;
   expiresAt: string;
+  inviteCodeHash: string | null;
 }
 
 interface MemoryStore {
@@ -193,6 +194,8 @@ export const memoryAdapter: DbAdapter = {
         requestId: input.requestId,
         tokenHash: input.tokenHash,
         expiresAt: input.expiresAt,
+        inviteCodeHash:
+          input.inviteCodeHash ?? null,
       }
     );
 
@@ -205,7 +208,9 @@ export const memoryAdapter: DbAdapter = {
   },
 
   async consumeSnapshotRequestVerification(
-    tokenHash: string
+    tokenHash: string,
+    validInviteCodeHash:
+      string | null = null
   ): Promise<SnapshotRequest | null> {
     const store = getStore();
     const verification =
@@ -231,10 +236,20 @@ export const memoryAdapter: DbAdapter = {
       return null;
     }
 
+    const queuedByFiInvite =
+      Boolean(
+        validInviteCodeHash &&
+        verification.inviteCodeHash &&
+        verification.inviteCodeHash ===
+          validInviteCodeHash
+      );
+
     const now = new Date().toISOString();
     const verifiedRequest: SnapshotRequest = {
       ...request,
-      status: "pending_approval",
+      status: queuedByFiInvite
+        ? "queued"
+        : "pending_approval",
       updatedAt: now,
     };
 

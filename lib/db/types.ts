@@ -367,6 +367,7 @@ export interface IssueSnapshotRequestVerificationInput {
   requestId: string;
   tokenHash: string;
   expiresAt: string;
+  inviteCodeHash?: string | null;
 }
 
 export interface CreateProjectInput {
@@ -383,7 +384,8 @@ export interface DbAdapter {
     input: IssueSnapshotRequestVerificationInput
   ): Promise<boolean>;
   consumeSnapshotRequestVerification(
-    tokenHash: string
+    tokenHash: string,
+    validInviteCodeHash?: string | null
   ): Promise<SnapshotRequest | null>;
   failSnapshotVerificationDelivery(
     requestId: string

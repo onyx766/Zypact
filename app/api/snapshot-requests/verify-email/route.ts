@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getDb } from "@/lib/db";
+import {
+  readSnapshotFiInviteConfiguration,
+} from "@/lib/snapshot-requests/fi-invite";
 import { hashSnapshotEmailVerificationToken } from "@/lib/snapshot-requests/email-verification";
 
 export const runtime = "nodejs";
@@ -63,6 +66,22 @@ export async function POST(request: Request) {
     return unavailableResponse();
   }
 
+  const fiInvite =
+    readSnapshotFiInviteConfiguration();
+
+  if (fiInvite.kind === "invalid") {
+    console.error(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        level: "error",
+        event:
+          "snapshot_fi_invite_configuration_error",
+      })
+    );
+
+    return unavailableResponse();
+  }
+
   const contentLength = Number(
     request.headers.get("content-length") || "0"
   );
@@ -102,18 +121,37 @@ export async function POST(request: Request) {
 
     const verified =
       await getDb().consumeSnapshotRequestVerification(
-        tokenHash
+        tokenHash,
+        fiInvite.kind === "enabled"
+          ? fiInvite.expectedCodeHash
+          : null
       );
 
     if (!verified) {
       return invalidTokenResponse();
     }
 
+    const queued =
+      verified.status === "queued";
+
+    if (
+      !queued &&
+      verified.status !== "pending_approval"
+    ) {
+      throw new Error(
+        "unexpected_snapshot_verification_status"
+      );
+    }
+
     return jsonResponse(
       {
         ok: true,
-        status: "pending_approval",
-        nextStep: "awaiting_founder_approval",
+        status: queued
+          ? "queued"
+          : "pending_approval",
+        nextStep: queued
+          ? "awaiting_scan_runner"
+          : "awaiting_founder_approval",
       },
       200
     );

@@ -392,6 +392,9 @@ export interface DbAdapter {
     requestId: string,
     approvedBy: string
   ): Promise<SnapshotRequest | null>;
+  reserveSnapshotRequestProject(
+    requestId: string
+  ): Promise<SnapshotRequest | null>;
   createProject(input: CreateProjectInput): Promise<Project>;
   updateProjectCategory(projectId: string, category: string): Promise<void>;
   saveSitePages(

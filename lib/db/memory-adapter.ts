@@ -335,6 +335,59 @@ export const memoryAdapter: DbAdapter = {
     return { ...queuedRequest };
   },
 
+  async reserveSnapshotRequestProject(
+    requestId: string
+  ): Promise<SnapshotRequest | null> {
+    const store = getStore();
+    const request =
+      store.snapshotRequests.get(requestId);
+
+    if (!request) {
+      return null;
+    }
+
+    if (
+      request.status === "running" &&
+      request.projectId
+    ) {
+      return { ...request };
+    }
+
+    if (request.status !== "queued") {
+      return null;
+    }
+
+    let projectId = request.projectId;
+
+    if (!projectId) {
+      const project: Project = {
+        id: randomUUID(),
+        userId: null,
+        companyName: request.companyName,
+        domain: request.normalizedDomain,
+        category: request.buyerCategory,
+        createdAt: new Date().toISOString(),
+      };
+
+      store.projects.set(project.id, project);
+      projectId = project.id;
+    }
+
+    const runningRequest: SnapshotRequest = {
+      ...request,
+      status: "running",
+      projectId,
+      updatedAt: new Date().toISOString(),
+    };
+
+    store.snapshotRequests.set(
+      requestId,
+      runningRequest
+    );
+
+    return { ...runningRequest };
+  },
+
   async createProject(input: CreateProjectInput): Promise<Project> {
     const project: Project = {
       id: randomUUID(),

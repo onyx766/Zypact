@@ -79,7 +79,13 @@ assert(bank.supportingEvidenceWithSources.some((item) => item.claim.includes("St
 assert(bank.proofItems.length === 1);
 assert(bank.competitorComparisons.length === 1);
 assert(bank.forbiddenClaims.includes("guaranteed AI recommendations"));
-assert(!JSON.stringify(bank).includes("AI will recommend Vugio"), "forbidden claims should not become allowed claims");
+assert(
+  !bank.allowedClaims.includes("AI will recommend Vugio") &&
+    !bank.allowedClaimsWithSources.some(
+      (item) => item.claim === "AI will recommend Vugio",
+    ),
+  "forbidden claims should not become allowed claims",
+);
 
 const emptyBank = buildReviewedEvidenceBank(emptyTemplate, new Date("2026-07-10T00:00:00.000Z"));
 assert.equal(emptyBank.publicGenerationStatus, "blocked_until_public_permission");

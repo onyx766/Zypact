@@ -70,15 +70,21 @@ function extractCompetitorsFromEvidenceText(text: string): string[] {
     results.push(...splitCompetitors(match[1]));
   }
 
-  return uniq(
-    results.map((name) =>
+  const cleaned = results
+    .map((name) =>
       name
         .replace(/^competitors?\s+/i, "")
         .replace(/^like\s+/i, "")
         .replace(/\s+can\s+be\s+highlighted$/i, "")
         .trim(),
-    ),
-  );
+    )
+    .filter(
+      (name) =>
+        !/^(?:direct\s+)?competitors?$/i.test(name) &&
+        !/^(?:other\s+)?(?:tools?|alternatives?)$/i.test(name),
+    );
+
+  return uniq(cleaned);
 }
 
 function deriveComparisonCompetitors(evidenceNeeded: string[], firstFix: string | undefined, fallbackCompetitors: string[]): string[] {

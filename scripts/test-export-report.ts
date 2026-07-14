@@ -1,0 +1,925 @@
+#!/usr/bin/env tsx
+/**
+ * Sprint 11 + 11.5 unit tests for `lib/export/build-mvp-report.ts`.
+ *
+ * Coverage:
+ *   Fence / secret sweep (Sprint 11)
+ *     - `computeDynamicFence` scales past nested backtick runs
+ *     - `wrapAssetContent` survives nested ```json blocks
+ *     - `redactSensitive` catches literal values + known prefixes
+ *   Section structure (Sprint 11.5)
+ *     - Every section in `REPORT_SECTIONS` appears in the report body
+ *     - Executive Summary appears at the top and technical metadata is
+ *       moved into a final "Appendix — Technical metadata" section
+ *     - Assets are grouped by publish status
+ *     - NOT READY blockquotes carry the QA-context tagline
+ *     - "What this means" plain-English section renders after probes
+ *     - Recommended Next Actions produces concrete website actions
+ *   Sprint 12 honesty rule (display only)
+ *     - Every probe reference is labeled `Simulated <Platform>-style probe`
+ *     - Metadata explicitly says "probe origin: simulated"
+ *   companyName fallback (Sprint 11.5 + Sprint 12 test hook)
+ *     - `resolveCompanyName` falls back from project → mirrorProfile → domain
+ *     - Report brand line reflects the fallback source
+ *   Read-only invariant preserved from Sprint 11
+ */
+
+delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+delete process.env.LLM_PROVIDER;
+delete process.env.OPENAI_API_KEY;
+delete process.env.ANTHROPIC_API_KEY;
+delete process.env.OPENAI_MODEL;
+
+import {
+  buildMvpReport,
+  computeDynamicFence,
+  longestBacktickRun,
+  redactSensitive,
+  resolveCompanyName,
+  simulatedProbeLabel,
+  deriveProbeMode,
+  aggregateEvidenceNeeded,
+  gapToRecommendedAction,
+  wrapAssetContent,
+  REDACTED_MARKER,
+  REPORT_SECTIONS,
+} from "@/lib/export/build-mvp-report";
+import type {
+  BuildMvpReportInput,
+} from "@/lib/export/build-mvp-report";
+import type {
+  Project,
+  MirrorProfileRow,
+  GeneratedPrompt,
+  ProbeResult,
+  Competitor,
+  GapMapRow,
+  Gap,
+  EvidenceBankRow,
+  FixBriefRow,
+  GeneratedAssetRow,
+  QaReportRow,
+} from "@/lib/db/types";
+
+let checks = 0;
+let failures = 0;
+
+function check(name: string, cond: boolean, detail = ""): void {
+  checks += 1;
+  if (cond) {
+    console.log(`✓ ${name}${detail ? ` — ${detail}` : ""}`);
+  } else {
+    failures += 1;
+    console.log(`✗ ${name}${detail ? ` — ${detail}` : ""}`);
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Dynamic fence                                                              */
+/* -------------------------------------------------------------------------- */
+
+function testFence(): void {
+  check("longestBacktickRun('no backticks') === 0", longestBacktickRun("no backticks") === 0);
+  check("longestBacktickRun('```code```') === 3", longestBacktickRun("```code```") === 3);
+  check("longestBacktickRun('`````') === 5", longestBacktickRun("`````") === 5);
+
+  check("floor is 4 backticks", computeDynamicFence("plain text").length === 4);
+  check("dyn fence for ```` is 5", computeDynamicFence("````").length === 5);
+  check("dyn fence for ````` is 6", computeDynamicFence("`````").length === 6);
+
+  const nested = ["# Nested", "", "```json", '{ "foo": "bar" }', "```", "", "prose"].join("\n");
+  const wrapped = wrapAssetContent(nested, "asset-markdown");
+  check("wrapped opening declares info string", wrapped.split("\n")[0].endsWith("asset-markdown"));
+
+  const spicy = "hello ```` fence inside";
+  const spicyWrap = wrapAssetContent(spicy, "asset-markdown");
+  check(
+    "wrapper scales to 5 for 4-backtick content",
+    spicyWrap.startsWith("`````asset-markdown\n") && spicyWrap.endsWith("\n`````")
+  );
+
+  const spicier = "hello ````` fence inside";
+  const spicierWrap = wrapAssetContent(spicier, "json");
+  check(
+    "wrapper scales to 6 for 5-backtick content",
+    spicierWrap.startsWith("``````json\n") && spicierWrap.endsWith("\n``````")
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Secret sweep                                                               */
+/* -------------------------------------------------------------------------- */
+
+function testRedactSensitive(): void {
+  const secret1 = "sb_secret_ABCDEFGHIJKLMNO1234567";
+  const secret2 = ["sk", "live", "XYZABCDEFGHIJKL1234567"].join("-");
+  const secret3 = ["sk", "proj", "abcd1234efgh5678ijkl9012"].join("-");
+  const noise = "This is a normal paragraph.";
+  const raw = [noise, secret1, secret2, secret3].join("\n\n");
+  const { output, redactionCount } = redactSensitive(raw, [secret1, secret2]);
+  check("explicit secret values are replaced", !output.includes(secret1) && !output.includes(secret2));
+  check("prefix sweep catches sk-proj-", !output.includes(secret3));
+  check(">= 3 redactions applied", redactionCount >= 3, `count=${redactionCount}`);
+  check("redacted marker is present", output.includes(REDACTED_MARKER));
+  check("innocuous prose preserved", output.includes(noise));
+  const trivial = "ok";
+  const { output: tOut, redactionCount: tCount } = redactSensitive(trivial, ["ok"]);
+  check("short values ignored", tOut === trivial && tCount === 0);
+}
+
+/* -------------------------------------------------------------------------- */
+/*  companyName fallback                                                       */
+/* -------------------------------------------------------------------------- */
+
+function testCompanyNameFallback(): void {
+  const mkProject = (companyName: string | null): Project => ({
+    id: "p1",
+    userId: "u1",
+    companyName,
+    domain: "https://acme.example.com",
+    category: null,
+    createdAt: "2026-07-10T00:00:00.000Z",
+  });
+  const mkMirror = (companyName: unknown): MirrorProfileRow => ({
+    id: "mp1",
+    projectId: "p1",
+    json: { companyName },
+    createdAt: "2026-07-10T00:00:00.000Z",
+  });
+
+  // 1. project.companyName wins
+  const r1 = resolveCompanyName(mkProject("Acme Corp"), mkMirror("Should not be used"));
+  check("project.companyName wins", r1.name === "Acme Corp" && r1.source === "project");
+
+  // 2. missing project.companyName falls back to mirror
+  const r2 = resolveCompanyName(mkProject(null), mkMirror("Linear"));
+  check("falls back to mirrorProfile.companyName", r2.name === "Linear" && r2.source === "mirror_profile");
+
+  // 3. missing both falls back to domain
+  const r3 = resolveCompanyName(mkProject(null), mkMirror(""));
+  check("falls back to domain", r3.name === "https://acme.example.com" && r3.source === "domain");
+
+  // 4. no mirror profile at all
+  const r4 = resolveCompanyName(mkProject(null), null);
+  check("no mirror profile → domain", r4.name === "https://acme.example.com" && r4.source === "domain");
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Simulated probe honesty                                                    */
+/* -------------------------------------------------------------------------- */
+
+function testSimulatedProbeHonesty(): void {
+  check(
+    "deriveProbeMode returns simulated (no probeMode column exists yet)",
+    deriveProbeMode(null) === "simulated"
+  );
+  check(
+    "simulatedProbeLabel builds a plain-English phrase",
+    simulatedProbeLabel("chatgpt") === "Simulated Chatgpt-style probe"
+  );
+  check(
+    "simulatedProbeLabel preserves platform casing seed",
+    simulatedProbeLabel("perplexity") === "Simulated Perplexity-style probe"
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Recommended actions                                                        */
+/* -------------------------------------------------------------------------- */
+
+function testGapToRecommendedAction(): void {
+  const mk = (type: string, competitorName: string | null = "Jira"): Gap => ({
+    id: `g-${type}`,
+    projectId: "p1",
+    competitorName,
+    type,
+    severity: "high",
+    explanation: "e",
+    affectedPrompts: [],
+    suggestedFixDirection: "Enhance SEO",
+    createdAt: "2026-07-10T00:00:00.000Z",
+  });
+  check(
+    "comparison_content → concrete comparison page action",
+    gapToRecommendedAction(mk("comparison_content"), "Acme").includes(
+      "comparison page: **Acme vs Jira**"
+    )
+  );
+  check(
+    "prompt_loss → FAQ block action",
+    gapToRecommendedAction(mk("prompt_loss"), "Acme").includes("FAQ answers")
+  );
+  check(
+    "proof → proof block action",
+    gapToRecommendedAction(mk("proof"), "Acme").includes("proof blocks")
+  );
+  check(
+    "citation → third-party review action",
+    gapToRecommendedAction(mk("citation"), "Acme").includes("third-party reviews")
+  );
+  check(
+    "entity_clarity → JSON-LD action",
+    gapToRecommendedAction(mk("entity_clarity"), "Acme").includes("JSON-LD schema markup")
+  );
+  check(
+    "pricing → pricing evidence action",
+    gapToRecommendedAction(mk("pricing"), "Acme").includes("pricing evidence")
+  );
+  check(
+    "unknown gap type falls back to suggestedFixDirection",
+    gapToRecommendedAction(mk("unknown-fictional-type"), "Acme").includes("Enhance SEO")
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Fixtures                                                                   */
+/* -------------------------------------------------------------------------- */
+
+function makeFixtures(opts: {
+  ownerId: string;
+  spicyAssetContent: string;
+  jsonLdContent: string;
+  projectCompanyName?: string | null;
+  mirrorCompanyName?: string;
+  categoryConfidence?: string;
+  detectedCategory?: string;
+}): BuildMvpReportInput {
+  const now = new Date("2026-07-10T01:30:00.000Z");
+  const projectId = "11111111-1111-1111-1111-111111111111";
+  const project: Project = {
+    id: projectId,
+    userId: opts.ownerId,
+    // `??` would turn an explicit `null` into "Acme Corp" — the fallback
+    // test needs `null` to reach the builder verbatim.
+    companyName:
+      opts.projectCompanyName === undefined ? "Acme Corp" : opts.projectCompanyName,
+    domain: "https://acme.example.com",
+    category: "AI product development platform for teams",
+    createdAt: now.toISOString(),
+  };
+  const mirrorProfile: MirrorProfileRow = {
+    id: "mp-1",
+    projectId,
+    json: {
+      companyName: opts.mirrorCompanyName ?? "Acme Corp",
+      website: "https://acme.example.com",
+      detectedCategory:
+        opts.detectedCategory ?? "AI product development platform for teams",
+      categoryConfidence: opts.categoryConfidence ?? "high",
+      targetAudience: ["Product managers"],
+      useCases: ["Async issue tracking"],
+      features: ["Cycle boards"],
+      painPointsAddressed: ["Manual triage"],
+      claims: [{ claim: "Faster shipping", sourceUrl: "/home", hasProof: false }],
+      proofSignals: [
+        { type: "customer", detail: "Vercel uses Acme", sourceUrl: "/customers" },
+      ],
+      competitorsMentioned: ["Jira", "Height"],
+      missingSignals: [
+        { signal: "SOC2", whyItMatters: "Enterprise trust" },
+        { signal: "Pricing calculator", whyItMatters: "Buyer clarity" },
+        { signal: "Case study PDFs", whyItMatters: "Sales enablement" },
+      ],
+      buyerIntentAngles: ["Alternative to Jira"],
+      aiReadabilityNotes: "Site copy is scannable.",
+    },
+    createdAt: now.toISOString(),
+  };
+  const prompts: GeneratedPrompt[] = Array.from({ length: 3 }).map((_, i) => ({
+    id: `prompt-${i}`,
+    projectId,
+    prompt: `Best tools for prompt ${i}`,
+    intentType: "best_tools",
+    commercialValue: 5,
+    winnability: 4,
+    priority: 20,
+    rationale: "test",
+    selected: i === 0,
+    createdAt: now.toISOString(),
+  }));
+  const probeResults: ProbeResult[] = [
+    {
+      id: "probe-1",
+      probeRunId: "run-1",
+      projectId,
+      generatedPromptId: prompts[0].id,
+      prompt: prompts[0].prompt,
+      platform: "chatgpt",
+      probeMode: "simulated",
+      rawResponse: "raw",
+      clientMentioned: false,
+      clientPosition: "absent",
+      competitorsMentioned: [
+        { name: "Jira", position: 1, context: "AI recommended Jira" },
+        { name: "Height", position: 2, context: "AI mentioned Height as an alternative" },
+      ],
+      sourcesCited: [{ source: "G2", type: "review_site" }],
+      answerSummary: "AI recommends Jira and Height, no Acme mention.",
+      verdict: "lost",
+      whyClientLost: "Acme absent from AI answer.",
+      createdAt: now.toISOString(),
+    },
+    {
+      id: "probe-2",
+      probeRunId: "run-1",
+      projectId,
+      generatedPromptId: prompts[1].id,
+      prompt: prompts[1].prompt,
+      platform: "perplexity",
+      probeMode: "simulated",
+      rawResponse: "raw",
+      clientMentioned: true,
+      clientPosition: "listed",
+      competitorsMentioned: [
+        { name: "Jira", position: 1, context: "Perplexity recommended Jira first" },
+      ],
+      sourcesCited: [],
+      answerSummary: "Perplexity listed Acme second after Jira.",
+      verdict: "partial",
+      whyClientLost: "Ranked below Jira.",
+      createdAt: now.toISOString(),
+    },
+  ];
+  const competitors: Competitor[] = [
+    {
+      id: "comp-1",
+      projectId,
+      name: "Jira",
+      website: "https://atlassian.com/jira",
+      discoverySource: "user",
+      mentionCount: 3,
+      promptIds: [],
+      threatLevel: "high",
+      confidence: "verified",
+      isPhantom: false,
+      isBlindSpot: false,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    },
+    {
+      id: "comp-2",
+      projectId,
+      name: "Height",
+      website: null,
+      discoverySource: "ai_answer",
+      mentionCount: 1,
+      promptIds: [],
+      threatLevel: "medium",
+      confidence: "unverified",
+      isPhantom: true,
+      isBlindSpot: false,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    },
+  ];
+  const gapMap: GapMapRow = {
+    id: "gm-1",
+    projectId,
+    json: {
+      competitorDistances: [
+        {
+          competitor: "Jira",
+          recommendationDistance: 24,
+          gapScores: {
+            prompt_loss: 5,
+            citation: 4,
+            review: 3,
+            comparison_content: 4,
+            proof: 4,
+            entity_clarity: 4,
+          },
+          topReasons: ["Missing comparison"],
+          evidenceStrength: "moderate",
+        },
+      ],
+      prioritizedGaps: [],
+    },
+    createdAt: now.toISOString(),
+  };
+  const gaps: Gap[] = [
+    {
+      id: "gap-1",
+      projectId,
+      competitorName: "Jira",
+      type: "comparison_content",
+      severity: "high",
+      explanation: "Missing comparison page for Acme vs Jira.",
+      affectedPrompts: [prompts[0].id],
+      suggestedFixDirection: "Enhance SEO and content marketing strategies.",
+      createdAt: now.toISOString(),
+    },
+    {
+      id: "gap-2",
+      projectId,
+      competitorName: "Jira",
+      type: "citation",
+      severity: "medium",
+      explanation: "No third-party review citations.",
+      affectedPrompts: [prompts[1].id],
+      suggestedFixDirection: "Improve visibility.",
+      createdAt: now.toISOString(),
+    },
+  ];
+  const evidenceBank: EvidenceBankRow = {
+    id: "eb-1",
+    projectId,
+    productDescription: "Acme is an issue tracker for high-velocity teams.",
+    targetAudience: ["PMs"],
+    mainUseCases: ["Issue tracking"],
+    features: [{ name: "Cycles", description: "Time-boxed sprints" }],
+    proofItems: [{ type: "customer", detail: "Vercel" }],
+    competitors: ["Jira", "Height"],
+    allowedClaims: ["Async-first"],
+    forbiddenClaims: ["guaranteed rankings", "guaranteed AI mentions", "guaranteed citations"],
+    tone: "confident",
+    notes: "",
+    provenance: "auto_filled_from_mirror_profile",
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+  };
+  const fixBriefs: FixBriefRow[] = [
+    {
+      id: "fb-1",
+      projectId,
+      gapId: gaps[0].id,
+      probeResultId: probeResults[0].id,
+      lostPrompt: prompts[0].prompt,
+      competitorRecommended: "Jira",
+      rootCause: "No comparison content.",
+      recommendedFix: "Publish Acme vs Jira comparison page.",
+      fixType: "comparison_page",
+      assetsToGenerate: ["comparison_page_outline"],
+      evidenceNeeded: ["pricing information", "third-party review URL"],
+      evidenceAvailable: ["Customer list"],
+      priority: 1,
+      expectedImpact: "Recover 10+ lost prompts.",
+      status: "ready_for_assets",
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    },
+  ];
+
+  const spicyAsset: GeneratedAssetRow = {
+    id: "asset-needs-evidence",
+    projectId,
+    fixBriefId: fixBriefs[0].id,
+    assetType: "comparison_page_outline",
+    title: "Acme vs Jira — comparison outline",
+    content: opts.spicyAssetContent,
+    placeholders: [],
+    claimsUsed: [{ claim: "Async-first", source: "evidence_bank" }],
+    qaStatus: "needs_evidence",
+    lifecycleStatus: "active",
+    generationProvider: "mock",
+    generationModel: "mock",
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+  };
+  const jsonLdAsset: GeneratedAssetRow = {
+    id: "asset-pending",
+    projectId,
+    fixBriefId: fixBriefs[0].id,
+    assetType: "json_ld_schema",
+    title: "JSON-LD FAQPage schema",
+    content: opts.jsonLdContent,
+    placeholders: [],
+    claimsUsed: [],
+    qaStatus: "pending_qa",
+    lifecycleStatus: "active",
+    generationProvider: "mock",
+    generationModel: "mock",
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+  };
+  const safeAsset: GeneratedAssetRow = {
+    id: "asset-safe",
+    projectId,
+    fixBriefId: fixBriefs[0].id,
+    assetType: "faq_block",
+    title: "Acme FAQ block",
+    content: "## FAQ\n\n**Is Acme async-first?** Yes.",
+    placeholders: [],
+    claimsUsed: [],
+    qaStatus: "safe_to_publish",
+    lifecycleStatus: "active",
+    generationProvider: "mock",
+    generationModel: "mock",
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+  };
+  const unsupportedAsset: GeneratedAssetRow = {
+    id: "asset-unsupported",
+    projectId,
+    fixBriefId: fixBriefs[0].id,
+    assetType: "proof_block",
+    title: "Acme proof block",
+    content: "Trusted by thousands (uh oh).",
+    placeholders: [],
+    claimsUsed: [],
+    qaStatus: "unsupported_claims",
+    lifecycleStatus: "active",
+    generationProvider: "mock",
+    generationModel: "mock",
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+  };
+  const assets: GeneratedAssetRow[] = [spicyAsset, jsonLdAsset, safeAsset, unsupportedAsset];
+
+  const latestQaByAsset = new Map<string, QaReportRow>();
+  latestQaByAsset.set(spicyAsset.id, {
+    id: "qa-1",
+    projectId,
+    generatedAssetId: spicyAsset.id,
+    verdict: "needs_evidence",
+    violations: [
+      {
+        type: "quality",
+        quote: "Async-first",
+        reason: "Needs example.",
+        suggestedFix: "Add case study.",
+      },
+    ],
+    placeholdersRemaining: ["[EVIDENCE NEEDED: third-party review]"],
+    overallNotes: "Add third-party evidence.",
+    createdAt: now.toISOString(),
+  });
+  latestQaByAsset.set(safeAsset.id, {
+    id: "qa-2",
+    projectId,
+    generatedAssetId: safeAsset.id,
+    verdict: "safe_to_publish",
+    violations: [],
+    placeholdersRemaining: [],
+    overallNotes: "Clean.",
+    createdAt: now.toISOString(),
+  });
+  latestQaByAsset.set(unsupportedAsset.id, {
+    id: "qa-3",
+    projectId,
+    generatedAssetId: unsupportedAsset.id,
+    verdict: "unsupported_claims",
+    violations: [
+      {
+        type: "forbidden_claim",
+        quote: "Trusted by thousands",
+        reason: "Forbidden claim per Evidence Bank.",
+        suggestedFix: "Remove the claim.",
+      },
+    ],
+    placeholdersRemaining: [],
+    overallNotes: "Trim the claim.",
+    createdAt: now.toISOString(),
+  });
+
+  return {
+    project,
+    mirrorProfile,
+    prompts,
+    probeResults,
+    competitors,
+    gapMap,
+    gaps,
+    evidenceBank,
+    fixBriefs,
+    assets,
+    latestQaByAsset,
+    llmProvider: "openai",
+    llmModel: "gpt-4o-mini",
+    mockMode: false,
+    now,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Full report render                                                         */
+/* -------------------------------------------------------------------------- */
+
+function testFullReport(): void {
+  const jsonLd = ["{", '  "@context": "https://schema.org",', '  "@type": "FAQPage"', "}"].join("\n");
+  const spicy = [
+    "# H1",
+    "",
+    "```json",
+    jsonLd,
+    "```",
+    "",
+    "Prose with `inline` and ```triple```.",
+    "",
+    "```md",
+    "nested",
+    "```",
+  ].join("\n");
+
+  const input = makeFixtures({
+    ownerId: "user-alice",
+    spicyAssetContent: spicy,
+    jsonLdContent: jsonLd,
+  });
+
+  const snapshotJson = JSON.stringify(input, mapReplacer);
+  const savedMapSize = input.latestQaByAsset.size;
+
+  const { markdown, filename, qaDistribution, publishability, warnings } = buildMvpReport(input);
+
+  // All 19 section headings appear.
+  for (const s of REPORT_SECTIONS) {
+    check(`report contains "${s}"`, markdown.includes(`## ${s}`));
+  }
+
+  // Executive Summary is first, appendix is last.
+  const execIdx = markdown.indexOf(`## ${REPORT_SECTIONS[0]}`);
+  const appendixIdx = markdown.indexOf(`## ${REPORT_SECTIONS[18]}`);
+  // Executive Summary is the first `##` heading — no other section starts
+  // before it. Compare directly against the position of any other `## `.
+  const firstAnyHeading = markdown.indexOf("\n## ");
+  check(
+    "Executive Summary is the first ## section in the body",
+    execIdx > 0 && firstAnyHeading + 1 === execIdx
+  );
+  check("Appendix is the last section", appendixIdx > execIdx);
+
+  // Appendix contains the technical metadata.
+  check("appendix contains projectId", markdown.slice(appendixIdx).includes("**projectId**:"));
+  check("appendix contains exportFormatVersion", markdown.slice(appendixIdx).includes("**exportFormatVersion**: 2"));
+  check("appendix contains provider=openai", markdown.slice(appendixIdx).includes("**provider**: openai"));
+  check("appendix contains model=gpt-4o-mini", markdown.slice(appendixIdx).includes("**model**: gpt-4o-mini"));
+  check("appendix contains mock mode: off", markdown.slice(appendixIdx).includes("**mock mode**: off"));
+  check(
+    "appendix contains probe origin simulated",
+    markdown.slice(appendixIdx).includes("**probe origin**: simulated")
+  );
+
+  // Helper to slice a single section without getting eaten by markdown
+  // table separators (`|---|---|`). Section joiners are `\n---\n\n`.
+  const sectionSliceBySepOrHeading = (heading: string): string => {
+    const start = markdown.indexOf(`## ${heading}`);
+    if (start < 0) return "";
+    const nextHeading = markdown.indexOf("\n## ", start + heading.length);
+    return markdown.slice(start, nextHeading > 0 ? nextHeading : markdown.length);
+  };
+
+  // Executive Summary contains the client-facing scoreboard.
+  const execSection = sectionSliceBySepOrHeading(REPORT_SECTIONS[0]);
+  check("exec summary mentions the brand", execSection.includes("Acme Corp"));
+  check(
+    "exec summary describes probe as product-recommendation scorecard",
+    execSection.includes("AI probe result (") && execSection.includes("product-recommendation scorecard") && execSection.includes("recommendedAsProduct")
+  );
+  check("exec summary lists top competitors", execSection.includes("Top competitors AI recommended instead"));
+  check("exec summary lists biggest gap", execSection.includes("Biggest gap"));
+  check("exec summary lists next recommended fix", execSection.includes("Next recommended fix"));
+  check("exec summary lists publishability", execSection.includes("Publishability"));
+  check("exec summary lists evidence needed", execSection.includes("Evidence needed to unlock publish-ready assets"));
+
+  // Publishability section groups counts.
+  const pubSection = sectionSliceBySepOrHeading(REPORT_SECTIONS[1]);
+  check("Publishability lists all 4 buckets", [
+    "Publish-ready",
+    "Needs evidence",
+    "Unsupported claims",
+    "Pending QA",
+  ].every((s) => pubSection.includes(s)));
+
+  // Evidence Needed section aggregates gaps.
+  const evidenceNeededSection = sectionSliceBySepOrHeading(REPORT_SECTIONS[2]);
+  check(
+    "Evidence Needed lists 'pricing information' (from fix brief)",
+    evidenceNeededSection.includes("pricing information")
+  );
+  check(
+    "Evidence Needed extracts placeholder plain text",
+    evidenceNeededSection.includes("third-party review")
+  );
+
+  // Probe Results section labels each probe as simulated.
+  const probeIdx = markdown.indexOf(`## ${REPORT_SECTIONS[6]}`);
+  const probeSection = markdown.slice(probeIdx, markdown.indexOf(`## ${REPORT_SECTIONS[7]}`));
+  check(
+    "probe section warns 'every result … came from a simulated' probe",
+    probeSection.includes("simulated") && probeSection.includes("No live call was made")
+  );
+  check(
+    "probe headings use 'Simulated <Platform>-style probe'",
+    probeSection.includes("Simulated Chatgpt-style probe") &&
+      probeSection.includes("Simulated Perplexity-style probe")
+  );
+  check(
+    "each probe body includes 'probe origin: simulated'",
+    (probeSection.match(/probe origin\*\*:\s*simulated/g) ?? []).length >= 2
+  );
+
+  // What this means section covers the four bullet-points from the brief.
+  const wtmSection = sectionSliceBySepOrHeading(REPORT_SECTIONS[7]);
+  check("What this means mentions lost prompts", wtmSection.includes("lost or under-performed"));
+  check("What this means mentions competitors that appeared", wtmSection.includes("competitors appeared instead"));
+  check("What this means mentions commercial impact", wtmSection.includes("Why this matters commercially"));
+  check("What this means calls out the sampling caveat", wtmSection.includes("small, simulated probe"));
+
+  // Recommended Next Actions section produces concrete website actions.
+  const rnaSection = sectionSliceBySepOrHeading(REPORT_SECTIONS[10]);
+  check(
+    "Recommended Next Actions contains a comparison-page action",
+    rnaSection.includes("comparison page: **Acme Corp vs Jira**")
+  );
+  check(
+    "Recommended Next Actions surfaces a citation/review action",
+    rnaSection.includes("third-party reviews")
+  );
+
+  // Generated Assets section is grouped by status.
+  const assetsIdx = markdown.indexOf(`## ${REPORT_SECTIONS[13]}`);
+  const assetsSection = markdown.slice(assetsIdx, markdown.indexOf(`## ${REPORT_SECTIONS[14]}`));
+  check("Generated Assets section has Publish-ready subheading", /###\s+Publish-ready\s+\(\d+\)/.test(assetsSection));
+  check("Generated Assets section has Needs evidence subheading", /###\s+Needs evidence\s+\(\d+\)/.test(assetsSection));
+  check("Generated Assets section has Unsupported claims subheading", /###\s+Unsupported claims\s+\(\d+\)/.test(assetsSection));
+  check("Generated Assets section has Pending QA subheading", /###\s+Pending QA\s+\(\d+\)/.test(assetsSection));
+
+  // NOT READY blockquotes carry the QA-context tagline.
+  const nrCount = (markdown.match(/NOT READY TO PUBLISH/g) ?? []).length;
+  check("Multiple NOT READY TO PUBLISH labels present", nrCount >= 3, `count=${nrCount}`);
+  check(
+    "needs_evidence carries the 'Held by QA to prevent unsupported claims' tagline",
+    markdown.includes("Held by QA to prevent unsupported claims")
+  );
+  check(
+    "pending_qa carries the 'QA has not run against this draft yet' tagline",
+    markdown.includes("QA has not run against this draft yet")
+  );
+  check(
+    "unsupported_claims carries the 'not backed by the Evidence Bank yet' tagline",
+    markdown.includes("not backed by the Evidence Bank yet")
+  );
+
+  // Read-only invariant preserved.
+  check(
+    "buildMvpReport did not mutate input tree",
+    JSON.stringify(input, mapReplacer) === snapshotJson
+  );
+  check(
+    "buildMvpReport did not mutate latestQaByAsset",
+    input.latestQaByAsset.size === savedMapSize
+  );
+
+  // Distribution & publishability output correctness.
+  check("qaDistribution.pending_qa = 1", qaDistribution.pending_qa === 1);
+  check("qaDistribution.needs_evidence = 1", qaDistribution.needs_evidence === 1);
+  check("qaDistribution.safe_to_publish = 1", qaDistribution.safe_to_publish === 1);
+  check("qaDistribution.unsupported_claims = 1", qaDistribution.unsupported_claims === 1);
+  check("publishability.publishReady = 1", publishability.publishReady === 1);
+  check("publishability.total = 4", publishability.total === 4);
+  check("warnings.notReadyAssetCount = 3", warnings.notReadyAssetCount === 3);
+
+  // Filename shape.
+  check(
+    "filename is zypact-report-<projectId>-<yyyymmdd>.md",
+    /^zypact-report-[a-f0-9-]{36}-\d{8}\.md$/.test(filename)
+  );
+}
+
+function mapReplacer(_key: string, value: unknown): unknown {
+  if (value instanceof Map) {
+    return { __map: [...value.entries()].sort((a, b) => a[0].localeCompare(b[0])) };
+  }
+  return value;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  companyName fallback flows into the exported report                         */
+/* -------------------------------------------------------------------------- */
+
+function testCompanyNameInReport(): void {
+  const jsonLd = '{"@context":"https://schema.org"}';
+  const spicy = "prose";
+
+  // Case: project.companyName is null but mirror profile has "Linear".
+  const input = makeFixtures({
+    ownerId: "user-alice",
+    spicyAssetContent: spicy,
+    jsonLdContent: jsonLd,
+    projectCompanyName: null,
+    mirrorCompanyName: "Linear",
+  });
+  const { markdown } = buildMvpReport(input);
+  check(
+    "exec summary uses mirror-profile companyName when project has none",
+    markdown.includes("**Brand**: Linear")
+  );
+  check(
+    "project summary tags source as mirror_profile",
+    markdown.includes("**Brand**: Linear _(source: `mirror_profile`)_")
+  );
+  check(
+    "report NEVER shows 'companyName: n/a' when mirror profile has a name",
+    !markdown.includes("companyName: n/a") && !markdown.includes("**Brand**: n/a")
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Category caveat surfaces model-inferred over-specificity                    */
+/* -------------------------------------------------------------------------- */
+
+function testCategoryCaveat(): void {
+  const input = makeFixtures({
+    ownerId: "user-alice",
+    spicyAssetContent: "prose",
+    jsonLdContent: '{"@type":"Thing"}',
+    categoryConfidence: "high",
+    detectedCategory: "AI product development platform for teams",
+  });
+  const { markdown } = buildMvpReport(input);
+  check(
+    "over-specific 'for teams'-shaped category gets a model-inferred caveat",
+    markdown.includes("model-inferred and may over-specify the brand")
+  );
+
+  const inputLow = makeFixtures({
+    ownerId: "user-alice",
+    spicyAssetContent: "prose",
+    jsonLdContent: '{"@type":"Thing"}',
+    categoryConfidence: "low",
+    detectedCategory: "SaaS",
+  });
+  const { markdown: mdLow } = buildMvpReport(inputLow);
+  check(
+    "low-confidence category emits a confidence caveat",
+    mdLow.includes("Category confidence is `low`")
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Aggregation                                                                */
+/* -------------------------------------------------------------------------- */
+
+function testAggregateEvidenceNeeded(): void {
+  const input = makeFixtures({
+    ownerId: "user-alice",
+    spicyAssetContent: "prose",
+    jsonLdContent: "{}",
+  });
+  const agg = aggregateEvidenceNeeded(input);
+  check(
+    "aggregate contains 'pricing information'",
+    agg.includes("pricing information")
+  );
+  check(
+    "aggregate strips [EVIDENCE NEEDED: …] wrapper from placeholders",
+    agg.every((s) => !s.startsWith("[EVIDENCE NEEDED"))
+  );
+
+  // Controlled dedup test: inject an exact-duplicate evidence need into
+  // the fix brief and assert only one copy makes it into the aggregate.
+  const dupInput: BuildMvpReportInput = {
+    ...input,
+    fixBriefs: [
+      { ...input.fixBriefs[0], evidenceNeeded: ["Pricing information", "pricing information"] },
+    ],
+  };
+  const dupAgg = aggregateEvidenceNeeded(dupInput);
+  check(
+    "aggregate deduplicates by canonical lowercase whitespace",
+    dupAgg.filter((s) => s.toLowerCase() === "pricing information").length === 1
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Secret leak inside a report body                                           */
+/* -------------------------------------------------------------------------- */
+
+function testSecretLeakThroughReport(): void {
+  const fake = "sb_secret_TESTREDACTABLEBUTNOTREAL123456";
+  const jsonLd = '{"@context":"https://schema.org"}';
+  const spicy = "prose containing service token: " + fake;
+  const input = makeFixtures({
+    ownerId: "user-alice",
+    spicyAssetContent: spicy,
+    jsonLdContent: jsonLd,
+  });
+  const { markdown, warnings } = buildMvpReport({ ...input, sensitiveValues: [fake] });
+  check("sensitive value not present in exported markdown", !markdown.includes(fake));
+  check("redaction marker appears", markdown.includes(REDACTED_MARKER));
+  check("warnings.secretsRedactedCount >= 1", warnings.secretsRedactedCount >= 1);
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Entry                                                                     */
+/* -------------------------------------------------------------------------- */
+
+testFence();
+testRedactSensitive();
+testCompanyNameFallback();
+testSimulatedProbeHonesty();
+testGapToRecommendedAction();
+testAggregateEvidenceNeeded();
+testFullReport();
+testCompanyNameInReport();
+testCategoryCaveat();
+testSecretLeakThroughReport();
+
+console.log(
+  `\n${checks - failures}/${checks} checks passed. ` +
+    (failures === 0
+      ? "Sprint 11.5 export builder scenario PASSED."
+      : "Sprint 11.5 export builder scenario FAILED.")
+);
+process.exit(failures === 0 ? 0 : 1);

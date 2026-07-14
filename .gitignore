@@ -15,3 +15,12 @@ tailwind.config.broken-*.ts
 tailwind.config.disabled-*.ts
 postcss.config.disabled-*.js
 postcss.config.disabled-*.mjs
+
+# Local and generated MVP artifacts
+.validation-runs/
+exports/
+tsconfig.tsbuildinfo
+zypact-demo-report-*.md
+zypact-sprint*/
+app/page.legacy-*.tsx
+scripts/tmp-*.ts

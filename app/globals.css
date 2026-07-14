@@ -432,3 +432,119 @@ h2 {
     margin-bottom: 20px;
   }
 }
+
+/* Snapshot email verification */
+
+.verification-page {
+  min-height: 100vh;
+  background: var(--bg-alt);
+}
+
+.verification-shell {
+  width: 100%;
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 72px 24px 120px;
+}
+
+.verification-card {
+  border: 1px solid var(--card-line);
+  border-radius: 20px;
+  background: var(--white);
+  padding: clamp(28px, 6vw, 52px);
+  box-shadow: 0 18px 50px rgba(17, 17, 17, 0.04);
+}
+
+.verification-result {
+  max-width: 34rem;
+}
+
+.verification-icon {
+  width: 42px;
+  height: 42px;
+  margin-bottom: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--heading);
+  color: var(--white);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.verification-label {
+  margin: 0 0 14px;
+  color: var(--label);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.verification-title {
+  margin: 0;
+  max-width: 34rem;
+  font-size: clamp(2rem, 6vw, 3.25rem);
+  line-height: 1.06;
+}
+
+.verification-copy {
+  max-width: 31rem;
+  margin: 22px 0 0;
+  color: var(--body);
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+.verification-actions {
+  margin-top: 30px;
+}
+
+.verification-actions .button {
+  min-width: 150px;
+}
+
+.verification-actions button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.verification-note {
+  margin: 16px 0 0;
+  color: var(--fine);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.verification-feedback {
+  margin: 22px 0 0;
+  border: 1px solid var(--card-line);
+  border-radius: 10px;
+  background: var(--bg-alt);
+  padding: 14px 16px;
+  color: var(--body);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.verification-status {
+  color: var(--body);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+@media (max-width: 640px) {
+  .verification-shell {
+    padding-top: 40px;
+  }
+
+  .verification-card {
+    border-radius: 16px;
+  }
+
+  .verification-actions .button {
+    width: 100%;
+  }
+}

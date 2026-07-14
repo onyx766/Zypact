@@ -711,6 +711,29 @@ export const supabaseAdapter: DbAdapter = {
       : null;
   },
 
+  async finalizeSnapshotRequest(
+    requestId,
+    projectId,
+    status
+  ) {
+    const { data, error } = await getClient()
+      .rpc(
+        "finalize_snapshot_request",
+        {
+          p_request_id: requestId,
+          p_project_id: projectId,
+          p_final_status: status,
+        }
+      )
+      .maybeSingle<SnapshotRequestDbRow>();
+
+    if (error) throw error;
+
+    return data
+      ? mapSnapshotRequest(data)
+      : null;
+  },
+
   async createProject(input: CreateProjectInput): Promise<Project> {
     const { data, error } = await getClient()
       .from("projects")

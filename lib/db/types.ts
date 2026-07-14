@@ -331,6 +331,10 @@ export type SnapshotProgressStage =
   | "building_diagnosis"
   | "quality_review";
 
+export type SnapshotCompletionStatus =
+  | "report_ready"
+  | "failed";
+
 export type SnapshotRequestLimitCode =
   | "email_30d"
   | "domain_30d"
@@ -410,6 +414,11 @@ export interface DbAdapter {
     requestId: string,
     projectId: string,
     stage: SnapshotProgressStage
+  ): Promise<SnapshotRequest | null>;
+  finalizeSnapshotRequest(
+    requestId: string,
+    projectId: string,
+    status: SnapshotCompletionStatus
   ): Promise<SnapshotRequest | null>;
   createProject(input: CreateProjectInput): Promise<Project>;
   updateProjectCategory(projectId: string, category: string): Promise<void>;

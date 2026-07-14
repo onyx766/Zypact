@@ -450,6 +450,53 @@ export const memoryAdapter: DbAdapter = {
     return { ...updated };
   },
 
+  async finalizeSnapshotRequest(
+    requestId,
+    projectId,
+    status
+  ) {
+    const store = getStore();
+    const request =
+      store.snapshotRequests.get(requestId);
+
+    if (
+      !request ||
+      request.projectId !== projectId
+    ) {
+      return null;
+    }
+
+    if (request.status === status) {
+      return { ...request };
+    }
+
+    if (request.status !== "running") {
+      return null;
+    }
+
+    if (
+      status === "report_ready" &&
+      request.progressStage !==
+        "quality_review"
+    ) {
+      return null;
+    }
+
+    const finalized: SnapshotRequest = {
+      ...request,
+      status,
+      updatedAt:
+        new Date().toISOString(),
+    };
+
+    store.snapshotRequests.set(
+      requestId,
+      finalized
+    );
+
+    return { ...finalized };
+  },
+
   async createProject(input: CreateProjectInput): Promise<Project> {
     const project: Project = {
       id: randomUUID(),

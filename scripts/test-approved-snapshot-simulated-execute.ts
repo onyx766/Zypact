@@ -175,7 +175,11 @@ async function main() {
 
     assert.equal(
       storedRequest.status,
-      "running"
+      "report_ready"
+    );
+
+    console.log(
+      "✓ successful execution reached report_ready"
     );
 
     assert.ok(
@@ -327,7 +331,7 @@ async function main() {
     );
 
     console.log(
-      "\n7/7 checks passed. Approved snapshot simulated execution PASSED."
+      "\n8/8 checks passed. Approved snapshot simulated execution PASSED."
     );
   } finally {
     let cleanupProjectId =

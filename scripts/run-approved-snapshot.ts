@@ -461,6 +461,9 @@ async function executeScan(
     );
   }
 
+  const reservedProjectId =
+    projectId;
+
   mkdirSync(
     dirname(args.out),
     {
@@ -482,7 +485,7 @@ async function executeScan(
       "--competitors",
       args.competitors.join(","),
       "--project-id",
-      projectId,
+      reservedProjectId,
       "--probe-mode",
       args.probeMode,
       "--budget-usd",
@@ -505,13 +508,55 @@ async function executeScan(
     }
   );
 
+  const markFailed =
+    async (
+      message: string
+    ): Promise<never> => {
+      const failedRequest =
+        await db.finalizeSnapshotRequest(
+          request.id,
+          reservedProjectId,
+          "failed"
+        );
+
+      if (
+        !failedRequest ||
+        failedRequest.status !== "failed"
+      ) {
+        throw new Error(
+          `${message}\nSnapshot failure state could not be recorded.`
+        );
+      }
+
+      throw new Error(message);
+    };
+
   if (command.error) {
-    throw command.error;
+    await markFailed(
+      command.error.message
+    );
   }
 
   if (command.status !== 0) {
-    fail(
+    await markFailed(
       `MVP runner exited with status ${command.status ?? "unknown"}.`
+    );
+  }
+
+  const completedRequest =
+    await db.finalizeSnapshotRequest(
+      request.id,
+      reservedProjectId,
+      "report_ready"
+    );
+
+  if (
+    !completedRequest ||
+    completedRequest.status !==
+      "report_ready"
+  ) {
+    fail(
+      "Snapshot completion could not be recorded."
     );
   }
 
@@ -520,7 +565,11 @@ async function executeScan(
   );
 
   console.log(
-    `projectId       : ${projectId}`
+    `projectId       : ${reservedProjectId}`
+  );
+
+  console.log(
+    "request status  : report_ready"
   );
 
   console.log(

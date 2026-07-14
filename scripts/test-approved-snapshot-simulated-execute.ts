@@ -63,6 +63,10 @@ async function main() {
   const outputPath =
     `/tmp/zypact-approved-execute-${suffix}.md`;
 
+  const shortReportPath =
+    outputPath.replace(/\.md$/i, "") +
+    "-short.md";
+
   const requestId = randomUUID();
   const approvedBy = randomUUID();
 
@@ -330,10 +334,52 @@ async function main() {
       "✓ simulated MVP report was generated"
     );
 
+    assert.equal(
+      existsSync(shortReportPath),
+      true
+    );
+
+    const shortReport =
+      readFileSync(
+        shortReportPath,
+        "utf8"
+      );
+
+    assert.ok(
+      shortReport.length > 300
+    );
+
+    assert.ok(
+      shortReport.includes(
+        `# Zypact Short Report — ${companyName}`
+      )
+    );
+
+    assert.ok(
+      shortReport.includes(
+        "## 1. Executive diagnosis"
+      )
+    );
+
+    assert.equal(
+      shortReport.includes("projectId"),
+      false
+    );
+
     console.log(
-      "\n8/8 checks passed. Approved snapshot simulated execution PASSED."
+      "✓ existing 14B short report was generated"
+    );
+
+    console.log(
+      "\n9/9 checks passed. Approved snapshot simulated execution PASSED."
     );
   } finally {
+    rmSync(
+      shortReportPath,
+      {
+        force: true,
+      }
+    );
     let cleanupProjectId =
       projectId;
 

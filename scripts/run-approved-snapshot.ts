@@ -464,6 +464,10 @@ async function executeScan(
   const reservedProjectId =
     projectId;
 
+  const shortReportPath =
+    args.out.replace(/\.md$/i, "") +
+    "-short.md";
+
   mkdirSync(
     dirname(args.out),
     {
@@ -543,6 +547,36 @@ async function executeScan(
     );
   }
 
+  const shortReportCommand =
+    spawnSync(
+      "npx",
+      [
+        "tsx",
+        "scripts/render-sales-report.ts",
+        args.out,
+        shortReportPath,
+        "--focus-competitors",
+        args.competitors.join(","),
+      ],
+      {
+        cwd: process.cwd(),
+        env: process.env,
+        stdio: "inherit",
+      }
+    );
+
+  if (shortReportCommand.error) {
+    await markFailed(
+      `Short report renderer failed: ${shortReportCommand.error.message}`
+    );
+  }
+
+  if (shortReportCommand.status !== 0) {
+    await markFailed(
+      `Short report renderer exited with status ${shortReportCommand.status ?? "unknown"}.`
+    );
+  }
+
   const completedRequest =
     await db.finalizeSnapshotRequest(
       request.id,
@@ -574,6 +608,10 @@ async function executeScan(
 
   console.log(
     `report path     : ${args.out}`
+  );
+
+  console.log(
+    `short report    : ${shortReportPath}`
   );
 }
 

@@ -16,6 +16,7 @@ import type {
   Gap,
   GapInput,
   GapMapRow,
+  IssueSnapshotRequestVerificationInput,
   GeneratedPrompt,
   GeneratedPromptInput,
   MirrorProfileRow,
@@ -590,6 +591,40 @@ export const supabaseAdapter: DbAdapter = {
     }
 
     return mapSnapshotRequest(data);
+  },
+
+  async issueSnapshotRequestVerification(
+    input: IssueSnapshotRequestVerificationInput
+  ): Promise<boolean> {
+    const { data, error } = await getClient().rpc(
+      "issue_snapshot_request_verification",
+      {
+        p_request_id: input.requestId,
+        p_token_hash: input.tokenHash,
+        p_expires_at: input.expiresAt,
+      }
+    );
+
+    if (error) throw error;
+
+    return data === true;
+  },
+
+  async consumeSnapshotRequestVerification(
+    tokenHash: string
+  ): Promise<SnapshotRequest | null> {
+    const { data, error } = await getClient()
+      .rpc(
+        "consume_snapshot_request_verification",
+        {
+          p_token_hash: tokenHash,
+        }
+      )
+      .maybeSingle<SnapshotRequestDbRow>();
+
+    if (error) throw error;
+
+    return data ? mapSnapshotRequest(data) : null;
   },
 
   async createProject(input: CreateProjectInput): Promise<Project> {

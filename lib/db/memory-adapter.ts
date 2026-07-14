@@ -15,6 +15,7 @@ import type {
   Gap,
   GapInput,
   GapMapRow,
+  IssueSnapshotRequestVerificationInput,
   GeneratedPrompt,
   GeneratedPromptInput,
   MirrorProfileRow,
@@ -42,8 +43,16 @@ import { evaluateSnapshotRequestLimits } from "@/lib/snapshot-requests/limits";
  * plug in Supabase for persistence.
  */
 
+interface MemorySnapshotVerification {
+  requestId: string;
+  tokenHash: string;
+  expiresAt: string;
+}
+
 interface MemoryStore {
   snapshotRequests: Map<string, SnapshotRequest>;
+  snapshotVerificationsByHash: Map<string, MemorySnapshotVerification>;
+  snapshotVerificationHashByRequest: Map<string, string>;
   projects: Map<string, Project>;
   sitePagesByProject: Map<string, SitePage[]>;
   mirrorProfilesByProject: Map<string, MirrorProfileRow>;
@@ -66,6 +75,8 @@ function getStore(): MemoryStore {
   if (!g[globalKey]) {
     g[globalKey] = {
       snapshotRequests: new Map(),
+      snapshotVerificationsByHash: new Map(),
+      snapshotVerificationHashByRequest: new Map(),
       projects: new Map(),
       sitePagesByProject: new Map(),
       mirrorProfilesByProject: new Map(),
@@ -132,6 +143,112 @@ export const memoryAdapter: DbAdapter = {
 
     store.snapshotRequests.set(row.id, row);
     return { ...row };
+  },
+
+  async issueSnapshotRequestVerification(
+    input: IssueSnapshotRequestVerificationInput
+  ): Promise<boolean> {
+    const store = getStore();
+    const request = store.snapshotRequests.get(input.requestId);
+    const expiresAtMs = new Date(input.expiresAt).getTime();
+
+    if (
+      !request ||
+      request.status !== "pending_verification" ||
+      !Number.isFinite(expiresAtMs) ||
+      expiresAtMs <= Date.now()
+    ) {
+      return false;
+    }
+
+    const existingHash =
+      store.snapshotVerificationHashByRequest.get(
+        input.requestId
+      );
+
+    if (existingHash) {
+      store.snapshotVerificationsByHash.delete(
+        existingHash
+      );
+    }
+
+    const conflictingVerification =
+      store.snapshotVerificationsByHash.get(
+        input.tokenHash
+      );
+
+    if (
+      conflictingVerification &&
+      conflictingVerification.requestId !==
+        input.requestId
+    ) {
+      throw new Error(
+        "Snapshot verification token hash collision"
+      );
+    }
+
+    store.snapshotVerificationsByHash.set(
+      input.tokenHash,
+      {
+        requestId: input.requestId,
+        tokenHash: input.tokenHash,
+        expiresAt: input.expiresAt,
+      }
+    );
+
+    store.snapshotVerificationHashByRequest.set(
+      input.requestId,
+      input.tokenHash
+    );
+
+    return true;
+  },
+
+  async consumeSnapshotRequestVerification(
+    tokenHash: string
+  ): Promise<SnapshotRequest | null> {
+    const store = getStore();
+    const verification =
+      store.snapshotVerificationsByHash.get(tokenHash);
+
+    if (!verification) {
+      return null;
+    }
+
+    const request = store.snapshotRequests.get(
+      verification.requestId
+    );
+
+    const expired =
+      new Date(verification.expiresAt).getTime() <=
+      Date.now();
+
+    if (
+      !request ||
+      request.status !== "pending_verification" ||
+      expired
+    ) {
+      return null;
+    }
+
+    const now = new Date().toISOString();
+    const verifiedRequest: SnapshotRequest = {
+      ...request,
+      status: "pending_approval",
+      updatedAt: now,
+    };
+
+    store.snapshotRequests.set(
+      verifiedRequest.id,
+      verifiedRequest
+    );
+
+    store.snapshotVerificationsByHash.delete(tokenHash);
+    store.snapshotVerificationHashByRequest.delete(
+      verifiedRequest.id
+    );
+
+    return { ...verifiedRequest };
   },
 
   async createProject(input: CreateProjectInput): Promise<Project> {

@@ -363,6 +363,12 @@ export interface CreateSnapshotRequestInput {
   requestIpHash?: string | null;
 }
 
+export interface IssueSnapshotRequestVerificationInput {
+  requestId: string;
+  tokenHash: string;
+  expiresAt: string;
+}
+
 export interface CreateProjectInput {
   domain: string;
   companyName?: string | null;
@@ -373,6 +379,12 @@ export interface DbAdapter {
   createSnapshotRequest(
     input: CreateSnapshotRequestInput
   ): Promise<SnapshotRequest>;
+  issueSnapshotRequestVerification(
+    input: IssueSnapshotRequestVerificationInput
+  ): Promise<boolean>;
+  consumeSnapshotRequestVerification(
+    tokenHash: string
+  ): Promise<SnapshotRequest | null>;
   createProject(input: CreateProjectInput): Promise<Project>;
   updateProjectCategory(projectId: string, category: string): Promise<void>;
   saveSitePages(

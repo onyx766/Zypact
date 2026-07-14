@@ -1,7 +1,7 @@
 import { crawlSite, type CrawledPage } from "@/lib/crawler/crawl-site";
 import { runSiteReaderAgent } from "@/lib/agents/site-reader";
 import { getDb } from "@/lib/db";
-import type { Project, MirrorProfileRow } from "@/lib/db/types";
+import type { DbAdapter, Project, MirrorProfileRow } from "@/lib/db/types";
 import { getPagesCrawlLimit, type PlanId, DEFAULT_PLAN } from "@/lib/pricing/pricing-config";
 import type { SiteReaderOutput } from "@/lib/schemas/site-reader.schema";
 import { withPipelineStep } from "./save-pipeline-step";
@@ -24,6 +24,7 @@ export interface RunMirrorScanInput {
   websiteUrl: string;
   companyName?: string;
   planId?: PlanId;
+  projectId?: string;
   /**
    * Owner of the newly-created project. Passed by the API route from the
    * authenticated user (Sprint 10.5). May be `null` only for internal CLI
@@ -32,6 +33,100 @@ export interface RunMirrorScanInput {
    * rows via `requireProjectOwner`.
    */
   userId?: string | null;
+}
+
+export type ResolveMirrorScanProjectResult =
+  | {
+      ok: true;
+      project: Project;
+      created: boolean;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+function normalizeProjectDomain(value: string): string {
+  const raw = value.trim();
+  const url =
+    /^https?:\/\//i.test(raw)
+      ? raw
+      : `https://${raw}`;
+
+  return new URL(url)
+    .hostname
+    .toLowerCase()
+    .replace(/^www\./, "");
+}
+
+export async function resolveMirrorScanProject(
+  input: RunMirrorScanInput,
+  db: DbAdapter
+): Promise<ResolveMirrorScanProjectResult> {
+  let requestedDomain: string;
+
+  try {
+    requestedDomain =
+      normalizeProjectDomain(input.websiteUrl);
+  } catch {
+    return {
+      ok: false,
+      error: "Invalid website URL",
+    };
+  }
+
+  if (input.projectId) {
+    const existing =
+      await db.getProject(input.projectId);
+
+    if (!existing) {
+      return {
+        ok: false,
+        error:
+          "Reserved project was not found",
+      };
+    }
+
+    let existingDomain: string;
+
+    try {
+      existingDomain =
+        normalizeProjectDomain(existing.domain);
+    } catch {
+      return {
+        ok: false,
+        error:
+          "Reserved project has an invalid domain",
+      };
+    }
+
+    if (existingDomain !== requestedDomain) {
+      return {
+        ok: false,
+        error:
+          "Reserved project domain does not match the requested website",
+      };
+    }
+
+    return {
+      ok: true,
+      project: existing,
+      created: false,
+    };
+  }
+
+  const project = await db.createProject({
+    domain: requestedDomain,
+    companyName:
+      input.companyName ?? null,
+    userId: input.userId ?? null,
+  });
+
+  return {
+    ok: true,
+    project,
+    created: true,
+  };
 }
 
 export type RunMirrorScanResult =
@@ -53,18 +148,21 @@ export async function runMirrorScan(
   const maxPages = getPagesCrawlLimit(planId);
   const db = getDb();
 
-  let hostname: string;
-  try {
-    hostname = new URL(input.websiteUrl).hostname;
-  } catch {
-    return { ok: false, error: "Invalid website URL" };
+  const resolvedProject =
+    await resolveMirrorScanProject(
+      input,
+      db
+    );
+
+  if (!resolvedProject.ok) {
+    return {
+      ok: false,
+      error: resolvedProject.error,
+    };
   }
 
-  const project = await db.createProject({
-    domain: hostname,
-    companyName: input.companyName ?? null,
-    userId: input.userId ?? null,
-  });
+  const project =
+    resolvedProject.project;
 
   try {
     const crawl = await withPipelineStep(

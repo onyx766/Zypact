@@ -293,6 +293,48 @@ export const memoryAdapter: DbAdapter = {
     return true;
   },
 
+  async approveAndQueueSnapshotRequest(
+    requestId: string,
+    approvedBy: string
+  ): Promise<SnapshotRequest | null> {
+    const store = getStore();
+    const request =
+      store.snapshotRequests.get(requestId);
+
+    if (!request || !approvedBy) {
+      return null;
+    }
+
+    if (request.status === "queued") {
+      return { ...request };
+    }
+
+    if (
+      request.status !==
+      "pending_approval"
+    ) {
+      return null;
+    }
+
+    const now = new Date().toISOString();
+
+    // The database implementation records an intermediate
+    // approved state inside one transaction. The in-memory
+    // adapter exposes only the final queued result.
+    const queuedRequest: SnapshotRequest = {
+      ...request,
+      status: "queued",
+      updatedAt: now,
+    };
+
+    store.snapshotRequests.set(
+      requestId,
+      queuedRequest
+    );
+
+    return { ...queuedRequest };
+  },
+
   async createProject(input: CreateProjectInput): Promise<Project> {
     const project: Project = {
       id: randomUUID(),

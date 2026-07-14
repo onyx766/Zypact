@@ -642,6 +642,27 @@ export const supabaseAdapter: DbAdapter = {
     return data === true;
   },
 
+  async approveAndQueueSnapshotRequest(
+    requestId: string,
+    approvedBy: string
+  ): Promise<SnapshotRequest | null> {
+    const { data, error } = await getClient()
+      .rpc(
+        "approve_and_queue_snapshot_request",
+        {
+          p_request_id: requestId,
+          p_approved_by: approvedBy,
+        }
+      )
+      .maybeSingle<SnapshotRequestDbRow>();
+
+    if (error) throw error;
+
+    return data
+      ? mapSnapshotRequest(data)
+      : null;
+  },
+
   async createProject(input: CreateProjectInput): Promise<Project> {
     const { data, error } = await getClient()
       .from("projects")

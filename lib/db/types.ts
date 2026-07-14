@@ -388,6 +388,10 @@ export interface DbAdapter {
   failSnapshotVerificationDelivery(
     requestId: string
   ): Promise<boolean>;
+  approveAndQueueSnapshotRequest(
+    requestId: string,
+    approvedBy: string
+  ): Promise<SnapshotRequest | null>;
   createProject(input: CreateProjectInput): Promise<Project>;
   updateProjectCategory(projectId: string, category: string): Promise<void>;
   saveSitePages(

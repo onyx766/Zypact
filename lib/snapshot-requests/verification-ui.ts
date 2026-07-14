@@ -8,6 +8,11 @@ export type SnapshotVerificationUiResult =
       nextStep: "awaiting_founder_approval";
     }
   | {
+      ok: true;
+      status: "queued";
+      nextStep: "awaiting_scan_runner";
+    }
+  | {
       ok: false;
       reason:
         | "invalid_link"
@@ -73,14 +78,27 @@ export async function verifySnapshotEmailLink(
       typeof payload === "object" &&
       "ok" in payload &&
       payload.ok === true &&
-      "status" in payload &&
-      payload.status === "pending_approval"
+      "status" in payload
     ) {
-      return {
-        ok: true,
-        status: "pending_approval",
-        nextStep: "awaiting_founder_approval",
-      };
+      if (payload.status === "queued") {
+        return {
+          ok: true,
+          status: "queued",
+          nextStep: "awaiting_scan_runner",
+        };
+      }
+
+      if (
+        payload.status ===
+        "pending_approval"
+      ) {
+        return {
+          ok: true,
+          status: "pending_approval",
+          nextStep:
+            "awaiting_founder_approval",
+        };
+      }
     }
 
     if (response.status === 400) {

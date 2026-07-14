@@ -322,6 +322,22 @@ export type SnapshotRequestStatus =
   | "rejected"
   | "expired";
 
+export type SnapshotRequestLimitCode =
+  | "email_30d"
+  | "domain_30d"
+  | "active_domain"
+  | "ip_daily";
+
+export class SnapshotRequestLimitError extends Error {
+  readonly code: SnapshotRequestLimitCode;
+
+  constructor(code: SnapshotRequestLimitCode) {
+    super(`Snapshot request limit reached: ${code}`);
+    this.name = "SnapshotRequestLimitError";
+    this.code = code;
+  }
+}
+
 export interface SnapshotRequest {
   id: string;
   workEmail: string;

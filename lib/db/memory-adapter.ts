@@ -29,6 +29,8 @@ import type {
   SnapshotRequest,
   SitePage,
 } from "./types";
+import { SnapshotRequestLimitError } from "./types";
+import { evaluateSnapshotRequestLimits } from "@/lib/snapshot-requests/limits";
 
 /**
  * In-memory adapter. Used when Supabase is not configured so Sprint 1 is
@@ -104,6 +106,14 @@ export const memoryAdapter: DbAdapter = {
   async createSnapshotRequest(
     input: CreateSnapshotRequestInput
   ): Promise<SnapshotRequest> {
+    const store = getStore();
+    const existing = [...store.snapshotRequests.values()];
+    const limit = evaluateSnapshotRequestLimits(existing, input);
+
+    if (!limit.ok) {
+      throw new SnapshotRequestLimitError(limit.code);
+    }
+
     const now = new Date().toISOString();
     const row: SnapshotRequest = {
       id: randomUUID(),
@@ -120,7 +130,7 @@ export const memoryAdapter: DbAdapter = {
       updatedAt: now,
     };
 
-    getStore().snapshotRequests.set(row.id, row);
+    store.snapshotRequests.set(row.id, row);
     return { ...row };
   },
 

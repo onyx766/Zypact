@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { SnapshotRequestLimitError } from "@/lib/db/types";
 import {
   extractRequestIp,
   hashRequestIp,
@@ -23,6 +24,18 @@ function unavailableResponse() {
       error: "Snapshot requests are temporarily unavailable.",
     },
     { status: 503 }
+  );
+}
+
+function requestLimitResponse() {
+  return NextResponse.json(
+    {
+      ok: false,
+      error:
+        "A free snapshot was already requested recently. Try again later or contact Zypact.",
+      code: "snapshot_request_limit",
+    },
+    { status: 429 }
   );
 }
 
@@ -137,6 +150,10 @@ export async function POST(request: Request) {
       { status: 201 }
     );
   } catch (error) {
+    if (error instanceof SnapshotRequestLimitError) {
+      return requestLimitResponse();
+    }
+
     if (error instanceof SnapshotRequestValidationError) {
       return NextResponse.json(
         {

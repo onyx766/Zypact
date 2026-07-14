@@ -28,8 +28,10 @@ import type {
   QaReportRowInput,
   SaveProbeResultInput,
   SnapshotRequest,
+  SnapshotRequestLimitCode,
   SitePage,
 } from "./types";
+import { SnapshotRequestLimitError } from "./types";
 
 /**
  * Supabase adapter (service role). Only instantiated when
@@ -245,6 +247,30 @@ interface ProbeResultDbRow {
   verdict: string;
   why_client_lost: string;
   created_at: string;
+}
+
+function snapshotLimitCodeFromError(
+  error: { message?: string } | null
+): SnapshotRequestLimitCode | null {
+  const message = error?.message ?? "";
+
+  if (message.includes("snapshot_limit_email_30d")) {
+    return "email_30d";
+  }
+
+  if (message.includes("snapshot_limit_domain_30d")) {
+    return "domain_30d";
+  }
+
+  if (message.includes("snapshot_limit_active_domain")) {
+    return "active_domain";
+  }
+
+  if (message.includes("snapshot_limit_ip_daily")) {
+    return "ip_daily";
+  }
+
+  return null;
 }
 
 function mapSnapshotRequest(r: SnapshotRequestDbRow): SnapshotRequest {
@@ -542,21 +568,24 @@ export const supabaseAdapter: DbAdapter = {
     input: CreateSnapshotRequestInput
   ): Promise<SnapshotRequest> {
     const { data, error } = await getClient()
-      .from("snapshot_requests")
-      .insert({
-        work_email: input.workEmail,
-        normalized_email: input.normalizedEmail,
-        company_name: input.companyName,
-        website_url: input.websiteUrl,
-        normalized_domain: input.normalizedDomain,
-        buyer_category: input.buyerCategory,
-        status: "pending_verification",
-        request_ip_hash: input.requestIpHash ?? null,
+      .rpc("create_snapshot_request_guarded", {
+        p_work_email: input.workEmail,
+        p_normalized_email: input.normalizedEmail,
+        p_company_name: input.companyName,
+        p_website_url: input.websiteUrl,
+        p_normalized_domain: input.normalizedDomain,
+        p_buyer_category: input.buyerCategory,
+        p_request_ip_hash: input.requestIpHash ?? null,
       })
-      .select("*")
       .single<SnapshotRequestDbRow>();
 
     if (error || !data) {
+      const limitCode = snapshotLimitCodeFromError(error);
+
+      if (limitCode) {
+        throw new SnapshotRequestLimitError(limitCode);
+      }
+
       throw error ?? new Error("createSnapshotRequest failed");
     }
 

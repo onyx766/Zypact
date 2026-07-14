@@ -3,7 +3,7 @@ import { isIP } from "node:net";
 import { z } from "zod";
 import type { CreateSnapshotRequestInput } from "@/lib/db/types";
 
-const snapshotRequestSchema = z
+const requestFieldsSchema = z
   .object({
     workEmail: z.string().trim().email().max(254),
     companyName: z.string().trim().min(2).max(120),
@@ -11,6 +11,18 @@ const snapshotRequestSchema = z
     buyerCategory: z.string().trim().min(2).max(160),
   })
   .strict();
+
+const submissionSchema = requestFieldsSchema
+  .extend({
+    turnstileToken: z
+      .string()
+      .trim()
+      .min(1, "Complete the security check.")
+      .max(2048),
+  })
+  .strict();
+
+type RequestFields = z.infer<typeof requestFieldsSchema>;
 
 export class SnapshotRequestValidationError extends Error {
   readonly issues: Record<string, string[]>;
@@ -20,6 +32,21 @@ export class SnapshotRequestValidationError extends Error {
     this.name = "SnapshotRequestValidationError";
     this.issues = issues;
   }
+}
+
+function validationIssues(
+  error: z.ZodError
+): Record<string, string[]> {
+  const flattened = error.flatten().fieldErrors;
+  const issues: Record<string, string[]> = {};
+
+  for (const [field, messages] of Object.entries(flattened)) {
+    if (messages && messages.length > 0) {
+      issues[field] = messages;
+    }
+  }
+
+  return issues;
 }
 
 function websiteError(message: string): SnapshotRequestValidationError {
@@ -80,33 +107,50 @@ function normalizeWebsite(raw: string): {
   };
 }
 
+function normalizeFields(
+  data: RequestFields
+): CreateSnapshotRequestInput {
+  const website = normalizeWebsite(data.websiteUrl);
+
+  return {
+    workEmail: data.workEmail,
+    normalizedEmail: data.workEmail.toLowerCase(),
+    companyName: data.companyName,
+    websiteUrl: website.websiteUrl,
+    normalizedDomain: website.normalizedDomain,
+    buyerCategory: data.buyerCategory,
+  };
+}
+
 export function normalizeSnapshotRequestInput(
   raw: unknown
 ): CreateSnapshotRequestInput {
-  const parsed = snapshotRequestSchema.safeParse(raw);
+  const parsed = requestFieldsSchema.safeParse(raw);
 
   if (!parsed.success) {
-    const flattened = parsed.error.flatten().fieldErrors;
-    const issues: Record<string, string[]> = {};
-
-    for (const [field, messages] of Object.entries(flattened)) {
-      if (messages && messages.length > 0) {
-        issues[field] = messages;
-      }
-    }
-
-    throw new SnapshotRequestValidationError(issues);
+    throw new SnapshotRequestValidationError(
+      validationIssues(parsed.error)
+    );
   }
 
-  const website = normalizeWebsite(parsed.data.websiteUrl);
+  return normalizeFields(parsed.data);
+}
+
+export function parseSnapshotRequestSubmission(raw: unknown): {
+  input: CreateSnapshotRequestInput;
+  turnstileToken: string;
+} {
+  const parsed = submissionSchema.safeParse(raw);
+
+  if (!parsed.success) {
+    throw new SnapshotRequestValidationError(
+      validationIssues(parsed.error)
+    );
+  }
 
   return {
-    workEmail: parsed.data.workEmail,
-    normalizedEmail: parsed.data.workEmail.toLowerCase(),
-    companyName: parsed.data.companyName,
-    websiteUrl: website.websiteUrl,
-    normalizedDomain: website.normalizedDomain,
-    buyerCategory: parsed.data.buyerCategory,
+    input: normalizeFields(parsed.data),
+    turnstileToken: parsed.data.turnstileToken,
   };
 }
 

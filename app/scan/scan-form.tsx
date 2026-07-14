@@ -17,7 +17,6 @@ import {
 declare global {
   interface Window {
     turnstile?: {
-      ready(callback: () => void): void;
       render(
         container: string | HTMLElement,
         options: {
@@ -94,46 +93,36 @@ export function ScanForm({
       return;
     }
 
-    window.turnstile.ready(() => {
-      if (
-        !window.turnstile ||
-        !widgetContainerRef.current ||
-        widgetIdRef.current
-      ) {
-        return;
-      }
-
-      widgetIdRef.current =
-        window.turnstile.render(
-          widgetContainerRef.current,
-          {
-            sitekey: siteKey,
-            action: "snapshot_request",
-            theme: "light",
-            size: "flexible",
-            callback(token) {
-              setTurnstileToken(token);
-              setTurnstileReady(true);
-              setFieldErrors((current) => {
-                const next = { ...current };
-                delete next.turnstileToken;
-                return next;
-              });
-            },
-            "expired-callback"() {
-              setTurnstileToken("");
-              setTurnstileReady(false);
-            },
-            "error-callback"() {
-              setTurnstileToken("");
-              setTurnstileReady(false);
-              setFeedback(
-                "The security check could not load. Please refresh the page and try again."
-              );
-            },
-          }
-        );
-    });
+    widgetIdRef.current =
+      window.turnstile.render(
+        widgetContainerRef.current,
+        {
+          sitekey: siteKey,
+          action: "snapshot_request",
+          theme: "light",
+          size: "flexible",
+          callback(token) {
+            setTurnstileToken(token);
+            setTurnstileReady(true);
+            setFieldErrors((current) => {
+              const next = { ...current };
+              delete next.turnstileToken;
+              return next;
+            });
+          },
+          "expired-callback"() {
+            setTurnstileToken("");
+            setTurnstileReady(false);
+          },
+          "error-callback"() {
+            setTurnstileToken("");
+            setTurnstileReady(false);
+            setFeedback(
+              "The security check could not load. Please refresh the page and try again."
+            );
+          },
+        }
+      );
   }, [enabled, siteKey]);
 
   useEffect(() => {

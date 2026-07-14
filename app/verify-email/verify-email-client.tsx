@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useRef,
   useState,
 } from "react";
 import {
@@ -19,6 +20,9 @@ type VerificationView =
   | "error";
 
 export function VerifyEmailClient() {
+  const initializationRef =
+    useRef(false);
+
   const [token, setToken] =
     useState<string | null>(null);
 
@@ -26,6 +30,15 @@ export function VerifyEmailClient() {
     useState<VerificationView>("loading");
 
   useEffect(() => {
+    // React development Strict Mode may execute effects twice.
+    // Without this guard, the first execution removes the token
+    // from the address bar and the second incorrectly marks it invalid.
+    if (initializationRef.current) {
+      return;
+    }
+
+    initializationRef.current = true;
+
     const params = new URLSearchParams(
       window.location.search
     );

@@ -24,3 +24,4 @@ zypact-demo-report-*.md
 zypact-sprint*/
 app/page.legacy-*.tsx
 scripts/tmp-*.ts
+supabase/.temp/

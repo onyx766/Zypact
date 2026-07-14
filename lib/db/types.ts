@@ -307,6 +307,46 @@ export interface SaveProbeResultInput {
   whyClientLost: string;
 }
 
+export type SnapshotRequestStatus =
+  | "pending_verification"
+  | "verified"
+  | "pending_approval"
+  | "approved"
+  | "queued"
+  | "running"
+  | "quality_review"
+  | "needs_founder_review"
+  | "report_ready"
+  | "qa_failed"
+  | "failed"
+  | "rejected"
+  | "expired";
+
+export interface SnapshotRequest {
+  id: string;
+  workEmail: string;
+  normalizedEmail: string;
+  companyName: string;
+  websiteUrl: string;
+  normalizedDomain: string;
+  buyerCategory: string;
+  status: SnapshotRequestStatus;
+  requestIpHash: string | null;
+  projectId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateSnapshotRequestInput {
+  workEmail: string;
+  normalizedEmail: string;
+  companyName: string;
+  websiteUrl: string;
+  normalizedDomain: string;
+  buyerCategory: string;
+  requestIpHash?: string | null;
+}
+
 export interface CreateProjectInput {
   domain: string;
   companyName?: string | null;
@@ -314,6 +354,9 @@ export interface CreateProjectInput {
 }
 
 export interface DbAdapter {
+  createSnapshotRequest(
+    input: CreateSnapshotRequestInput
+  ): Promise<SnapshotRequest>;
   createProject(input: CreateProjectInput): Promise<Project>;
   updateProjectCategory(projectId: string, category: string): Promise<void>;
   saveSitePages(

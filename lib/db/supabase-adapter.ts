@@ -3,6 +3,7 @@ import type {
   Competitor,
   CompetitorInput,
   CreateProjectInput,
+  CreateSnapshotRequestInput,
   DbAdapter,
   EvidenceBankProvenance,
   EvidenceBankRow,
@@ -26,6 +27,7 @@ import type {
   QaReportRow,
   QaReportRowInput,
   SaveProbeResultInput,
+  SnapshotRequest,
   SitePage,
 } from "./types";
 
@@ -50,6 +52,21 @@ function getClient(): SupabaseClient {
     auth: { persistSession: false, autoRefreshToken: false },
   });
   return cached;
+}
+
+interface SnapshotRequestDbRow {
+  id: string;
+  work_email: string;
+  normalized_email: string;
+  company_name: string;
+  website_url: string;
+  normalized_domain: string;
+  buyer_category: string;
+  status: string;
+  request_ip_hash: string | null;
+  project_id: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 interface ProjectRow {
@@ -228,6 +245,23 @@ interface ProbeResultDbRow {
   verdict: string;
   why_client_lost: string;
   created_at: string;
+}
+
+function mapSnapshotRequest(r: SnapshotRequestDbRow): SnapshotRequest {
+  return {
+    id: r.id,
+    workEmail: r.work_email,
+    normalizedEmail: r.normalized_email,
+    companyName: r.company_name,
+    websiteUrl: r.website_url,
+    normalizedDomain: r.normalized_domain,
+    buyerCategory: r.buyer_category,
+    status: r.status as SnapshotRequest["status"],
+    requestIpHash: r.request_ip_hash,
+    projectId: r.project_id,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
 }
 
 function mapProject(r: ProjectRow): Project {
@@ -504,6 +538,31 @@ function mapProbeResult(r: ProbeResultDbRow): ProbeResult {
 }
 
 export const supabaseAdapter: DbAdapter = {
+  async createSnapshotRequest(
+    input: CreateSnapshotRequestInput
+  ): Promise<SnapshotRequest> {
+    const { data, error } = await getClient()
+      .from("snapshot_requests")
+      .insert({
+        work_email: input.workEmail,
+        normalized_email: input.normalizedEmail,
+        company_name: input.companyName,
+        website_url: input.websiteUrl,
+        normalized_domain: input.normalizedDomain,
+        buyer_category: input.buyerCategory,
+        status: "pending_verification",
+        request_ip_hash: input.requestIpHash ?? null,
+      })
+      .select("*")
+      .single<SnapshotRequestDbRow>();
+
+    if (error || !data) {
+      throw error ?? new Error("createSnapshotRequest failed");
+    }
+
+    return mapSnapshotRequest(data);
+  },
+
   async createProject(input: CreateProjectInput): Promise<Project> {
     const { data, error } = await getClient()
       .from("projects")

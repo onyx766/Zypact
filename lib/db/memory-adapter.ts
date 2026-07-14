@@ -3,6 +3,7 @@ import type {
   Competitor,
   CompetitorInput,
   CreateProjectInput,
+  CreateSnapshotRequestInput,
   DbAdapter,
   EvidenceBankRow,
   EvidenceBankRowInput,
@@ -25,6 +26,7 @@ import type {
   QaReportRow,
   QaReportRowInput,
   SaveProbeResultInput,
+  SnapshotRequest,
   SitePage,
 } from "./types";
 
@@ -39,6 +41,7 @@ import type {
  */
 
 interface MemoryStore {
+  snapshotRequests: Map<string, SnapshotRequest>;
   projects: Map<string, Project>;
   sitePagesByProject: Map<string, SitePage[]>;
   mirrorProfilesByProject: Map<string, MirrorProfileRow>;
@@ -60,6 +63,7 @@ function getStore(): MemoryStore {
   const g = globalThis as unknown as Record<string, MemoryStore | undefined>;
   if (!g[globalKey]) {
     g[globalKey] = {
+      snapshotRequests: new Map(),
       projects: new Map(),
       sitePagesByProject: new Map(),
       mirrorProfilesByProject: new Map(),
@@ -97,6 +101,29 @@ function cloneEvidenceBankInput(
 }
 
 export const memoryAdapter: DbAdapter = {
+  async createSnapshotRequest(
+    input: CreateSnapshotRequestInput
+  ): Promise<SnapshotRequest> {
+    const now = new Date().toISOString();
+    const row: SnapshotRequest = {
+      id: randomUUID(),
+      workEmail: input.workEmail,
+      normalizedEmail: input.normalizedEmail,
+      companyName: input.companyName,
+      websiteUrl: input.websiteUrl,
+      normalizedDomain: input.normalizedDomain,
+      buyerCategory: input.buyerCategory,
+      status: "pending_verification",
+      requestIpHash: input.requestIpHash ?? null,
+      projectId: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    getStore().snapshotRequests.set(row.id, row);
+    return { ...row };
+  },
+
   async createProject(input: CreateProjectInput): Promise<Project> {
     const project: Project = {
       id: randomUUID(),

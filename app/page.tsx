@@ -3,9 +3,7 @@ import { PRICING_PLANS, PUBLIC_PLAN_ORDER } from "@/lib/pricing/plans";
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://zypact.com";
 
-const evidenceFormUrl =
-  process.env.EVIDENCE_FORM_URL ||
-  "mailto:hello@zypact.com?subject=Free%20AI%20visibility%20snapshot&body=Hi%20Zypact%2C%20I%27d%20like%20to%20run%20a%20free%20AI%20visibility%20snapshot.%0A%0ACompany%20domain%3A%0ACategory%3A%0AMain%20competitors%3A";
+const snapshotFormUrl = "/scan";
 
 const stripeGrowthUrl = process.env.STRIPE_GROWTH_URL;
 const stripeProUrl = process.env.STRIPE_PRO_URL;
@@ -28,7 +26,7 @@ export const metadata: Metadata = {
 };
 
 function getCheckoutUrl(planKey: "free" | "growth" | "pro") {
-  if (planKey === "free") return evidenceFormUrl;
+  if (planKey === "free") return snapshotFormUrl;
   if (planKey === "growth") return stripeGrowthUrl || "#";
   return stripeProUrl || "#";
 }
@@ -91,12 +89,12 @@ export default function LandingPage() {
         <nav className="nav" aria-label="Primary navigation">
           <a href="#how-it-works">How it works</a>
           <a href="#pricing">Pricing</a>
-          <a href={evidenceFormUrl} className="button button-primary">
+          <a href={snapshotFormUrl} className="button button-primary">
             Run free snapshot
           </a>
         </nav>
 
-        <a href={evidenceFormUrl} className="button button-primary mobile-cta">
+        <a href={snapshotFormUrl} className="button button-primary mobile-cta">
           Run free snapshot
         </a>
       </header>
@@ -112,7 +110,7 @@ export default function LandingPage() {
           </p>
 
           <div className="hero-actions">
-            <a href={evidenceFormUrl} className="button button-primary">
+            <a href={snapshotFormUrl} className="button button-primary">
               Run your free snapshot
             </a>
           </div>

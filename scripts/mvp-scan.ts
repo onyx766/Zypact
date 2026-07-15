@@ -960,10 +960,21 @@ async function main(): Promise<void> {
   const project = ensuredProject.project;
   await ensureMirrorProfile(project);
 
-  await updateSnapshotProgress(
-    args,
-    "generating_questions"
-  );
+  const existingPrompts =
+    await getDb().getGeneratedPrompts(
+      project.id
+    );
+
+  if (existingPrompts.length === 0) {
+    await updateSnapshotProgress(
+      args,
+      "generating_questions"
+    );
+  } else {
+    console.log(
+      "snapshot progress : generating_questions skipped (prompts reused)"
+    );
+  }
 
   await ensurePrompts(args, project);
   await ensureEvidenceBank(project.id);

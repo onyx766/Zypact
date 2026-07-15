@@ -99,6 +99,7 @@ export const ProbeAnalysisOutputSchema = z
   .transform((val) => {
     let clientMentioned = val.clientMentioned;
     let clientPosition = val.clientPosition;
+    let verdict = val.verdict;
 
     // If the agent says the client position is absent, treat the client as not mentioned.
     // This fixes common LLM drift: clientMentioned=true + clientPosition="absent" + verdict="lost".
@@ -111,10 +112,30 @@ export const ProbeAnalysisOutputSchema = z
       clientPosition = "absent";
     }
 
+    // Canonicalize verdict from the authoritative client position.
+    // This prevents contradictory LLM output from stopping the whole scan.
+    if (verdict !== "not_relevant") {
+      if (clientPosition === "primary") {
+        clientMentioned = true;
+        verdict = "won";
+      } else if (
+        clientPosition === "listed" ||
+        clientPosition === "negative"
+      ) {
+        clientMentioned = true;
+        verdict = "partial";
+      } else {
+        clientMentioned = false;
+        clientPosition = "absent";
+        verdict = "lost";
+      }
+    }
+
     return {
       ...val,
       clientMentioned,
       clientPosition,
+      verdict,
       whyClientLost:
         val.whyClientLost.trim().length > 0 ||
         val.verdict === "won" ||

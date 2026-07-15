@@ -374,10 +374,76 @@ function brandTerms(project: Project, mirrorJson: unknown): string[] {
   return [...terms];
 }
 
-function pickPromptTargets(prompts: GeneratedPrompt[], count: number): GeneratedPrompt[] {
-  const selected = prompts.filter((p) => p.selected);
-  const candidates = selected.length > 0 ? selected : prompts;
-  return chooseCommercialPromptRows(candidates, Math.max(1, Math.min(count, candidates.length)));
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function promptContainsBrandTerm(
+  prompt: string,
+  terms: string[]
+): boolean {
+  return terms.some((rawTerm) => {
+    const normalizedTerm = rawTerm
+      .trim()
+      .toLowerCase()
+      .replace(/^https?:\/\//, "")
+      .replace(/^www\./, "")
+      .replace(/\/.*$/, "");
+
+    const variants = new Set([
+      normalizedTerm,
+      normalizedTerm.split(".")[0] ?? "",
+    ]);
+
+    return [...variants].some((variant) => {
+      if (variant.length < 3) return false;
+
+      const pattern = new RegExp(
+        `(^|[^a-z0-9])${escapeRegExp(variant)}([^a-z0-9]|$)`,
+        "i"
+      );
+
+      return pattern.test(prompt);
+    });
+  });
+}
+
+function pickPromptTargets(
+  prompts: GeneratedPrompt[],
+  count: number,
+  clientBrandTerms: string[]
+): GeneratedPrompt[] {
+  const wanted = Math.max(1, count);
+
+  const isUnbranded = (row: GeneratedPrompt): boolean =>
+    !promptContainsBrandTerm(
+      row.prompt,
+      clientBrandTerms
+    );
+
+  const selectedUnbranded = prompts.filter(
+    (row) => row.selected && isUnbranded(row)
+  );
+
+  const allUnbranded = prompts.filter(isUnbranded);
+
+  const candidates =
+    selectedUnbranded.length >= wanted
+      ? selectedUnbranded
+      : allUnbranded;
+
+  if (candidates.length < wanted) {
+    throw new Error(
+      `Prompt selection requires ${wanted} unbranded prompts, ` +
+      `but only ${candidates.length} are available after excluding ` +
+      `the client brand.`
+    );
+  }
+
+  return chooseCommercialPromptRows(
+    candidates,
+    wanted
+  );
 }
 
 function mergeZypactCommercialSanityPromptsIfNeeded(args: Args, prompts: GeneratedPrompt[]): boolean {
@@ -785,7 +851,11 @@ async function buildPlan(args: Args): Promise<{ plan: StagePlan; project: Projec
     if (customPrompts.length > 0) {
       missingProbeCalls = plannedPromptCount * args.runs;
     } else if (prompts.length > 0) {
-      const targets = pickPromptTargets(prompts, args.prompts);
+      const targets = pickPromptTargets(
+        prompts,
+        args.prompts,
+        brandTerms(project, null)
+      );
       missingProbeCalls = targets.reduce((acc, p) => acc + Math.max(0, args.runs - existingRunCount(probeRows, p.prompt, args.probeMode)), 0);
     }
   }
@@ -987,7 +1057,8 @@ async function main(): Promise<void> {
   const targets =
     pickPromptTargets(
       prompts,
-      args.prompts
+      args.prompts,
+      brandTerms(project, null)
     );
 
   await updateSnapshotProgress(

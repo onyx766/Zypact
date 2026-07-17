@@ -285,7 +285,7 @@ function parseRecommendedPercent(aiProbeResult: string): number {
 }
 
 function parseOutcomeCount(aiProbeResult: string, label: "won" | "partial" | "lost"): number {
-  const m = aiProbeResult.match(new RegExp(`([0-9]+)\s+${label}`, "i"));
+  const m = aiProbeResult.match(new RegExp(`([0-9]+)\\s+${label}`, "i"));
   const n = Number(m?.[1]);
   return Number.isFinite(n) ? n : 0;
 }
@@ -302,7 +302,7 @@ function visibilityTone(aiProbeResult: string): VisibilityTone {
 function executiveInterpretation(brand: string, brandedReputation: string, tone: VisibilityTone, competitors: string[]): string {
   const competitorText = formatList(competitors.slice(0, 3));
   if (tone === "strong") {
-    return `${brand} was recommended in most of the unbranded buying prompts tested. The opportunity is not basic recovery from invisibility; it is consolidation — becoming the primary recommendation more often, improving cited-source coverage, and defending the position against ${competitorText}. When the brand was named directly, the branded reputation check was **${brandedReputation}**, so this is not a reputation-risk signal.`;
+    return `${brand} was recommended in most of the unbranded buying prompts tested. The opportunity is not basic recovery from invisibility; it is consolidation — becoming the primary recommendation more often, improving cited-source coverage, and defending the position against ${competitorText}. When the brand was named directly, the branded reputation check was **${brandedReputation}**, which supports a visibility-consolidation interpretation.`;
   }
   if (tone === "mixed") {
     return `${brand} was recommended in most of the unbranded buyer runs tested, but not consistently as the primary recommendation. The opportunity is to consolidate that visibility into a stronger primary shortlist position against ${competitorText}. When the brand was named directly, the branded reputation check was **${brandedReputation}**.`;

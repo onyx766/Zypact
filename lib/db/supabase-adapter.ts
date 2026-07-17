@@ -28,6 +28,8 @@ import type {
   QaReportRow,
   QaReportRowInput,
   SaveProbeResultInput,
+  SaveSnapshotReportArtifactInput,
+  SnapshotReportArtifact,
   SnapshotRequest,
   SnapshotRequestLimitCode,
   SitePage,
@@ -70,6 +72,21 @@ interface SnapshotRequestDbRow {
   project_id: string | null;
   progress_stage: string | null;
   progress_updated_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface SnapshotReportArtifactDbRow {
+  id: string;
+  snapshot_request_id: string;
+  project_id: string;
+  full_report_markdown: string;
+  short_report_markdown: string;
+  full_report_filename: string;
+  short_report_filename: string;
+  generated_at: string;
+  delivered_at: string | null;
+  delivery_message_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -294,6 +311,31 @@ function mapSnapshotRequest(r: SnapshotRequestDbRow): SnapshotRequest {
       r.progress_updated_at,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+  };
+}
+
+function mapSnapshotReportArtifact(
+  row: SnapshotReportArtifactDbRow
+): SnapshotReportArtifact {
+  return {
+    id: row.id,
+    snapshotRequestId:
+      row.snapshot_request_id,
+    projectId: row.project_id,
+    fullReportMarkdown:
+      row.full_report_markdown,
+    shortReportMarkdown:
+      row.short_report_markdown,
+    fullReportFilename:
+      row.full_report_filename,
+    shortReportFilename:
+      row.short_report_filename,
+    generatedAt: row.generated_at,
+    deliveredAt: row.delivered_at,
+    deliveryMessageId:
+      row.delivery_message_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -571,6 +613,89 @@ function mapProbeResult(r: ProbeResultDbRow): ProbeResult {
 }
 
 export const supabaseAdapter: DbAdapter = {
+  async getSnapshotRequest(
+    requestId: string
+  ): Promise<SnapshotRequest | null> {
+    const { data, error } = await getClient()
+      .from("snapshot_requests")
+      .select("*")
+      .eq("id", requestId)
+      .maybeSingle<SnapshotRequestDbRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data
+      ? mapSnapshotRequest(data)
+      : null;
+  },
+
+  async getSnapshotReportArtifact(
+    requestId: string
+  ): Promise<SnapshotReportArtifact | null> {
+    const { data, error } = await getClient()
+      .from("snapshot_report_artifacts")
+      .select("*")
+      .eq("snapshot_request_id", requestId)
+      .maybeSingle<SnapshotReportArtifactDbRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data
+      ? mapSnapshotReportArtifact(data)
+      : null;
+  },
+
+  async saveSnapshotReportArtifact(
+    input: SaveSnapshotReportArtifactInput
+  ): Promise<SnapshotReportArtifact> {
+    const now = new Date().toISOString();
+
+    const { data, error } = await getClient()
+      .from("snapshot_report_artifacts")
+      .upsert(
+        {
+          snapshot_request_id:
+            input.snapshotRequestId,
+          project_id: input.projectId,
+          full_report_markdown:
+            input.fullReportMarkdown,
+          short_report_markdown:
+            input.shortReportMarkdown,
+          full_report_filename:
+            input.fullReportFilename,
+          short_report_filename:
+            input.shortReportFilename,
+          generated_at: input.generatedAt,
+
+          // Regenerating a report makes the new version
+          // undelivered until the founder sends it again.
+          delivered_at: null,
+          delivery_message_id: null,
+          updated_at: now,
+        },
+        {
+          onConflict: "snapshot_request_id",
+        }
+      )
+      .select("*")
+      .single<SnapshotReportArtifactDbRow>();
+
+    if (error || !data) {
+      throw (
+        error ??
+        new Error(
+          "saveSnapshotReportArtifact failed"
+        )
+      );
+    }
+
+    return mapSnapshotReportArtifact(data);
+  },
+
   async listSnapshotRequests(
     limit = 100
   ): Promise<SnapshotRequest[]> {

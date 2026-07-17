@@ -368,6 +368,32 @@ export interface SnapshotRequest {
   updatedAt: string;
 }
 
+
+export interface SnapshotReportArtifact {
+  id: string;
+  snapshotRequestId: string;
+  projectId: string;
+  fullReportMarkdown: string;
+  shortReportMarkdown: string;
+  fullReportFilename: string;
+  shortReportFilename: string;
+  generatedAt: string;
+  deliveredAt: string | null;
+  deliveryMessageId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SaveSnapshotReportArtifactInput {
+  snapshotRequestId: string;
+  projectId: string;
+  fullReportMarkdown: string;
+  shortReportMarkdown: string;
+  fullReportFilename: string;
+  shortReportFilename: string;
+  generatedAt: string;
+}
+
 export interface CreateSnapshotRequestInput {
   workEmail: string;
   normalizedEmail: string;
@@ -391,9 +417,21 @@ export interface CreateProjectInput {
 }
 
 export interface DbAdapter {
+  getSnapshotRequest(
+    requestId: string
+  ): Promise<SnapshotRequest | null>;
+
   listSnapshotRequests(
     limit?: number
   ): Promise<SnapshotRequest[]>;
+
+  getSnapshotReportArtifact(
+    requestId: string
+  ): Promise<SnapshotReportArtifact | null>;
+
+  saveSnapshotReportArtifact(
+    input: SaveSnapshotReportArtifactInput
+  ): Promise<SnapshotReportArtifact>;
   createSnapshotRequest(
     input: CreateSnapshotRequestInput
   ): Promise<SnapshotRequest>;

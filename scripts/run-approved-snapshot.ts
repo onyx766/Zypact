@@ -4,8 +4,10 @@ import "dotenv/config";
 
 import {
   mkdirSync,
+  readFileSync,
 } from "node:fs";
 import {
+  basename,
   dirname,
 } from "node:path";
 import {
@@ -574,6 +576,60 @@ async function executeScan(
   if (shortReportCommand.status !== 0) {
     await markFailed(
       `Short report renderer exited with status ${shortReportCommand.status ?? "unknown"}.`
+    );
+  }
+
+  const {
+    fullReportMarkdown,
+    shortReportMarkdown,
+  } = await (async (): Promise<{
+    fullReportMarkdown: string;
+    shortReportMarkdown: string;
+  }> => {
+    try {
+      return {
+        fullReportMarkdown:
+          readFileSync(
+            args.out,
+            "utf-8"
+          ),
+        shortReportMarkdown:
+          readFileSync(
+            shortReportPath,
+            "utf-8"
+          ),
+      };
+    } catch (error) {
+      return markFailed(
+        `Generated report files could not be read: ${
+          error instanceof Error
+            ? error.message
+            : "unknown_error"
+        }`
+      );
+    }
+  })();
+
+  try {
+    await db.saveSnapshotReportArtifact({
+      snapshotRequestId: request.id,
+      projectId: reservedProjectId,
+      fullReportMarkdown,
+      shortReportMarkdown,
+      fullReportFilename:
+        basename(args.out),
+      shortReportFilename:
+        basename(shortReportPath),
+      generatedAt:
+        new Date().toISOString(),
+    });
+  } catch (error) {
+    await markFailed(
+      `Generated reports could not be persisted: ${
+        error instanceof Error
+          ? error.message
+          : "unknown_error"
+      }`
     );
   }
 

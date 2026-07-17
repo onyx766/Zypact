@@ -27,6 +27,8 @@ import type {
   QaReportRow,
   QaReportRowInput,
   SaveProbeResultInput,
+  SaveSnapshotReportArtifactInput,
+  SnapshotReportArtifact,
   SnapshotRequest,
   SitePage,
 } from "./types";
@@ -113,7 +115,71 @@ function cloneEvidenceBankInput(
   };
 }
 
+const memorySnapshotReportArtifacts =
+  new Map<string, SnapshotReportArtifact>();
+
 export const memoryAdapter: DbAdapter = {
+  async getSnapshotRequest(
+    requestId: string
+  ): Promise<SnapshotRequest | null> {
+    const request =
+      getStore().snapshotRequests.get(requestId);
+
+    return request
+      ? { ...request }
+      : null;
+  },
+
+  async getSnapshotReportArtifact(
+    requestId: string
+  ): Promise<SnapshotReportArtifact | null> {
+    const artifact =
+      memorySnapshotReportArtifacts.get(requestId);
+
+    return artifact
+      ? { ...artifact }
+      : null;
+  },
+
+  async saveSnapshotReportArtifact(
+    input: SaveSnapshotReportArtifactInput
+  ): Promise<SnapshotReportArtifact> {
+    const existing =
+      memorySnapshotReportArtifacts.get(
+        input.snapshotRequestId
+      );
+
+    const now = new Date().toISOString();
+
+    const artifact: SnapshotReportArtifact = {
+      id: existing?.id ?? randomUUID(),
+      snapshotRequestId:
+        input.snapshotRequestId,
+      projectId: input.projectId,
+      fullReportMarkdown:
+        input.fullReportMarkdown,
+      shortReportMarkdown:
+        input.shortReportMarkdown,
+      fullReportFilename:
+        input.fullReportFilename,
+      shortReportFilename:
+        input.shortReportFilename,
+      generatedAt: input.generatedAt,
+      deliveredAt: null,
+      deliveryMessageId: null,
+      createdAt:
+        existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+
+    memorySnapshotReportArtifacts.set(
+      input.snapshotRequestId,
+      artifact
+    );
+
+    return { ...artifact };
+  },
+
   async listSnapshotRequests(
     limit = 100
   ): Promise<SnapshotRequest[]> {

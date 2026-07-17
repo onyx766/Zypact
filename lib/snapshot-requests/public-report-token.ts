@@ -7,5 +7,5 @@ export function createPublicReportToken(): string {
 export function isValidPublicReportToken(
   value: string
 ): boolean {
-  return /^[A-Za-z0-9_-]{43}$/.test(value);
+  return /^[A-Za-z0-9_-]{43,128}$/.test(value);
 }

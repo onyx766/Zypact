@@ -571,6 +571,30 @@ function mapProbeResult(r: ProbeResultDbRow): ProbeResult {
 }
 
 export const supabaseAdapter: DbAdapter = {
+  async listSnapshotRequests(
+    limit = 100
+  ): Promise<SnapshotRequest[]> {
+    const safeLimit = Math.min(
+      Math.max(Math.trunc(limit), 1),
+      200
+    );
+
+    const { data, error } = await getClient()
+      .from("snapshot_requests")
+      .select("*")
+      .order("created_at", {
+        ascending: false,
+      })
+      .limit(safeLimit)
+      .returns<SnapshotRequestDbRow[]>();
+
+    if (error) {
+      throw error;
+    }
+
+    return (data || []).map(mapSnapshotRequest);
+  },
+
   async createSnapshotRequest(
     input: CreateSnapshotRequestInput
   ): Promise<SnapshotRequest> {

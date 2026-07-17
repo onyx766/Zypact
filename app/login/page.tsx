@@ -1,5 +1,9 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/current-user";
+import {
+  FOUNDER_ADMIN_PATH,
+  safeNextPath,
+} from "@/lib/auth/safe-next-path";
 import { LoginForm } from "./login-form";
 
 export const dynamic = "force-dynamic";
@@ -7,32 +11,83 @@ export const dynamic = "force-dynamic";
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: { sent?: string; error?: string; next?: string };
+  searchParams: {
+    sent?: string;
+    error?: string;
+    next?: string;
+  };
 }) {
+  const next = safeNextPath(
+    searchParams.next,
+    FOUNDER_ADMIN_PATH
+  );
+
   const user = await getCurrentUser();
+
   if (user) {
-    redirect("/");
+    redirect(next);
   }
 
   const sent = searchParams.sent === "1";
-  const errorMsg = typeof searchParams.error === "string" ? searchParams.error : null;
-  const next = typeof searchParams.next === "string" ? searchParams.next : "/";
+  const errorMsg =
+    typeof searchParams.error === "string"
+      ? searchParams.error
+      : null;
 
   return (
-    <section>
-      <h1>Sign in</h1>
-      <p className="muted">
-        Enter your email. We&apos;ll send a magic link to sign you in.
+    <section
+      style={{
+        maxWidth: 520,
+        margin: "0 auto",
+        padding: "96px 24px",
+      }}
+    >
+      <p
+        style={{
+          margin: "0 0 12px",
+          color: "#999",
+          fontSize: 13,
+          textTransform: "uppercase",
+          letterSpacing: "0.04em",
+        }}
+      >
+        Founder access
       </p>
+
+      <h1
+        style={{
+          margin: 0,
+          fontSize: 42,
+          lineHeight: 1.05,
+        }}
+      >
+        Sign in
+      </h1>
+
+      <p
+        style={{
+          margin: "18px 0 28px",
+          color: "#666",
+          lineHeight: 1.6,
+        }}
+      >
+        Enter your founder email. We will send a
+        private sign-in link.
+      </p>
+
       {sent ? (
-        <p style={{ color: "green" }}>
-          Check your email for a sign-in link. You can close this tab.
+        <p style={{ color: "#18794e" }}>
+          Check your email for the sign-in link.
         </p>
       ) : (
         <LoginForm next={next} />
       )}
+
       {errorMsg ? (
-        <p style={{ color: "crimson" }} role="alert">
+        <p
+          style={{ color: "crimson" }}
+          role="alert"
+        >
           {errorMsg}
         </p>
       ) : null}

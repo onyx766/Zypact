@@ -391,6 +391,9 @@ export interface CreateProjectInput {
 }
 
 export interface DbAdapter {
+  listSnapshotRequests(
+    limit?: number
+  ): Promise<SnapshotRequest[]>;
   createSnapshotRequest(
     input: CreateSnapshotRequestInput
   ): Promise<SnapshotRequest>;

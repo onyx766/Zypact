@@ -19,7 +19,9 @@ export function LoginForm({ next }: Props) {
     try {
       const supabase = getSupabaseBrowserClient();
       const origin = window.location.origin;
-      const nextParam = encodeURIComponent(next || "/");
+      const nextParam = encodeURIComponent(
+        next || "/admin/snapshot-requests"
+      );
       const { error: err } = await supabase.auth.signInWithOtp({
         email,
         options: {

@@ -114,6 +114,24 @@ function cloneEvidenceBankInput(
 }
 
 export const memoryAdapter: DbAdapter = {
+  async listSnapshotRequests(
+    limit = 100
+  ): Promise<SnapshotRequest[]> {
+    const safeLimit = Math.min(
+      Math.max(Math.trunc(limit), 1),
+      200
+    );
+
+    return [...getStore().snapshotRequests.values()]
+      .sort(
+        (left, right) =>
+          new Date(right.createdAt).getTime() -
+          new Date(left.createdAt).getTime()
+      )
+      .slice(0, safeLimit)
+      .map((request) => ({ ...request }));
+  },
+
   async createSnapshotRequest(
     input: CreateSnapshotRequestInput
   ): Promise<SnapshotRequest> {

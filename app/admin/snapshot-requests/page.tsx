@@ -317,21 +317,39 @@ export default async function SnapshotRequestsAdminPage() {
                     </td>
 
                     <td style={{ padding: 16 }}>
-                      {request.status ===
-                      "pending_approval" ? (
-                        <ApproveButton
-                          requestId={request.id}
-                        />
-                      ) : (
-                        <span
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "flex-start",
+                          gap: 10,
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        <a
+                          href={`/admin/snapshot-requests/${request.id}`}
                           style={{
-                            color: "#999",
-                            fontSize: 13,
+                            display: "inline-flex",
+                            alignItems: "center",
+                            minHeight: 36,
+                            border:
+                              "1px solid #d0d0d0",
+                            borderRadius: 999,
+                            padding: "0 14px",
+                            color: "#111",
+                            textDecoration: "none",
+                            fontWeight: 600,
                           }}
                         >
-                          No action
-                        </span>
-                      )}
+                          View
+                        </a>
+
+                        {request.status ===
+                        "pending_approval" ? (
+                          <ApproveButton
+                            requestId={request.id}
+                          />
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))}

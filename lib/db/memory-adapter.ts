@@ -180,6 +180,39 @@ export const memoryAdapter: DbAdapter = {
     return { ...artifact };
   },
 
+  async rejectSnapshotRequest(
+    requestId: string
+  ): Promise<SnapshotRequest | null> {
+    const store = getStore();
+
+    const request =
+      store.snapshotRequests.get(requestId);
+
+    if (
+      !request ||
+      request.status !==
+        "pending_approval"
+    ) {
+      return null;
+    }
+
+    const rejected: SnapshotRequest = {
+      ...request,
+      status: "rejected",
+      progressStage: null,
+      progressUpdatedAt: null,
+      updatedAt:
+        new Date().toISOString(),
+    };
+
+    store.snapshotRequests.set(
+      requestId,
+      rejected
+    );
+
+    return { ...rejected };
+  },
+
   async listSnapshotRequests(
     limit = 100
   ): Promise<SnapshotRequest[]> {

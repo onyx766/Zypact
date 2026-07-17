@@ -432,6 +432,9 @@ export interface DbAdapter {
   saveSnapshotReportArtifact(
     input: SaveSnapshotReportArtifactInput
   ): Promise<SnapshotReportArtifact>;
+  rejectSnapshotRequest(
+    requestId: string
+  ): Promise<SnapshotRequest | null>;
   createSnapshotRequest(
     input: CreateSnapshotRequestInput
   ): Promise<SnapshotRequest>;

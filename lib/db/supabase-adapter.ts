@@ -696,6 +696,27 @@ export const supabaseAdapter: DbAdapter = {
     return mapSnapshotReportArtifact(data);
   },
 
+  async rejectSnapshotRequest(
+    requestId: string
+  ): Promise<SnapshotRequest | null> {
+    const { data, error } = await getClient()
+      .rpc(
+        "reject_snapshot_request",
+        {
+          p_request_id: requestId,
+        }
+      )
+      .maybeSingle<SnapshotRequestDbRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data
+      ? mapSnapshotRequest(data)
+      : null;
+  },
+
   async listSnapshotRequests(
     limit = 100
   ): Promise<SnapshotRequest[]> {

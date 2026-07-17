@@ -197,6 +197,8 @@ function parseCompetitorMentions(markdown: string): Map<string, number> {
 interface PromptCompetitorCount {
   name: string;
   count: number;
+  bestPosition: number;
+  positionTotal: number;
 }
 
 function normalizePromptCompetitorKey(
@@ -301,9 +303,13 @@ function parsePromptCompetitorMentions(
         continue;
       }
 
+      const position = Number(cells[0]);
       const name = cells[1];
 
-      if (!name) {
+      if (
+        !name ||
+        !Number.isFinite(position)
+      ) {
         continue;
       }
 
@@ -324,6 +330,15 @@ function parsePromptCompetitorMentions(
             existing?.name ?? name,
           count:
             (existing?.count ?? 0) + 1,
+          bestPosition:
+            Math.min(
+              existing?.bestPosition ??
+                position,
+              position
+            ),
+          positionTotal:
+            (existing?.positionTotal ?? 0) +
+            position,
         }
       );
     }
@@ -366,7 +381,11 @@ function promptCompetitorsFor(
 
   return filtered.sort(
     (a, b) =>
+      a.bestPosition -
+        b.bestPosition ||
       b.count - a.count ||
+      a.positionTotal / a.count -
+        b.positionTotal / b.count ||
       a.name.localeCompare(b.name)
   );
 }
@@ -911,16 +930,34 @@ export function buildSalesReportFromMvpMarkdown(markdown: string, options: Build
                 promptCompetitorMentions
               );
 
+            const namedCompetitors =
+              rowCompetitors.filter(
+                (item) =>
+                  !isGenericCompetitorLabel(
+                    item.name
+                  )
+              );
+
+            const hasGenericComparison =
+              rowCompetitors.some(
+                (item) =>
+                  isGenericCompetitorLabel(
+                    item.name
+                  )
+              );
+
             const competitorCell =
-              rowCompetitors.length > 0
-                ? rowCompetitors
+              namedCompetitors.length > 0
+                ? namedCompetitors
                     .slice(0, 4)
                     .map(
                       (item) =>
                         `${item.name} (${item.count})`
                     )
                     .join(", ")
-                : "No specific products were recommended in these runs";
+                : hasGenericComparison
+                  ? "AI compared the category with traditional MDR; no specific competing brand dominated these runs"
+                  : "No specific products were recommended in these runs";
 
             const lossType =
               promptLossType(

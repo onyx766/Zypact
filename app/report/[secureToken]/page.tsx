@@ -86,6 +86,26 @@ export default async function PublicReportPage({
       artifact.shortReportMarkdown
     );
 
+  const testedRuns =
+    report.promptRows.reduce(
+      (total, row) =>
+        total + (Number(row.runs) || 0),
+      0
+    );
+
+  const lostBuyerMoments =
+    report.promptRows.filter(
+      (row) =>
+        /^lost$/i.test(row.outcome)
+    ).length;
+
+  const missedEveryRun =
+    report.promptRows.length > 0 &&
+    report.promptRows.every(
+      (row) =>
+        row.recommended === "0%"
+    );
+
   return (
     <main className="report-page">
       <header className="report-header">

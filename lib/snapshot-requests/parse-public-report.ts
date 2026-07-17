@@ -182,37 +182,37 @@ export function parsePublicSnapshotReport(
 
   const executive = extractSection(
     markdown,
-    "1\\. Executive diagnosis"
+    "1. Executive diagnosis"
   );
 
   const probes = extractSection(
     markdown,
-    "2\\. What happened in the AI probes"
+    "2. What happened in the AI probes"
   );
 
   const commercial = extractSection(
     markdown,
-    "3\\. Why this matters commercially"
+    "3. Why this matters commercially"
   );
 
   const fix = extractSection(
     markdown,
-    "4\\. First recommended fix"
+    "4. First recommended fix"
   );
 
   const next = extractSection(
     markdown,
-    "5\\. Suggested next step"
+    "5. Suggested next step"
   );
 
   const integrity =
     extractSection(
       markdown,
-      "6\\. Integrity notes"
+      "6. Integrity notes"
     ) ||
     extractSection(
       markdown,
-      "5\\. Integrity notes"
+      "5. Integrity notes"
     );
 
   const competitorMatch = executive.match(

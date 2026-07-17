@@ -355,6 +355,31 @@ export default async function SnapshotRequestDetailPage({
                 }}
               >
                 <a
+                  href={`/report/${artifact.publicToken}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{
+                    display:
+                      "inline-flex",
+                    alignItems:
+                      "center",
+                    minHeight: 38,
+                    border:
+                      "1px solid #111",
+                    borderRadius: 999,
+                    padding:
+                      "0 14px",
+                    background: "#fff",
+                    color: "#111",
+                    textDecoration:
+                      "none",
+                    fontWeight: 600,
+                  }}
+                >
+                  Preview client report
+                </a>
+
+                <a
                   href={`/api/internal/snapshot-requests/${request.id}/reports/short`}
                   style={{
                     display:

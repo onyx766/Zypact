@@ -1161,3 +1161,8 @@ h2 {
     margin-top: 18px;
   }
 }
+
+/* Keep the priority-action heading readable on the dark report card */
+.report-fix h2 {
+  color: #ffffff;
+}

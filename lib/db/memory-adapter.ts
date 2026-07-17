@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createPublicReportToken } from "@/lib/snapshot-requests/public-report-token";
 import type {
   Competitor,
   CompetitorInput,
@@ -141,6 +142,18 @@ export const memoryAdapter: DbAdapter = {
       : null;
   },
 
+  async getSnapshotReportArtifactByPublicToken(
+    publicToken: string
+  ): Promise<SnapshotReportArtifact | null> {
+    for (const artifact of memorySnapshotReportArtifacts.values()) {
+      if (artifact.publicToken === publicToken) {
+        return { ...artifact };
+      }
+    }
+
+    return null;
+  },
+
   async saveSnapshotReportArtifact(
     input: SaveSnapshotReportArtifactInput
   ): Promise<SnapshotReportArtifact> {
@@ -165,6 +178,9 @@ export const memoryAdapter: DbAdapter = {
       shortReportFilename:
         input.shortReportFilename,
       generatedAt: input.generatedAt,
+      publicToken:
+        existing?.publicToken ??
+        createPublicReportToken(),
       deliveredAt: null,
       deliveryMessageId: null,
       createdAt:

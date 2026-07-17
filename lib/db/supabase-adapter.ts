@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { createPublicReportToken } from "@/lib/snapshot-requests/public-report-token";
 import type {
   Competitor,
   CompetitorInput,
@@ -85,6 +86,7 @@ interface SnapshotReportArtifactDbRow {
   full_report_filename: string;
   short_report_filename: string;
   generated_at: string;
+  public_token: string;
   delivered_at: string | null;
   delivery_message_id: string | null;
   created_at: string;
@@ -331,6 +333,7 @@ function mapSnapshotReportArtifact(
     shortReportFilename:
       row.short_report_filename,
     generatedAt: row.generated_at,
+    publicToken: row.public_token,
     deliveredAt: row.delivered_at,
     deliveryMessageId:
       row.delivery_message_id,
@@ -649,10 +652,37 @@ export const supabaseAdapter: DbAdapter = {
       : null;
   },
 
+  async getSnapshotReportArtifactByPublicToken(
+    publicToken: string
+  ): Promise<SnapshotReportArtifact | null> {
+    const { data, error } = await getClient()
+      .from("snapshot_report_artifacts")
+      .select("*")
+      .eq("public_token", publicToken)
+      .maybeSingle<SnapshotReportArtifactDbRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data
+      ? mapSnapshotReportArtifact(data)
+      : null;
+  },
+
   async saveSnapshotReportArtifact(
     input: SaveSnapshotReportArtifactInput
   ): Promise<SnapshotReportArtifact> {
     const now = new Date().toISOString();
+
+    const existing =
+      await this.getSnapshotReportArtifact(
+        input.snapshotRequestId
+      );
+
+    const publicToken =
+      existing?.publicToken ??
+      createPublicReportToken();
 
     const { data, error } = await getClient()
       .from("snapshot_report_artifacts")
@@ -670,6 +700,7 @@ export const supabaseAdapter: DbAdapter = {
           short_report_filename:
             input.shortReportFilename,
           generated_at: input.generatedAt,
+          public_token: publicToken,
 
           // Regenerating a report makes the new version
           // undelivered until the founder sends it again.

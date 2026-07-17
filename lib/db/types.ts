@@ -378,6 +378,7 @@ export interface SnapshotReportArtifact {
   fullReportFilename: string;
   shortReportFilename: string;
   generatedAt: string;
+  publicToken: string;
   deliveredAt: string | null;
   deliveryMessageId: string | null;
   createdAt: string;
@@ -427,6 +428,10 @@ export interface DbAdapter {
 
   getSnapshotReportArtifact(
     requestId: string
+  ): Promise<SnapshotReportArtifact | null>;
+
+  getSnapshotReportArtifactByPublicToken(
+    publicToken: string
   ): Promise<SnapshotReportArtifact | null>;
 
   saveSnapshotReportArtifact(

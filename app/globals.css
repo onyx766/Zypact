@@ -778,3 +778,28 @@ h2 {
     display: none;
   }
 }
+
+/* Zypact brand logo */
+.zypact-logo-link {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  text-decoration: none;
+}
+
+.zypact-logo-image {
+  display: block;
+  width: 174px;
+  height: 58px;
+  object-fit: cover;
+  object-position: center;
+  border-radius: 12px;
+}
+
+@media (max-width: 720px) {
+  .zypact-logo-image {
+    width: 142px;
+    height: 48px;
+    border-radius: 10px;
+  }
+}

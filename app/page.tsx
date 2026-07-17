@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { ZypactLogo } from "@/components/zypact-logo";
 import { PRICING_PLANS, PUBLIC_PLAN_ORDER } from "@/lib/pricing/plans";
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://zypact.com";
@@ -82,9 +83,11 @@ export default function LandingPage() {
       />
 
       <header className="header">
-        <a href="#top" className="wordmark">
-          Zypact
-        </a>
+        <ZypactLogo
+          href="#top"
+          priority
+          className="wordmark"
+        />
 
         <nav className="nav" aria-label="Primary navigation">
           <a href="#how-it-works">How it works</a>

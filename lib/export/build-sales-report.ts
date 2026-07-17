@@ -66,8 +66,6 @@ const INTERNAL_PATTERNS = [
   /existing MVP scan export/i,
 ];
 
-const DEFAULT_REPORT_DATE = new Date("2026-07-10T00:00:00.000Z");
-
 function clean(value: string | undefined | null): string {
   return (value ?? "")
     .replace(/`/g, "")
@@ -299,6 +297,27 @@ function visibilityTone(aiProbeResult: string): VisibilityTone {
   return "absent";
 }
 
+function brandedReputationHasNegativeSignal(
+  value: string
+): boolean {
+  const negativeCountMatch =
+    value.match(
+      /(\d+)\s*\/\s*\d+\s+branded runs negative/i
+    );
+
+  if (negativeCountMatch) {
+    return Number(negativeCountMatch[1]) > 0;
+  }
+
+  const normalized =
+    value.toLowerCase();
+
+  return (
+    normalized.includes("negative") &&
+    !normalized.includes("positive")
+  );
+}
+
 function executiveInterpretation(brand: string, brandedReputation: string, tone: VisibilityTone, competitors: string[]): string {
   const competitorText = formatList(competitors.slice(0, 3));
   if (tone === "strong") {
@@ -307,7 +326,15 @@ function executiveInterpretation(brand: string, brandedReputation: string, tone:
   if (tone === "mixed") {
     return `${brand} was recommended in most of the unbranded buyer runs tested, but not consistently as the primary recommendation. The opportunity is to consolidate that visibility into a stronger primary shortlist position against ${competitorText}. When the brand was named directly, the branded reputation check was **${brandedReputation}**.`;
   }
-  return `${brand} did not appear as a recommended product in the unbranded buying prompts tested. When the brand was named directly, the branded reputation check was **${brandedReputation}**, which means this is not only a visibility gap — it is also a reputation-risk signal.`;
+  if (
+    brandedReputationHasNegativeSignal(
+      brandedReputation
+    )
+  ) {
+    return `${brand} did not appear as a recommended product in the unbranded buying prompts tested. When the brand was named directly, the branded reputation check was **${brandedReputation}**. The result combines a discovery gap with a negative branded signal that should be reviewed.`;
+  }
+
+  return `${brand} did not appear as a recommended product in the unbranded buying prompts tested. When the brand was named directly, the branded reputation check was **${brandedReputation}**. This points to a discoverability gap, not a negative reputation signal.`;
 }
 
 function competitorHeadlineLabel(tone: string, aiProbeResult: string): string {
@@ -444,7 +471,7 @@ export function buildSalesReportFromMvpMarkdown(markdown: string, options: Build
   const brandedRows = getBrandedRows(promptRows);
   const focusCompetitors = chooseFocusCompetitors(markdown, options, fixBrief);
   const competitorMentions = parseCompetitorMentions(markdown);
-  const date = options.now ?? DEFAULT_REPORT_DATE;
+  const date = options.now ?? new Date();
   const reportDate = date.toISOString().slice(0, 10);
   const selectedPromptCount = parseSelectedPromptCount(markdown);
   const basis = parseScorecardBasis(markdown, includedRows);

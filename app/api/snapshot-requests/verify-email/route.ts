@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getDb } from "@/lib/db";
 import { hashSnapshotEmailVerificationToken } from "@/lib/snapshot-requests/email-verification";
+import {
+  sendFounderSnapshotRequestNotification,
+  type FounderSnapshotNotificationConfig,
+} from "@/lib/snapshot-requests/founder-notification-delivery";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,6 +42,122 @@ function unavailableResponse() {
     },
     503
   );
+}
+
+function readFounderNotificationConfiguration():
+  | FounderSnapshotNotificationConfig
+  | null {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.SNAPSHOT_EMAIL_FROM;
+  const replyTo =
+    process.env.SNAPSHOT_EMAIL_REPLY_TO || null;
+  const appBaseUrl =
+    process.env.SNAPSHOT_PUBLIC_BASE_URL;
+
+  const founderEmails = (
+    process.env.SNAPSHOT_FOUNDER_EMAILS || ""
+  )
+    .split(",")
+    .map((email) =>
+      email.trim().toLowerCase()
+    )
+    .filter(Boolean);
+
+  if (
+    !apiKey ||
+    !from ||
+    !appBaseUrl ||
+    founderEmails.length === 0
+  ) {
+    return null;
+  }
+
+  return {
+    apiKey,
+    from,
+    replyTo,
+    appBaseUrl,
+    founderEmails,
+  };
+}
+
+async function notifyFounder(
+  verified: {
+    id: string;
+    companyName: string;
+    workEmail: string;
+    websiteUrl: string;
+    normalizedDomain: string;
+    buyerCategory: string;
+  }
+): Promise<void> {
+  if (
+    process.env
+      .SNAPSHOT_FOUNDER_NOTIFICATIONS_ENABLED !==
+    "true"
+  ) {
+    return;
+  }
+
+  const config =
+    readFounderNotificationConfiguration();
+
+  if (!config) {
+    console.error(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        level: "error",
+        event:
+          "snapshot_founder_notification_configuration_error",
+        requestId: verified.id,
+      })
+    );
+
+    return;
+  }
+
+  try {
+    const delivered =
+      await sendFounderSnapshotRequestNotification(
+        {
+          requestId: verified.id,
+          companyName: verified.companyName,
+          workEmail: verified.workEmail,
+          websiteUrl: verified.websiteUrl,
+          normalizedDomain:
+            verified.normalizedDomain,
+          buyerCategory:
+            verified.buyerCategory,
+        },
+        config
+      );
+
+    console.info(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        level: "info",
+        event:
+          "snapshot_founder_notification_sent",
+        requestId: verified.id,
+        provider: delivered.provider,
+        messageId: delivered.messageId,
+      })
+    );
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        level: "error",
+        event:
+          "snapshot_founder_notification_failed",
+        requestId: verified.id,
+        error:
+          error instanceof Error
+            ? error.message
+            : "unknown_error",
+      })
+    );
+  }
 }
 
 function invalidTokenResponse() {
@@ -108,6 +228,8 @@ export async function POST(request: Request) {
     if (!verified) {
       return invalidTokenResponse();
     }
+
+    await notifyFounder(verified);
 
     return jsonResponse(
       {

@@ -134,6 +134,24 @@ export default async function PublicReportPage({
           {report.executiveNarrative}
         </p>
 
+        {missedEveryRun &&
+        testedRuns > 0 ? (
+          <div className="report-note">
+            <strong>
+              {report.brand} was absent
+              from all {testedRuns} live
+              AI answers tested.
+            </strong>
+
+            <p>
+              {lostBuyerMoments} of{" "}
+              {report.promptRows.length}{" "}
+              buyer discovery or shortlist
+              moments were lost.
+            </p>
+          </div>
+        ) : null}
+
         <div className="report-meta">
           <span>
             Generated {report.generated}

@@ -1791,7 +1791,23 @@ function sectionWarnings(input: BuildMvpReportInput): string {
   parts.push(`- **assets with no QA report**: ${missingReports.length}`);
   parts.push("");
   if (notReady.length === 0) {
-    parts.push("All current active assets pass QA.");
+    if (
+      currentAssetsForReport(
+        input,
+        resolveCompanyName(
+          input.project,
+          input.mirrorProfile
+        ).name
+      ).length === 0
+    ) {
+      parts.push(
+        "No active assets were available for QA."
+      );
+    } else {
+      parts.push(
+        "All current active assets pass QA."
+      );
+    }
     parts.push("");
     return parts.join("\n");
   }
@@ -1996,7 +2012,7 @@ export function buildMvpReport(input: BuildMvpReportInput): BuildMvpReportOutput
     "# Zypact MVP — Client Report",
     "",
     `> Read-only snapshot of the AI-visibility scan for **${brand.name}** (\`${input.project.domain}\`). Generated ${now.toISOString()}.`,
-    "> No LLM calls, no live platform-API probes, and no database writes were made to produce this file.",
+    "> Rendering this export triggered no new LLM calls, live probes, or database writes.",
     "",
     "---",
     "",

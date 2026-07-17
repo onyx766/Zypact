@@ -194,6 +194,183 @@ function parseCompetitorMentions(markdown: string): Map<string, number> {
   return result;
 }
 
+interface PromptCompetitorCount {
+  name: string;
+  count: number;
+}
+
+function normalizePromptCompetitorKey(
+  value: string
+): string {
+  return clean(value)
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function promptCompetitorNamesMatch(
+  left: string,
+  right: string
+): boolean {
+  const a =
+    normalizePromptCompetitorKey(left);
+
+  const b =
+    normalizePromptCompetitorKey(right);
+
+  if (!a || !b) {
+    return false;
+  }
+
+  if (a === b) {
+    return true;
+  }
+
+  return (
+    a.length >= 4 &&
+    b.length >= 4 &&
+    (a.includes(b) || b.includes(a))
+  );
+}
+
+function parsePromptCompetitorMentions(
+  markdown: string
+): Map<
+  string,
+  Map<string, PromptCompetitorCount>
+> {
+  const result =
+    new Map<
+      string,
+      Map<string, PromptCompetitorCount>
+    >();
+
+  const blocks = markdown
+    .split(
+      /\n### Live Perplexity Sonar probe · product verdict:/i
+    )
+    .slice(1);
+
+  for (const block of blocks) {
+    if (
+      !/\*\*scorecard status\*\*:\s*included/i.test(
+        block
+      )
+    ) {
+      continue;
+    }
+
+    const prompt = clean(
+      block.match(
+        /^-\s+\*\*prompt\*\*:\s*(.+)$/m
+      )?.[1]
+    );
+
+    if (!prompt) {
+      continue;
+    }
+
+    const section =
+      block.match(
+        /-\s+\*\*competitors mentioned[^*]*\*\*:\s*\n([\s\S]*?)(?=\n-\s+\*\*sources cited|\n##\s+|\n###\s+|\n---|$)/i
+      )?.[1] ?? "";
+
+    const promptKey =
+      normalizePromptCompetitorKey(prompt);
+
+    const counts =
+      result.get(promptKey) ??
+      new Map<
+        string,
+        PromptCompetitorCount
+      >();
+
+    for (
+      const line of section.split(/\r?\n/)
+    ) {
+      const cells = line
+        .trim()
+        .split("|")
+        .slice(1, -1)
+        .map((cell) => clean(cell));
+
+      if (
+        cells.length < 3 ||
+        !/^\d+$/.test(cells[0])
+      ) {
+        continue;
+      }
+
+      const name = cells[1];
+
+      if (!name) {
+        continue;
+      }
+
+      const competitorKey =
+        normalizePromptCompetitorKey(name);
+
+      if (!competitorKey) {
+        continue;
+      }
+
+      const existing =
+        counts.get(competitorKey);
+
+      counts.set(
+        competitorKey,
+        {
+          name:
+            existing?.name ?? name,
+          count:
+            (existing?.count ?? 0) + 1,
+        }
+      );
+    }
+
+    result.set(promptKey, counts);
+  }
+
+  return result;
+}
+
+function promptCompetitorsFor(
+  prompt: string,
+  mentions: Map<
+    string,
+    Map<string, PromptCompetitorCount>
+  >,
+  allowedNames?: string[]
+): PromptCompetitorCount[] {
+  const values = Array.from(
+    mentions
+      .get(
+        normalizePromptCompetitorKey(
+          prompt
+        )
+      )
+      ?.values() ?? []
+  );
+
+  const filtered =
+    allowedNames?.length
+      ? values.filter((item) =>
+          allowedNames.some((allowed) =>
+            promptCompetitorNamesMatch(
+              item.name,
+              allowed
+            )
+          )
+        )
+      : values;
+
+  return filtered.sort(
+    (a, b) =>
+      b.count - a.count ||
+      a.name.localeCompare(b.name)
+  );
+}
+
 function chooseFocusCompetitors(markdown: string, options: BuildSalesReportOptions, fixBrief: FixBriefSummary): string[] {
   if (options.focusCompetitors?.length) {
     return options.focusCompetitors.map(clean).filter(Boolean).slice(0, 5);
@@ -345,7 +522,7 @@ function competitorHeadlineLabel(tone: string, aiProbeResult: string): string {
     normalizedTone === "winning" ||
     normalizedTone === "positive"
   ) {
-    return "Other tools AI recommended in the same frame";
+    return "Other tools AI recommended across the tested prompts";
   }
 
   const normalizedScorecard = String(aiProbeResult || "").replace(/\s+/g, " ");
@@ -357,7 +534,7 @@ function competitorHeadlineLabel(tone: string, aiProbeResult: string): string {
   const lostGroups = lostMatch ? Number(lostMatch[1]) : 0;
 
   if (lostGroups > 0) {
-    return "Competitors AI recommended instead";
+    return "Competitors AI recommended across the tested prompts";
   }
 
   const recommendedRateMatch =
@@ -370,7 +547,7 @@ function competitorHeadlineLabel(tone: string, aiProbeResult: string): string {
     return "Other tools AI recommended in the same frame";
   }
 
-  return "Competitors AI recommended instead";
+  return "Competitors AI recommended across the tested prompts";
 }
 
 function opportunityLabel(tone: VisibilityTone): string {
@@ -379,17 +556,76 @@ function opportunityLabel(tone: VisibilityTone): string {
   return "clearest buying-frame loss";
 }
 
-function frameRecommendationSentence(brand: string, tone: VisibilityTone, competitors: string[]): string {
-  const competitorText = formatList(competitors.slice(0, 4));
-  if (tone === "strong") return `In that frame, ${brand} was present, but AI still surfaced ${competitorText} prominently.`;
-  if (tone === "mixed") return `In that frame, AI also recommended ${competitorText}, so ${brand} is not yet the clear primary choice.`;
+function frameRecommendationSentence(
+  brand: string,
+  tone: VisibilityTone,
+  competitors: string[]
+): string {
+  if (competitors.length === 0) {
+    if (tone === "strong") {
+      return `In that frame, ${brand} was present and no other specific product was observed in the stored prompt-level runs.`;
+    }
+
+    if (tone === "mixed") {
+      return `In that frame, ${brand} appeared inconsistently, and no specific competing product was observed in the stored prompt-level runs.`;
+    }
+
+    return "In that frame, no specific competing product was recommended in the stored runs; the answers focused on general strategies instead.";
+  }
+
+  const competitorText =
+    formatList(
+      competitors.slice(0, 4)
+    );
+
+  if (tone === "strong") {
+    return `In that frame, ${brand} was present, but AI still surfaced ${competitorText} prominently.`;
+  }
+
+  if (tone === "mixed") {
+    return `In that frame, AI also recommended ${competitorText}, so ${brand} is not yet the clear primary choice.`;
+  }
+
   return `In that frame, AI recommended ${competitorText} instead.`;
 }
 
-function fixHeading(tone: VisibilityTone): string {
+function fixHeading(
+  tone: VisibilityTone,
+  hasFrameCompetitors: boolean
+): string {
+  if (!hasFrameCompetitors) {
+    return "Publish an answer-first, evidence-backed page for the missing buyer question.";
+  }
+
   return tone === "strong"
     ? "Strengthen comparison / proof content around the consolidation frame."
     : "Strengthen comparison / proof content around the under-performing buying frame.";
+}
+
+function frameAwareFix(
+  brand: string,
+  focusPrompt: string,
+  frameCompetitors: string[],
+  originalFix: string
+): string {
+  if (frameCompetitors.length > 0) {
+    return originalFix;
+  }
+
+  return `Publish an answer-first page that directly addresses “${clean(
+    focusPrompt
+  )}” for ${brand}'s target audience. Explain the documented methodology, concrete steps, and verifiable evidence without framing the page as a competitor comparison.`;
+}
+
+function fixSafetySentence(
+  brand: string,
+  hasFrameCompetitors: boolean
+): string {
+  if (hasFrameCompetitors) {
+    return `The page should be factual, specific, and evidence-led. It should not claim that AI will recommend ${brand}. The goal is to give AI systems and human buyers a clear, verifiable page that explains where ${brand} fits compared with the brands actually appearing in those prompt-matched runs.`;
+  }
+
+  return `The page should be factual, specific, and evidence-led. It should not claim that AI will recommend ${brand}. The goal is to answer the buyer question clearly using ${brand}'s documented methodology and verifiable evidence.`;
 }
 
 function sanitizeSentence(value: string): string {
@@ -470,7 +706,26 @@ export function buildSalesReportFromMvpMarkdown(markdown: string, options: Build
   const scorecardRows = getScorecardPrompts(promptRows, fixBrief);
   const brandedRows = getBrandedRows(promptRows);
   const focusCompetitors = chooseFocusCompetitors(markdown, options, fixBrief);
-  const competitorMentions = parseCompetitorMentions(markdown);
+  const promptCompetitorMentions =
+    parsePromptCompetitorMentions(markdown);
+
+  const focusPrompt =
+    fixBrief.lostPrompt ||
+    lostPrompts[0] ||
+    "Alternatives in the core buying category";
+
+  const frameCompetitorRows =
+    promptCompetitorsFor(
+      focusPrompt,
+      promptCompetitorMentions,
+      options.focusCompetitors
+    );
+
+  const frameCompetitors =
+    frameCompetitorRows.map(
+      (item) => item.name
+    );
+
   const date = options.now ?? new Date();
   const reportDate = date.toISOString().slice(0, 10);
   const selectedPromptCount = parseSelectedPromptCount(markdown);
@@ -479,19 +734,59 @@ export function buildSalesReportFromMvpMarkdown(markdown: string, options: Build
   const tone = visibilityTone(aiProbeResult);
   const brandedEvidence = parseBrandedProbeEvidence(markdown);
 
-  const firstFix = fixBrief.recommendedFix || extractBullet(markdown, "Next recommended fix") || "Publish a focused comparison/alternative page with concrete product and pricing evidence.";
-  const firstEvidence = fixBrief.evidenceNeeded.length > 0 ? fixBrief.evidenceNeeded : evidenceNeeded;
+  const sourceFirstFix =
+    fixBrief.recommendedFix ||
+    extractBullet(
+      markdown,
+      "Next recommended fix"
+    ) ||
+    "Publish a focused, evidence-backed page for the missing buyer question.";
 
-  const scorecardTable = scorecardRows.length > 0
-    ? scorecardRows.map((row) => {
-        const competitors = Array.from(competitorMentions.entries())
-          .filter(([name]) => focusCompetitors.includes(name))
-          .map(([name, count]) => `${name} (${count})`)
-          .slice(0, 4)
-          .join(", ") || formatList(focusCompetitors.slice(0, 3));
-        return `| ${row.prompt} | ${row.runs} | ${row.recommendedAsProduct} | ${row.citedAsSource} | ${row.productVerdict} | ${competitors} |`;
-      }).join("\n")
-    : `| ${lostPrompts[0] ?? fixBrief.lostPrompt ?? "Core buyer prompt"} | n/a | 0% | 0% | lost | ${formatList(focusCompetitors.slice(0, 3))} |`;
+  const firstFix =
+    frameAwareFix(
+      brand,
+      focusPrompt,
+      frameCompetitors,
+      sourceFirstFix
+    );
+
+  const firstEvidence =
+    fixBrief.evidenceNeeded.length > 0
+      ? fixBrief.evidenceNeeded
+      : evidenceNeeded;
+
+  const firstFixSafetySentence =
+    fixSafetySentence(
+      brand,
+      frameCompetitors.length > 0
+    );
+
+  const scorecardTable =
+    scorecardRows.length > 0
+      ? scorecardRows
+          .map((row) => {
+            const rowCompetitors =
+              promptCompetitorsFor(
+                row.prompt,
+                promptCompetitorMentions,
+                options.focusCompetitors
+              );
+
+            const competitorCell =
+              rowCompetitors.length > 0
+                ? rowCompetitors
+                    .slice(0, 4)
+                    .map(
+                      (item) =>
+                        `${item.name} (${item.count})`
+                    )
+                    .join(", ")
+                : "No specific products were recommended in these runs";
+
+            return `| ${row.prompt} | ${row.runs} | ${row.recommendedAsProduct} | ${row.citedAsSource} | ${row.productVerdict} | ${competitorCell} |`;
+          })
+          .join("\n")
+      : `| ${focusPrompt} | n/a | 0% | 0% | lost | No prompt-matched competitor evidence was available |`;
 
   const brandedCheckText = extractSubsection(markdown, "Branded reputation check")
     .split(/\r?\n/)
@@ -539,17 +834,17 @@ AI answers increasingly behave like shortlists. When a buyer asks for alternativ
 
 For ${brand}, the ${opportunityLabel(tone)} is:
 
-> ${fixBrief.lostPrompt || lostPrompts[0] || "Alternatives in the core buying category"}
+> ${focusPrompt}
 
-${frameRecommendationSentence(brand, tone, focusCompetitors)}
+${frameRecommendationSentence(brand, tone, frameCompetitors)}
 
 ## 4. First recommended fix
 
-**${fixHeading(tone)}**
+**${fixHeading(tone, frameCompetitors.length > 0)}**
 
 ${firstFix}
 
-The page should be factual, specific, and evidence-led. It should not claim that AI will recommend ${brand}. The goal is to give AI systems and human buyers a clear, verifiable page that explains where ${brand} fits compared with the brands already appearing in answers.
+${firstFixSafetySentence}
 
 ### Evidence needed before publish-ready copy
 
@@ -567,7 +862,7 @@ Send the evidence listed above and we can generate the publish-ready page draft,
 - Sample size: small snapshot, not a market-wide benchmark.
 - Scope: unbranded prompts are used for visibility; branded prompts are tracked separately for reputation.
 - No new probes, LLM calls, or database writes are needed to render this short report.
-- This report intentionally avoids out-of-frame competitors when a focused Fix Brief provides a narrower competitor set.
+- Competitors shown in each table row and any “In that frame” statement come only from the stored runs for that exact prompt.
 `);
 
   return {

@@ -59,6 +59,22 @@ const vugioFixture = `# Zypact MVP — Client Report
 - **answerSummary**: The AI response indicates that Vugio is likely non-existent or misnamed and does not have a credible reputation as a retailer for studio products. In contrast, Adorama is recommended as a top choice due to its established reputation, extensive offerings, and customer service protections.
 - **whyClientLost**: Vugio was mentioned negatively, indicating it lacks credibility as a retailer compared to Adorama.
 
+### Live Perplexity Sonar probe · product verdict: **lost**
+
+- **scorecard status**: included
+- **prompt**: Alternatives to Adorama for studio equipment?
+- **platform**: \`perplexity\`
+- **recommendedAsProduct**: no
+- **productPosition**: absent
+- **citedAsSource**: no
+- **competitors mentioned (in the live Perplexity answer)**:
+
+  | position | name | context |
+  |---|---|---|
+  | 1 | B&H Photo | recommended alternative |
+  | 2 | KEH Camera | recommended alternative |
+  | 3 | MPB | recommended alternative |
+
 ## 8. What this means
 
 ### Which prompts Vugio lost or under-performed
@@ -119,8 +135,8 @@ assert(!/legacy\s+/i.test(vugioBody), "does not expose legacy probe wording");
 assert(!vugioBody.includes("existing MVP scan export"), "does not expose old internal source wording");
 assert(!vugioBody.includes("Shopify (2)") && !vugioBody.includes("Canva (2)"), "does not foreground out-of-frame competitors in the main competitor column");
 assert(vugioBody.includes("small snapshot, not a market-wide benchmark"), "keeps sample-size caveat");
-assert(vugioBody.includes("**Competitors AI recommended instead:**"), "Vugio losing case keeps the “instead” competitor label");
-assert(!vugioBody.includes("**Other tools AI recommended in the same frame:**"), "Vugio losing case does not use the neutral winning label");
+assert(vugioBody.includes("**Competitors AI recommended across the tested prompts:**"), "Vugio losing case keeps the “instead” competitor label");
+assert(!vugioBody.includes("**Other tools AI recommended across the tested prompts:**"), "Vugio losing case does not use the neutral winning label");
 
 const linearFixture = `# Zypact MVP — Client Report
 
@@ -159,6 +175,22 @@ const linearFixture = `# Zypact MVP — Client Report
 | Best issue tracking tools for engineering teams? | included | 3 | 100% | 67% | 0% | won |
 | Alternatives to Jira for product teams? | included | 2 | 50% | 0% | 0% | partial |
 | Compare Linear vs Jira for engineering teams. | tracked_separately (branded) | 2 | 100% | 50% | 0% | won |
+
+### Live Perplexity Sonar probe · product verdict: **partial**
+
+- **scorecard status**: included
+- **prompt**: Alternatives to Jira for product teams?
+- **platform**: \`perplexity\`
+- **recommendedAsProduct**: yes
+- **productPosition**: secondary
+- **citedAsSource**: no
+- **competitors mentioned (in the live Perplexity answer)**:
+
+  | position | name | context |
+  |---|---|---|
+  | 1 | Jira | primary incumbent |
+  | 2 | Asana | alternative |
+  | 3 | ClickUp | alternative |
 
 ## 8. What this means
 
@@ -205,7 +237,134 @@ assert(!linearBody.includes("clearest buying-frame loss"), "does not call a winn
 assert(!linearBody.includes("likely non-existent"), "does not fabricate a pain quote for a winning brand");
 assert(!linearBody.includes("Direct evidence from the branded check"), "does not render negative evidence block when there is no negative branded probe");
 assert(linearBody.includes("Add a comparison page that consolidates Linear's existing strengths"), "renders consolidation fix without fabricating pain");
-assert(linearBody.includes("**Other tools AI recommended in the same frame:**"), "Linear winning case uses the neutral competitor label");
-assert(!linearBody.includes("**Competitors AI recommended instead:**"), "Linear winning case does not use the losing competitor label");
+assert(linearBody.includes("**Other tools AI recommended across the tested prompts:**"), "Linear winning case uses the neutral competitor label");
+assert(!linearBody.includes("**Competitors AI recommended across the tested prompts:**"), "Linear winning case does not use the losing competitor label");
+
+
+const noFrameFixture = `# Zypact MVP — Client Report
+
+## 1. Executive Summary
+
+- **Brand**: Acme
+- **Domain**: \`acme.example\`
+- **Category (Mirror Profile)**: AI visibility software
+- **AI probe result (live Perplexity unbranded product-recommendation scorecard, 1 prompt / 3 runs)**: 0 won · 0 partial · 1 lost · recommendedAsProduct 0% · citedAsSource 0%
+- **Branded reputation**: positive (0/1 branded runs negative)
+- **Top competitors AI recommended instead**: Peec AI, Otterly AI
+- **Next recommended fix**: Create a comparison page against Peec AI.
+
+## 3. Evidence Needed to Unlock Publish-Ready Assets
+
+- documented methodology and concrete product evidence
+
+## 6. Prompt Mirror summary
+
+- **selected for probe**: 10
+
+## 7. Probe Results
+
+### Probe Set
+
+- **scorecard prompt groups**: 1
+- **scorecard runs**: 3
+
+### Prompt-level aggregation
+
+| prompt | scorecard status | runs | recommendedAsProduct | citedAsSource | negativeMentions | product verdict |
+|---|---|---|---|---|---|---|
+| How to improve my company's visibility in AI recommendations? | included | 3 | 0% | 0% | 0% | lost |
+
+### Live Perplexity Sonar probe · product verdict: **lost**
+
+- **scorecard status**: included
+- **prompt**: How to improve my company's visibility in AI recommendations?
+- **platform**: \`perplexity\`
+- **recommendedAsProduct**: no
+- **productPosition**: absent
+- **citedAsSource**: no
+- **answerSummary**: The answer focused on general strategies and did not recommend any specific products.
+- **whyClientLost**: Acme was not mentioned.
+
+## 8. What this means
+
+### Which prompts Acme lost or under-performed
+- How to improve my company's visibility in AI recommendations? (3 runs, recommendedAsProduct 0%, citedAsSource 0%)
+
+### Branded reputation check
+0/1 branded runs mentioned Acme negatively.
+
+### Which competitors appeared instead
+| competitor | mentions across main probes |
+|---|---|
+| Peec AI | 3 |
+| Otterly AI | 2 |
+
+## 13. Fix Brief
+
+- **lostPrompt**: How to improve my company's visibility in AI recommendations?
+- **competitorRecommended**: Peec AI, Otterly AI
+- **fixType**: \`comparison_page\`
+
+#### Recommended fix
+Create a comparison page against Peec AI.
+
+#### Evidence needed
+- documented methodology and concrete product evidence
+`;
+
+const noFrameReport =
+  buildSalesReportFromMvpMarkdown(
+    noFrameFixture,
+    {
+      now: new Date(
+        "2026-07-17T00:00:00.000Z"
+      ),
+    }
+  );
+
+const noFrameBody =
+  noFrameReport.markdown;
+
+assert(
+  noFrameBody.includes(
+    "No specific products were recommended in these runs"
+  ),
+  "prompt table does not leak competitors from other prompts"
+);
+
+assert(
+  noFrameBody.includes(
+    "no specific competing product was recommended in the stored runs"
+  ),
+  "frame sentence reports the absence of prompt-level competitors"
+);
+
+assert(
+  !noFrameBody.includes(
+    "In that frame, AI recommended Peec AI"
+  ),
+  "does not attribute global competitors to the focus prompt"
+);
+
+assert(
+  noFrameBody.includes(
+    "Publish an answer-first, evidence-backed page"
+  ),
+  "uses an answer-first fix when the prompt had no competitor recommendations"
+);
+
+assert(
+  noFrameBody.includes(
+    "without framing the page as a competitor comparison"
+  ),
+  "does not preserve an unsupported comparison recommendation"
+);
+
+assert(
+  noFrameBody.includes(
+    "**Competitors AI recommended across the tested prompts:**"
+  ),
+  "keeps global competitors clearly labeled as cross-prompt evidence"
+);
 
 console.log("Sprint 14B.3 sales report tests passed.");

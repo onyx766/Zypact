@@ -5,6 +5,7 @@ import {
 } from "@/lib/auth/founder";
 import { ApproveButton } from "../approve-button";
 import { RejectButton } from "../reject-button";
+import { SendReportButton } from "../send-report-button";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -354,6 +355,14 @@ export default async function SnapshotRequestDetailPage({
                   flexWrap: "wrap",
                 }}
               >
+                <SendReportButton
+                  requestId={request.id}
+                  recipientEmail={request.workEmail}
+                  alreadyDelivered={Boolean(
+                    artifact.deliveredAt
+                  )}
+                />
+
                 <a
                   href={`/report/${artifact.publicToken}`}
                   target="_blank"

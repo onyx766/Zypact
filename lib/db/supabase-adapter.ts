@@ -727,6 +727,31 @@ export const supabaseAdapter: DbAdapter = {
     return mapSnapshotReportArtifact(data);
   },
 
+  async markSnapshotReportDelivered(
+    requestId: string,
+    messageId: string,
+    deliveredAt: string
+  ): Promise<SnapshotReportArtifact | null> {
+    const { data, error } = await getClient()
+      .from("snapshot_report_artifacts")
+      .update({
+        delivered_at: deliveredAt,
+        delivery_message_id: messageId,
+        updated_at: deliveredAt,
+      })
+      .eq("snapshot_request_id", requestId)
+      .select("*")
+      .maybeSingle<SnapshotReportArtifactDbRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data
+      ? mapSnapshotReportArtifact(data)
+      : null;
+  },
+
   async rejectSnapshotRequest(
     requestId: string
   ): Promise<SnapshotRequest | null> {

@@ -196,6 +196,33 @@ export const memoryAdapter: DbAdapter = {
     return { ...artifact };
   },
 
+  async markSnapshotReportDelivered(
+    requestId: string,
+    messageId: string,
+    deliveredAt: string
+  ): Promise<SnapshotReportArtifact | null> {
+    const existing =
+      memorySnapshotReportArtifacts.get(requestId);
+
+    if (!existing) {
+      return null;
+    }
+
+    const updated: SnapshotReportArtifact = {
+      ...existing,
+      deliveredAt,
+      deliveryMessageId: messageId,
+      updatedAt: deliveredAt,
+    };
+
+    memorySnapshotReportArtifacts.set(
+      requestId,
+      updated
+    );
+
+    return { ...updated };
+  },
+
   async rejectSnapshotRequest(
     requestId: string
   ): Promise<SnapshotRequest | null> {

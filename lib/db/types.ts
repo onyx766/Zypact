@@ -437,6 +437,13 @@ export interface DbAdapter {
   saveSnapshotReportArtifact(
     input: SaveSnapshotReportArtifactInput
   ): Promise<SnapshotReportArtifact>;
+
+  markSnapshotReportDelivered(
+    requestId: string,
+    messageId: string,
+    deliveredAt: string
+  ): Promise<SnapshotReportArtifact | null>;
+
   rejectSnapshotRequest(
     requestId: string
   ): Promise<SnapshotRequest | null>;

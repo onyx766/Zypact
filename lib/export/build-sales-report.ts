@@ -371,6 +371,51 @@ function promptCompetitorsFor(
   );
 }
 
+function isGenericCompetitorLabel(
+  value: string
+): boolean {
+  const normalized = clean(value).toLowerCase();
+
+  return (
+    normalized === "traditional mdr" ||
+    normalized === "legacy mdr" ||
+    normalized === "mdr" ||
+    normalized === "ai-native solutions" ||
+    normalized === "ai-native security platforms"
+  );
+}
+
+function promptLossType(
+  prompt: string,
+  competitors: PromptCompetitorCount[]
+): string {
+  const normalized = clean(prompt).toLowerCase();
+  const hasNamedProduct = competitors.some(
+    (item) => !isGenericCompetitorLabel(item.name)
+  );
+
+  if (
+    /alternatives?|best tools?|most effective|platforms? for/i.test(
+      normalized
+    ) &&
+    hasNamedProduct
+  ) {
+    return "Competitive shortlist loss";
+  }
+
+  if (
+    /cost benefits?|roi|risks?|compared to|vs\b/i.test(
+      normalized
+    )
+  ) {
+    return "Authority / source loss";
+  }
+
+  return hasNamedProduct
+    ? "Competitive discovery loss"
+    : "Category-association loss";
+}
+
 function chooseFocusCompetitors(markdown: string, options: BuildSalesReportOptions, fixBrief: FixBriefSummary): string[] {
   if (options.focusCompetitors?.length) {
     return options.focusCompetitors.map(clean).filter(Boolean).slice(0, 5);
@@ -495,15 +540,58 @@ function brandedReputationHasNegativeSignal(
   );
 }
 
-function executiveInterpretation(brand: string, brandedReputation: string, tone: VisibilityTone, competitors: string[]): string {
-  const competitorText = formatList(competitors.slice(0, 3));
+function brandedReputationWasMeasured(
+  value: string
+): boolean {
+  const normalized = clean(value);
+
+  return !/^(not measured|not tested in this snapshot)$/i.test(
+    normalized
+  );
+}
+
+function brandedReputationDisplay(
+  value: string
+): string {
+  return brandedReputationWasMeasured(value)
+    ? clean(value)
+    : "Not tested in this snapshot";
+}
+
+function executiveInterpretation(
+  brand: string,
+  brandedReputation: string,
+  tone: VisibilityTone,
+  competitors: string[]
+): string {
+  const competitorText =
+    formatList(competitors.slice(0, 3));
+
+  const reputationMeasured =
+    brandedReputationWasMeasured(
+      brandedReputation
+    );
+
   if (tone === "strong") {
-    return `${brand} was recommended in most of the unbranded buying prompts tested. The opportunity is not basic recovery from invisibility; it is consolidation — becoming the primary recommendation more often, improving cited-source coverage, and defending the position against ${competitorText}. When the brand was named directly, the branded reputation check was **${brandedReputation}**, which supports a visibility-consolidation interpretation.`;
+    const reputationSentence =
+      reputationMeasured
+        ? ` When the brand was named directly, the branded reputation check was **${brandedReputation}**, which supports a visibility-consolidation interpretation.`
+        : " Branded reputation was not tested in this snapshot.";
+
+    return `${brand} was recommended in most of the unbranded buying prompts tested. The opportunity is not basic recovery from invisibility; it is consolidation — becoming the primary recommendation more often, improving cited-source coverage, and defending the position against ${competitorText}.${reputationSentence}`;
   }
+
   if (tone === "mixed") {
-    return `${brand} was recommended in most of the unbranded buyer runs tested, but not consistently as the primary recommendation. The opportunity is to consolidate that visibility into a stronger primary shortlist position against ${competitorText}. When the brand was named directly, the branded reputation check was **${brandedReputation}**.`;
+    const reputationSentence =
+      reputationMeasured
+        ? ` When the brand was named directly, the branded reputation check was **${brandedReputation}**.`
+        : " Branded reputation was not tested in this snapshot.";
+
+    return `${brand} was recommended in some of the unbranded buyer runs tested, but not consistently as the primary recommendation. The opportunity is to consolidate that visibility into a stronger primary shortlist position against ${competitorText}.${reputationSentence}`;
   }
+
   if (
+    reputationMeasured &&
     brandedReputationHasNegativeSignal(
       brandedReputation
     )
@@ -511,10 +599,22 @@ function executiveInterpretation(brand: string, brandedReputation: string, tone:
     return `${brand} did not appear as a recommended product in the unbranded buying prompts tested. When the brand was named directly, the branded reputation check was **${brandedReputation}**. The result combines a discovery gap with a negative branded signal that should be reviewed.`;
   }
 
+  if (!reputationMeasured) {
+    return `${brand} did not appear as a recommended product in the unbranded buying prompts tested. Branded reputation was not tested in this snapshot. This identifies a discoverability gap without making a claim about branded reputation.`;
+  }
+
   return `${brand} did not appear as a recommended product in the unbranded buying prompts tested. When the brand was named directly, the branded reputation check was **${brandedReputation}**. This points to a discoverability gap, not a negative reputation signal.`;
 }
 
-function competitorHeadlineLabel(tone: string, aiProbeResult: string): string {
+function competitorHeadlineLabel(
+  tone: string,
+  aiProbeResult: string,
+  hasManualComparisonSet: boolean
+): string {
+  if (hasManualComparisonSet) {
+    return "Comparison set selected for this scan";
+  }
+
   const normalizedTone = String(tone || "").toLowerCase();
 
   if (
@@ -693,7 +793,13 @@ export function buildSalesReportFromMvpMarkdown(markdown: string, options: Build
   const domain = extractBullet(markdown, "Domain") || "the website";
   const category = extractBullet(markdown, "Category (Mirror Profile)") || extractBullet(markdown, "Detected category") || "the buying category";
   const aiProbeResult = extractBulletByPrefix(markdown, "AI probe result") || "recommendedAsProduct 0% · citedAsSource 0%";
-  const brandedReputation = parseBrandedReputation(markdown);
+  const brandedReputationRaw =
+    parseBrandedReputation(markdown);
+
+  const brandedReputation =
+    brandedReputationDisplay(
+      brandedReputationRaw
+    );
   const evidenceNeeded = extractSection(markdown, "3\\. Evidence Needed to Unlock Publish-Ready Assets")
     .split(/\r?\n/)
     .map((line) => clean(line.replace(/^-\s+/, "")))
@@ -703,11 +809,38 @@ export function buildSalesReportFromMvpMarkdown(markdown: string, options: Build
   const includedRows = promptRows.filter((row) => /^included$/i.test(row.scorecardStatus));
   const lostPrompts = extractLostPrompts(markdown);
   const fixBrief = parseFixBrief(markdown);
-  const scorecardRows = getScorecardPrompts(promptRows, fixBrief);
+  const scorecardRows = includedRows;
   const brandedRows = getBrandedRows(promptRows);
   const focusCompetitors = chooseFocusCompetitors(markdown, options, fixBrief);
   const promptCompetitorMentions =
     parsePromptCompetitorMentions(markdown);
+
+  const observedCompetitorMentions =
+    Array.from(
+      parseCompetitorMentions(markdown)
+        .entries()
+    )
+      .filter(
+        ([name, count]) =>
+          count > 0 &&
+          !isGenericCompetitorLabel(name)
+      )
+      .sort(
+        (a, b) =>
+          b[1] - a[1] ||
+          a[0].localeCompare(b[0])
+      )
+      .slice(0, 4);
+
+  const observedCompetitorSummary =
+    observedCompetitorMentions.map(
+      ([name, count]) =>
+        `${name} — ${count} ${
+          count === 1
+            ? "mention"
+            : "mentions"
+        }`
+    );
 
   const focusPrompt =
     fixBrief.lostPrompt ||
@@ -732,7 +865,14 @@ export function buildSalesReportFromMvpMarkdown(markdown: string, options: Build
   const basis = parseScorecardBasis(markdown, includedRows);
   const visibilityLine = visibilityHeadline(markdown, aiProbeResult, basis);
   const tone = visibilityTone(aiProbeResult);
-  const brandedEvidence = parseBrandedProbeEvidence(markdown);
+  const brandedEvidence =
+    brandedReputationWasMeasured(
+      brandedReputationRaw
+    )
+      ? parseBrandedProbeEvidence(
+          markdown
+        )
+      : null;
 
   const sourceFirstFix =
     fixBrief.recommendedFix ||
@@ -768,8 +908,7 @@ export function buildSalesReportFromMvpMarkdown(markdown: string, options: Build
             const rowCompetitors =
               promptCompetitorsFor(
                 row.prompt,
-                promptCompetitorMentions,
-                options.focusCompetitors
+                promptCompetitorMentions
               );
 
             const competitorCell =
@@ -783,20 +922,26 @@ export function buildSalesReportFromMvpMarkdown(markdown: string, options: Build
                     .join(", ")
                 : "No specific products were recommended in these runs";
 
-            return `| ${row.prompt} | ${row.runs} | ${row.recommendedAsProduct} | ${row.citedAsSource} | ${row.productVerdict} | ${competitorCell} |`;
+            const lossType =
+              promptLossType(
+                row.prompt,
+                rowCompetitors
+              );
+
+            return `| ${row.prompt} | ${row.runs} | ${row.recommendedAsProduct} | ${row.citedAsSource} | ${row.productVerdict} | ${lossType} | ${competitorCell} |`;
           })
           .join("\n")
-      : `| ${focusPrompt} | n/a | 0% | 0% | lost | No prompt-matched competitor evidence was available |`;
+      : `| ${focusPrompt} | n/a | 0% | 0% | lost | Category-association loss | No prompt-matched competitor evidence was available |`;
 
   const brandedCheckText = extractSubsection(markdown, "Branded reputation check")
     .split(/\r?\n/)
     .map((line) => clean(line))
     .find(Boolean);
   const brandedLine = brandedCheckText || brandedReputation;
-  const hiddenPromptCount = includedRows.length - scorecardRows.length;
-  const promptFilterNote = hiddenPromptCount > 0
-    ? `\n${scorecardRows.length} of ${includedRows.length} unbranded buyer prompts ${scorecardRows.length === 1 ? "is" : "are"} shown below. ${hiddenPromptCount} ${hiddenPromptCount === 1 ? "prompt was" : "prompts were"} excluded from the focused table because ${hiddenPromptCount === 1 ? "it was" : "they were"} outside the selected buying frame; see integrity notes.\n`
-    : "";
+  const promptFilterNote =
+    includedRows.length > 0
+      ? `\nAll ${includedRows.length} tested buyer prompts are shown below. Each prompt was run ${includedRows[0]?.runs || "multiple"} times using live AI answers.\n`
+      : "";
   const selectedLine = selectedPromptCount
     ? `This snapshot covered ${basis.promptGroups} of the ${selectedPromptCount} highest-value buyer prompts identified for ${brand}. A full scan covers all ${selectedPromptCount} and tracks how visibility and branded reputation change over time.`
     : `This snapshot covered ${basis.promptGroups} buyer prompts for ${brand}. A full scan expands coverage and tracks how visibility and branded reputation change over time.`;
@@ -812,21 +957,50 @@ ${trendLine()}
 
 **Visibility:** ${visibilityLine}.  
 **Branded reputation:** ${brandedReputation}.  
-**${competitorHeadlineLabel(tone, aiProbeResult)}:** ${formatList(focusCompetitors.slice(0, 3))}.
+**${
+  observedCompetitorSummary.length > 0
+    ? competitorHeadlineLabel(
+        tone,
+        aiProbeResult,
+        false
+      )
+    : competitorHeadlineLabel(
+        tone,
+        aiProbeResult,
+        Boolean(
+          options.focusCompetitors?.length &&
+          frameCompetitors.length === 0
+        )
+      )
+}:** ${
+  observedCompetitorSummary.length > 0
+    ? formatList(
+        observedCompetitorSummary
+      )
+    : formatList(
+        focusCompetitors.slice(0, 3)
+      )
+}.
 
 ${executiveInterpretation(brand, brandedReputation, tone, focusCompetitors)}
 ${brandedEvidenceBlock(brand, brandedEvidence)}
 ## 2. What happened in the AI probes
 ${promptFilterNote}
-| Buyer prompt tested | Runs | Recommended ${brand}? | Cited ${brand} as source? | Outcome | Competitors in the same frame |
-|---|---:|---:|---:|---|---|
+| Buyer prompt tested | Runs | Recommended ${brand}? | Cited ${brand} as source? | Outcome | Loss type | Brands / products observed |
+|---|---:|---:|---:|---|---|---|
 ${scorecardTable}
 
 ### Branded reputation check
 
 ${brandedLine}
 
-This check is tracked separately from the unbranded visibility scorecard. The unbranded scorecard answers: “Does AI suggest the brand spontaneously?” The branded check answers: “What does AI say when the brand is named directly?”
+${
+  brandedReputationWasMeasured(
+    brandedReputationRaw
+  )
+    ? "This check is tracked separately from the unbranded visibility scorecard. The unbranded scorecard answers: “Does AI suggest the brand spontaneously?” The branded check answers: “What does AI say when the brand is named directly?”"
+    : "No branded reputation probe was included in this snapshot, so this report makes no positive or negative claim about what AI says when the brand is named directly."
+}
 
 ## 3. Why this matters commercially
 

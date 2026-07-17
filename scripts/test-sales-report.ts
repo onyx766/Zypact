@@ -122,7 +122,12 @@ assert(vugioBody.includes("at risk (2/2 branded runs negative)"), "renders brand
 assert(vugioBody.includes("A buyer asked:"), "renders branded evidence prompt");
 assert(vugioBody.includes("The AI response was summarized as:"), "does not present an answer summary as a raw quote");
 assert(vugioBody.includes("likely non-existent or misnamed"), "renders the visceral branded reputation evidence");
-assert(vugioBody.includes("1 of 2 unbranded buyer prompts is shown below"), "explains focused prompt filtering");
+assert(
+  vugioBody.includes(
+    "All 2 tested buyer prompts are shown below"
+  ),
+  "shows the complete tested prompt set"
+);
 assert(vugioBody.includes("This snapshot covered 2 of the 20 highest-value buyer prompts identified for Vugio"), "renders scope CTA");
 assert(vugioBody.includes("generate the publish-ready page draft, verified against that evidence"), "renders concierge next step");
 assert(vugioBody.includes("from a live scan performed on 2026-07-10"), "uses client-safe integrity source wording");
@@ -368,3 +373,115 @@ assert(
 );
 
 console.log("Sprint 14B.3 sales report tests passed.");
+
+const unmeasuredReputationFixture = `# Zypact MVP — Client Report
+
+## 1. Executive Summary
+
+- **Brand**: AiStrike
+- **Domain**: \`aistrike.com\`
+- **Category (Mirror Profile)**: AI-native security operations platform for cybersecurity
+- **AI probe result (live Perplexity unbranded product-recommendation scorecard, 1 prompt / 3 runs)**: 0 won · 0 partial · 1 lost · recommendedAsProduct 0% · citedAsSource 0%
+- **Branded reputation**: not measured
+- **Top competitors AI recommended instead**: Securonix
+- **Next recommended fix**: Publish an answer-first page about reducing alert fatigue.
+
+## 6. Prompt Mirror summary
+
+- **selected for probe**: 20
+
+## 7. Probe Results
+
+### Probe Set
+
+- **scorecard prompt groups**: 1
+- **scorecard runs**: 3
+
+### Prompt-level aggregation
+
+| prompt | scorecard status | runs | recommendedAsProduct | citedAsSource | negativeMentions | product verdict |
+|---|---|---|---|---|---|---|
+| What should a cybersecurity leader use for reducing alert fatigue? | included | 3 | 0% | 0% | 0% | lost |
+
+## 8. What this means
+
+### Which prompts AiStrike lost or under-performed
+- What should a cybersecurity leader use for reducing alert fatigue? (3 runs, recommendedAsProduct 0%, citedAsSource 0%)
+
+## 13. Fix Brief
+
+- **lostPrompt**: What should a cybersecurity leader use for reducing alert fatigue?
+- **competitorRecommended**: Securonix
+- **fixType**: \`comparison_page\`
+
+#### Recommended fix
+Publish an answer-first page about reducing alert fatigue.
+
+#### Evidence needed
+- specific examples of how AiStrike reduces alert fatigue
+`;
+
+const unmeasuredReport =
+  buildSalesReportFromMvpMarkdown(
+    unmeasuredReputationFixture,
+    {
+      now: new Date(
+        "2026-07-17T00:00:00.000Z"
+      ),
+      focusCompetitors: [
+        "CrowdStrike Falcon",
+        "Palo Alto Cortex XSIAM",
+        "Microsoft Sentinel",
+      ],
+    }
+  );
+
+const unmeasuredBody =
+  unmeasuredReport.markdown;
+
+
+assert(
+  unmeasuredBody.includes(
+    "**Branded reputation:** Not tested in this snapshot."
+  ),
+  "unmeasured branded reputation is client-safe"
+);
+
+assert(
+  unmeasuredBody.includes(
+    "**Comparison set selected for this scan:** CrowdStrike Falcon, Palo Alto Cortex XSIAM and Microsoft Sentinel."
+  ),
+  "manual competitors are labeled as a comparison set"
+);
+
+assert(
+  !unmeasuredBody.includes(
+    "**Competitors AI recommended across the tested prompts:** CrowdStrike Falcon"
+  ),
+  "manual comparison set is not represented as AI-observed evidence"
+);
+
+assert(
+  unmeasuredBody.includes(
+    "Branded reputation was not tested in this snapshot"
+  ),
+  "executive interpretation does not imply a branded probe occurred"
+);
+
+assert(
+  unmeasuredBody.includes(
+    "No branded reputation probe was included in this snapshot"
+  ),
+  "methodology section explains the untested state"
+);
+
+assert(
+  !unmeasuredBody.includes(
+    "When the brand was named directly, the branded reputation check was **Not tested"
+  ),
+  "untested reputation is not described as a completed branded check"
+);
+
+console.log(
+  "✓ Unmeasured reputation and manual comparison-set labeling are accurate"
+);

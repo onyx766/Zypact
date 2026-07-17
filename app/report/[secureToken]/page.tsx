@@ -198,8 +198,9 @@ export default async function PublicReportPage({
                   <th>Recommended?</th>
                   <th>Cited?</th>
                   <th>Outcome</th>
+                  <th>Type of loss</th>
                   <th>
-                    Other products observed
+                    Brands / products observed
                   </th>
                 </tr>
               </thead>
@@ -220,6 +221,10 @@ export default async function PublicReportPage({
                         <span className="report-outcome">
                           {row.outcome}
                         </span>
+                      </td>
+                      <td>
+                        {row.lossType ||
+                          "Visibility loss"}
                       </td>
                       <td>
                         {row.competitors}

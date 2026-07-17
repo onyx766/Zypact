@@ -4,6 +4,7 @@ export interface PublicReportPromptRow {
   recommended: string;
   cited: string;
   outcome: string;
+  lossType: string;
   competitors: string;
 }
 
@@ -146,13 +147,23 @@ function parsePromptRows(
       continue;
     }
 
+    const hasLossType =
+      cells.length >= 7;
+
     rows.push({
       prompt: cells[0],
       runs: cells[1],
       recommended: cells[2],
       cited: cells[3],
       outcome: cells[4],
-      competitors: cells[5],
+      lossType:
+        hasLossType
+          ? cells[5]
+          : "",
+      competitors:
+        hasLossType
+          ? cells[6]
+          : cells[5],
     });
   }
 
@@ -216,7 +227,7 @@ export function parsePublicSnapshotReport(
     );
 
   const competitorMatch = executive.match(
-    /^\*\*(Competitors AI recommended across the tested prompts|Other tools AI recommended across the tested prompts|Competitors AI recommended instead):\*\*\s*(.+)$/im
+    /^\*\*(Competitors AI recommended across the tested prompts|Other tools AI recommended across the tested prompts|Competitors AI recommended instead|Comparison set selected for this scan|Competitors observed):\*\*\s*(.+)$/im
   );
 
   const executiveParagraphs =
@@ -334,8 +345,12 @@ export function parsePublicSnapshotReport(
       "Branded reputation"
     ),
     competitorLabel:
-      clean(competitorMatch?.[1]) ||
-      "Competitors observed",
+      /Competitors AI recommended/i.test(
+        clean(competitorMatch?.[1])
+      )
+        ? `Brands appearing where ${brand} did not`
+        : clean(competitorMatch?.[1]) ||
+          "Competitors observed",
     competitors:
       clean(competitorMatch?.[2]).replace(
         /\.$/,

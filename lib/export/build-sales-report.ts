@@ -436,18 +436,47 @@ function promptLossType(
 }
 
 function chooseFocusCompetitors(markdown: string, options: BuildSalesReportOptions, fixBrief: FixBriefSummary): string[] {
-  if (options.focusCompetitors?.length) {
-    return options.focusCompetitors.map(clean).filter(Boolean).slice(0, 5);
+  const seen = new Set<string>();
+
+  const unique = (items: string[]): string[] =>
+    items
+      .map(clean)
+      .filter(Boolean)
+      .filter((item) => {
+        const key = item.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+  const observedCompetitors = unique([
+    ...splitCsv(extractBullet(markdown, "Top competitors AI recommended instead")),
+    ...fixBrief.competitors,
+  ]);
+
+  if (observedCompetitors.length > 0) {
+    return observedCompetitors.slice(0, 5);
   }
-  if (fixBrief.competitors.length > 0) {
-    return fixBrief.competitors.slice(0, 5);
-  }
-  const top = splitCsv(extractBullet(markdown, "Top competitors AI recommended instead"));
-  return top.slice(0, 5);
+
+  return unique(options.focusCompetitors ?? []).slice(0, 5);
 }
 
 function formatList(items: string[], fallback = "not enough evidence yet"): string {
-  const values = items.map(clean).filter(Boolean);
+  const seen = new Set<string>();
+  const values = items
+    .map(clean)
+    .filter(Boolean)
+    .filter((item) => {
+      const key = item
+        .toLowerCase()
+        .replace(/\s*\([^)]*\)/g, "")
+        .trim();
+
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
   if (values.length === 0) return fallback;
   if (values.length === 1) return values[0];
   if (values.length === 2) return `${values[0]} and ${values[1]}`;
@@ -721,19 +750,47 @@ function fixHeading(
     : "Strengthen comparison / proof content around the under-performing buying frame.";
 }
 
+function normalizeFixText(value: string): string {
+  const text = clean(value)
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!text) return "";
+
+  const withoutBrokenTail = text
+    .replace(
+      /\b(emphasi|emphasiz|positioni|compariso|competi|outlin|capabilit)\s*$/i,
+      ""
+    )
+    .replace(/[,:;\s]+$/g, "")
+    .trim();
+
+  if (!withoutBrokenTail) return "";
+
+  return /[.!?]$/.test(withoutBrokenTail)
+    ? withoutBrokenTail
+    : `${withoutBrokenTail}.`;
+}
+
 function frameAwareFix(
   brand: string,
   focusPrompt: string,
   frameCompetitors: string[],
   originalFix: string
 ): string {
-  if (frameCompetitors.length > 0) {
-    return originalFix;
+  const cleanedOriginalFix =
+    normalizeFixText(originalFix);
+
+  if (
+    frameCompetitors.length > 0 &&
+    cleanedOriginalFix
+  ) {
+    return cleanedOriginalFix;
   }
 
-  return `Publish an answer-first page that directly addresses “${clean(
+  return normalizeFixText(`Publish an answer-first page that directly addresses “${clean(
     focusPrompt
-  )}” for ${brand}'s target audience. Explain the documented methodology, concrete steps, and verifiable evidence without framing the page as a competitor comparison.`;
+  )}” for ${brand}'s target audience. Explain the documented methodology, concrete steps, and verifiable evidence without framing the page as a competitor comparison.`);
 }
 
 function fixSafetySentence(
@@ -979,9 +1036,7 @@ export function buildSalesReportFromMvpMarkdown(markdown: string, options: Build
     includedRows.length > 0
       ? `\nAll ${includedRows.length} tested buyer prompts are shown below. Each prompt was run ${includedRows[0]?.runs || "multiple"} times using live AI answers.\n`
       : "";
-  const selectedLine = selectedPromptCount
-    ? `This snapshot covered ${basis.promptGroups} of the ${selectedPromptCount} highest-value buyer prompts identified for ${brand}. A full scan covers all ${selectedPromptCount} and tracks how visibility and branded reputation change over time.`
-    : `This snapshot covered ${basis.promptGroups} buyer prompts for ${brand}. A full scan expands coverage and tracks how visibility and branded reputation change over time.`;
+  const selectedLine = `This snapshot covered ${basis.promptGroups} targeted buyer prompts for ${brand}. A fuller recurring scan can expand the prompt set, add branded reputation checks, and track whether ${brand} gains or loses visibility over time.`;
 
   const markdownOut = sanitizeClientMarkdown(`# Zypact Short Report — ${brand}
 

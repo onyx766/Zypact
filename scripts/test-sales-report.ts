@@ -28,8 +28,8 @@ const vugioFixture = `# Zypact MVP — Client Report
 
 ## 6. Prompt Mirror summary
 
-- **total prompts**: 50
-- **selected for probe**: 20
+- **stored prompt rows**: 50
+- **rows marked selected**: 20
 
 ## 7. Probe Results
 
@@ -128,7 +128,7 @@ assert(
   ),
   "shows the complete tested prompt set"
 );
-assert(vugioBody.includes("This snapshot covered 2 of the 20 highest-value buyer prompts identified for Vugio"), "renders scope CTA");
+assert(vugioBody.includes("This snapshot covered 2 targeted buyer prompts for Vugio"), "renders scope CTA");
 assert(vugioBody.includes("generate the publish-ready page draft, verified against that evidence"), "renders concierge next step");
 assert(vugioBody.includes("from a live scan performed on 2026-07-10"), "uses client-safe integrity source wording");
 assert(vugioBody.includes("B&H Photo"), "keeps in-frame competitor B&H Photo");
@@ -162,8 +162,8 @@ const linearFixture = `# Zypact MVP — Client Report
 
 ## 6. Prompt Mirror summary
 
-- **total prompts**: 50
-- **selected for probe**: 20
+- **stored prompt rows**: 50
+- **rows marked selected**: 20
 
 ## 7. Probe Results
 
@@ -264,7 +264,7 @@ const noFrameFixture = `# Zypact MVP — Client Report
 
 ## 6. Prompt Mirror summary
 
-- **selected for probe**: 10
+- **rows marked selected**: 10
 
 ## 7. Probe Results
 
@@ -388,7 +388,7 @@ const unmeasuredReputationFixture = `# Zypact MVP — Client Report
 
 ## 6. Prompt Mirror summary
 
-- **selected for probe**: 20
+- **rows marked selected**: 20
 
 ## 7. Probe Results
 
@@ -447,11 +447,210 @@ assert(
   "unmeasured branded reputation is client-safe"
 );
 
+const MANUAL_COMPARISON_SET = [
+  "CrowdStrike Falcon",
+  "Palo Alto Cortex XSIAM",
+  "Microsoft Sentinel",
+];
+const MANUAL_RENDERED =
+  "**Comparison set selected for this scan:** CrowdStrike Falcon, Palo Alto Cortex XSIAM and Microsoft Sentinel.";
+
+/* ---- observed: value and label both come from the observed branch ---- */
 assert(
   unmeasuredBody.includes(
-    "**Comparison set selected for this scan:** CrowdStrike Falcon, Palo Alto Cortex XSIAM and Microsoft Sentinel."
+    "**Competitors AI recommended across the tested prompts:** Securonix."
   ),
-  "manual competitors are labeled as a comparison set"
+  "observed competitor is displayed under the AI-observed label"
+);
+assert(
+  !unmeasuredBody.includes("**Comparison set selected for this scan:**"),
+  "observed evidence is never labeled as the manually selected comparison set"
+);
+
+/* ---- setup guards ---- */
+const OBSERVED_BULLET =
+  "- **Top competitors AI recommended instead**: Securonix\n";
+const DERIVED_FIX_LINE = "- **competitorRecommended**: Securonix";
+assert(
+  unmeasuredReputationFixture.includes(OBSERVED_BULLET),
+  "setup: observed bullet present"
+);
+assert(
+  unmeasuredReputationFixture.includes(DERIVED_FIX_LINE),
+  "setup: derived fix-brief competitor present"
+);
+assert(
+  !unmeasuredReputationFixture.includes("Which competitors appeared instead") &&
+    !unmeasuredReputationFixture.includes("Live Perplexity Sonar probe"),
+  "setup: fixture has no summary table and no probe block, so ranks 1 and 3 are empty"
+);
+
+/* ---- derived-only: no observed source at all, no manual set ---- */
+const derivedOnlyFixture = unmeasuredReputationFixture.replace(
+  OBSERVED_BULLET,
+  ""
+);
+assert(
+  !derivedOnlyFixture.includes("Top competitors AI recommended instead"),
+  "setup: observed bullet was actually removed"
+);
+assert(
+  derivedOnlyFixture.includes(DERIVED_FIX_LINE),
+  "setup: derived competitor retained"
+);
+
+const derivedOnlyBody = buildSalesReportFromMvpMarkdown(derivedOnlyFixture, {
+  now: new Date("2026-07-17T00:00:00.000Z"),
+}).markdown;
+
+assert(
+  !derivedOnlyBody.includes(
+    "**Competitors AI recommended across the tested prompts:** Securonix."
+  ),
+  "derived competitor is never presented as AI-observed"
+);
+assert(
+  !derivedOnlyBody.includes("**Comparison set selected for this scan:**"),
+  "derived competitor is never presented as a manual comparison set"
+);
+assert(
+  derivedOnlyBody.includes("not enough evidence yet"),
+  "derived-only falls back to the existing no-evidence state"
+);
+
+/* ---- derived + manual: manual wins the labelled line ---- */
+const derivedPlusManualBody = buildSalesReportFromMvpMarkdown(
+  derivedOnlyFixture,
+  {
+    now: new Date("2026-07-17T00:00:00.000Z"),
+    focusCompetitors: MANUAL_COMPARISON_SET,
+  }
+).markdown;
+
+assert(
+  derivedPlusManualBody.includes(MANUAL_RENDERED),
+  "manual set is displayed when no observed evidence exists"
+);
+for (const name of MANUAL_COMPARISON_SET) {
+  assert(
+    derivedPlusManualBody.includes(name),
+    `manual competitor ${name} is displayed`
+  );
+}
+assert(
+  !derivedPlusManualBody.includes(
+    "**Comparison set selected for this scan:** Securonix"
+  ),
+  "derived competitor is not substituted into the manual comparison-set line"
+);
+assert(
+  !derivedPlusManualBody.includes(
+    "**Competitors AI recommended across the tested prompts:** CrowdStrike Falcon"
+  ),
+  "manual set is never labeled as AI-observed"
+);
+
+/* ---- true manual fallback: no observed, no derived ---- */
+const manualFallbackFixture = derivedOnlyFixture.replace(
+  DERIVED_FIX_LINE,
+  "- **competitorRecommended**: "
+);
+assert(
+  !manualFallbackFixture.includes(DERIVED_FIX_LINE),
+  "setup: derived competitor was actually cleared"
+);
+
+const manualFallbackBody = buildSalesReportFromMvpMarkdown(
+  manualFallbackFixture,
+  {
+    now: new Date("2026-07-17T00:00:00.000Z"),
+    focusCompetitors: MANUAL_COMPARISON_SET,
+  }
+).markdown;
+
+assert(
+  manualFallbackBody.includes(MANUAL_RENDERED),
+  "manual set uses the comparison-set label"
+);
+for (const name of MANUAL_COMPARISON_SET) {
+  assert(
+    manualFallbackBody.includes(name),
+    `manual competitor ${name} is displayed in fallback`
+  );
+}
+assert(
+  !manualFallbackBody.includes(
+    "**Competitors AI recommended across the tested prompts:** CrowdStrike Falcon"
+  ),
+  "manual fallback is never labeled as AI-observed"
+);
+
+/* ---- overlap: same name in observed evidence AND the manual set ---- */
+const overlapBody = buildSalesReportFromMvpMarkdown(
+  unmeasuredReputationFixture,
+  {
+    now: new Date("2026-07-17T00:00:00.000Z"),
+    focusCompetitors: ["Securonix", "CrowdStrike Falcon"],
+  }
+).markdown;
+
+assert(
+  overlapBody.includes(
+    "**Competitors AI recommended across the tested prompts:** Securonix."
+  ),
+  "overlapping name keeps observed provenance from the selected branch"
+);
+assert(
+  !overlapBody.includes("**Comparison set selected for this scan:**"),
+  "overlap does not flip provenance to manual"
+);
+
+/* ---- frameCompetitors as an independent observed source (rank 3) ---- */
+const frameOnlyFixture = `${derivedOnlyFixture}
+
+### Live Perplexity Sonar probe · product verdict: **lost**
+
+- **scorecard status**: included
+- **prompt**: What should a cybersecurity leader use for reducing alert fatigue?
+- **platform**: \`perplexity\`
+- **recommendedAsProduct**: no
+- **productPosition**: absent
+- **citedAsSource**: no
+- **competitors mentioned (in the live Perplexity answer)**:
+
+  | position | name | context |
+  |---|---|---|
+  | 1 | Exabeam | recommended alternative |
+`;
+assert(
+  !frameOnlyFixture.includes("Top competitors AI recommended instead") &&
+    !frameOnlyFixture.includes("Which competitors appeared instead"),
+  "setup: ranks 1 and 2 are empty in the frame fixture"
+);
+assert(
+  frameOnlyFixture.includes("| 1 | Exabeam |"),
+  "setup: per-probe observed competitor present"
+);
+
+const frameOnlyBody = buildSalesReportFromMvpMarkdown(frameOnlyFixture, {
+  now: new Date("2026-07-17T00:00:00.000Z"),
+}).markdown;
+
+assert(
+  frameOnlyBody.includes(
+    "**Competitors AI recommended across the tested prompts:** Exabeam."
+  ),
+  "per-probe observed competitor is displayed under the AI-observed label"
+);
+assert(
+  !frameOnlyBody.includes("**Comparison set selected for this scan:**"),
+  "per-probe observed evidence is not labeled as a manual comparison set"
+);
+assert(
+  !frameOnlyBody.includes(
+    "**Competitors AI recommended across the tested prompts:** Securonix."
+  ),
+  "derived competitor does not displace the per-probe observed competitor"
 );
 
 assert(

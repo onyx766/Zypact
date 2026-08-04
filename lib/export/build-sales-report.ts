@@ -435,6 +435,76 @@ function promptLossType(
     : "Category-association loss";
 }
 
+/**
+ * Provenance of the competitor list on the executive-diagnosis line.
+ * Assigned at the branch that selects the list — never inferred afterwards
+ * by comparing names, because an observed competitor may also appear in a
+ * manually supplied comparison set.
+ */
+type CompetitorDisplaySource = "observed" | "manual" | "none";
+
+type CompetitorDisplaySelection = {
+  competitors: string[];
+  source: CompetitorDisplaySource;
+};
+
+/**
+ * Single resolver for the labelled competitor line: returns the displayed
+ * list AND its provenance together, so the label can never contradict the
+ * value.
+ *
+ * Fix Brief competitors are NOT an input. That field comes from the Fix
+ * Brief agent's unconstrained `competitorRecommended` string
+ * (lib/pipeline/generate-fix-brief.ts; schema `z.string().min(1)`), so it
+ * is not guaranteed to be observed AI evidence and no truthful
+ * client-facing label exists for it. It falls through to the manual set or
+ * the existing empty state.
+ */
+function resolveCompetitorDisplay(
+  observedCompetitorSummary: string[],
+  observedReportCompetitors: string[],
+  observedFrameCompetitors: string[],
+  manualCompetitors: string[] | undefined
+): CompetitorDisplaySelection {
+  const norm = (items: string[]): string[] => {
+    const seen = new Set<string>();
+    return items
+      .map(clean)
+      .filter(Boolean)
+      .filter((item) => {
+        const key = item.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  };
+
+  if (observedCompetitorSummary.length > 0) {
+    return { competitors: observedCompetitorSummary, source: "observed" };
+  }
+
+  const reportObserved = norm(observedReportCompetitors);
+  if (reportObserved.length > 0) {
+    return { competitors: reportObserved.slice(0, 3), source: "observed" };
+  }
+
+  // Per-probe observed evidence. Generic contextual labels are excluded
+  // using the same predicate the summary path already applies.
+  const frameObserved = norm(observedFrameCompetitors).filter(
+    (name) => !isGenericCompetitorLabel(name)
+  );
+  if (frameObserved.length > 0) {
+    return { competitors: frameObserved.slice(0, 3), source: "observed" };
+  }
+
+  const manual = norm(manualCompetitors ?? []);
+  if (manual.length > 0) {
+    return { competitors: manual.slice(0, 3), source: "manual" };
+  }
+
+  return { competitors: [], source: "none" };
+}
+
 function chooseFocusCompetitors(markdown: string, options: BuildSalesReportOptions, fixBrief: FixBriefSummary): string[] {
   const seen = new Set<string>();
 
@@ -501,10 +571,6 @@ function numberFromLine(markdown: string, label: string): number | undefined {
   const m = markdown.match(new RegExp(`^-\\s+\\*\\*${escaped}\\*\\*:\\s*([0-9]+)`, "im"));
   const n = Number(m?.[1]);
   return Number.isFinite(n) ? n : undefined;
-}
-
-function parseSelectedPromptCount(markdown: string): number | undefined {
-  return numberFromLine(markdown, "selected for probe");
 }
 
 function parseScorecardBasis(markdown: string, includedRows: PromptRow[]): { promptGroups: number; runs: number } {
@@ -937,7 +1003,14 @@ export function buildSalesReportFromMvpMarkdown(markdown: string, options: Build
 
   const date = options.now ?? new Date();
   const reportDate = date.toISOString().slice(0, 10);
-  const selectedPromptCount = parseSelectedPromptCount(markdown);
+
+  const competitorDisplay = resolveCompetitorDisplay(
+    observedCompetitorSummary,
+    splitCsv(extractBullet(markdown, "Top competitors AI recommended instead")),
+    frameCompetitors,
+    options.focusCompetitors
+  );
+
   const basis = parseScorecardBasis(markdown, includedRows);
   const visibilityLine = visibilityHeadline(markdown, aiProbeResult, basis);
   const tone = visibilityTone(aiProbeResult);
@@ -1050,29 +1123,12 @@ ${trendLine()}
 **Visibility:** ${visibilityLine}.  
 **Branded reputation:** ${brandedReputation}.  
 **${
-  observedCompetitorSummary.length > 0
-    ? competitorHeadlineLabel(
-        tone,
-        aiProbeResult,
-        false
-      )
-    : competitorHeadlineLabel(
-        tone,
-        aiProbeResult,
-        Boolean(
-          options.focusCompetitors?.length &&
-          frameCompetitors.length === 0
-        )
-      )
-}:** ${
-  observedCompetitorSummary.length > 0
-    ? formatList(
-        observedCompetitorSummary
-      )
-    : formatList(
-        focusCompetitors.slice(0, 3)
-      )
-}.
+  competitorHeadlineLabel(
+    tone,
+    aiProbeResult,
+    competitorDisplay.source === "manual"
+  )
+}:** ${formatList(competitorDisplay.competitors)}.
 
 ${executiveInterpretation(brand, brandedReputation, tone, focusCompetitors)}
 ${brandedEvidenceBlock(brand, brandedEvidence)}

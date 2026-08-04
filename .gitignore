@@ -25,3 +25,6 @@ zypact-sprint*/
 app/page.legacy-*.tsx
 scripts/tmp-*.ts
 supabase/.temp/
+.vercel
+.env*
+!.env.example

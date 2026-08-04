@@ -183,8 +183,11 @@ async function main(): Promise<void> {
         model: readCount("model"),
         mockMode: readCount("mock mode"),
         promptsTotal: readCount("prompts total"),
-        promptsSelected: readCount("prompts selected for probe"),
-        probeResults: readCount("probe results"),
+        distinctPromptsScorecard: readCount(
+          "distinct prompts represented in scorecard results"
+        ),
+        scorecardProbeRuns: readCount("scorecard probe runs"),
+        allStoredProbeRows: readCount("all stored probe rows"),
         competitors: readCount("competitors"),
         prioritizedGaps: readCount("prioritized gaps"),
         fixBriefs: readCount("fix briefs"),

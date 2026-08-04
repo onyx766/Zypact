@@ -641,7 +641,7 @@ function testFullReport(): void {
 
   // Appendix contains the technical metadata.
   check("appendix contains projectId", markdown.slice(appendixIdx).includes("**projectId**:"));
-  check("appendix contains exportFormatVersion", markdown.slice(appendixIdx).includes("**exportFormatVersion**: 2"));
+  check("appendix contains exportFormatVersion", markdown.slice(appendixIdx).includes("**exportFormatVersion**: 3"));
   check("appendix contains provider=openai", markdown.slice(appendixIdx).includes("**provider**: openai"));
   check("appendix contains model=gpt-4o-mini", markdown.slice(appendixIdx).includes("**model**: gpt-4o-mini"));
   check("appendix contains mock mode: off", markdown.slice(appendixIdx).includes("**mock mode**: off"));
@@ -902,6 +902,186 @@ function testSecretLeakThroughReport(): void {
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Prompt-count integrity: stored `selected` rows are NOT prompts probed      */
+/* -------------------------------------------------------------------------- */
+
+/** Slice one `## ` section so assertions target the right part of the report. */
+function sliceReportSection(markdown: string, heading: string): string {
+  const start = markdown.indexOf(`## ${heading}`);
+  if (start < 0) return "";
+  const next = markdown.indexOf("\n## ", start + heading.length);
+  return markdown.slice(start, next > 0 ? next : markdown.length);
+}
+
+function testPromptCountIntegrity(): void {
+  const now = new Date("2026-08-04T00:00:00.000Z");
+  const iso = now.toISOString();
+  const projectId = "22222222-2222-2222-2222-222222222222";
+
+  // Deliberately brand-free so every group is unbranded and the scorecard
+  // subset equals the full prompt-group set for this fixture.
+  const texts = [
+    "best alpha analytics workflow",
+    "best bravo billing reconciliation",
+    "best charlie deployment pipeline",
+    "best delta inventory forecasting",
+    "best echo payroll compliance",
+    "best foxtrot shipping logistics",
+    "best golf recruiting onboarding",
+    "best hotel warehouse robotics",
+    "best india telemetry dashboards",
+    "best juliet contract redlining",
+    "best kilo procurement sourcing",
+    "best lima translation localisation",
+  ];
+
+  const project: Project = {
+    id: projectId,
+    userId: "user-count",
+    companyName: "Acme Corp",
+    domain: "acme.example.com",
+    category: "test category",
+    createdAt: iso,
+  };
+
+  // 12 stored prompt rows, ALL flagged selected — the misleading input.
+  const prompts: GeneratedPrompt[] = texts.map((prompt, i) => ({
+    id: `gp-${i}`,
+    projectId,
+    prompt,
+    intentType: "manual",
+    commercialValue: 5,
+    winnability: 3,
+    priority: 100 - i,
+    rationale: "",
+    selected: true,
+    createdAt: iso,
+  }));
+
+  const probeRow = (
+    n: number,
+    prompt: string,
+    generatedPromptId: string | null,
+    probeMode: ProbeResult["probeMode"]
+  ): ProbeResult => ({
+    id: `pr-${n}`,
+    probeRunId: `run-${n}`,
+    projectId,
+    generatedPromptId,
+    prompt,
+    platform: "perplexity",
+    probeMode,
+    rawResponse: "answer body",
+    clientMentioned: false,
+    clientPosition: "absent",
+    competitorsMentioned: [],
+    sourcesCited: [],
+    answerSummary: "summary",
+    verdict: "lost",
+    whyClientLost: "not recommended",
+    createdAt: iso,
+  });
+
+  // Only the first ELEVEN prompts were probed, 3 live runs each = 33.
+  // Prompt 0 varies by case/whitespace; prompt 1 carries a null prompt id.
+  const probeResults: ProbeResult[] = [];
+  let n = 0;
+  for (let p = 0; p < 11; p += 1) {
+    for (let r = 0; r < 3; r += 1) {
+      let text = texts[p]!;
+      if (p === 0 && r === 1) text = "Best Alpha Analytics Workflow";
+      if (p === 0 && r === 2) text = "  best   alpha  analytics   workflow ";
+      probeResults.push(
+        probeRow(n++, text, p === 1 ? null : `gp-${p}`, "live_perplexity")
+      );
+    }
+  }
+
+  const input: BuildMvpReportInput = {
+    project,
+    mirrorProfile: null,
+    prompts,
+    probeResults,
+    competitors: [],
+    gapMap: null,
+    gaps: [],
+    evidenceBank: null,
+    fixBriefs: [],
+    assets: [],
+    latestQaByAsset: new Map(),
+    llmProvider: "openai",
+    llmModel: "gpt-4o-mini",
+    mockMode: false,
+    now,
+  };
+
+  const { markdown } = buildMvpReport(input);
+  const execSection = sliceReportSection(markdown, REPORT_SECTIONS[0]);
+  const promptSection = sliceReportSection(markdown, REPORT_SECTIONS[5]);
+  const appendix = sliceReportSection(markdown, REPORT_SECTIONS[18]);
+
+  check(
+    "section 6 reports 12 stored prompt rows marked selected",
+    promptSection.includes("**stored prompt rows**: 12") &&
+      promptSection.includes("**rows marked selected**: 12")
+  );
+  check(
+    "section 6 heading is 'Stored prompt targets'",
+    promptSection.includes("### Stored prompt targets") &&
+      !promptSection.includes("### Selected prompts")
+  );
+  check(
+    "appendix reports 11 distinct scorecard prompts, not 12",
+    appendix.includes("**distinct prompts represented in scorecard results**: 11")
+  );
+  check(
+    "appendix reports 33 scorecard probe runs",
+    appendix.includes("**scorecard probe runs**: 33")
+  );
+  check(
+    "appendix reports 33 stored probe rows",
+    appendix.includes("**all stored probe rows**: 33")
+  );
+  check(
+    "executive summary agrees with the appendix (11 prompts / 33 runs)",
+    execSection.includes("11 prompts / 33 runs")
+  );
+  check(
+    "phrase 'selected for probe' is absent from the whole report",
+    !markdown.includes("selected for probe")
+  );
+
+  // Mixed modes: 3 simulated rows for a 12th prompt must NOT enter the
+  // scorecard subset while live rows exist, but must still be stored rows.
+  const mixedInput: BuildMvpReportInput = {
+    ...input,
+    probeResults: [
+      ...probeResults,
+      probeRow(100, texts[11]!, "gp-11", "simulated"),
+      probeRow(101, texts[11]!, "gp-11", "simulated"),
+      probeRow(102, texts[11]!, "gp-11", "simulated"),
+    ],
+  };
+  const mixed = buildMvpReport(mixedInput).markdown;
+  const mixedExec = sliceReportSection(mixed, REPORT_SECTIONS[0]);
+  const mixedAppendix = sliceReportSection(mixed, REPORT_SECTIONS[18]);
+
+  check(
+    "mixed modes keep the scorecard subset at 11 prompts / 33 runs",
+    mixedAppendix.includes("**distinct prompts represented in scorecard results**: 11") &&
+      mixedAppendix.includes("**scorecard probe runs**: 33")
+  );
+  check(
+    "mixed modes report 36 stored probe rows",
+    mixedAppendix.includes("**all stored probe rows**: 36")
+  );
+  check(
+    "mixed-mode executive summary still agrees with the appendix",
+    mixedExec.includes("11 prompts / 33 runs")
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Entry                                                                     */
 /* -------------------------------------------------------------------------- */
 
@@ -915,6 +1095,7 @@ testFullReport();
 testCompanyNameInReport();
 testCategoryCaveat();
 testSecretLeakThroughReport();
+testPromptCountIntegrity();
 
 console.log(
   `\n${checks - failures}/${checks} checks passed. ` +

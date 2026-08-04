@@ -58,7 +58,7 @@ import type {
 import { buildProbeSetSummary, isBrandedPrompt, probeSetLabel, type PromptProbeAggregate } from "@/lib/probe-results/report-selection";
 import { isAiPlatformName } from "@/lib/ai-platforms/platform-registry";
 
-export const EXPORT_FORMAT_VERSION = 2;
+export const EXPORT_FORMAT_VERSION = 3;
 
 /** Marker emitted whenever the secret sweep redacts a match. */
 export const REDACTED_MARKER = "[REDACTED]";
@@ -956,8 +956,11 @@ function sectionPrompts(input: BuildMvpReportInput): string {
   const parts: string[] = [];
   parts.push(`## ${REPORT_SECTIONS[5]}`);
   parts.push("");
-  parts.push(`- **total prompts**: ${total}`);
-  parts.push(`- **selected for probe**: ${selected.length}`);
+  // Both counts describe STORED prompt rows and their authoring-intent
+  // `selected` flag. Neither is the number of prompts actually probed —
+  // the appendix carries the scorecard-derived counts for that.
+  parts.push(`- **stored prompt rows**: ${total}`);
+  parts.push(`- **rows marked selected**: ${selected.length}`);
   parts.push("");
   parts.push("### Intent distribution");
   if (intentRows.length === 0) {
@@ -968,9 +971,9 @@ function sectionPrompts(input: BuildMvpReportInput): string {
     parts.push(intentRows.join("\n"));
   }
   parts.push("");
-  parts.push("### Selected prompts");
+  parts.push("### Stored prompt targets");
   if (selected.length === 0) {
-    parts.push("_none selected_");
+    parts.push("_none_");
   } else {
     parts.push("| priority | commercialValue | winnability | intent | prompt |");
     parts.push("|---|---|---|---|---|");
@@ -1918,6 +1921,7 @@ function sectionAppendixMetadata(
   const brandName = resolveCompanyName(input.project, input.mirrorProfile).name;
   const activeAssets = currentAssetsForReport(input, brandName);
   const supersededAssets = supersededAssetsForReport(input, brandName);
+  const probeSet = getProbeSet(input, brandName);
   const rows: Array<[string, string]> = [
     ["report generated", now.toISOString()],
     ["exportFormatVersion", String(EXPORT_FORMAT_VERSION)],
@@ -1942,11 +1946,18 @@ function sectionAppendixMetadata(
     ["mirrorProfile.createdAt", nice(input.mirrorProfile?.createdAt ?? null)],
     ["evidenceBank.updatedAt", nice(input.evidenceBank?.updatedAt ?? null)],
     ["prompts total", String(input.prompts.length)],
+    // Derived from the SAME probe subset the Executive Summary uses
+    // (`scorecardPromptGroups` / `scorecardProbeResults`), so the two
+    // sections can never disagree — including when branded prompt groups
+    // exist and the scorecard is restricted to unbranded prompts. Stored
+    // rows flagged `selected` are authoring intent and must never be
+    // reported as prompts probed.
     [
-      "prompts selected for probe",
-      String(input.prompts.filter((p) => p.selected).length),
+      "distinct prompts represented in scorecard results",
+      String(probeSet.scorecardPromptGroups.length),
     ],
-    ["probe results", String(input.probeResults.length)],
+    ["scorecard probe runs", String(probeSet.scorecardProbeResults.length)],
+    ["all stored probe rows", String(input.probeResults.length)],
     ["competitors", String(input.competitors.length)],
     ["prioritized gaps", String(input.gaps.length)],
     ["fix briefs", String(input.fixBriefs.length)],

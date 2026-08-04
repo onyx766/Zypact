@@ -65,14 +65,24 @@ function signature(prompt: string): string {
   return terms.slice(0, 8).join("|");
 }
 
-function tooSimilar(a: string, b: string): boolean {
+export const PROMPT_SIMILARITY_THRESHOLD = 0.75;
+
+/**
+ * Token-overlap ratio between two prompts, relative to the smaller token set.
+ * Exposed so selection can *report* why a candidate was rejected instead of
+ * dropping it silently. The threshold itself is unchanged.
+ */
+export function promptOverlapRatio(a: string, b: string): number {
   const aa = new Set(normalizePrompt(a));
   const bb = new Set(normalizePrompt(b));
-  if (aa.size === 0 || bb.size === 0) return false;
+  if (aa.size === 0 || bb.size === 0) return 0;
   let overlap = 0;
   for (const t of aa) if (bb.has(t)) overlap += 1;
-  const ratio = overlap / Math.min(aa.size, bb.size);
-  return ratio >= 0.75;
+  return overlap / Math.min(aa.size, bb.size);
+}
+
+function tooSimilar(a: string, b: string): boolean {
+  return promptOverlapRatio(a, b) >= PROMPT_SIMILARITY_THRESHOLD;
 }
 
 function sortPrompts<T extends { priority: number; commercialValue: number; winnability: number; id: string | number }>(rows: T[]): T[] {
@@ -138,17 +148,72 @@ export function selectCommercialProbePromptIds(
   return selected.slice(0, max).map((p) => p.id);
 }
 
-export function chooseCommercialPromptRows(
+export interface PromptSelectionRejection {
+  promptId: string;
+  priority: number;
+  blockedByPromptId: string;
+  blockedByPriority: number;
+  overlapRatio: number;
+}
+
+export interface PromptSelectionResult {
+  rows: GeneratedPrompt[];
+  requested: number;
+  candidates: number;
+  selected: number;
+  rejectedAsDuplicate: number;
+  rejections: PromptSelectionRejection[];
+  reachedTarget: boolean;
+  shortfallReason:
+    | "insufficient_candidates"
+    | "duplicate_rejection"
+    | null;
+}
+
+/**
+ * Same selection algorithm as `chooseCommercialPromptRows`, but it reports
+ * what it dropped. Near-duplicate rejection is legitimate; returning fewer
+ * prompts than requested *without saying so* is not. Callers use this to
+ * fail loudly instead of running a silently smaller scan.
+ */
+export function chooseCommercialPromptRowsWithDiagnostics(
   prompts: GeneratedPrompt[],
   count: number,
-): GeneratedPrompt[] {
+): PromptSelectionResult {
   const selected = prompts.filter((p) => p.selected);
   const candidates = selected.length > 0 ? selected : prompts;
   const out: GeneratedPrompt[] = [];
   const used = new Set<string>();
+  const rejections: PromptSelectionRejection[] = [];
+  const alreadyRejected = new Set<string>();
+
   const add = (p: GeneratedPrompt): boolean => {
     if (used.has(p.id)) return false;
-    if (out.some((x) => tooSimilar(x.prompt, p.prompt))) return false;
+
+    let blocker: GeneratedPrompt | null = null;
+    let overlapRatio = 0;
+    for (const x of out) {
+      const ratio = promptOverlapRatio(x.prompt, p.prompt);
+      if (ratio > overlapRatio) {
+        overlapRatio = ratio;
+        blocker = x;
+      }
+    }
+
+    if (blocker && overlapRatio >= PROMPT_SIMILARITY_THRESHOLD) {
+      if (!alreadyRejected.has(p.id)) {
+        alreadyRejected.add(p.id);
+        rejections.push({
+          promptId: p.id,
+          priority: p.priority,
+          blockedByPromptId: blocker.id,
+          blockedByPriority: blocker.priority,
+          overlapRatio,
+        });
+      }
+      return false;
+    }
+
     out.push(p);
     used.add(p.id);
     return true;
@@ -166,7 +231,31 @@ export function chooseCommercialPromptRows(
     if (out.length >= count) break;
     add(p);
   }
-  return out.slice(0, count);
+
+  const rows = out.slice(0, count);
+  const reachedTarget = rows.length >= count;
+
+  return {
+    rows,
+    requested: count,
+    candidates: candidates.length,
+    selected: rows.length,
+    rejectedAsDuplicate: rejections.length,
+    rejections,
+    reachedTarget,
+    shortfallReason: reachedTarget
+      ? null
+      : candidates.length < count
+        ? "insufficient_candidates"
+        : "duplicate_rejection",
+  };
+}
+
+export function chooseCommercialPromptRows(
+  prompts: GeneratedPrompt[],
+  count: number,
+): GeneratedPrompt[] {
+  return chooseCommercialPromptRowsWithDiagnostics(prompts, count).rows;
 }
 
 export const ZYPACT_COMMERCIAL_SANITY_PROMPTS: GeneratedPromptInput[] = [

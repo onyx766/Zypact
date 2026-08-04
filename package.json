@@ -34,7 +34,8 @@
     "refresh:asset-lifecycle": "tsx scripts/refresh-asset-lifecycle.ts",
     "seed:zypact-commercial-prompts": "tsx scripts/seed-zypact-commercial-sanity-prompts.ts",
     "mvp:scan": "tsx scripts/mvp-scan.ts",
-    "test:mvp-scan": "tsx scripts/test-mvp-scan-runner.ts"
+    "test:mvp-scan": "tsx scripts/test-mvp-scan-runner.ts",
+    "test:prompt-cardinality": "tsx scripts/test-prompt-selection-cardinality.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

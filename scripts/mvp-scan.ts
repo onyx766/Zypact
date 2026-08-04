@@ -30,7 +30,11 @@ import { discoverCompetitors } from "@/lib/pipeline/discover-competitors";
 import { generateGapMap } from "@/lib/pipeline/generate-gap-map";
 import { generateFixBrief } from "@/lib/pipeline/generate-fix-brief";
 import { buildMvpReport } from "@/lib/export/build-mvp-report";
-import { chooseCommercialPromptRows } from "@/lib/prompts/commercial-selection";
+import {
+  applyPromptShortfallPolicy,
+  type PromptShortfallPolicy,
+} from "@/lib/prompts/prompt-selection-policy";
+import { selectPromptTargets } from "@/lib/prompts/select-prompt-targets";
 import { buildProbeSetSummary } from "@/lib/probe-results/report-selection";
 import { SiteReaderOutputSchema } from "@/lib/schemas/site-reader.schema";
 import { probeRequestLeaksClientIdentity } from "@/lib/probe-analysis/product-recommendation";
@@ -51,6 +55,7 @@ interface Args {
   probeMode: RunnerProbeMode;
   dryRun: boolean;
   forceNewProject: boolean;
+  allowFewerPrompts: boolean;
   budgetUsd: number;
   out?: string;
 }
@@ -60,9 +65,25 @@ interface StagePlan {
   mirror: "run" | "reuse";
   prompts: "generate" | "reuse" | "file";
   evidenceBank: "create" | "reuse";
-  probes: "run" | "skip";
-  recommendations: "run" | "skip";
+  probes: "run" | "skip" | "pending" | "blocked";
+  recommendations: "run" | "skip" | "pending" | "blocked";
   export: "write" | "skip";
+}
+
+/** What the plan may claim about the number of prompts that will be probed. */
+type PlanPromptSelection =
+  | { kind: "exact"; count: number; basis: string }
+  | { kind: "unknown"; basis: string };
+
+/**
+ * Spend confidence is tracked SEPARATELY from prompt-count confidence. An
+ * exact prompt count does not imply an exact probe count: missing probes also
+ * depend on how many runs already exist for each prompt.
+ */
+interface PlanSpendEstimate {
+  kind: "exact" | "not_final" | "not_applicable";
+  missingProbeCalls: number;
+  estimatedSpend: number;
 }
 
 const DEFAULT_USER_ID = "a76f133a-b3ef-4440-b418-dddb3e1ea524";
@@ -127,6 +148,7 @@ function parseArgs(argv: string[]): Args {
     "dry-run",
     "force-new-project",
     "allow-unguarded-frame",
+    "allow-fewer-prompts",
     "budget-usd",
     "out",
   ]);
@@ -201,6 +223,7 @@ function parseArgs(argv: string[]): Args {
     probeMode: probeModeRaw,
     dryRun: has("dry-run"),
     forceNewProject: has("force-new-project"),
+    allowFewerPrompts: has("allow-fewer-prompts"),
     budgetUsd: parsePositiveMoney(get("budget-usd"), DEFAULT_BUDGET_USD, "--budget-usd"),
     out: get("out")?.trim(),
   };
@@ -290,6 +313,20 @@ function customPromptRows(args: Args): Array<Omit<GeneratedPrompt, "id" | "proje
   } as Omit<GeneratedPrompt, "id" | "projectId" | "createdAt">));
 }
 
+/**
+ * Prompt rows as they *would* be stored from --prompts-file, so planning can
+ * run the real selection before any paid probe. Ids are synthetic and never
+ * persisted; file priorities are distinct, so id never affects sort order.
+ */
+function plannedFilePromptRows(args: Args): GeneratedPrompt[] {
+  return customPromptRows(args).map((row, index) => ({
+    ...row,
+    id: `planned-${index}`,
+    projectId: "planned",
+    createdAt: new Date(0).toISOString(),
+  }));
+}
+
 async function replacePromptsFromFileIfNeeded(args: Args, projectId: string): Promise<boolean> {
   if (!args.promptsFile) return false;
 
@@ -358,7 +395,10 @@ async function findExistingProject(args: Args): Promise<Project | null> {
   return getDb().getProject(data.id);
 }
 
-function brandTerms(project: Project, mirrorJson: unknown): string[] {
+function brandTerms(
+  project: { companyName: string | null; domain: string },
+  mirrorJson: unknown
+): string[] {
   const terms = new Set<string>();
   if (project.companyName?.trim()) terms.add(project.companyName.trim());
   if (project.domain.trim()) {
@@ -374,76 +414,21 @@ function brandTerms(project: Project, mirrorJson: unknown): string[] {
   return [...terms];
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function promptContainsBrandTerm(
-  prompt: string,
-  terms: string[]
-): boolean {
-  return terms.some((rawTerm) => {
-    const normalizedTerm = rawTerm
-      .trim()
-      .toLowerCase()
-      .replace(/^https?:\/\//, "")
-      .replace(/^www\./, "")
-      .replace(/\/.*$/, "");
-
-    const variants = new Set([
-      normalizedTerm,
-      normalizedTerm.split(".")[0] ?? "",
-    ]);
-
-    return [...variants].some((variant) => {
-      if (variant.length < 3) return false;
-
-      const pattern = new RegExp(
-        `(^|[^a-z0-9])${escapeRegExp(variant)}([^a-z0-9]|$)`,
-        "i"
-      );
-
-      return pattern.test(prompt);
-    });
-  });
-}
-
+/**
+ * Policy wrapper. EVERY shortfall — brand filtering, similarity rejection, or
+ * an insufficient pool — flows through this single diagnostic path, so
+ * --allow-fewer-prompts can accept any of them.
+ */
 function pickPromptTargets(
   prompts: GeneratedPrompt[],
   count: number,
-  clientBrandTerms: string[]
+  clientBrandTerms: string[],
+  onShortfall: PromptShortfallPolicy = "throw"
 ): GeneratedPrompt[] {
-  const wanted = Math.max(1, count);
-
-  const isUnbranded = (row: GeneratedPrompt): boolean =>
-    !promptContainsBrandTerm(
-      row.prompt,
-      clientBrandTerms
-    );
-
-  const selectedUnbranded = prompts.filter(
-    (row) => row.selected && isUnbranded(row)
-  );
-
-  const allUnbranded = prompts.filter(isUnbranded);
-
-  const candidates =
-    selectedUnbranded.length >= wanted
-      ? selectedUnbranded
-      : allUnbranded;
-
-  if (candidates.length < wanted) {
-    throw new Error(
-      `Prompt selection requires ${wanted} unbranded prompts, ` +
-      `but only ${candidates.length} are available after excluding ` +
-      `the client brand.`
-    );
-  }
-
-  return chooseCommercialPromptRows(
-    candidates,
-    wanted
-  );
+  const selection = selectPromptTargets(prompts, count, clientBrandTerms);
+  const outcome = applyPromptShortfallPolicy(selection, onShortfall);
+  if (outcome.warning) console.warn(outcome.warning);
+  return outcome.rows;
 }
 
 function mergeZypactCommercialSanityPromptsIfNeeded(args: Args, prompts: GeneratedPrompt[]): boolean {
@@ -533,7 +518,7 @@ async function saveSimulatedProbe(projectId: string, prompt: GeneratedPrompt, br
   });
 }
 
-async function runMissingProbes(args: Args, project: Project, promptTargets: GeneratedPrompt[]): Promise<{ attempted: number; saved: number; usedMock: boolean }> {
+async function runMissingProbes(args: Args, project: Project, promptTargets: GeneratedPrompt[]): Promise<{ attempted: number; saved: number; usedMock: boolean; promptsWithSavedRuns: number }> {
   const db = getDb();
   const beforeRows = await db.getProbeResultsByProject(project.id);
   const mirror = await db.getMirrorProfile(project.id);
@@ -547,17 +532,21 @@ async function runMissingProbes(args: Args, project: Project, promptTargets: Gen
   let attempted = 0;
   let saved = 0;
   let usedMock = false;
+  let promptsWithSavedRuns = 0;
 
   for (const prompt of promptTargets) {
     const already = existingRunCount(beforeRows, prompt.prompt, args.probeMode);
     const missing = Math.max(0, args.runs - already);
     if (missing === 0) continue;
 
+    let savedForPrompt = 0;
+
     for (let i = 0; i < missing; i += 1) {
       attempted += 1;
       if (args.probeMode === "simulated") {
         await saveSimulatedProbe(project.id, prompt, brandName, args.competitors);
         saved += 1;
+        savedForPrompt += 1;
         usedMock = true;
         continue;
       }
@@ -585,10 +574,13 @@ async function runMissingProbes(args: Args, project: Project, promptTargets: Gen
       });
       if (!analyzed.ok) throw new Error(analyzed.error);
       saved += 1;
+      savedForPrompt += 1;
     }
+
+    if (savedForPrompt > 0) promptsWithSavedRuns += 1;
   }
 
-  return { attempted, saved, usedMock };
+  return { attempted, saved, usedMock, promptsWithSavedRuns };
 }
 
 async function ensureProject(
@@ -825,18 +817,30 @@ async function exportReport(args: Args, project: Project, outPath: string): Prom
   return abs;
 }
 
-async function buildPlan(args: Args): Promise<{ plan: StagePlan; project: Project | null; outputPath: string; missingProbeCalls: number; estimatedSpend: number }> {
+async function buildPlan(args: Args): Promise<{ plan: StagePlan; project: Project | null; outputPath: string; promptSelection: PlanPromptSelection; spend: PlanSpendEstimate; shortfallBlocksExecution: boolean }> {
   const existing = await findExistingProject(args);
   const outputPath = args.out || defaultOutPath(args);
   let project = existing;
   const db = getDb();
   const customPrompts = readCustomPromptLines(args);
   const plannedPromptCount = customPrompts.length > 0 ? Math.min(args.prompts, customPrompts.length) : args.prompts;
+  const mergesSanityPrompts = hostnameOf(args.domain).toLowerCase() === "zypact.com";
 
   let mirrorAction: StagePlan["mirror"] = "run";
   let promptAction: StagePlan["prompts"] = customPrompts.length > 0 ? "file" : "generate";
   let bankAction: StagePlan["evidenceBank"] = "create";
-  let missingProbeCalls = plannedPromptCount * args.runs;
+
+  let promptSelection: PlanPromptSelection = {
+    kind: "unknown",
+    basis: "prompts are generated during the scan",
+  };
+
+  // Default: a planning-only figure, never treated as final.
+  let spend: PlanSpendEstimate = {
+    kind: "not_final",
+    missingProbeCalls: plannedPromptCount * args.runs,
+    estimatedSpend: 0,
+  };
 
   if (project) {
     const [mirror, prompts, bank, probeRows] = await Promise.all([
@@ -848,37 +852,107 @@ async function buildPlan(args: Args): Promise<{ plan: StagePlan; project: Projec
     mirrorAction = mirror ? "reuse" : "run";
     promptAction = customPrompts.length > 0 ? "file" : (prompts.length > 0 ? "reuse" : "generate");
     bankAction = bank ? "reuse" : "create";
-    if (customPrompts.length > 0) {
-      missingProbeCalls = plannedPromptCount * args.runs;
-    } else if (prompts.length > 0) {
-      const targets = pickPromptTargets(
-        prompts,
-        args.prompts,
-        brandTerms(project, null)
+
+    // companyName and domain are immutable after project creation — the only
+    // project mutation in the DbAdapter is updateProjectCategory — so these
+    // are provably the brand terms execution will use.
+    const executionBrandTerms = brandTerms(project, null);
+
+    // Same reuse arithmetic runMissingProbes performs.
+    const missingFor = (rows: GeneratedPrompt[]): number =>
+      rows.reduce(
+        (acc, p) => acc + Math.max(0, args.runs - existingRunCount(probeRows, p.prompt, args.probeMode)),
+        0
       );
-      missingProbeCalls = targets.reduce((acc, p) => acc + Math.max(0, args.runs - existingRunCount(probeRows, p.prompt, args.probeMode)), 0);
+
+    if (customPrompts.length > 0) {
+      // --prompts-file short-circuits the sanity merge in ensurePrompts, so
+      // the execution candidate pool is exactly the file contents.
+      const selection = selectPromptTargets(
+        plannedFilePromptRows(args),
+        plannedPromptCount,
+        executionBrandTerms
+      );
+      promptSelection = {
+        kind: "exact",
+        count: selection.selected,
+        basis: "file prompts, brand-filtered with the project terms",
+      };
+      spend = { kind: "exact", missingProbeCalls: missingFor(selection.rows), estimatedSpend: 0 };
+    } else if (prompts.length > 0) {
+      const selection = selectPromptTargets(prompts, args.prompts, executionBrandTerms);
+      if (mergesSanityPrompts) {
+        // The merge ADDS candidates at execution; a pre-merge count bounds
+        // nothing in either direction, and probes may run even at zero here.
+        promptSelection = {
+          kind: "unknown",
+          basis: "extra sanity prompts are merged for this domain at execution",
+        };
+        spend = { kind: "not_final", missingProbeCalls: missingFor(selection.rows), estimatedSpend: 0 };
+      } else {
+        promptSelection = {
+          kind: "exact",
+          count: selection.selected,
+          basis: "stored prompts, brand-filtered with the project terms",
+        };
+        spend = { kind: "exact", missingProbeCalls: missingFor(selection.rows), estimatedSpend: 0 };
+      }
     }
+  } else if (customPrompts.length > 0) {
+    promptSelection = {
+      kind: "unknown",
+      basis: "project does not exist yet; execution brand terms are not yet known",
+    };
   }
 
-  const estimatedSpend = args.probeMode === "live" ? estimatedCost(missingProbeCalls) : 0;
+  // An exact shortfall without the override stops execution before any probe.
+  const shortfallBlocksExecution =
+    promptSelection.kind === "exact" &&
+    promptSelection.count < args.prompts &&
+    !args.allowFewerPrompts;
+
+  // No probes can run under these arguments, so there is no executable cost
+  // to present and no budget decision to make.
+  spend = shortfallBlocksExecution
+    ? { ...spend, kind: "not_applicable", estimatedSpend: 0 }
+    : {
+        ...spend,
+        estimatedSpend: args.probeMode === "live" ? estimatedCost(spend.missingProbeCalls) : 0,
+      };
+
+  // "skip" promises nothing will run — only an exact estimate may promise it.
+  const probeStage: StagePlan["probes"] = shortfallBlocksExecution
+    ? "blocked"
+    : spend.kind === "exact"
+      ? spend.missingProbeCalls > 0 ? "run" : "skip"
+      : "pending";
+
   return {
     project,
     outputPath,
-    missingProbeCalls,
-    estimatedSpend,
+    promptSelection,
+    spend,
+    shortfallBlocksExecution,
     plan: {
       project: existing ? "reuse" : "create",
       mirror: mirrorAction,
       prompts: promptAction,
       evidenceBank: bankAction,
-      probes: missingProbeCalls > 0 ? "run" : "skip",
-      recommendations: missingProbeCalls > 0 ? "run" : "skip",
+      probes: probeStage,
+      recommendations: probeStage,
       export: args.dryRun ? "skip" : "write",
     },
   };
 }
 
-function printPlan(args: Args, plan: StagePlan, outputPath: string, missingProbeCalls: number, estimatedSpend: number): void {
+function formatPlanSelection(selection: PlanPromptSelection): string {
+  if (selection.kind === "exact") {
+    return `${selection.count} (exact — ${selection.basis})`;
+  }
+  return `not yet known — exact selection occurs before probes (${selection.basis})`;
+}
+
+function printPlan(args: Args, plan: StagePlan, outputPath: string, spend: PlanSpendEstimate, promptSelection: PlanPromptSelection): void {
   console.log("Zypact MVP scan plan");
   console.log(`brand          : ${args.brand}`);
   console.log(`domain         : ${hostnameOf(args.domain)}`);
@@ -898,9 +972,32 @@ function printPlan(args: Args, plan: StagePlan, outputPath: string, missingProbe
   if (args.competitors.length > 0) {
     console.log(`competitors    : ${args.competitors.join(", ")}`);
   }
-  console.log(`prompts x runs : ${args.prompts} x ${args.runs}`);
-  console.log(`missing probes : ${missingProbeCalls}`);
-  console.log(`estimated cost : $${estimatedSpend.toFixed(2)}`);
+  if (args.allowFewerPrompts) {
+    console.log(`allow fewer    : yes (--allow-fewer-prompts)`);
+  }
+  console.log(`prompts req.   : ${args.prompts}`);
+  console.log(`prompts sel.   : ${formatPlanSelection(promptSelection)}`);
+  if (promptSelection.kind === "exact" && promptSelection.count < args.prompts) {
+    console.log(
+      args.allowFewerPrompts
+        ? `prompt shortfall: execution will continue with ${promptSelection.count} because --allow-fewer-prompts is enabled`
+        : `prompt shortfall: execution will stop unless --allow-fewer-prompts is enabled`
+    );
+  }
+  console.log(`runs / prompt  : ${args.runs}`);
+  if (spend.kind === "not_applicable") {
+    const blocked = "not applicable — execution is blocked by prompt shortfall";
+    console.log(`missing probes : ${blocked}`);
+    console.log(`estimated cost : ${blocked}`);
+  } else {
+    const spendIsExact = spend.kind === "exact";
+    console.log(
+      `missing probes : ${spendIsExact ? String(spend.missingProbeCalls) : `not final (planning estimate ${spend.missingProbeCalls})`}`
+    );
+    console.log(
+      `estimated cost : ${spendIsExact ? `$${spend.estimatedSpend.toFixed(2)}` : `not final (planning estimate $${spend.estimatedSpend.toFixed(2)})`}`
+    );
+  }
   console.log(`budget limit   : $${args.budgetUsd.toFixed(2)}`);
   console.log(`output path    : ${outputPath}`);
   console.log("stages:");
@@ -1013,10 +1110,17 @@ async function main(): Promise<void> {
   if (args.probeMode === "simulated") process.env.ZYPACT_MOCK_MODE = "on";
 
   const dry = await buildPlan(args);
-  printPlan(args, dry.plan, dry.outputPath, dry.missingProbeCalls, dry.estimatedSpend);
+  printPlan(args, dry.plan, dry.outputPath, dry.spend, dry.promptSelection);
 
-  if (dry.estimatedSpend > args.budgetUsd) {
-    fail(`Budget guard stopped scan before paid probes. Estimated $${dry.estimatedSpend.toFixed(2)} exceeds budget $${args.budgetUsd.toFixed(2)}.`);
+  // A blocked plan runs no probes, so there is no budget decision to make.
+  // Only an EXACT missing-probe calculation may hard-stop here; anything else
+  // defers to the exact pre-probe guard, which runs before any spend.
+  if (
+    !dry.shortfallBlocksExecution &&
+    dry.spend.kind === "exact" &&
+    dry.spend.estimatedSpend > args.budgetUsd
+  ) {
+    fail(`Budget guard stopped scan before paid probes. Estimated $${dry.spend.estimatedSpend.toFixed(2)} exceeds budget $${args.budgetUsd.toFixed(2)}.`);
   }
   if (args.dryRun) {
     console.log("dry-run complete: no paid probes, no writes.");
@@ -1058,20 +1162,40 @@ async function main(): Promise<void> {
     pickPromptTargets(
       prompts,
       args.prompts,
-      brandTerms(project, null)
+      brandTerms(project, null),
+      args.allowFewerPrompts ? "warn" : "throw"
     );
+
+  // Final, exact accounting before any external probe call.
+  const probeRowsBeforeRun =
+    await getDb().getProbeResultsByProject(project.id);
+  const probesToRun = targets.reduce(
+    (acc, p) => acc + Math.max(0, args.runs - existingRunCount(probeRowsBeforeRun, p.prompt, args.probeMode)),
+    0
+  );
+  const exactSpend =
+    args.probeMode === "live" ? estimatedCost(probesToRun) : 0;
+
+  console.log(`prompt targets    : ${targets.length} of ${args.prompts} requested (exact)`);
+  console.log(`probes to run     : ${probesToRun}`);
+  console.log(`estimated cost    : $${exactSpend.toFixed(2)} (exact)`);
+
+  if (exactSpend > args.budgetUsd) {
+    fail(
+      `Budget guard stopped scan before paid probes. Exact $${exactSpend.toFixed(2)} exceeds budget $${args.budgetUsd.toFixed(2)}.`
+    );
+  }
 
   await updateSnapshotProgress(
     args,
     "checking_ai_visibility"
   );
 
-  const probeRun =
-    await runMissingProbes(
-      args,
-      project,
-      targets
-    );
+  const probeRun = await runMissingProbes(
+    args,
+    project,
+    targets
+  );
 
   await updateSnapshotProgress(
     args,
@@ -1121,6 +1245,8 @@ async function main(): Promise<void> {
   console.log(`projectId           : ${project.id}`);
   console.log(`report path         : ${outputAbs}`);
   console.log(`probe mode          : ${args.probeMode}`);
+  console.log(`prompt targets      : ${targets.length} of ${args.prompts} requested`);
+  console.log(`prompts with new runs: ${probeRun.promptsWithSavedRuns}`);
   console.log(`probes saved        : ${probeRun.saved}`);
   console.log(`scorecard           : ${scorecardLine(finalProbes, project, mirror?.json ?? null)}`);
   console.log(`top competitors     : ${topCompetitors}`);

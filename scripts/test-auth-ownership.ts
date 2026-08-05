@@ -17,10 +17,15 @@
  * from project_not_found.
  */
 
-// Force the in-memory DB adapter for this scenario. `getDb()` returns
-// the memory adapter when either Supabase env var is missing.
+// Force the in-memory DB adapter for this scenario. `getDb()` permits the
+// memory adapter under NODE_ENV=test; clearing the Supabase variables keeps
+// this process isolated even when the developer or CI environment is
+// configured with real credentials.
+delete process.env.VERCEL_ENV;
+Object.assign(process.env, { NODE_ENV: "test" });
 delete process.env.NEXT_PUBLIC_SUPABASE_URL;
 delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+delete process.env.ZYPACT_ALLOW_MEMORY_DB;
 
 import { getDb } from "@/lib/db";
 import { __setSupabaseServerClientForTests } from "@/lib/supabase/server";

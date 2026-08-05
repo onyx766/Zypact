@@ -135,11 +135,11 @@ async function main() {
     "✓ Turnstile token is required"
   );
 
-  delete process.env
-    .NEXT_PUBLIC_SUPABASE_URL;
-
-  delete process.env
-    .SUPABASE_SERVICE_ROLE_KEY;
+  delete process.env.VERCEL_ENV;
+  Object.assign(process.env, { NODE_ENV: "test" });
+  delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+  delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  delete process.env.ZYPACT_ALLOW_MEMORY_DB;
 
   delete process.env
     .TURNSTILE_SECRET_KEY;

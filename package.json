@@ -40,7 +40,8 @@
     "test:snapshot-send-idempotency": "tsx scripts/test-snapshot-send-report-idempotency.ts",
     "test:snapshot-worker-claim": "tsx scripts/test-snapshot-worker-claim.ts",
     "test:snapshot-worker-migration-contract": "tsx scripts/test-snapshot-worker-migration-contract.ts",
-    "test:snapshot-worker-fencing-migration-contract": "tsx scripts/test-snapshot-worker-fencing-migration-contract.ts"
+    "test:snapshot-worker-fencing-migration-contract": "tsx scripts/test-snapshot-worker-fencing-migration-contract.ts",
+    "test:snapshot-worker-dml-revocation-contract": "tsx scripts/test-snapshot-worker-dml-revocation-contract.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

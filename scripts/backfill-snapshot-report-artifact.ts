@@ -158,8 +158,10 @@ async function main(): Promise<void> {
       }
     );
 
+  // Insert-only: the request is already `report_ready`, which the normal
+  // save path deliberately refuses. Returns null when an artifact exists.
   const artifact =
-    await db.saveSnapshotReportArtifact({
+    await db.insertSnapshotReportArtifactBackfill({
       snapshotRequestId: request.id,
       projectId: request.projectId,
       fullReportMarkdown:
@@ -173,6 +175,12 @@ async function main(): Promise<void> {
       generatedAt:
         new Date().toISOString(),
     });
+
+  if (!artifact) {
+    fail(
+      "Backfill refused: a report artifact already exists for this request."
+    );
+  }
 
   console.log(
     JSON.stringify(

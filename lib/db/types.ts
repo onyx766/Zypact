@@ -458,14 +458,35 @@ export interface DbAdapter {
     publicToken: string
   ): Promise<SnapshotReportArtifact | null>;
 
+  /**
+   * Store a report for a request that is still `running` and manually
+   * owned. Returns null when the RPC refuses on a business rule — most
+   * importantly when the artifact has already been delivered.
+   */
   saveSnapshotReportArtifact(
     input: SaveSnapshotReportArtifactInput
-  ): Promise<SnapshotReportArtifact>;
+  ): Promise<SnapshotReportArtifact | null>;
 
+  /**
+   * Insert a missing artifact for a request that is already
+   * `report_ready`. Separate from `saveSnapshotReportArtifact` because the
+   * two paths have incompatible source-status preconditions in SQL, and
+   * this one is insert-only. Returns null when an artifact already exists.
+   */
+  insertSnapshotReportArtifactBackfill(
+    input: SaveSnapshotReportArtifactInput
+  ): Promise<SnapshotReportArtifact | null>;
+
+  /**
+   * Record delivery bookkeeping. `resend` is computed by the founder route
+   * and passed through: initial delivery requires an undelivered artifact,
+   * a resend requires a previously delivered one.
+   */
   markSnapshotReportDelivered(
     requestId: string,
     messageId: string,
-    deliveredAt: string
+    deliveredAt: string,
+    resend: boolean
   ): Promise<SnapshotReportArtifact | null>;
 
   rejectSnapshotRequest(

@@ -149,6 +149,10 @@ async function seed(): Promise<Fixture> {
     generatedAt: new Date().toISOString(),
   });
 
+  if (!artifact) {
+    throw new Error("seed fixture: saveSnapshotReportArtifact returned null");
+  }
+
   return { requestId: request.id, artifactId: artifact.id };
 }
 
@@ -317,7 +321,8 @@ async function resendCases(): Promise<void> {
     await memoryAdapter.markSnapshotReportDelivered(
       legacyFx.requestId,
       "",
-      new Date().toISOString()
+      new Date().toISOString(),
+      false
     );
   }
   resetCalls();

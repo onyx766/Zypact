@@ -209,6 +209,10 @@ async function main() {
       projectId: null,
       progressStage: null,
       progressUpdatedAt: null,
+      claimedBy: null,
+      claimToken: null,
+      leaseExpiresAt: null,
+      attemptCount: 0,
       createdAt: oldCreatedAt,
       updatedAt: oldCreatedAt,
     };

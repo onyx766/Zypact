@@ -1,0 +1,53 @@
+name: Snapshot Worker PostgreSQL Level 2
+
+# Applies every tracked migration to a disposable PostgreSQL 16 service
+# container and proves the claim/lease concurrency behavior that static SQL
+# assertions and memory-adapter tests cannot prove.
+#
+# No repository secret is used. No Production, Preview, Supabase, Vercel,
+# Resend, AI, or payment credential is referenced. Nothing is deployed.
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "supabase/migrations/**"
+      - ".github/workflows/snapshot-worker-postgres-level2.yml"
+      - "scripts/test-snapshot-worker-postgres-level2.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  level2:
+    name: Level 2 concurrency proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          # Synthetic, non-secret values. This database is created and
+          # destroyed inside the job and is never reachable from outside it.
+          POSTGRES_USER: zypact_level2
+          POSTGRES_PASSWORD: level2-disposable-not-a-secret
+          POSTGRES_DB: zypact_level2
+        options: >-
+          --health-cmd "pg_isready -U zypact_level2 -d zypact_level2"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v6
+
+      - name: Run Level 2 PostgreSQL concurrency validation
+        env:
+          # The script talks to the service container through `docker exec`,
+          # so no port is published to the runner.
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: bash scripts/test-snapshot-worker-postgres-level2.sh

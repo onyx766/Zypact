@@ -18,7 +18,19 @@ export interface ClientReportDeliveryInput {
   visibilitySummary: string;
   brandedReputation: string;
   firstPriorityAction: string;
+  /**
+   * Provider idempotency key for this delivery generation.
+   *
+   * Supplied by the caller so an initial send and an explicit resend use
+   * different keys — a permanent per-request key would make the provider
+   * deduplicate a resend against the original email. There is deliberately
+   * no fallback derived from `requestId` alone.
+   */
+  deliveryIdempotencyKey: string;
 }
+
+/** Resend rejects idempotency keys longer than this. */
+export const MAX_DELIVERY_IDEMPOTENCY_KEY_LENGTH = 256;
 
 export class ClientReportDeliveryError extends Error {
   readonly code: string;
@@ -148,6 +160,22 @@ export async function sendClientSnapshotReport(
     );
   }
 
+  // Validated before any fetch: an empty key would silently disable
+  // provider deduplication, and an over-length key is rejected rather
+  // than truncated, because truncation could collide two generations.
+  const idempotencyKey =
+    input.deliveryIdempotencyKey.trim();
+
+  if (
+    !idempotencyKey ||
+    idempotencyKey.length >
+      MAX_DELIVERY_IDEMPOTENCY_KEY_LENGTH
+  ) {
+    throw new ClientReportDeliveryError(
+      "invalid_idempotency_key"
+    );
+  }
+
   const reportLink =
     buildClientReportLink(
       config.appBaseUrl,
@@ -260,7 +288,7 @@ export async function sendClientSnapshotReport(
           "content-type":
             "application/json",
           "idempotency-key":
-            `snapshot-report-${input.requestId}`,
+            idempotencyKey,
         },
         body: JSON.stringify(body),
         signal: controller.signal,

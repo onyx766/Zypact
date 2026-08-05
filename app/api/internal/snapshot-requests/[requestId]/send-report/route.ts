@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import {
   requireCurrentUser,
@@ -35,8 +36,115 @@ function unavailableResponse() {
   );
 }
 
+function invalidBodyResponse() {
+  return NextResponse.json(
+    {
+      ok: false,
+      error: "invalid_body",
+    },
+    { status: 400 }
+  );
+}
+
+/**
+ * Parse the request body.
+ *
+ * An absent or empty body means "first delivery". Anything malformed,
+ * non-object, or carrying an unknown property is rejected rather than
+ * being treated as a first send — a typo must never silently email a
+ * customer.
+ */
+async function parseSendReportBody(
+  request: Request
+): Promise<{ resend: boolean } | null> {
+  let raw: string;
+
+  try {
+    raw = await request.text();
+  } catch {
+    return null;
+  }
+
+  if (!raw.trim()) {
+    return { resend: false };
+  }
+
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  if (
+    parsed === null ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed)
+  ) {
+    return null;
+  }
+
+  const entries = Object.entries(
+    parsed as Record<string, unknown>
+  );
+
+  for (const [key] of entries) {
+    if (key !== "resend") return null;
+  }
+
+  const value = (
+    parsed as { resend?: unknown }
+  ).resend;
+
+  if (value === undefined) {
+    return { resend: false };
+  }
+
+  if (typeof value !== "boolean") {
+    return null;
+  }
+
+  return { resend: value };
+}
+
+/**
+ * Idempotency key for the current delivery generation.
+ *
+ * The initial send and each subsequent resend must differ, or the
+ * provider deduplicates the resend against the original email. The
+ * previous message ID is hashed rather than embedded so no provider
+ * identifier travels in a request header.
+ */
+function buildDeliveryIdempotencyKey(input: {
+  artifactId: string;
+  deliveredAt: string | null;
+  deliveryMessageId: string | null;
+  resend: boolean;
+}): string {
+  const prefix =
+    `snapshot-report/${input.artifactId}`;
+
+  if (!input.resend || !input.deliveredAt) {
+    return `${prefix}/initial`;
+  }
+
+  if (!input.deliveryMessageId) {
+    // Delivered before message IDs were recorded. A constant key keeps
+    // concurrent retries deduplicated; repeated legacy resends share one
+    // key, which favours not duplicating a customer email.
+    return `${prefix}/resend/legacy`;
+  }
+
+  const digest = createHash("sha256")
+    .update(input.deliveryMessageId)
+    .digest("hex");
+
+  return `${prefix}/resend/${digest}`;
+}
+
 export async function POST(
-  _request: Request,
+  request: Request,
   context: {
     params: {
       requestId: string;
@@ -91,6 +199,15 @@ export async function POST(
     );
   }
 
+  // Parsed after authorization so an unauthenticated caller can never
+  // distinguish a malformed body from a concealed 404.
+  const body =
+    await parseSendReportBody(request);
+
+  if (!body) {
+    return invalidBodyResponse();
+  }
+
   const apiKey =
     process.env.RESEND_API_KEY;
 
@@ -125,6 +242,34 @@ export async function POST(
     );
   }
 
+  // Permanent founder-intent guard. This blocks an *accidental* resend
+  // indefinitely; it is not the concurrency mechanism — two concurrent
+  // first sends can both pass it. Concurrency is handled by the provider
+  // idempotency key below.
+  if (
+    artifact.deliveredAt &&
+    !body.resend
+  ) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "already_delivered",
+        deliveredAt:
+          artifact.deliveredAt,
+      },
+      { status: 409 }
+    );
+  }
+
+  const deliveryIdempotencyKey =
+    buildDeliveryIdempotencyKey({
+      artifactId: artifact.id,
+      deliveredAt: artifact.deliveredAt,
+      deliveryMessageId:
+        artifact.deliveryMessageId,
+      resend: body.resend,
+    });
+
   const report =
     parsePublicSnapshotReport(
       artifact.shortReportMarkdown
@@ -149,6 +294,7 @@ export async function POST(
           firstPriorityAction:
             report.firstFixHeading ||
             "Review the first priority action in your private report.",
+          deliveryIdempotencyKey,
         },
         {
           apiKey,

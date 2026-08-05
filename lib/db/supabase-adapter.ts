@@ -73,6 +73,10 @@ interface SnapshotRequestDbRow {
   project_id: string | null;
   progress_stage: string | null;
   progress_updated_at: string | null;
+  claimed_by: string | null;
+  claim_token: string | null;
+  lease_expires_at: string | null;
+  attempt_count: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -311,6 +315,10 @@ function mapSnapshotRequest(r: SnapshotRequestDbRow): SnapshotRequest {
       r.progress_stage as SnapshotRequest["progressStage"],
     progressUpdatedAt:
       r.progress_updated_at,
+    claimedBy: r.claimed_by ?? null,
+    claimToken: r.claim_token ?? null,
+    leaseExpiresAt: r.lease_expires_at ?? null,
+    attemptCount: r.attempt_count ?? 0,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -903,6 +911,46 @@ export const supabaseAdapter: DbAdapter = {
         "reserve_snapshot_request_project",
         {
           p_request_id: requestId,
+        }
+      )
+      .maybeSingle<SnapshotRequestDbRow>();
+
+    if (error) throw error;
+
+    return data
+      ? mapSnapshotRequest(data)
+      : null;
+  },
+
+  // Server-only. The claim token never reaches browser code and is
+  // never logged.
+  async claimNextSnapshotRequest(input) {
+    const { data, error } = await getClient()
+      .rpc(
+        "claim_next_snapshot_request",
+        {
+          p_worker_id: input.workerId,
+          p_lease_seconds: input.leaseSeconds,
+          p_max_attempts: input.maxAttempts,
+        }
+      )
+      .maybeSingle<SnapshotRequestDbRow>();
+
+    if (error) throw error;
+
+    return data
+      ? mapSnapshotRequest(data)
+      : null;
+  },
+
+  async renewSnapshotRequestLease(input) {
+    const { data, error } = await getClient()
+      .rpc(
+        "renew_snapshot_request_lease",
+        {
+          p_request_id: input.requestId,
+          p_claim_token: input.claimToken,
+          p_lease_seconds: input.leaseSeconds,
         }
       )
       .maybeSingle<SnapshotRequestDbRow>();

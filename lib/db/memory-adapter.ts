@@ -299,6 +299,10 @@ export const memoryAdapter: DbAdapter = {
       projectId: null,
       progressStage: null,
       progressUpdatedAt: null,
+      claimedBy: null,
+      claimToken: null,
+      leaseExpiresAt: null,
+      attemptCount: 0,
       createdAt: now,
       updatedAt: now,
     };
@@ -508,6 +512,14 @@ export const memoryAdapter: DbAdapter = {
       return null;
     }
 
+    // A worker owns this request. The manual runner must not attach.
+    if (
+      request.status === "running" &&
+      request.claimToken !== null
+    ) {
+      return null;
+    }
+
     if (
       request.status === "running" &&
       request.projectId
@@ -550,6 +562,197 @@ export const memoryAdapter: DbAdapter = {
     );
 
     return { ...runningRequest };
+  },
+
+  /**
+   * Mirrors `claim_next_snapshot_request`.
+   *
+   * Deterministic ordering only. Single-threaded JavaScript cannot
+   * exhibit a row-lock race, so this proves the selection and lease
+   * rules — never PostgreSQL `FOR UPDATE SKIP LOCKED` behavior.
+   */
+  async claimNextSnapshotRequest(input) {
+    const workerId = input.workerId.trim();
+
+    if (
+      workerId.length < 1 ||
+      workerId.length > 100
+    ) {
+      throw new Error("invalid_worker_id");
+    }
+
+    if (
+      !Number.isInteger(input.leaseSeconds) ||
+      input.leaseSeconds < 60 ||
+      input.leaseSeconds > 3600
+    ) {
+      throw new Error("invalid_lease_seconds");
+    }
+
+    if (
+      !Number.isInteger(input.maxAttempts) ||
+      input.maxAttempts < 1 ||
+      input.maxAttempts > 10
+    ) {
+      throw new Error("invalid_max_attempts");
+    }
+
+    const store = getStore();
+    const now = Date.now();
+
+    const isExpiredWorkerOwned = (
+      r: SnapshotRequest
+    ): boolean =>
+      r.status === "running" &&
+      r.claimToken !== null &&
+      r.leaseExpiresAt !== null &&
+      Date.parse(r.leaseExpiresAt) <= now;
+
+    // Terminalize exhausted worker-owned requests first. Manual runs
+    // (claimToken null) are never touched.
+    for (const request of store.snapshotRequests.values()) {
+      if (
+        isExpiredWorkerOwned(request) &&
+        request.attemptCount >= input.maxAttempts
+      ) {
+        store.snapshotRequests.set(request.id, {
+          ...request,
+          status: "failed",
+          claimedBy: null,
+          claimToken: null,
+          leaseExpiresAt: null,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    }
+
+    const candidates = [
+      ...store.snapshotRequests.values(),
+    ].filter(
+      (r) =>
+        (isExpiredWorkerOwned(r) &&
+          r.attemptCount < input.maxAttempts) ||
+        r.status === "queued"
+    );
+
+    // Stale first: their paid probes are already bought.
+    candidates.sort((a, b) => {
+      const rank = (r: SnapshotRequest) =>
+        r.status === "running" ? 0 : 1;
+
+      if (rank(a) !== rank(b)) {
+        return rank(a) - rank(b);
+      }
+
+      const created =
+        Date.parse(a.createdAt) -
+        Date.parse(b.createdAt);
+
+      if (created !== 0) return created;
+
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+
+    const candidate = candidates[0];
+
+    if (!candidate) {
+      return null;
+    }
+
+    let projectId = candidate.projectId;
+
+    if (!projectId) {
+      const project: Project = {
+        id: randomUUID(),
+        userId: null,
+        companyName: candidate.companyName,
+        domain: candidate.normalizedDomain,
+        category: candidate.buyerCategory,
+        createdAt: new Date().toISOString(),
+      };
+
+      store.projects.set(project.id, project);
+      projectId = project.id;
+    }
+
+    const wasQueued = candidate.status === "queued";
+    const timestamp = new Date().toISOString();
+
+    const claimed: SnapshotRequest = {
+      ...candidate,
+      status: "running",
+      projectId,
+      progressStage: wasQueued
+        ? "reserved"
+        : candidate.progressStage,
+      progressUpdatedAt: wasQueued
+        ? timestamp
+        : candidate.progressUpdatedAt,
+      attemptCount: candidate.attemptCount + 1,
+      claimedBy: workerId,
+      // Generated here, never supplied by the caller.
+      claimToken: randomUUID(),
+      leaseExpiresAt: new Date(
+        now + input.leaseSeconds * 1000
+      ).toISOString(),
+      updatedAt: timestamp,
+    };
+
+    store.snapshotRequests.set(
+      claimed.id,
+      claimed
+    );
+
+    return { ...claimed };
+  },
+
+  /** Mirrors `renew_snapshot_request_lease`. */
+  async renewSnapshotRequestLease(input) {
+    if (
+      !Number.isInteger(input.leaseSeconds) ||
+      input.leaseSeconds < 60 ||
+      input.leaseSeconds > 3600
+    ) {
+      throw new Error("invalid_lease_seconds");
+    }
+
+    const store = getStore();
+    const request = store.snapshotRequests.get(
+      input.requestId
+    );
+
+    if (!request) {
+      return null;
+    }
+
+    const now = Date.now();
+
+    // An expired lease is lost permanently — never revived.
+    if (
+      request.status !== "running" ||
+      request.claimedBy === null ||
+      request.claimToken === null ||
+      request.leaseExpiresAt === null ||
+      request.claimToken !== input.claimToken ||
+      Date.parse(request.leaseExpiresAt) <= now
+    ) {
+      return null;
+    }
+
+    const renewed: SnapshotRequest = {
+      ...request,
+      leaseExpiresAt: new Date(
+        now + input.leaseSeconds * 1000
+      ).toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    store.snapshotRequests.set(
+      renewed.id,
+      renewed
+    );
+
+    return { ...renewed };
   },
 
   async updateSnapshotRequestProgress(

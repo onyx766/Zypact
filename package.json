@@ -39,7 +39,8 @@
     "test:db-adapter-selection": "tsx scripts/test-db-adapter-selection.ts",
     "test:snapshot-send-idempotency": "tsx scripts/test-snapshot-send-report-idempotency.ts",
     "test:snapshot-worker-claim": "tsx scripts/test-snapshot-worker-claim.ts",
-    "test:snapshot-worker-migration-contract": "tsx scripts/test-snapshot-worker-migration-contract.ts"
+    "test:snapshot-worker-migration-contract": "tsx scripts/test-snapshot-worker-migration-contract.ts",
+    "test:snapshot-worker-fencing-migration-contract": "tsx scripts/test-snapshot-worker-fencing-migration-contract.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

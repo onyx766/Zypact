@@ -998,10 +998,13 @@ assert "19. service_role CANNOT DELETE snapshot_requests" \
 assert "19. service_role CANNOT TRUNCATE snapshot_requests" \
   "$(as_service_role "truncate table public.snapshot_requests cascade;")" \
   "PERMISSION_DENIED"
-assert "19. service_role CANNOT use REFERENCES on snapshot_requests" \
-  "$(as_service_role "create temp table l2_ref_probe (
-      rid uuid references public.snapshot_requests (id));")" \
-  "PERMISSION_DENIED"
+# A `CREATE TEMP TABLE ... REFERENCES` probe can fail before PostgreSQL
+# evaluates the referenced-table privilege — the role also needs TEMP and
+# CREATE rights — so the failure would not isolate REFERENCES. Inspect the
+# specific privilege instead.
+assert "19. service_role does NOT hold REFERENCES on snapshot_requests" \
+  "$(psql_q "select has_table_privilege('service_role','public.snapshot_requests','REFERENCES')::text;")" \
+  "false"
 assert "19. service_role CANNOT create a TRIGGER on snapshot_requests" \
   "$(as_service_role "create trigger l2_trg_probe after insert
      on public.snapshot_requests for each row execute function
@@ -1025,10 +1028,10 @@ assert "19. service_role CANNOT DELETE snapshot_report_artifacts" \
 assert "19. service_role CANNOT TRUNCATE snapshot_report_artifacts" \
   "$(as_service_role "truncate table public.snapshot_report_artifacts cascade;")" \
   "PERMISSION_DENIED"
-assert "19. service_role CANNOT use REFERENCES on snapshot_report_artifacts" \
-  "$(as_service_role "create temp table l2_ref_probe2 (
-      aid uuid references public.snapshot_report_artifacts (id));")" \
-  "PERMISSION_DENIED"
+# Same reasoning as the snapshot_requests REFERENCES check above.
+assert "19. service_role does NOT hold REFERENCES on snapshot_report_artifacts" \
+  "$(psql_q "select has_table_privilege('service_role','public.snapshot_report_artifacts','REFERENCES')::text;")" \
+  "false"
 assert "19. service_role CANNOT create a TRIGGER on snapshot_report_artifacts" \
   "$(as_service_role "create trigger l2_trg_probe2 after insert
      on public.snapshot_report_artifacts for each row execute function

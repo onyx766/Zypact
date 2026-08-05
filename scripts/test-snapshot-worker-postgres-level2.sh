@@ -481,7 +481,9 @@ r6_queued="$(seed_queued "t6-queued" 5)"
 
 claimed6="$(psql_q "select id from public.claim_next_snapshot_request('worker-y:${RANDOM}', ${LEASE_SECONDS}, ${MAX_ATTEMPTS});" | tr -d '[:space:]')"
 
-stale6="$(psql_q "select status||'|'||coalesce(project_id::text,'')||'|'||coalesce(progress_stage,'')||'|'||attempt_count||'|'||coalesce(claimed_by,'NULL')||'|'||coalesce(claim_token::text,'NULL')||'|'||coalesce(lease_expires_at::text,'NULL')
+# The claim token is reduced to its shape in SQL, so the raw value never
+# reaches a shell variable and cannot appear in an assertion failure message.
+stale6="$(psql_q "select status||'|'||coalesce(project_id::text,'')||'|'||coalesce(progress_stage,'')||'|'||attempt_count||'|'||coalesce(claimed_by,'NULL')||'|'||case when claim_token is null then 'null' else 'non-null' end||'|'||coalesce(lease_expires_at::text,'NULL')
                   from public.snapshot_requests where id='${r6_stale}';")"
 IFS='|' read -r s6 sp6 sg6 sn6 sw6 st6 sl6 <<<"${stale6}"
 
@@ -490,7 +492,7 @@ assert "6b. project ID preserved"             "${sp6}" "${p6}"
 assert "6c. progress stage preserved"         "${sg6}" "building_diagnosis"
 assert "6d. attempt count preserved"          "${sn6}" "${MAX_ATTEMPTS}"
 assert "6e. claimed_by cleared"               "${sw6}" "NULL"
-assert "6f. claim_token cleared"              "${st6}" "NULL"
+assert "6f. claim_token cleared"              "${st6}" "null"
 assert "6g. lease_expires_at cleared"         "${sl6}" "NULL"
 assert "6h. queued request claimed in the same call" "${claimed6}" "${r6_queued}"
 

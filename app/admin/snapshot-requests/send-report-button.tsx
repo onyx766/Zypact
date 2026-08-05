@@ -43,6 +43,15 @@ export function SendReportButton({
         `/api/internal/snapshot-requests/${requestId}/send-report`,
         {
           method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          // Resending is explicit: the route refuses to send again
+          // without this flag, so a stray click cannot re-email a client.
+          body: JSON.stringify({
+            resend: alreadyDelivered,
+          }),
         }
       );
 
@@ -96,7 +105,7 @@ export function SendReportButton({
         {pending
           ? "Sending…"
           : alreadyDelivered
-            ? "Send report again"
+            ? "Resend report"
             : "Send report"}
       </button>
 

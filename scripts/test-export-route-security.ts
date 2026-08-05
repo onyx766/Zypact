@@ -24,9 +24,14 @@
  * No live network, no Supabase, no LLM.
  */
 
-// Force in-memory adapter and disable live LLM checks.
+// Force in-memory adapter and disable live LLM checks. NODE_ENV=test is what
+// permits the memory adapter; clearing the Supabase variables keeps this
+// process isolated even when real credentials are present in the environment.
+delete process.env.VERCEL_ENV;
+Object.assign(process.env, { NODE_ENV: "test" });
 delete process.env.NEXT_PUBLIC_SUPABASE_URL;
 delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+delete process.env.ZYPACT_ALLOW_MEMORY_DB;
 delete process.env.LLM_PROVIDER;
 delete process.env.OPENAI_API_KEY;
 delete process.env.ANTHROPIC_API_KEY;

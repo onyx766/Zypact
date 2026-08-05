@@ -3,8 +3,11 @@ import { getDb } from "../lib/db";
 import { generateSnapshotEmailVerificationToken } from "../lib/snapshot-requests/email-verification";
 
 async function main() {
+  delete process.env.VERCEL_ENV;
+  Object.assign(process.env, { NODE_ENV: "test" });
   delete process.env.NEXT_PUBLIC_SUPABASE_URL;
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  delete process.env.ZYPACT_ALLOW_MEMORY_DB;
 
   process.env.SNAPSHOT_EMAIL_VERIFICATION_ENABLED =
     "false";

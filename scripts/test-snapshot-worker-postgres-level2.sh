@@ -547,6 +547,413 @@ assert "8. service_role CANNOT execute the internal helper" \
   "$(psql_expect_error "set role service_role; select public._ensure_snapshot_request_project(gen_random_uuid());")" \
   "PERMISSION_DENIED"
 
+# ═════════════════════════════════════════════════════════════════════════
+#  Migration 0031 — token-fenced writes
+# ═════════════════════════════════════════════════════════════════════════
+
+readonly MD_FULL='# Full report'
+readonly MD_SHORT='# Short report'
+
+# Claim a fresh request and echo "<request_id>|<project_id>|<claim_token>".
+claim_fresh() {
+  local label="$1"
+  local id
+  id="$(seed_queued "${label}" 10)"
+  psql_q "select id||'|'||project_id||'|'||claim_token
+            from public.claim_next_snapshot_request('w-${label}:${RANDOM}', ${LEASE_SECONDS}, ${MAX_ATTEMPTS});"
+}
+
+# Insert an artifact directly, bypassing the RPCs. Legitimate here: 0031
+# does not revoke table DML, and these fixtures set up states the RPCs
+# deliberately refuse to create.
+seed_artifact() {
+  # seed_artifact <request_id> <project_id> <delivered: yes|no>
+  psql_q "insert into public.snapshot_report_artifacts
+            (snapshot_request_id, project_id, full_report_markdown,
+             short_report_markdown, full_report_filename,
+             short_report_filename, generated_at, public_token,
+             delivered_at, delivery_message_id)
+          values ('$1','$2','seeded full','seeded short','f.md','s.md', now(),
+                  public._generate_snapshot_public_token(),
+                  $([[ "$3" == "yes" ]] && echo "now()" || echo "null"),
+                  $([[ "$3" == "yes" ]] && echo "'seeded-message-id'" || echo "null"))
+          returning id;" >/dev/null
+}
+
+artifact_field() {
+  psql_q "select coalesce($2::text,'NULL') from public.snapshot_report_artifacts
+           where snapshot_request_id='$1';"
+}
+
+# Stable identity for a public token without ever holding or printing the
+# token itself. Assertion failures show digests, never tokens.
+artifact_token_id() {
+  psql_q "select coalesce(md5(public_token),'NONE')
+            from public.snapshot_report_artifacts
+           where snapshot_request_id='$1';"
+}
+
+request_field() {
+  psql_q "select coalesce($2::text,'NULL') from public.snapshot_requests where id='$1';"
+}
+
+# ── Test 9 — worker progress fencing ─────────────────────────────────────
+
+echo
+echo "── Test 9: worker progress fencing ──────────────────────"
+
+psql_q "delete from public.snapshot_requests;" >/dev/null
+IFS='|' read -r w9 p9 t9 <<<"$(claim_fresh "t9")"
+
+assert "9a. correct active token advances progress" \
+  "$(psql_q "select progress_stage from public.update_snapshot_request_progress_worker('${w9}','${p9}','${t9}','crawling');")" \
+  "crawling"
+assert "9b. wrong token cannot advance progress" \
+  "$(psql_q "select count(*) from public.update_snapshot_request_progress_worker('${w9}','${p9}',gen_random_uuid(),'analyzing_site');")" \
+  "0"
+assert "9c. worker progress does not renew the lease" \
+  "$(psql_q "select case when lease_expires_at = (select lease_expires_at from public.snapshot_requests where id='${w9}') then 'unchanged' else 'changed' end
+             from public.snapshot_requests where id='${w9}';")" \
+  "unchanged"
+
+psql_q "update public.snapshot_requests set lease_expires_at = now() - interval '1 minute' where id='${w9}';" >/dev/null
+assert "9d. expired token cannot advance progress" \
+  "$(psql_q "select count(*) from public.update_snapshot_request_progress_worker('${w9}','${p9}','${t9}','analyzing_site');")" \
+  "0"
+
+t9b="$(psql_q "select claim_token from public.claim_next_snapshot_request('w-t9b:${RANDOM}', ${LEASE_SECONDS}, ${MAX_ATTEMPTS});")"
+assert "9e. old token cannot advance after reclaim" \
+  "$(psql_q "select count(*) from public.update_snapshot_request_progress_worker('${w9}','${p9}','${t9}','analyzing_site');")" \
+  "0"
+assert "9f. new token can advance after reclaim" \
+  "$(psql_q "select count(*) from public.update_snapshot_request_progress_worker('${w9}','${p9}','${t9b}','analyzing_site');")" \
+  "1"
+assert "9g. worker-owned request cannot use the manual progress path" \
+  "$(psql_q "select count(*) from public.update_snapshot_request_progress('${w9}','${p9}','building_diagnosis');")" \
+  "0"
+assert "9h. worker-owned request cannot use manual finalization" \
+  "$(psql_q "select count(*) from public.finalize_snapshot_request('${w9}','${p9}','failed');")" \
+  "0"
+
+# ── Test 10 — manual-owned request rejects worker paths ──────────────────
+
+echo
+echo "── Test 10: manual-owned request rejects worker paths ───"
+
+psql_q "delete from public.snapshot_requests;" >/dev/null
+m10="$(seed_queued "t10" 10)"
+psql_q "select 1 from public.reserve_snapshot_request_project('${m10}');" >/dev/null
+p10="$(request_field "${m10}" project_id)"
+
+assert "10a. manual reserve leaves ownership fields null" \
+  "$(request_field "${m10}" claim_token)" "NULL"
+assert "10b. manual-owned request rejects worker progress" \
+  "$(psql_q "select count(*) from public.update_snapshot_request_progress_worker('${m10}','${p10}',gen_random_uuid(),'crawling');")" \
+  "0"
+assert "10c. manual-owned request rejects worker completion" \
+  "$(psql_q "select count(*) from public.complete_snapshot_report_worker('${m10}','${p10}',gen_random_uuid(),'${MD_FULL}','${MD_SHORT}','f.md','s.md',now());")" \
+  "0"
+assert "10d. manual-owned request rejects worker failure" \
+  "$(psql_q "select count(*) from public.mark_snapshot_request_failed_worker('${m10}','${p10}',gen_random_uuid());")" \
+  "0"
+assert "10e. manual progress path still works" \
+  "$(psql_q "select progress_stage from public.update_snapshot_request_progress('${m10}','${p10}','crawling');")" \
+  "crawling"
+
+# ── Test 11 — atomic worker completion ───────────────────────────────────
+
+echo
+echo "── Test 11: atomic worker completion ────────────────────"
+
+psql_q "delete from public.snapshot_requests;" >/dev/null
+IFS='|' read -r w11 p11 t11 <<<"$(claim_fresh "t11")"
+before11="$(request_field "${w11}" attempt_count)"
+
+assert "11a. completion returns the artifact" \
+  "$(psql_q "select count(*) from public.complete_snapshot_report_worker('${w11}','${p11}','${t11}','${MD_FULL}','${MD_SHORT}','f.md','s.md',now());")" \
+  "1"
+assert "11b. request became report_ready/quality_review in the same call" \
+  "$(psql_q "select status||'/'||progress_stage from public.snapshot_requests where id='${w11}';")" \
+  "report_ready/quality_review"
+assert "11c. ownership fields cleared" \
+  "$(psql_q "select case when claimed_by is null and claim_token is null and lease_expires_at is null
+                   then 'cleared' else 'retained' end
+             from public.snapshot_requests where id='${w11}';")" \
+  "cleared"
+assert "11d. attempt_count preserved" "$(request_field "${w11}" attempt_count)" "${before11}"
+
+tok11="$(artifact_field "${w11}" public_token)"
+assert "11e. public token is 64 characters" "${#tok11}" "64"
+assert "11f. public token matches the route regex" \
+  "$(psql_q "select case when '${tok11}' ~ '^[A-Za-z0-9_-]{43,128}\$' then 'yes' else 'no' end;")" \
+  "yes"
+assert "11g. delivery metadata is null on a new artifact" \
+  "$(artifact_field "${w11}" delivered_at)" "NULL"
+assert "11h. stale token cannot complete again" \
+  "$(psql_q "select count(*) from public.complete_snapshot_report_worker('${w11}','${p11}','${t11}','other full','other short','x.md','y.md',now());")" \
+  "0"
+
+# Atomicity: a duplicate public_token forces a unique-index violation
+# after the artifact insert, inside the same transaction.
+psql_q "delete from public.snapshot_requests;" >/dev/null
+IFS='|' read -r w11b p11b t11b <<<"$(claim_fresh "t11b")"
+atomic_err="$(psql_expect_error "
+  create or replace function pg_temp.force_fail() returns void language sql as \$f\$ select 1 \$f\$;
+  begin;
+  select public.complete_snapshot_report_worker('${w11b}','${p11b}','${t11b}','${MD_FULL}','${MD_SHORT}','f.md','s.md',now());
+  select 1/0;
+  commit;")"
+assert "11i. forced failure inside completion rolls back the artifact" \
+  "$(psql_q "select count(*) from public.snapshot_report_artifacts where snapshot_request_id='${w11b}';")" \
+  "0"
+assert "11j. forced failure inside completion rolls back report_ready" \
+  "$(request_field "${w11b}" status)" "running"
+
+# ── Test 12 — delivered artifact immutability ────────────────────────────
+
+echo
+echo "── Test 12: delivered artifact immutability ─────────────"
+
+psql_q "delete from public.snapshot_requests;" >/dev/null
+IFS='|' read -r w12 p12 t12 <<<"$(claim_fresh "t12")"
+seed_artifact "${w12}" "${p12}" yes
+tok12="$(artifact_token_id "${w12}")"
+
+assert "12a. worker completion refuses a delivered artifact" \
+  "$(psql_q "select count(*) from public.complete_snapshot_report_worker('${w12}','${p12}','${t12}','${MD_FULL}','${MD_SHORT}','f.md','s.md',now());")" \
+  "0"
+assert "12b. delivered content unchanged" \
+  "$(artifact_field "${w12}" full_report_markdown)" "seeded full"
+assert "12c. delivery metadata not cleared" \
+  "$(artifact_field "${w12}" delivery_message_id)" "seeded-message-id"
+assert "12d. public token unchanged" "$(artifact_token_id "${w12}")" "${tok12}"
+assert "12e. worker failure refuses an artifact-bearing request" \
+  "$(psql_q "select count(*) from public.mark_snapshot_request_failed_worker('${w12}','${p12}','${t12}');")" \
+  "0"
+
+# Manual and backfill writers against a delivered artifact.
+psql_q "delete from public.snapshot_requests;" >/dev/null
+m12="$(seed_queued "t12m" 10)"
+psql_q "select 1 from public.reserve_snapshot_request_project('${m12}');" >/dev/null
+p12m="$(request_field "${m12}" project_id)"
+seed_artifact "${m12}" "${p12m}" yes
+
+assert "12f. manual save refuses a delivered artifact" \
+  "$(psql_q "select count(*) from public.save_snapshot_report_artifact_manual('${m12}','${p12m}','${MD_FULL}','${MD_SHORT}','f.md','s.md',now());")" \
+  "0"
+assert "12g. manual content unchanged after refusal" \
+  "$(artifact_field "${m12}" full_report_markdown)" "seeded full"
+
+# ── Test 13 — manual save and token preservation ─────────────────────────
+
+echo
+echo "── Test 13: manual save and token preservation ──────────"
+
+psql_q "delete from public.snapshot_requests;" >/dev/null
+m13="$(seed_queued "t13" 10)"
+psql_q "select 1 from public.reserve_snapshot_request_project('${m13}');" >/dev/null
+p13="$(request_field "${m13}" project_id)"
+
+assert "13a. manual save inserts an artifact" \
+  "$(psql_q "select count(*) from public.save_snapshot_report_artifact_manual('${m13}','${p13}','${MD_FULL}','${MD_SHORT}','f.md','s.md',now());")" \
+  "1"
+tok13="$(artifact_field "${m13}" public_token)"
+tok13id="$(artifact_token_id "${m13}")"
+assert "13b. generated token is 64 characters" "${#tok13}" "64"
+assert "13c. manual save updates an undelivered artifact" \
+  "$(psql_q "select count(*) from public.save_snapshot_report_artifact_manual('${m13}','${p13}','updated full','updated short','f2.md','s2.md',now());")" \
+  "1"
+assert "13d. content updated" "$(artifact_field "${m13}" full_report_markdown)" "updated full"
+assert "13e. public token preserved across update" \
+  "$(artifact_token_id "${m13}")" "${tok13id}"
+assert "13f. manual save does not finalize the request" \
+  "$(request_field "${m13}" status)" "running"
+assert "13g. empty artifact input is rejected" \
+  "$(psql_expect_error "select public.save_snapshot_report_artifact_manual('${m13}','${p13}','','${MD_SHORT}','f.md','s.md',now());" )" \
+  "OTHER_ERROR"
+
+# ── Test 14 — backfill is insert-only ────────────────────────────────────
+
+echo
+echo "── Test 14: backfill is insert-only ─────────────────────"
+
+psql_q "delete from public.snapshot_requests;" >/dev/null
+b14="$(seed_queued "t14" 10)"
+psql_q "select 1 from public.reserve_snapshot_request_project('${b14}');" >/dev/null
+p14="$(request_field "${b14}" project_id)"
+
+assert "14a. backfill refuses a running request" \
+  "$(psql_q "select count(*) from public.insert_snapshot_report_artifact_backfill('${b14}','${p14}','${MD_FULL}','${MD_SHORT}','f.md','s.md',now());")" \
+  "0"
+
+psql_q "update public.snapshot_requests set status='report_ready', progress_stage='quality_review' where id='${b14}';" >/dev/null
+assert "14b. backfill inserts when the artifact is missing" \
+  "$(psql_q "select count(*) from public.insert_snapshot_report_artifact_backfill('${b14}','${p14}','${MD_FULL}','${MD_SHORT}','f.md','s.md',now());")" \
+  "1"
+tok14="$(artifact_token_id "${b14}")"
+assert "14c. backfill refuses an existing undelivered artifact" \
+  "$(psql_q "select count(*) from public.insert_snapshot_report_artifact_backfill('${b14}','${p14}','overwrite full','overwrite short','x.md','y.md',now());")" \
+  "0"
+assert "14d. existing content untouched by refused backfill" \
+  "$(artifact_field "${b14}" full_report_markdown)" "${MD_FULL}"
+assert "14e. token untouched by refused backfill" \
+  "$(artifact_token_id "${b14}")" "${tok14}"
+
+# ── Test 15 — delivery and resend bookkeeping ────────────────────────────
+
+echo
+echo "── Test 15: delivery and resend bookkeeping ─────────────"
+
+assert "15a. initial delivery succeeds on an undelivered artifact" \
+  "$(psql_q "select count(*) from public.mark_snapshot_report_delivered('${b14}','msg-one',now(),false);")" \
+  "1"
+assert "15b. delivered_at is set" \
+  "$(psql_q "select case when delivered_at is null then 'NULL' else 'set' end
+             from public.snapshot_report_artifacts where snapshot_request_id='${b14}';")" \
+  "set"
+assert "15c. initial delivery refuses an already-delivered artifact" \
+  "$(psql_q "select count(*) from public.mark_snapshot_report_delivered('${b14}','msg-two',now(),false);")" \
+  "0"
+assert "15d. resend succeeds and replaces the message ID" \
+  "$(psql_q "select delivery_message_id from public.mark_snapshot_report_delivered('${b14}','msg-three',now(),true);")" \
+  "msg-three"
+assert "15e. delivery never changes content" \
+  "$(artifact_field "${b14}" full_report_markdown)" "${MD_FULL}"
+assert "15f. delivery never changes the public token" \
+  "$(artifact_token_id "${b14}")" "${tok14}"
+
+psql_q "delete from public.snapshot_requests;" >/dev/null
+m15="$(seed_queued "t15" 10)"
+psql_q "select 1 from public.reserve_snapshot_request_project('${m15}');" >/dev/null
+p15="$(request_field "${m15}" project_id)"
+psql_q "select 1 from public.save_snapshot_report_artifact_manual('${m15}','${p15}','${MD_FULL}','${MD_SHORT}','f.md','s.md',now());" >/dev/null
+assert "15g. resend refuses a never-delivered artifact" \
+  "$(psql_q "select count(*) from public.mark_snapshot_report_delivered('${m15}','msg-x',now(),true);")" \
+  "0"
+assert "15h. delivery refuses a non-report_ready request" \
+  "$(psql_q "select count(*) from public.mark_snapshot_report_delivered('${m15}','msg-y',now(),false);")" \
+  "0"
+
+# ── Test 16 — manual finalization artifact invariants ────────────────────
+
+echo
+echo "── Test 16: manual finalization artifact invariants ─────"
+
+assert "16a. manual report_ready refuses without quality_review" \
+  "$(psql_q "select count(*) from public.finalize_snapshot_request('${m15}','${p15}','report_ready');")" \
+  "0"
+psql_q "select 1 from public.update_snapshot_request_progress('${m15}','${p15}','quality_review');" >/dev/null
+assert "16b. manual report_ready succeeds with artifact and quality_review" \
+  "$(psql_q "select status from public.finalize_snapshot_request('${m15}','${p15}','report_ready');")" \
+  "report_ready"
+
+psql_q "delete from public.snapshot_requests;" >/dev/null
+f16="$(seed_queued "t16" 10)"
+psql_q "select 1 from public.reserve_snapshot_request_project('${f16}');" >/dev/null
+p16="$(request_field "${f16}" project_id)"
+assert "16c. manual failed succeeds when no artifact exists" \
+  "$(psql_q "select status from public.finalize_snapshot_request('${f16}','${p16}','failed');")" \
+  "failed"
+
+psql_q "delete from public.snapshot_requests;" >/dev/null
+f16b="$(seed_queued "t16b" 10)"
+psql_q "select 1 from public.reserve_snapshot_request_project('${f16b}');" >/dev/null
+p16b="$(request_field "${f16b}" project_id)"
+seed_artifact "${f16b}" "${p16b}" no
+assert "16d. manual failed refuses an artifact-bearing request" \
+  "$(psql_q "select count(*) from public.finalize_snapshot_request('${f16b}','${p16b}','failed');")" \
+  "0"
+assert "16e. manual report_ready refuses without an artifact" \
+  "$(psql_q "select count(*) from public.finalize_snapshot_request('${f16b}','${p16b}','report_ready');" >/dev/null; \
+     psql_q "delete from public.snapshot_report_artifacts where snapshot_request_id='${f16b}';" >/dev/null; \
+     psql_q "select 1 from public.update_snapshot_request_progress('${f16b}','${p16b}','quality_review');" >/dev/null; \
+     psql_q "select count(*) from public.finalize_snapshot_request('${f16b}','${p16b}','report_ready');")" \
+  "0"
+
+# ── Test 17 — corrected stale-at-max terminalization ─────────────────────
+
+echo
+echo "── Test 17: corrected stale-at-max terminalization ──────"
+
+make_stale_at_max() {
+  # make_stale_at_max <label> <artifact: none|undelivered|delivered>
+  local label="$1" kind="$2" rid pid
+  IFS='|' read -r rid pid _ <<<"$(claim_fresh "${label}")"
+  [[ "${kind}" == "none" ]] || seed_artifact "${rid}" "${pid}" \
+    "$([[ "${kind}" == "delivered" ]] && echo yes || echo no)"
+  psql_q "update public.snapshot_requests
+             set progress_stage='building_diagnosis',
+                 attempt_count=${MAX_ATTEMPTS},
+                 lease_expires_at = now() - interval '5 minutes'
+           where id='${rid}';" >/dev/null
+  echo "${rid}"
+}
+
+psql_q "delete from public.snapshot_requests;" >/dev/null
+s17_none="$(make_stale_at_max "t17a" none)"
+s17_undel="$(make_stale_at_max "t17b" undelivered)"
+s17_del="$(make_stale_at_max "t17c" delivered)"
+q17="$(seed_queued "t17q" 1)"
+
+claimed17="$(psql_q "select id from public.claim_next_snapshot_request('w-t17:${RANDOM}', ${LEASE_SECONDS}, ${MAX_ATTEMPTS});" | tr -d '[:space:]')"
+
+assert "17a. stale-at-max WITHOUT artifact becomes failed" \
+  "$(request_field "${s17_none}" status)" "failed"
+assert "17b. stale-at-max with UNDELIVERED artifact stays running" \
+  "$(request_field "${s17_undel}" status)" "running"
+assert "17c. stale-at-max with DELIVERED artifact stays running" \
+  "$(request_field "${s17_del}" status)" "running"
+assert "17d. artifact-bearing stale request keeps its ownership fields" \
+  "$(psql_q "select case when claim_token is null then 'cleared' else 'retained' end
+             from public.snapshot_requests where id='${s17_del}';")" \
+  "retained"
+assert "17e. artifact-bearing stale request keeps progress and attempts" \
+  "$(psql_q "select progress_stage||'/'||attempt_count from public.snapshot_requests where id='${s17_del}';")" \
+  "building_diagnosis/${MAX_ATTEMPTS}"
+assert "17f. queued request is still claimable in the same call" \
+  "${claimed17}" "${q17}"
+assert "17g. delivered artifact survived terminalization intact" \
+  "$(artifact_field "${s17_del}" delivery_message_id)" "seeded-message-id"
+
+# ── Test 18 — privileges on the 0031 surface ─────────────────────────────
+
+echo
+echo "── Test 18: privileges on the 0031 surface ──────────────"
+
+for role in level2_plain anon authenticated; do
+  assert "18. ${role} cannot execute worker completion" \
+    "$(psql_expect_error "set role ${role}; select public.complete_snapshot_report_worker(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'a','b','c','d',now());")" \
+    "PERMISSION_DENIED"
+  assert "18. ${role} cannot execute manual artifact save" \
+    "$(psql_expect_error "set role ${role}; select public.save_snapshot_report_artifact_manual(gen_random_uuid(),gen_random_uuid(),'a','b','c','d',now());")" \
+    "PERMISSION_DENIED"
+  assert "18. ${role} cannot execute delivery" \
+    "$(psql_expect_error "set role ${role}; select public.mark_snapshot_report_delivered(gen_random_uuid(),'m',now(),false);")" \
+    "PERMISSION_DENIED"
+done
+
+for fn in \
+  "complete_snapshot_report_worker(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'a','b','c','d',now())" \
+  "mark_snapshot_request_failed_worker(gen_random_uuid(),gen_random_uuid(),gen_random_uuid())" \
+  "update_snapshot_request_progress_worker(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'crawling')" \
+  "save_snapshot_report_artifact_manual(gen_random_uuid(),gen_random_uuid(),'a','b','c','d',now())" \
+  "insert_snapshot_report_artifact_backfill(gen_random_uuid(),gen_random_uuid(),'a','b','c','d',now())" \
+  "mark_snapshot_report_delivered(gen_random_uuid(),'m',now(),false)"; do
+  assert "18. service_role CAN execute ${fn%%(*}" \
+    "$(psql_q "set role service_role; select count(*) >= 0 from public.${fn};" | tail -n1)" \
+    "t"
+done
+
+assert "18. service_role CANNOT execute _lock_active_snapshot_worker_claim" \
+  "$(psql_expect_error "set role service_role; select public._lock_active_snapshot_worker_claim(gen_random_uuid(),gen_random_uuid(),gen_random_uuid());")" \
+  "PERMISSION_DENIED"
+assert "18. service_role CANNOT execute _generate_snapshot_public_token" \
+  "$(psql_expect_error "set role service_role; select public._generate_snapshot_public_token();")" \
+  "PERMISSION_DENIED"
+assert "18. service_role CANNOT execute _assert_snapshot_artifact_input" \
+  "$(psql_expect_error "set role service_role; select public._assert_snapshot_artifact_input('a','b','c','d',now());")" \
+  "PERMISSION_DENIED"
+
 # ── Summary ──────────────────────────────────────────────────────────────
 
 echo

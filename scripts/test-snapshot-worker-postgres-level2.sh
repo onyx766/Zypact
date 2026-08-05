@@ -954,6 +954,198 @@ assert "18. service_role CANNOT execute _assert_snapshot_artifact_input" \
   "$(psql_expect_error "set role service_role; select public._assert_snapshot_artifact_input('a','b','c','d',now());")" \
   "PERMISSION_DENIED"
 
+# ═════════════════════════════════════════════════════════════════════════
+#  Migration 0032 — direct table DML revoked from service_role
+# ═════════════════════════════════════════════════════════════════════════
+#
+# Fixtures above run as the database owner, which is not subject to its own
+# REVOKEs, so Tests 1–18 are unaffected. These tests use real `SET ROLE
+# service_role` to prove what that role can and cannot do.
+
+# Run one statement as service_role and classify the outcome.
+as_service_role() {
+  psql_expect_error "set role service_role; $1"
+}
+
+# ── Test 19 — service_role direct table privileges ───────────────────────
+
+echo
+echo "── Test 19: service_role direct table privileges ────────"
+
+psql_q "delete from public.snapshot_requests;" >/dev/null
+
+for tbl in snapshot_requests snapshot_report_artifacts; do
+  assert "19. service_role CAN still SELECT ${tbl}" \
+    "$(psql_q "set role service_role; select count(*) >= 0 from public.${tbl};" | tail -n1)" \
+    "t"
+done
+
+# Denied writes. Each statement is syntactically valid, so a permission
+# error is the only reason it can fail.
+assert "19. service_role CANNOT INSERT snapshot_requests" \
+  "$(as_service_role "insert into public.snapshot_requests
+      (work_email, normalized_email, company_name, website_url,
+       normalized_domain, buyer_category)
+     values ('l2@example.invalid','l2@example.invalid','X',
+             'https://x.example.invalid','x.example.invalid','B2B');")" \
+  "PERMISSION_DENIED"
+assert "19. service_role CANNOT UPDATE snapshot_requests" \
+  "$(as_service_role "update public.snapshot_requests set updated_at = now();")" \
+  "PERMISSION_DENIED"
+assert "19. service_role CANNOT DELETE snapshot_requests" \
+  "$(as_service_role "delete from public.snapshot_requests;")" \
+  "PERMISSION_DENIED"
+assert "19. service_role CANNOT TRUNCATE snapshot_requests" \
+  "$(as_service_role "truncate table public.snapshot_requests cascade;")" \
+  "PERMISSION_DENIED"
+# A `CREATE TEMP TABLE ... REFERENCES` probe can fail before PostgreSQL
+# evaluates the referenced-table privilege — the role also needs TEMP and
+# CREATE rights — so the failure would not isolate REFERENCES. Inspect the
+# specific privilege instead.
+assert "19. service_role does NOT hold REFERENCES on snapshot_requests" \
+  "$(psql_q "select has_table_privilege('service_role','public.snapshot_requests','REFERENCES')::text;")" \
+  "false"
+assert "19. service_role CANNOT create a TRIGGER on snapshot_requests" \
+  "$(as_service_role "create trigger l2_trg_probe after insert
+     on public.snapshot_requests for each row execute function
+     public._generate_snapshot_public_token();")" \
+  "PERMISSION_DENIED"
+
+assert "19. service_role CANNOT INSERT snapshot_report_artifacts" \
+  "$(as_service_role "insert into public.snapshot_report_artifacts
+      (snapshot_request_id, project_id, full_report_markdown,
+       short_report_markdown, full_report_filename, short_report_filename,
+       generated_at, public_token)
+     values (gen_random_uuid(), gen_random_uuid(), 'f','s','f.md','s.md',
+             now(), repeat('a',64));")" \
+  "PERMISSION_DENIED"
+assert "19. service_role CANNOT UPDATE snapshot_report_artifacts" \
+  "$(as_service_role "update public.snapshot_report_artifacts set updated_at = now();")" \
+  "PERMISSION_DENIED"
+assert "19. service_role CANNOT DELETE snapshot_report_artifacts" \
+  "$(as_service_role "delete from public.snapshot_report_artifacts;")" \
+  "PERMISSION_DENIED"
+assert "19. service_role CANNOT TRUNCATE snapshot_report_artifacts" \
+  "$(as_service_role "truncate table public.snapshot_report_artifacts cascade;")" \
+  "PERMISSION_DENIED"
+# Same reasoning as the snapshot_requests REFERENCES check above.
+assert "19. service_role does NOT hold REFERENCES on snapshot_report_artifacts" \
+  "$(psql_q "select has_table_privilege('service_role','public.snapshot_report_artifacts','REFERENCES')::text;")" \
+  "false"
+assert "19. service_role CANNOT create a TRIGGER on snapshot_report_artifacts" \
+  "$(as_service_role "create trigger l2_trg_probe2 after insert
+     on public.snapshot_report_artifacts for each row execute function
+     public._generate_snapshot_public_token();")" \
+  "PERMISSION_DENIED"
+
+# Catalog cross-check: exactly SELECT remains on both tables.
+for tbl in snapshot_requests snapshot_report_artifacts; do
+  assert "19. catalog: service_role holds only SELECT on ${tbl}" \
+    "$(psql_q "select coalesce(string_agg(distinct privilege_type, ',' order by privilege_type),'NONE')
+                 from information_schema.role_table_grants
+                where grantee='service_role' and table_schema='public'
+                  and table_name='${tbl}';")" \
+    "SELECT"
+done
+
+# Unrelated tables must keep their DML.
+for tbl in projects probe_results generated_assets; do
+  assert "19. unrelated table ${tbl} keeps service_role INSERT" \
+    "$(psql_q "select has_table_privilege('service_role','public.${tbl}','INSERT')::text;")" \
+    "true"
+done
+
+# ── Test 20 — RPC surface still works after revocation ───────────────────
+
+echo
+echo "── Test 20: RPC surface still works after revocation ────"
+
+for fn in reserve_snapshot_request_project claim_next_snapshot_request \
+          renew_snapshot_request_lease update_snapshot_request_progress \
+          finalize_snapshot_request update_snapshot_request_progress_worker \
+          complete_snapshot_report_worker mark_snapshot_request_failed_worker \
+          save_snapshot_report_artifact_manual \
+          insert_snapshot_report_artifact_backfill \
+          mark_snapshot_report_delivered; do
+  assert "20. service_role retains EXECUTE on ${fn}" \
+    "$(psql_q "select bool_and(has_function_privilege('service_role', p.oid, 'EXECUTE'))::text
+                 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                where n.nspname='public' and p.proname='${fn}';")" \
+    "true"
+done
+
+for fn in _ensure_snapshot_request_project _lock_active_snapshot_worker_claim \
+          _generate_snapshot_public_token _assert_snapshot_artifact_input; do
+  assert "20. internal helper ${fn} still NOT executable by service_role" \
+    "$(psql_q "select bool_or(has_function_privilege('service_role', p.oid, 'EXECUTE'))::text
+                 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                where n.nspname='public' and p.proname='${fn}';")" \
+    "false"
+done
+
+# SECURITY DEFINER runs as its owner, so the RPCs must still mutate both
+# tables even though service_role lost direct DML. This is the property
+# the whole design depends on.
+psql_q "delete from public.snapshot_requests;" >/dev/null
+w20="$(seed_queued "t20-worker" 20)"
+
+assert "20. service_role CAN claim through the RPC (writes snapshot_requests)" \
+  "$(psql_q "set role service_role;
+             select count(*) from public.claim_next_snapshot_request('w-t20:${RANDOM}', ${LEASE_SECONDS}, ${MAX_ATTEMPTS});" | tail -n1)" \
+  "1"
+
+IFS='|' read -r r20 p20 t20 <<<"$(psql_q "select id||'|'||project_id||'|'||claim_token
+                                            from public.snapshot_requests where id='${w20}';")"
+
+assert "20. worker progress fencing still works under service_role" \
+  "$(psql_q "set role service_role;
+             select progress_stage from public.update_snapshot_request_progress_worker('${r20}','${p20}','${t20}','crawling');" | tail -n1)" \
+  "crawling"
+assert "20. wrong token still rejected under service_role" \
+  "$(psql_q "set role service_role;
+             select count(*) from public.update_snapshot_request_progress_worker('${r20}','${p20}',gen_random_uuid(),'analyzing_site');" | tail -n1)" \
+  "0"
+assert "20. atomic completion still works (writes both tables)" \
+  "$(psql_q "set role service_role;
+             select count(*) from public.complete_snapshot_report_worker('${r20}','${p20}','${t20}','# full','# short','f.md','s.md',now());" | tail -n1)" \
+  "1"
+assert "20. completion finalized the request" \
+  "$(psql_q "select status||'/'||progress_stage from public.snapshot_requests where id='${r20}';")" \
+  "report_ready/quality_review"
+
+# Manual save on a manual-owned running request.
+psql_q "delete from public.snapshot_requests;" >/dev/null
+m20="$(seed_queued "t20-manual" 20)"
+psql_q "select 1 from public.reserve_snapshot_request_project('${m20}');" >/dev/null
+pm20="$(psql_q "select project_id from public.snapshot_requests where id='${m20}';")"
+assert "20. manual artifact save still works under service_role" \
+  "$(psql_q "set role service_role;
+             select count(*) from public.save_snapshot_report_artifact_manual('${m20}','${pm20}','# full','# short','f.md','s.md',now());" | tail -n1)" \
+  "1"
+
+# Backfill on a manual-owned report_ready request with no artifact.
+psql_q "delete from public.snapshot_requests;" >/dev/null
+b20="$(seed_queued "t20-backfill" 20)"
+psql_q "select 1 from public.reserve_snapshot_request_project('${b20}');" >/dev/null
+pb20="$(psql_q "select project_id from public.snapshot_requests where id='${b20}';")"
+psql_q "update public.snapshot_requests set status='report_ready', progress_stage='quality_review' where id='${b20}';" >/dev/null
+assert "20. backfill insert still works under service_role" \
+  "$(psql_q "set role service_role;
+             select count(*) from public.insert_snapshot_report_artifact_backfill('${b20}','${pb20}','# full','# short','f.md','s.md',now());" | tail -n1)" \
+  "1"
+
+assert "20. delivery bookkeeping still works under service_role" \
+  "$(psql_q "set role service_role;
+             select count(*) from public.mark_snapshot_report_delivered('${b20}','msg-t20',now(),false);" | tail -n1)" \
+  "1"
+assert "20. delivered artifact still immutable under service_role" \
+  "$(psql_q "set role service_role;
+             select count(*) from public.save_snapshot_report_artifact_manual('${b20}','${pb20}','overwrite','overwrite','x.md','y.md',now());" | tail -n1)" \
+  "0"
+assert "20. delivered content unchanged" \
+  "$(psql_q "select full_report_markdown from public.snapshot_report_artifacts where snapshot_request_id='${b20}';")" \
+  "# full"
+
 # ── Summary ──────────────────────────────────────────────────────────────
 
 echo
@@ -966,13 +1158,11 @@ echo "duplicate claims    : ${duplicate_claims}"
 echo
 
 cat <<'NOTE'
-This disposable PostgreSQL 16 run proves only the tested migration and
-concurrency behavior. It does not make worker-owned progress, artifact
-persistence, finalization, or paid scan execution safe.
+The PostgreSQL Level 2 run proves the tested migration, privilege,
+locking, and transaction behavior only.
 
-Worker-owned progress writes, artifact persistence, report-ready
-finalization, failed finalization, and crash-after-artifact reconciliation
-remain unfenced.
+Application callers have not yet migrated to the RPC surface. Migration
+0032 must not be applied to Production until they have.
 NOTE
 echo
 

@@ -7,6 +7,13 @@
 > Supabase project references and database row identifiers have been replaced
 > with `[REDACTED_PROJECT_REF]` and `[REDACTED_UUID]` placeholders. Public
 > vendor documentation links are retained as-is.
+>
+> The company name and domain of the live validation subject have been
+> anonymized for privacy and appear as `Anonymized validation project` and
+> `[ANONYMIZED_VALIDATION_DOMAIN]`. The underlying runs were real: only the
+> subject's identity is masked. All test counts, row counts, gap findings,
+> mirror-profile findings, rendering evidence, caveats, methodology, and
+> conclusions are unchanged.
 
 
 ## Run — 2026-07-09 22:15 UTC (Sprint 11.5 — client-facing export readability)
@@ -38,7 +45,7 @@ list of requested formatting improvements.
   section carries the honesty label and the appendix records probe
   origin as simulated.
 - `scripts/verify-export-readonly-live.ts` — same 19-section update.
-- `zypact-demo-report-linear.md` — regenerated from the live authenticated
+- `zypact-demo-report-anonymized.md` — regenerated from the live authenticated
   project `[REDACTED_UUID]`.
 
 Nothing else in the pipeline was touched: prompts, Zod schemas, QA
@@ -57,14 +64,14 @@ logic, auth/ownership guards, RLS, and DB grants are all unchanged.
    thing a client sees.
 3. **companyName fallback**: `resolveCompanyName` returns `project.
    companyName` first, then `mirrorProfile.json.companyName`, then
-   `project.domain`. Verified in the live report — Linear's project row
+   `project.domain`. Verified in the live report — the anonymized project's row
    has `companyName = NULL` and the export correctly shows
-   `Brand: Linear _(source: mirror_profile)_`.
+   `Brand: Anonymized validation project _(source: mirror_profile)_`.
 4. **Category display**: `resolveCategoryDisplay` reads
    `mirrorProfile.detectedCategory` and emits a caveat when
    `categoryConfidence` is not `high` OR the label looks
    model-inferred/over-specific (contains "for" or > 60 chars). The live
-   Linear export carries the caveat "This category is model-inferred
+   anonymized project export carries the caveat "This category is model-inferred
    and may over-specify the brand's positioning. Confirm with the brand
    before quoting." because the detected category is
    "AI product development platform for teams".
@@ -87,9 +94,9 @@ logic, auth/ownership guards, RLS, and DB grants are all unchanged.
    aggregates every distinct evidence gap across Fix Briefs
    (`evidenceNeeded`), asset placeholders, and QA reports
    (`placeholdersRemaining`). Deduplicated on canonical lowercase.
-   On the live Linear export, this surfaces exactly the two gaps
+   On the live anonymized project export, this surfaces exactly the two gaps
    flagged by the brief: `pricing information` and
-   `specific features or benefits of Linear that enhance coordination
+   `specific features or benefits of the anonymized project that enhance coordination
    across teams`.
 9. **NOT READY TO PUBLISH softened**: kept the label, added a
    status-specific tagline ("Held by QA to prevent unsupported claims —
@@ -172,22 +179,22 @@ Commands run (in order):
   all 8 guard messages still verbatim.
 - `scripts/run-with-env.py npx tsx scripts/verify-export-readonly-live.ts
   [REDACTED_UUID]` — read-only proof against the
-  live authenticated Linear project. Row counts and `updated_at`
+  live authenticated anonymized validation project. Row counts and `updated_at`
   timestamps unchanged before/after export. No secret env value
   appears in the body. All 19 client-facing sections present. Passed.
 - `scripts/run-with-env.py npx tsx scripts/generate-demo-export.ts
-  [REDACTED_UUID] zypact-demo-report-linear.md` —
+  [REDACTED_UUID] zypact-demo-report-anonymized.md` —
   regenerated the demo Markdown for hand review.
 
-### Regenerated demo export (Linear)
+### Regenerated demo export (anonymized validation project)
 
-- **file**: `zypact-demo-report-linear.md`
+- **file**: `zypact-demo-report-anonymized.md`
 - **size**: 37,811 bytes
 - **owner**: `a76f133a…` (authenticated Supabase user)
 - **redactions performed**: 0 (no secrets found in body)
 - **QA distribution**: `pending_qa=0, needs_evidence=4, safe_to_publish=0, unsupported_claims=1`
 - **not-ready asset count**: 5
-- **companyName fallback fired**: yes (Linear pulled from
+- **companyName fallback fired**: yes (the company name pulled from
   `mirrorProfile.companyName`; `project.companyName` was `NULL`)
 - **category caveat fired**: yes (label
   "AI product development platform for teams" is flagged as
@@ -474,7 +481,7 @@ Using the Supabase-backed project `[REDACTED_UUID]` from the Sprint 10.5 live-LL
 - Export is Markdown-only for MVP. JSON export is deferred; no need to build it until real user feedback requires it.
 - Redaction sweep uses **exact-string** and **known-prefix** matching, not full PII detection. Env-based secret leakage is fully covered; broader PII redaction (SSNs, private emails, etc.) is intentionally out of scope for Sprint 11.
 - No copy button, no publish button, no PDF, no public share link — all explicitly out of scope by the sprint brief.
-- Report is generated eagerly per request (no persistence). If a project is very large the request may exceed a serverless response limit; today `linear.app` produces a 31 KB file, well within any hosting limit.
+- Report is generated eagerly per request (no persistence). If a project is very large the request may exceed a serverless response limit; today `[ANONYMIZED_VALIDATION_DOMAIN]` produces a 31 KB file, well within any hosting limit.
 
 ### Sprint 11 is ready for demo use
 
@@ -566,7 +573,7 @@ Non-owner and missing-project responses are byte-identical externally (`enumerat
 - [x] `npm run test:full-pipeline` with `MVP_TEST_USER_ID=<authenticated user>`
   - `project.userId === testUserId` assertion passed (pipeline script's own check on the returned Supabase project row).
   - projectId: `[REDACTED_UUID]`
-  - URL: `https://linear.app`
+  - URL: `[ANONYMIZED_VALIDATION_DOMAIN]`
   - Pages crawled: 5, prompts: **50**, selected: 16, probe results: 3, lost/partial: 3, competitors: 6, gaps: 5, fix briefs: 1, assets: 5, QA reports: 5.
   - QA distribution: `pending_qa=0`, `needs_evidence=4`, `safe_to_publish=0`, `unsupported_claims=1`. **No asset remains `pending_qa`.**
   - All 8 guard strings verbatim.
@@ -663,7 +670,7 @@ Anon-key hardening verified. Direct client reads are blocked.
 - `ZYPACT_MOCK_MODE`: unset (verified in-process; not read from a stale shell)
 
 ### URL tested
-`https://linear.app`
+`[ANONYMIZED_VALIDATION_DOMAIN]`
 
 ### Pipeline result
 - [x] pass
@@ -767,19 +774,19 @@ Both pass. Build output includes both static and server-rendered routes.
 
 ### Known limitations
 
-- Only one URL (`https://linear.app`) validated live so far; a second URL should be run before Sprint 11 as extra insurance.
+- Only one URL (`[ANONYMIZED_VALIDATION_DOMAIN]`) validated live so far; a second URL should be run before Sprint 11 as extra insurance.
 - `assetType` is now pinned by the caller. If a future asset agent is written that *asks* the model to pick the asset type, that pinning would need to be re-thought. That does not apply today — the pipeline always chooses the type on the caller side.
 - Content quality of generated assets is a separate live-model quality concern; `gpt-4o-mini` produces publishable outlines for `comparison_page_outline` and `comparison_table` but tended toward "needs_evidence" verdicts on `faq_block` and `proof_block`. That is expected behavior of the QA gate on a real model and does not affect this validation.
 
 ### Next recommended sprint
 
-The live-LLM + Supabase gate is now green on `linear.app`. Per the anti-loss rule, do NOT jump ahead:
+The live-LLM + Supabase gate is now green on `[ANONYMIZED_VALIDATION_DOMAIN]`. Per the anti-loss rule, do NOT jump ahead:
 
-1. Optional: re-run `test:full-pipeline` against a second, smaller B2B SaaS URL to confirm the four normalization fixes are model-run stable, not `linear.app`-specific.
+1. Optional: re-run `test:full-pipeline` against a second, smaller B2B SaaS URL to confirm the four normalization fixes are model-run stable, not `[ANONYMIZED_VALIDATION_DOMAIN]`-specific.
 2. Sprint 11 (**Export**) — the immediate next sprint, now unlocked.
 3. Anthropic live-LLM validation (validation 2) is prepared by the existing provider routing in `call-model.ts` but still gated behind `LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`; can happen in parallel with, or after, Sprint 11.
 
-Recommendation: proceed to Sprint 11 (Export). Live-LLM validation on `https://linear.app` is complete and green.
+Recommendation: proceed to Sprint 11 (Export). Live-LLM validation on `[ANONYMIZED_VALIDATION_DOMAIN]` is complete and green.
 
 ---
 
@@ -796,7 +803,7 @@ Recommendation: proceed to Sprint 11 (Export). Live-LLM validation on `https://l
 - `ZYPACT_MOCK_MODE`: unset
 
 ### URL tested
-`https://linear.app`
+`[ANONYMIZED_VALIDATION_DOMAIN]`
 
 ### Pipeline result
 - [ ] pass
@@ -874,7 +881,7 @@ Add billing / credits to the OpenAI account (or switch to a key with quota), the
 Model / provider: n/a (LLM in mock mode; DB is real hosted Supabase)
 
 ### URL tested
-`https://linear.app`
+`[ANONYMIZED_VALIDATION_DOMAIN]`
 
 ### Pipeline result
 - [x] pass
@@ -963,14 +970,14 @@ All 8 canonical guard strings still exported verbatim; asserted at run start by 
 ### Known limitations
 
 - LLM was in mock mode (no `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`), so agent output shapes are exercised but text quality is not.
-- Only one URL (`https://linear.app`) validated so far; the Supabase adapter should be re-run against at least one more URL before Sprint 11.
+- Only one URL (`[ANONYMIZED_VALIDATION_DOMAIN]`) validated so far; the Supabase adapter should be re-run against at least one more URL before Sprint 11.
 - Supabase RLS not exercised in this run — service_role bypasses RLS by design. If RLS is later enabled with strict policies, this validation does not cover the anon/authenticated paths.
 
 ### Next recommended sprint
 
 Per the anti-loss rule, do NOT jump ahead. Suggested next steps in priority order:
 
-1. Live-LLM run of `test:full-pipeline` against Supabase on `https://linear.app` (validates real agent output, not just shapes).
+1. Live-LLM run of `test:full-pipeline` against Supabase on `[ANONYMIZED_VALIDATION_DOMAIN]` (validates real agent output, not just shapes).
 2. Second URL Supabase run (e.g. a smaller B2B SaaS site) to confirm the adapter is robust across projects.
 3. Sprint 11 (export) — only after items 1 + 2 come back green.
 

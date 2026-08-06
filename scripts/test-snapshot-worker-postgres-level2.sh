@@ -1146,6 +1146,79 @@ assert "20. delivered content unchanged" \
   "$(psql_q "select full_report_markdown from public.snapshot_report_artifacts where snapshot_request_id='${b20}';")" \
   "# full"
 
+# ── Test 21 — artifact survives project deletion (migration 0033) ────────
+#
+# Before 0033 the artifact's project foreign key was ON DELETE CASCADE and
+# 0032 revoked nothing on public.projects, so deleting a project destroyed
+# a delivered report through a table the boundary never covered.
+
+echo
+echo "── Test 21: project deletion cannot destroy a report ────"
+
+assert "21. artifact project FK is ON DELETE RESTRICT" \
+  "$(psql_q "select confdeltype from pg_constraint
+              where conrelid='public.snapshot_report_artifacts'::regclass
+                and conname='snapshot_report_artifacts_project_id_fkey';")" \
+  "r"
+assert "21. artifact request FK still ON DELETE CASCADE" \
+  "$(psql_q "select confdeltype from pg_constraint
+              where conrelid='public.snapshot_report_artifacts'::regclass
+                and conname='snapshot_report_artifacts_snapshot_request_id_fkey';")" \
+  "c"
+
+# A delivered report, built through the approved surface.
+psql_q "delete from public.snapshot_requests;" >/dev/null
+d21="$(seed_queued "t21-delivered" 21)"
+psql_q "select 1 from public.reserve_snapshot_request_project('${d21}');" >/dev/null
+pd21="$(psql_q "select project_id from public.snapshot_requests where id='${d21}';")"
+psql_q "select 1 from public.save_snapshot_report_artifact_manual('${d21}','${pd21}','# full','# short','f.md','s.md',now());" >/dev/null
+psql_q "select 1 from public.update_snapshot_request_progress('${d21}','${pd21}','quality_review');" >/dev/null
+psql_q "select 1 from public.finalize_snapshot_request('${d21}','${pd21}','report_ready');" >/dev/null
+psql_q "select 1 from public.mark_snapshot_report_delivered('${d21}','msg-t21',now(),false);" >/dev/null
+
+assert "21. fixture artifact is delivered" \
+  "$(psql_q "select (delivered_at is not null)::text
+               from public.snapshot_report_artifacts where snapshot_request_id='${d21}';")" \
+  "true"
+
+# The whole point: this delete must fail rather than cascade.
+del21="$(psql_expect_error "delete from public.projects where id='${pd21}';")"
+assert "21. deleting the project is refused while a report exists" \
+  "$([[ "${del21}" != "NO_ERROR" ]] && echo blocked || echo allowed)" \
+  "blocked"
+assert "21. the delivered artifact survived" \
+  "$(psql_q "select count(*) from public.snapshot_report_artifacts where snapshot_request_id='${d21}';")" \
+  "1"
+assert "21. delivered content survived unchanged" \
+  "$(psql_q "select full_report_markdown from public.snapshot_report_artifacts where snapshot_request_id='${d21}';")" \
+  "# full"
+assert "21. the request survived" \
+  "$(psql_q "select status from public.snapshot_requests where id='${d21}';")" \
+  "report_ready"
+
+# service_role keeps DELETE on projects: 0033 changes a constraint, not a grant.
+assert "21. service_role still holds DELETE on public.projects" \
+  "$(psql_q "select has_table_privilege('service_role','public.projects','DELETE')::text;")" \
+  "true"
+assert "21. service_role delete on a report-bearing project is still refused" \
+  "$([[ "$(psql_expect_error "set role service_role; delete from public.projects where id='${pd21}';")" != "NO_ERROR" ]] && echo blocked || echo allowed)" \
+  "blocked"
+
+# Normal lifecycle: a project with no artifact is still deletable.
+free21="$(psql_q "insert into public.projects (domain) values ('t21-free.example.invalid') returning id;")"
+assert "21. a project with no report is still deletable" \
+  "$(psql_expect_error "delete from public.projects where id='${free21}';")" \
+  "NO_ERROR"
+
+# Deleting the request still removes its report — that cascade is retained.
+psql_q "delete from public.snapshot_requests where id='${d21}';" >/dev/null
+assert "21. deleting the request still removes its artifact" \
+  "$(psql_q "select count(*) from public.snapshot_report_artifacts where snapshot_request_id='${d21}';")" \
+  "0"
+assert "21. the project is deletable once its report is gone" \
+  "$(psql_expect_error "delete from public.projects where id='${pd21}';")" \
+  "NO_ERROR"
+
 # ── Summary ──────────────────────────────────────────────────────────────
 
 echo

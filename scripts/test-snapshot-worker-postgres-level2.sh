@@ -102,6 +102,31 @@ psql_expect_error() {
   fi
 }
 
+# Exact SQLSTATE for a statement expected to fail. `psql_expect_error` only
+# reports an error *class*; this returns the five-character code so a denial
+# assertion cannot be satisfied by an unrelated failure.
+psql_sqlstate() {
+  timeout "${PSQL_TIMEOUT}" docker exec -i "${POSTGRES_CONTAINER_ID}" \
+    psql -U "${PG_USER}" -d "${PG_DB}" -v ON_ERROR_STOP=1 -tAq <<SQL 2>/dev/null | tail -n1
+do \$do\$
+declare s text := 'NO_ERROR';
+begin
+  begin
+    $1
+  exception when others then
+    s := sqlstate;
+  end;
+  raise notice '%', s;
+end
+\$do\$;
+SQL
+}
+
+# Same, but returns the SQLSTATE produced while acting as a given role.
+sqlstate_as_role() {
+  psql_sqlstate "set local role $1; $2"
+}
+
 now_ms() { date +%s%3N; }
 
 # Report a token as null/non-null plus a short prefix — never in full.
@@ -150,19 +175,45 @@ begin
   if not exists (select 1 from pg_roles where rolname = 'authenticated') then
     create role authenticated nologin;
   end if;
+  -- Supabase's real service_role holds BYPASSRLS. Creating it without that
+  -- attribute made every RLS-enabled table invisible to it here, so a direct
+  -- write expected to SUCCEED could silently affect zero rows and still look
+  -- like a pass. Set the attribute whether the role is new or pre-existing.
   if not exists (select 1 from pg_roles where rolname = 'service_role') then
-    create role service_role nologin;
+    create role service_role nologin bypassrls;
+  else
+    alter role service_role bypassrls;
   end if;
   -- Fresh unprivileged role: inherits only PUBLIC, proving PUBLIC has no
   -- execute access on the worker RPCs.
   if not exists (select 1 from pg_roles where rolname = 'level2_plain') then
     create role level2_plain nologin;
   end if;
+  -- Deliberately WITHOUT bypassrls: used only where RLS filtering itself is
+  -- the property under test. Never used for RPC caller-equivalence tests.
+  if not exists (select 1 from pg_roles where rolname = 'level2_rls_role') then
+    create role level2_rls_role nologin nobypassrls;
+  else
+    alter role level2_rls_role nobypassrls;
+  end if;
 end;
 $$;
 SQL
 
-echo "created: anon, authenticated, service_role, level2_plain"
+echo "created: anon, authenticated, service_role, level2_plain, level2_rls_role"
+
+# Role attributes are a precondition for every later assertion, so verify
+# them before any test runs rather than trusting the DDL above.
+assert "roles. service_role has BYPASSRLS (mirrors Supabase)" \
+  "$(psql_q "select rolbypassrls::text from pg_roles where rolname='service_role';")" \
+  "true"
+assert "roles. level2_rls_role does NOT have BYPASSRLS" \
+  "$(psql_q "select rolbypassrls::text from pg_roles where rolname='level2_rls_role';")" \
+  "false"
+assert "roles. level2_rls_role holds no elevated attributes" \
+  "$(psql_q "select (rolsuper or rolcreatedb or rolcreaterole or rolreplication)::text
+               from pg_roles where rolname='level2_rls_role';")" \
+  "false"
 
 # ── Migrations ───────────────────────────────────────────────────────────
 
@@ -974,11 +1025,30 @@ echo "── Test 19: service_role direct table privileges ───────
 
 psql_q "delete from public.snapshot_requests;" >/dev/null
 
-for tbl in snapshot_requests snapshot_report_artifacts; do
-  assert "19. service_role CAN still SELECT ${tbl}" \
-    "$(psql_q "set role service_role; select count(*) >= 0 from public.${tbl};" | tail -n1)" \
-    "t"
-done
+# Seed a known fixture so SELECT visibility is proven against an exact count.
+# `count(*) >= 0` was previously used here and is always true — it passed even
+# when RLS hid every row, which is exactly the false positive this test must
+# now catch.
+t19_req="$(seed_queued "t19-select" 19)"
+psql_q "select 1 from public.reserve_snapshot_request_project('${t19_req}');" >/dev/null
+t19_proj="$(request_field "${t19_req}" project_id)"
+psql_q "select 1 from public.save_snapshot_report_artifact_manual(
+          '${t19_req}','${t19_proj}','${MD_FULL}','${MD_SHORT}','f.md','s.md',now());" >/dev/null
+
+assert "19. service_role SELECT sees the exact seeded snapshot_requests row" \
+  "$(psql_q "set role service_role;
+             select count(*) from public.snapshot_requests where id='${t19_req}';" | tail -n1)" \
+  "1"
+assert "19. service_role SELECT sees the exact seeded artifact row" \
+  "$(psql_q "set role service_role;
+             select count(*) from public.snapshot_report_artifacts
+              where snapshot_request_id='${t19_req}';" | tail -n1)" \
+  "1"
+assert "19. service_role SELECT returns real column data, not an empty set" \
+  "$(psql_q "set role service_role;
+             select full_report_markdown from public.snapshot_report_artifacts
+              where snapshot_request_id='${t19_req}';" | tail -n1)" \
+  "${MD_FULL}"
 
 # Denied writes. Each statement is syntactically valid, so a permission
 # error is the only reason it can fail.
@@ -1037,6 +1107,44 @@ assert "19. service_role CANNOT create a TRIGGER on snapshot_report_artifacts" \
      on public.snapshot_report_artifacts for each row execute function
      public._generate_snapshot_public_token();")" \
   "PERMISSION_DENIED"
+
+# Exact SQLSTATE, not just an error class. `psql_expect_error` matches on
+# message text; these pin the code to insufficient_privilege so an unrelated
+# failure can never satisfy a denial assertion.
+assert "19. INSERT denial SQLSTATE on snapshot_requests is 42501" \
+  "$(sqlstate_as_role service_role "insert into public.snapshot_requests
+      (work_email, normalized_email, company_name, website_url,
+       normalized_domain, buyer_category)
+     values ('l2s@example.invalid','l2s@example.invalid','X',
+             'https://xs.example.invalid','xs.example.invalid','B2B');")" \
+  "42501"
+assert "19. UPDATE denial SQLSTATE on snapshot_requests is 42501" \
+  "$(sqlstate_as_role service_role "update public.snapshot_requests set updated_at = now();")" \
+  "42501"
+assert "19. DELETE denial SQLSTATE on snapshot_requests is 42501" \
+  "$(sqlstate_as_role service_role "delete from public.snapshot_requests;")" \
+  "42501"
+assert "19. UPDATE denial SQLSTATE on snapshot_report_artifacts is 42501" \
+  "$(sqlstate_as_role service_role "update public.snapshot_report_artifacts set updated_at = now();")" \
+  "42501"
+assert "19. DELETE denial SQLSTATE on snapshot_report_artifacts is 42501" \
+  "$(sqlstate_as_role service_role "delete from public.snapshot_report_artifacts;")" \
+  "42501"
+
+# A denial must also leave the database untouched. Without BYPASSRLS these
+# counts would have been 0 regardless, which is why the role fidelity fix
+# above is a precondition for this check meaning anything.
+assert "19. denied writes left the seeded request row intact" \
+  "$(psql_q "select count(*) from public.snapshot_requests where id='${t19_req}';")" \
+  "1"
+assert "19. denied writes left the seeded artifact row intact" \
+  "$(psql_q "select count(*) from public.snapshot_report_artifacts
+              where snapshot_request_id='${t19_req}';")" \
+  "1"
+assert "19. denied writes did not alter artifact content" \
+  "$(psql_q "select full_report_markdown from public.snapshot_report_artifacts
+              where snapshot_request_id='${t19_req}';")" \
+  "${MD_FULL}"
 
 # Catalog cross-check: exactly SELECT remains on both tables.
 for tbl in snapshot_requests snapshot_report_artifacts; do
@@ -1203,18 +1311,22 @@ assert "21. service_role still holds DELETE on public.projects" \
 # The service_role case needs its own probe rather than psql_expect_error.
 #
 # 0011 enables RLS on public.projects and the schema defines no policies at
-# all. The table owner is exempt (0011 sets `no force row level security`),
-# but this harness creates `service_role` with plain `create role ...
-# nologin` — no BYPASSRLS, unlike the real Supabase role. Under RLS with no
-# policy the row is simply invisible, so a DELETE by id matches zero rows,
-# succeeds trivially, and never reaches the foreign key. An earlier version
-# of this assertion read that silent no-op as "the delete was allowed".
+# all. The table owner is exempt (0011 sets `no force row level security`).
+# service_role is now created WITH BYPASSRLS to match the real Supabase role,
+# so a DELETE by id reaches the foreign key and is refused with 23503 — which
+# is the property migration 0033 actually adds.
 #
-# This probe records who ran the statement, how many rows it actually
-# removed, and the SQLSTATE, and it runs both without and with BYPASSRLS so
-# the RLS no-op and the real constraint refusal are distinguished rather
-# than conflated. Everything runs inside a transaction that is rolled back,
-# so the fixture is untouched either way.
+# That was not always true here. The harness previously created service_role
+# without BYPASSRLS, so under RLS with no policy the row was invisible: the
+# DELETE matched zero rows, succeeded trivially, and never reached the
+# foreign key. An earlier version of this assertion read that silent no-op as
+# meaningful, which is the false positive the role fidelity fix removes.
+#
+# This probe records who ran the statement, how many rows it actually removed,
+# and the SQLSTATE. It runs with the production-faithful attribute first, then
+# once more with BYPASSRLS deliberately removed, so the constraint refusal and
+# the RLS no-op are distinguished rather than conflated. Everything runs inside
+# a transaction that is rolled back, so the fixture is untouched either way.
 t21_probe() {
   timeout "${PSQL_TIMEOUT}" docker exec -i "${POSTGRES_CONTAINER_ID}" \
     psql -U "${PG_USER}" -d "${PG_DB}" -v ON_ERROR_STOP=1 -tAq <<SQL
@@ -1244,19 +1356,14 @@ rollback;
 SQL
 }
 
-probe_rls="$(t21_probe "${pd21}" | tail -n1)"
-echo "   probe (service_role, no BYPASSRLS): ${probe_rls}"
-assert "21. under RLS service_role deletes zero rows instead of the project" \
-  "${probe_rls}" \
-  "service_role|NO_ERROR|0"
-
-# Match the production role, where service_role holds BYPASSRLS, so the
-# foreign key — not row visibility — has to do the blocking.
-psql_q "alter role service_role bypassrls;" >/dev/null
+# The default probe now runs against the production-faithful role: service_role
+# holds BYPASSRLS, so row visibility cannot do the blocking and the foreign key
+# added by 0033 has to. This ordering was inverted previously, when the harness
+# built service_role without BYPASSRLS — the "blocked" result it recorded came
+# from RLS hiding the row, not from the constraint under test.
 probe_fk="$(t21_probe "${pd21}" | tail -n1)"
-psql_q "alter role service_role nobypassrls;" >/dev/null
-echo "   probe (service_role, BYPASSRLS): ${probe_fk}"
-assert "21. service_role sees the row once RLS is bypassed" \
+echo "   probe (service_role, BYPASSRLS — production-faithful): ${probe_fk}"
+assert "21. service_role sees the row under its production BYPASSRLS attribute" \
   "$(cut -d'|' -f1 <<<"${probe_fk}")" \
   "service_role"
 assert "21. service_role delete on a report-bearing project raises 23503" \
@@ -1265,9 +1372,25 @@ assert "21. service_role delete on a report-bearing project raises 23503" \
 assert "21. service_role delete removed no project row" \
   "$(cut -d'|' -f3 <<<"${probe_fk}")" \
   "0"
+
+# Deliberately drop BYPASSRLS to record what the weaker role would have shown:
+# no error and zero rows removed. Keeping this probe documents that the 23503
+# above is genuinely the constraint and not an artifact of row filtering. The
+# attribute is restored immediately, and the restoration is asserted, because
+# every later test depends on the production-faithful default.
+psql_q "alter role service_role nobypassrls;" >/dev/null
+probe_rls="$(t21_probe "${pd21}" | tail -n1)"
+psql_q "alter role service_role bypassrls;" >/dev/null
+echo "   probe (service_role, BYPASSRLS removed — contrast only): ${probe_rls}"
+assert "21. without BYPASSRLS the same delete is a silent zero-row no-op" \
+  "${probe_rls}" \
+  "service_role|NO_ERROR|0"
+assert "21. the two probes disagree, so RLS was masking the constraint" \
+  "$([ "$(cut -d'|' -f2 <<<"${probe_fk}")" != "$(cut -d'|' -f2 <<<"${probe_rls}")" ] && echo differ || echo same)" \
+  "differ"
 assert "21. service_role BYPASSRLS was restored to the harness default" \
   "$(psql_q "select rolbypassrls::text from pg_roles where rolname='service_role';")" \
-  "false"
+  "true"
 assert "21. the project survived both probes" \
   "$(psql_q "select count(*) from public.projects where id='${pd21}';")" \
   "1"
@@ -1289,6 +1412,78 @@ assert "21. deleting the request still removes its artifact" \
 assert "21. the project is deletable once its report is gone" \
   "$(psql_expect_error "delete from public.projects where id='${pd21}';")" \
   "NO_ERROR"
+
+# ── Test 22 — RLS visibility fidelity (regression guard) ─────────────────
+#
+# This test exists because of a real harness defect: `service_role` was created
+# without BYPASSRLS while the production role has it. Every snapshot table has
+# RLS enabled and the schema defines no policies, so a role lacking BYPASSRLS
+# sees nothing — and an UPDATE or DELETE by such a role affects zero rows,
+# succeeds, and returns exit status 0. A test asserting only "the command
+# succeeded" would pass while doing nothing at all.
+#
+# `projects` is used as the subject because it has RLS enabled and is not
+# covered by migration 0032, so both roles legitimately hold DML on it and the
+# only difference between them is row visibility.
+
+echo
+echo "── Test 22: RLS visibility fidelity ─────────────────────"
+
+assert "22. RLS is enabled on public.projects" \
+  "$(psql_q "select relrowsecurity::text from pg_class where oid='public.projects'::regclass;")" \
+  "true"
+assert "22. no RLS policy exists on public.projects" \
+  "$(psql_q "select count(*) from pg_policies where schemaname='public' and tablename='projects';")" \
+  "0"
+
+psql_q "grant select, update on table public.projects to level2_rls_role;" >/dev/null
+t22_proj="$(psql_q "insert into public.projects (domain, company_name)
+                    values ('t22-rls.example.invalid','Level2 RLS fidelity')
+                    returning id;")"
+
+# service_role: BYPASSRLS, so the row is visible and a write really lands.
+assert "22. service_role (BYPASSRLS) sees the row" \
+  "$(psql_q "set role service_role; select count(*) from public.projects where id='${t22_proj}';" | tail -n1)" \
+  "1"
+assert "22. service_role UPDATE reports exactly one affected row" \
+  "$(psql_q "set role service_role;
+             with u as (update public.projects set company_name='Updated by service_role'
+                         where id='${t22_proj}' returning 1)
+             select count(*) from u;" | tail -n1)" \
+  "1"
+assert "22. service_role UPDATE actually persisted" \
+  "$(psql_q "select company_name from public.projects where id='${t22_proj}';")" \
+  "Updated by service_role"
+
+# level2_rls_role: no BYPASSRLS. It holds UPDATE, yet RLS hides the row, so the
+# statement succeeds while affecting nothing. This is the exact false positive
+# the hardening guards against, so it is asserted explicitly rather than left
+# implicit.
+assert "22. non-BYPASSRLS role sees zero rows under RLS" \
+  "$(psql_q "set role level2_rls_role; select count(*) from public.projects where id='${t22_proj}';" | tail -n1)" \
+  "0"
+assert "22. non-BYPASSRLS UPDATE raises no error" \
+  "$(sqlstate_as_role level2_rls_role "update public.projects set company_name='Should not apply' where id='${t22_proj}';")" \
+  "NO_ERROR"
+assert "22. non-BYPASSRLS UPDATE affects zero rows (silent no-op)" \
+  "$(psql_q "set role level2_rls_role;
+             with u as (update public.projects set company_name='Should not apply'
+                         where id='${t22_proj}' returning 1)
+             select count(*) from u;" | tail -n1)" \
+  "0"
+assert "22. the silent no-op left the value untouched" \
+  "$(psql_q "select company_name from public.projects where id='${t22_proj}';")" \
+  "Updated by service_role"
+
+# Teardown: the harness owns this row and the grant.
+psql_q "delete from public.projects where id='${t22_proj}';" >/dev/null
+psql_q "revoke select, update on table public.projects from level2_rls_role;" >/dev/null
+assert "22. temporary project row removed" \
+  "$(psql_q "select count(*) from public.projects where id='${t22_proj}';")" \
+  "0"
+assert "22. temporary grant revoked" \
+  "$(psql_q "select has_table_privilege('level2_rls_role','public.projects','UPDATE')::text;")" \
+  "false"
 
 # ── Summary ──────────────────────────────────────────────────────────────
 

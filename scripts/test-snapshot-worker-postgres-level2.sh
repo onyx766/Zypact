@@ -102,29 +102,43 @@ psql_expect_error() {
   fi
 }
 
-# Exact SQLSTATE for a statement expected to fail. `psql_expect_error` only
-# reports an error *class*; this returns the five-character code so a denial
-# assertion cannot be satisfied by an unrelated failure.
-psql_sqlstate() {
+# Exact SQLSTATE produced by a statement run as a given role, or NO_ERROR.
+#
+# `psql_expect_error` only reports an error *class*; this returns the
+# five-character code, so a denial assertion cannot be satisfied by an
+# unrelated failure.
+#
+# The result is carried out through a temp table rather than `raise notice`,
+# because NOTICE is written to stderr — a first version of this helper used
+# `raise notice` and discarded stderr, so every call returned an empty string
+# and five denial assertions failed in CI with `got []`. This mirrors the
+# `t21_probe` shape below, which is already proven against a real database.
+#
+# Everything runs inside a transaction that is rolled back, so a statement
+# that unexpectedly succeeds cannot leave the database modified.
+sqlstate_as_role() {
+  # sqlstate_as_role <role> <statement>
   timeout "${PSQL_TIMEOUT}" docker exec -i "${POSTGRES_CONTAINER_ID}" \
-    psql -U "${PG_USER}" -d "${PG_DB}" -v ON_ERROR_STOP=1 -tAq <<SQL 2>/dev/null | tail -n1
+    psql -U "${PG_USER}" -d "${PG_DB}" -v ON_ERROR_STOP=1 -tAq <<SQL | tail -n1
+begin;
+create temp table l2_sqlstate (s text);
+grant insert on l2_sqlstate to $1;
+set local role $1;
 do \$do\$
 declare s text := 'NO_ERROR';
 begin
   begin
-    $1
+    $2
   exception when others then
     s := sqlstate;
   end;
-  raise notice '%', s;
+  insert into l2_sqlstate values (s);
 end
 \$do\$;
+reset role;
+select s from l2_sqlstate;
+rollback;
 SQL
-}
-
-# Same, but returns the SQLSTATE produced while acting as a given role.
-sqlstate_as_role() {
-  psql_sqlstate "set local role $1; $2"
 }
 
 now_ms() { date +%s%3N; }

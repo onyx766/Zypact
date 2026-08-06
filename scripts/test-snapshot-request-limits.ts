@@ -197,6 +197,8 @@ async function main() {
     ).toISOString();
 
     const oldActiveRequest: SnapshotRequest = {
+      approvedAt: null,
+      approvedBy: null,
       id: "old-active-request",
       workEmail: "old@example.com",
       normalizedEmail: "old@example.com",

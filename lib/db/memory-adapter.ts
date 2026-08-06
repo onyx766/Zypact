@@ -325,6 +325,8 @@ export const memoryAdapter: DbAdapter = {
       projectId: null,
       progressStage: null,
       progressUpdatedAt: null,
+      approvedAt: null,
+      approvedBy: null,
       claimedBy: null,
       claimToken: null,
       leaseExpiresAt: null,

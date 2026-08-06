@@ -75,10 +75,9 @@ async function seedQueued(
   // Approved + queued is the eligible state; createdAt is made strictly
   // increasing so ordering assertions are deterministic.
   clock += 1000;
-  const row: SnapshotRequest & {
-    approvedAt?: string;
-    approvedBy?: string;
-  } = {
+  // `approvedAt` / `approvedBy` now live on SnapshotRequest itself, so the
+  // ad-hoc intersection this used to need is gone.
+  const row: SnapshotRequest = {
     ...created,
     status: "queued",
     createdAt: new Date(clock).toISOString(),

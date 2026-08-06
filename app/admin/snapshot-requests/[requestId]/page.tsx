@@ -89,6 +89,92 @@ function DetailRow({
   );
 }
 
+/**
+ * Inline preview for one stored report artifact.
+ *
+ * Rendered as pre-formatted plain text, not as parsed Markdown. The
+ * repository has no Markdown-rendering dependency installed, and adding one
+ * is out of scope for this change, so the raw source is shown verbatim
+ * inside a bounded scroll container. `dangerouslySetInnerHTML` is
+ * deliberately not used: report content is model-generated and must never
+ * reach the DOM as HTML.
+ *
+ * An empty artifact column renders an explicit neutral state rather than a
+ * blank panel, so the founder can tell "no content" from "not loaded".
+ */
+function ReportPreview({
+  heading,
+  filename,
+  markdown,
+}: {
+  heading: string;
+  filename: string;
+  markdown: string;
+}) {
+  const isEmpty =
+    markdown.trim().length === 0;
+
+  return (
+    <section
+      style={{ marginTop: 24 }}
+    >
+      <h3
+        style={{
+          margin: "0 0 8px",
+          fontSize: 15,
+        }}
+      >
+        {heading}
+      </h3>
+
+      <p
+        style={{
+          margin: "0 0 10px",
+          color: "#777",
+          fontSize: 12,
+        }}
+      >
+        {filename} ·{" "}
+        {markdown.length.toLocaleString(
+          "en-US"
+        )}{" "}
+        characters
+      </p>
+
+      {isEmpty ? (
+        <p
+          style={{
+            margin: 0,
+            color: "#777",
+            fontSize: 13,
+          }}
+        >
+          This report is empty.
+        </p>
+      ) : (
+        <pre
+          style={{
+            maxHeight: 520,
+            overflow: "auto",
+            margin: 0,
+            padding: 20,
+            borderRadius: 12,
+            background: "#f7f7f7",
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+            fontFamily:
+              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            fontSize: 13,
+            lineHeight: 1.6,
+          }}
+        >
+          {markdown}
+        </pre>
+      )}
+    </section>
+  );
+}
+
 export default async function SnapshotRequestDetailPage({
   params,
 }: {
@@ -279,6 +365,27 @@ export default async function SnapshotRequestDetailPage({
               request.updatedAt
             )}
           </DetailRow>
+
+          <DetailRow label="Approval">
+            {request.approvedAt
+              ? "Approved"
+              : "Not approved yet"}
+          </DetailRow>
+
+          <DetailRow label="Approved at">
+            {formatDate(
+              request.approvedAt
+            )}
+          </DetailRow>
+
+          {/*
+            Founder-only review metadata. `approvedBy` is an internal auth
+            user id and is deliberately not surfaced on the public report
+            page — this detail page is gated by requireFounderForPage.
+          */}
+          <DetailRow label="Approved by">
+            {request.approvedBy || "—"}
+          </DetailRow>
         </section>
 
         {request.status ===
@@ -458,28 +565,25 @@ export default async function SnapshotRequestDetailPage({
                   : "No"}
               </p>
 
-              <pre
-                style={{
-                  maxHeight: 720,
-                  overflow: "auto",
-                  margin:
-                    "20px 0 0",
-                  padding: 20,
-                  borderRadius: 12,
-                  background:
-                    "#f7f7f7",
-                  whiteSpace:
-                    "pre-wrap",
-                  overflowWrap:
-                    "anywhere",
-                  fontFamily:
-                    "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-                  fontSize: 13,
-                  lineHeight: 1.6,
-                }}
-              >
-                {artifact.shortReportMarkdown}
-              </pre>
+              <ReportPreview
+                heading="Short report"
+                filename={
+                  artifact.shortReportFilename
+                }
+                markdown={
+                  artifact.shortReportMarkdown
+                }
+              />
+
+              <ReportPreview
+                heading="Full report"
+                filename={
+                  artifact.fullReportFilename
+                }
+                markdown={
+                  artifact.fullReportMarkdown
+                }
+              />
             </>
           ) : (
             <p

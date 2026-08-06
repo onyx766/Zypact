@@ -21,6 +21,7 @@ delete process.env.NEXT_PUBLIC_SUPABASE_URL;
 delete process.env.SUPABASE_SERVICE_ROLE_KEY;
 delete process.env.ZYPACT_ALLOW_MEMORY_DB;
 
+import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -161,6 +162,117 @@ async function main(): Promise<void> {
   );
 
   __setSupabaseAdapterClientForTests(null);
+
+  /* ── 7a-7g. In-memory approval fidelity (behavioral) ──────────────── */
+  //
+  // The Supabase path sets approval metadata inside the RPC. The in-memory
+  // adapter has to record the same thing itself, or a test that approves
+  // in memory and then asserts approval metadata would silently see nulls.
+
+  console.log("\nIn-memory approval fidelity");
+
+  const { memoryAdapter } = await import("@/lib/db/memory-adapter");
+
+  const ACTOR = "00000000-0000-4000-8000-0000000000ac";
+
+  const created = await memoryAdapter.createSnapshotRequest({
+    workEmail: "approval-fidelity@example.invalid",
+    normalizedEmail: "approval-fidelity@example.invalid",
+    companyName: "Approval Fidelity",
+    websiteUrl: "https://approval-fidelity.example.invalid",
+    normalizedDomain: "approval-fidelity.example.invalid",
+    buyerCategory: "B2B SaaS testing",
+    requestIpHash: null,
+  });
+
+  check(
+    "7a. a new in-memory request starts unapproved",
+    created.approvedAt === null && created.approvedBy === null
+  );
+
+  // Refused approval first: wrong status must not write metadata.
+  const refused =
+    await memoryAdapter.approveAndQueueSnapshotRequest(
+      created.id,
+      ACTOR
+    );
+  const afterRefusal = await memoryAdapter.getSnapshotRequest(
+    created.id
+  );
+
+  check(
+    "7b. approving a pending_verification request is refused",
+    refused === null
+  );
+  check(
+    "7c. a refused approval leaves approval metadata untouched",
+    afterRefusal?.approvedAt === null &&
+      afterRefusal?.approvedBy === null
+  );
+
+  // Reach pending_approval through the adapter's real two-step verification
+  // path, the same way the other snapshot tests do.
+  const token = randomBytes(32).toString("hex");
+  await memoryAdapter.issueSnapshotRequestVerification({
+    requestId: created.id,
+    tokenHash: token,
+    expiresAt: new Date(
+      Date.now() + 30 * 60 * 1000
+    ).toISOString(),
+  });
+  const verified =
+    await memoryAdapter.consumeSnapshotRequestVerification(
+      token
+    );
+
+  check(
+    "7d. verification alone does not approve",
+    verified?.status === "pending_approval" &&
+      verified.approvedAt === null &&
+      verified.approvedBy === null
+  );
+
+  const before = Date.now();
+  const approvedInMemory =
+    await memoryAdapter.approveAndQueueSnapshotRequest(
+      created.id,
+      ACTOR
+    );
+  const after = Date.now();
+
+  check(
+    "7e. a valid approval reaches the queued state",
+    approvedInMemory?.status === "queued"
+  );
+  check(
+    "7f. approvedBy is the exact actor argument, untransformed",
+    approvedInMemory?.approvedBy === ACTOR,
+    String(approvedInMemory?.approvedBy)
+  );
+  check(
+    "7g. approvedAt is a non-null transition timestamp equal to updatedAt",
+    typeof approvedInMemory?.approvedAt === "string" &&
+      approvedInMemory.approvedAt === approvedInMemory.updatedAt &&
+      Date.parse(approvedInMemory.approvedAt) >= before &&
+      Date.parse(approvedInMemory.approvedAt) <= after,
+    String(approvedInMemory?.approvedAt)
+  );
+  check(
+    "7h. unrelated fields survive the approval transition",
+    approvedInMemory?.id === created.id &&
+      approvedInMemory?.workEmail === created.workEmail &&
+      approvedInMemory?.companyName === created.companyName &&
+      approvedInMemory?.normalizedDomain === created.normalizedDomain &&
+      approvedInMemory?.createdAt === created.createdAt
+  );
+
+  // The stored record — not just the returned copy — must carry it.
+  const reloaded = await memoryAdapter.getSnapshotRequest(created.id);
+  check(
+    "7i. the stored record carries the approval metadata too",
+    reloaded?.approvedBy === ACTOR &&
+      reloaded?.approvedAt === approvedInMemory?.approvedAt
+  );
 
   /* ── 8-19. Founder detail UI contract (static source) ─────────────── */
 

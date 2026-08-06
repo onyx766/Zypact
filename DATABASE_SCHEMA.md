@@ -475,6 +475,23 @@ snapshot_requests(id)` is unchanged and remains `ON DELETE CASCADE`.
 
 ### Rollback note
 
-After migration 0032, promoting an older deployment that writes directly is
-**not** a complete rollback — those writes are permission-denied. A rollback
-also requires restoring the revoked grants, or rolling forward instead.
+**Roll forward with current RPC-only code.** That is the preferred recovery from
+any snapshot-write problem after migration 0032.
+
+Older deployments are not interchangeable rollback targets:
+
+- **Compatibility-era code** supports the RPCs but defaults an absent
+  `SNAPSHOT_REPORT_WRITE_MODE` to `direct`. It may be considered only after
+  Production `SNAPSHOT_REPORT_WRITE_MODE=rpc` is restored **and** a new
+  deployment carrying that value is READY.
+- **Direct-only code** predates RPC write support and has no RPC write path.
+  Restoring the environment variable does not make it safe — it keeps writing
+  directly, and those writes are permission-denied. **Do not promote it or use
+  it as a rollback target.**
+
+Restoring the privileges this migration revoked is **not** a normal rollback or a
+routine workaround. It dismantles the RPC enforcement boundary described above,
+and is a last-resort emergency action requiring explicit founder approval, a
+separately reviewed and controlled migration, and a plan to restore RPC-only
+enforcement afterward. It must never be done through an ad hoc Production
+command. No such migration is planned or authorized.

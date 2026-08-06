@@ -964,9 +964,64 @@ or documentation that contradicts them without explicit founder approval.
   artifact: `finalize_snapshot_request` refuses it by design.
 * Delivery updates bookkeeping only. `mark_snapshot_report_delivered` must
   never change report content or the public token.
-* Promoting an older direct-mode deployment is NOT a complete rollback after
-  migration 0032. Direct writes are permission-denied, so a rollback also
-  requires restoring the revoked grants, or rolling forward instead.
+* The application contains no direct compatibility branch. All three artifact
+  mutation paths call their approved RPC unconditionally.
+
+## Write-mode configuration — final state
+
+`SNAPSHOT_REPORT_WRITE_MODE` is no longer part of normal configuration. It is
+not defined in Production, Preview, or Development, and it does not need to be.
+
+* Absent configuration resolves to `rpc`. That is the only supported mode.
+* `direct` is rejected as a configuration error, as is every other value —
+  including `RPC` and values with surrounding whitespace.
+* The orphaned branch-specific Preview entries left over from the rollout
+  branch have been removed. No branch-scoped environment entry remains.
+
+Do not reintroduce the variable as a required setting, and do not document it
+as pending removal — that work is complete.
+
+## Rollback rules
+
+These still apply and must not be softened. Older deployments fall into two
+different eras, and they are **not** recoverable the same way. Identify which
+era a rollback target belongs to before doing anything with it.
+
+### Compatibility-era code — recoverable, but not by promotion alone
+
+This is code that already supports `rpc` but defaults an absent variable to
+`direct` — the window between the adapter gaining RPC support and PR #11
+removing the direct branches.
+
+* **It defaults an absent variable to `direct`.** Because the variable is now
+  absent everywhere, deploying or promoting such a deployment would select the
+  `direct` path, which migration 0032 blocks.
+* Before deploying or promoting it, Production
+  `SNAPSHOT_REPORT_WRITE_MODE=rpc` must first be restored **and** be present in
+  a new READY deployment. Restoring the variable alone does not affect an
+  already-built deployment.
+
+### Direct-only-era code — not a valid rollback target
+
+This is older code from before RPC write support existed at all.
+
+* **Restoring `SNAPSHOT_REPORT_WRITE_MODE=rpc` does not make it safe.** It has
+  no RPC write path to select, so it keeps attempting direct table DML
+  regardless of configuration.
+* Migration 0032 blocks that direct DML, so its writes fail.
+* **Do not promote such a deployment or use it as a rollback target.** The
+  recovery is to roll forward with current RPC-only code.
+
+### Both eras
+
+* **Rolling forward with a correction is preferred** to any rollback.
+* Restoring the direct privileges revoked by migration 0032 is **not** a normal
+  rollback or an acceptable routine workaround for either era. It dismantles an
+  active security boundary and is a last-resort emergency action requiring
+  explicit founder approval, a separately reviewed and controlled migration, and
+  a documented plan to restore RPC-only enforcement afterward. It must never be
+  done through an ad hoc Production command. No such migration is planned or
+  authorized.
 
 ---
 

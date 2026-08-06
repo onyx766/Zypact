@@ -70,22 +70,70 @@ assertions that abort before `COMMIT` on any failure.
 - Repository `main` synchronized; the rollout branch and three merged legacy
   branches deleted locally and remotely.
 
-## Remaining non-blocking work
+## Follow-up work — completed 2026-08-06
 
-1. **Level 2 BYPASSRLS fidelity.** The disposable harness role is created
-   without `BYPASSRLS`, while the real `service_role` has it. No current
-   assertion is wrong — the denial probes rely on privilege checks, which
-   precede RLS, and the remaining `SET ROLE` sites call `SECURITY DEFINER`
-   RPCs that execute as the owner. The risk is latent: a future direct-write
-   test expecting success could silently pass on zero affected rows.
-2. **Direct compatibility-code removal.** The `direct` branches in the adapter
-   are unreachable in any environment now that 0032 is applied everywhere.
-3. **Write-mode environment variable removal.** Safe only *after* the resolver
-   stops defaulting to `direct`; removing the variable first would select the
-   dead path.
+All three items listed as remaining after the PR #8 rollout are now closed.
+
+1. **Level 2 BYPASSRLS fidelity — done.** The disposable harness created
+   `service_role` without `BYPASSRLS` while the real role has it. No assertion
+   had been wrong, but the gap was a latent trap: a direct write reduced to
+   zero rows by RLS still returns success. The harness role now carries
+   `BYPASSRLS`, a separate non-`BYPASSRLS` role exercises RLS filtering itself,
+   the tautological visibility check was replaced with exact-count assertions,
+   denials are pinned to SQLSTATE `42501`, and a new test demonstrates the
+   silent zero-row false positive end to end. CI: **223 assertions passed, 0
+   failed**.
+2. **Direct compatibility-code removal — done (PR #11).** The three `direct`
+   branches were deleted. Report artifact save, backfill, and delivery each
+   call their approved RPC unconditionally. Runtime direct mutation paths
+   against `snapshot_report_artifacts` and `snapshot_requests`: **0**. The
+   adapter no longer mints public report tokens — the SQL layer owns them.
+   Focused adapter tests: **67 passed, 0 failed**.
+3. **Write-mode environment variable removal — done.** The resolver now treats
+   absent configuration as `rpc` and rejects `direct` and every unsupported
+   value. With that deployed and verified, the Production entry was removed.
+
+## Transitional write-mode cleanup — completed 2026-08-06
+
+- PR #11 merged to `main`; Production deployed automatically from the merge
+  commit and reached READY.
+- All three artifact mutation paths are RPC-only, with no compatibility branch
+  and no fallback.
+- The Production `SNAPSHOT_REPORT_WRITE_MODE` entry was removed. Only the
+  Production-scoped record was deleted; no other environment entry changed.
+- Exactly one same-commit Production redeployment was created afterward, from
+  the identical merge commit, and reached READY. Environment changes apply only
+  to new deployments, so the redeploy is what puts the absence into effect.
+- Production now relies on absent → `rpc` resolution rather than on an
+  explicitly configured mode.
+- The four orphaned branch-specific Preview entries left behind by the deleted
+  rollout branch were removed, each with an exact environment-and-branch
+  selector so that identically named shared entries were not touched. No
+  branch-scoped environment entry remains.
+- Preview and Development define no write-mode entry in any scope.
+- **No database, migration, privilege, route, report, email, AI, scan, worker,
+  or cron action occurred during the environment cleanup.** No environment
+  value was read or printed at any point.
+
+This completes the transitional write-mode cleanup.
 
 ## Rollback
 
-After migration 0032, promoting an older direct-mode deployment is **not** a
-complete rollback — direct writes are permission-denied. A rollback also
-requires restoring the revoked grants, or rolling forward instead.
+Two rules, and they are not interchangeable.
+
+**Promoting or deploying older code is not a free action.** After migration
+0032, an older direct-mode deployment cannot write — direct DML is
+permission-denied. Separately, pre-PR #11 code defaults an *absent* variable to
+`direct`, and the variable is now absent everywhere, so such a deployment would
+select the blocked path. Before deploying or promoting pre-PR #11 code,
+Production `SNAPSHOT_REPORT_WRITE_MODE=rpc` must first be restored **and** be
+present in a new READY deployment; restoring the variable alone does not change
+an already-built deployment. **Rolling forward with a correction is preferred.**
+
+**Restoring the privileges revoked by migration 0032 is not a rollback option.**
+It dismantles an active security boundary: without 0032 the fencing, ownership,
+and delivered-artifact immutability rules enforced inside the RPCs can be
+bypassed by writing to the tables directly. It is a last-resort emergency
+action requiring explicit founder approval, a separately reviewed and controlled
+migration, and a documented plan to restore RPC-only enforcement afterward —
+never an ad hoc Production command. No such migration is planned or authorized.

@@ -325,6 +325,8 @@ export const memoryAdapter: DbAdapter = {
       projectId: null,
       progressStage: null,
       progressUpdatedAt: null,
+      approvedAt: null,
+      approvedBy: null,
       claimedBy: null,
       claimToken: null,
       leaseExpiresAt: null,
@@ -513,9 +515,17 @@ export const memoryAdapter: DbAdapter = {
     // The database implementation records an intermediate
     // approved state inside one transaction. The in-memory
     // adapter exposes only the final queued result.
+    //
+    // Approval metadata is recorded here so the in-memory result matches
+    // the RPC contract: `approve_and_queue_snapshot_request` sets
+    // `approved_at = now()` and `updated_at = now()` in a single UPDATE,
+    // so both share one timestamp. `approvedBy` is the caller's actor
+    // argument, stored verbatim.
     const queuedRequest: SnapshotRequest = {
       ...request,
       status: "queued",
+      approvedAt: now,
+      approvedBy,
       updatedAt: now,
     };
 

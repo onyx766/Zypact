@@ -365,6 +365,16 @@ export interface SnapshotRequest {
   progressStage: SnapshotProgressStage | null;
   progressUpdatedAt: string | null;
   /**
+   * Founder approval metadata (migration 0021). A CHECK constraint keeps
+   * the pair coherent: both null before approval, both non-null after.
+   *
+   * `approvedBy` is the founder's auth user id. It is internal review
+   * metadata — render it only on founder-only surfaces, never on the
+   * public report page.
+   */
+  approvedAt: string | null;
+  approvedBy: string | null;
+  /**
    * Worker ownership. All three are null together for manual CLI runs,
    * and non-null together once a worker holds the request.
    *

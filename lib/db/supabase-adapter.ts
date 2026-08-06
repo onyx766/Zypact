@@ -92,6 +92,8 @@ interface SnapshotRequestDbRow {
   project_id: string | null;
   progress_stage: string | null;
   progress_updated_at: string | null;
+  approved_at: string | null;
+  approved_by: string | null;
   claimed_by: string | null;
   claim_token: string | null;
   lease_expires_at: string | null;
@@ -334,6 +336,10 @@ function mapSnapshotRequest(r: SnapshotRequestDbRow): SnapshotRequest {
       r.progress_stage as SnapshotRequest["progressStage"],
     progressUpdatedAt:
       r.progress_updated_at,
+    // Preserved exactly as stored. Null before approval; never defaulted
+    // to a timestamp or an actor.
+    approvedAt: r.approved_at ?? null,
+    approvedBy: r.approved_by ?? null,
     claimedBy: r.claimed_by ?? null,
     claimToken: r.claim_token ?? null,
     leaseExpiresAt: r.lease_expires_at ?? null,

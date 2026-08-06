@@ -1146,6 +1146,150 @@ assert "20. delivered content unchanged" \
   "$(psql_q "select full_report_markdown from public.snapshot_report_artifacts where snapshot_request_id='${b20}';")" \
   "# full"
 
+# ── Test 21 — artifact survives project deletion (migration 0033) ────────
+#
+# Before 0033 the artifact's project foreign key was ON DELETE CASCADE and
+# 0032 revoked nothing on public.projects, so deleting a project destroyed
+# a delivered report through a table the boundary never covered.
+
+echo
+echo "── Test 21: project deletion cannot destroy a report ────"
+
+assert "21. artifact project FK is ON DELETE RESTRICT" \
+  "$(psql_q "select confdeltype from pg_constraint
+              where conrelid='public.snapshot_report_artifacts'::regclass
+                and conname='snapshot_report_artifacts_project_id_fkey';")" \
+  "r"
+assert "21. artifact request FK still ON DELETE CASCADE" \
+  "$(psql_q "select confdeltype from pg_constraint
+              where conrelid='public.snapshot_report_artifacts'::regclass
+                and conname='snapshot_report_artifacts_snapshot_request_id_fkey';")" \
+  "c"
+
+# A delivered report, built through the approved surface.
+psql_q "delete from public.snapshot_requests;" >/dev/null
+d21="$(seed_queued "t21-delivered" 21)"
+psql_q "select 1 from public.reserve_snapshot_request_project('${d21}');" >/dev/null
+pd21="$(psql_q "select project_id from public.snapshot_requests where id='${d21}';")"
+psql_q "select 1 from public.save_snapshot_report_artifact_manual('${d21}','${pd21}','# full','# short','f.md','s.md',now());" >/dev/null
+psql_q "select 1 from public.update_snapshot_request_progress('${d21}','${pd21}','quality_review');" >/dev/null
+psql_q "select 1 from public.finalize_snapshot_request('${d21}','${pd21}','report_ready');" >/dev/null
+psql_q "select 1 from public.mark_snapshot_report_delivered('${d21}','msg-t21',now(),false);" >/dev/null
+
+assert "21. fixture artifact is delivered" \
+  "$(psql_q "select (delivered_at is not null)::text
+               from public.snapshot_report_artifacts where snapshot_request_id='${d21}';")" \
+  "true"
+
+# The whole point: this delete must fail rather than cascade.
+del21="$(psql_expect_error "delete from public.projects where id='${pd21}';")"
+assert "21. deleting the project is refused while a report exists" \
+  "$([[ "${del21}" != "NO_ERROR" ]] && echo blocked || echo allowed)" \
+  "blocked"
+assert "21. the delivered artifact survived" \
+  "$(psql_q "select count(*) from public.snapshot_report_artifacts where snapshot_request_id='${d21}';")" \
+  "1"
+assert "21. delivered content survived unchanged" \
+  "$(psql_q "select full_report_markdown from public.snapshot_report_artifacts where snapshot_request_id='${d21}';")" \
+  "# full"
+assert "21. the request survived" \
+  "$(psql_q "select status from public.snapshot_requests where id='${d21}';")" \
+  "report_ready"
+
+# service_role keeps DELETE on projects: 0033 changes a constraint, not a grant.
+assert "21. service_role still holds DELETE on public.projects" \
+  "$(psql_q "select has_table_privilege('service_role','public.projects','DELETE')::text;")" \
+  "true"
+# The service_role case needs its own probe rather than psql_expect_error.
+#
+# 0011 enables RLS on public.projects and the schema defines no policies at
+# all. The table owner is exempt (0011 sets `no force row level security`),
+# but this harness creates `service_role` with plain `create role ...
+# nologin` — no BYPASSRLS, unlike the real Supabase role. Under RLS with no
+# policy the row is simply invisible, so a DELETE by id matches zero rows,
+# succeeds trivially, and never reaches the foreign key. An earlier version
+# of this assertion read that silent no-op as "the delete was allowed".
+#
+# This probe records who ran the statement, how many rows it actually
+# removed, and the SQLSTATE, and it runs both without and with BYPASSRLS so
+# the RLS no-op and the real constraint refusal are distinguished rather
+# than conflated. Everything runs inside a transaction that is rolled back,
+# so the fixture is untouched either way.
+t21_probe() {
+  timeout "${PSQL_TIMEOUT}" docker exec -i "${POSTGRES_CONTAINER_ID}" \
+    psql -U "${PG_USER}" -d "${PG_DB}" -v ON_ERROR_STOP=1 -tAq <<SQL
+begin;
+create temp table t21_probe (who text, state text, removed int);
+grant insert on t21_probe to service_role;
+set local role service_role;
+do \$\$
+declare
+  s text := 'NO_ERROR';
+  n integer := 0;
+begin
+  begin
+    with d as (
+      delete from public.projects where id = '$1' returning 1
+    )
+    select count(*) into n from d;
+  exception when others then
+    s := sqlstate;
+  end;
+  insert into t21_probe values (current_user, s, n);
+end
+\$\$;
+reset role;
+select who || '|' || state || '|' || removed from t21_probe;
+rollback;
+SQL
+}
+
+probe_rls="$(t21_probe "${pd21}" | tail -n1)"
+echo "   probe (service_role, no BYPASSRLS): ${probe_rls}"
+assert "21. under RLS service_role deletes zero rows instead of the project" \
+  "${probe_rls}" \
+  "service_role|NO_ERROR|0"
+
+# Match the production role, where service_role holds BYPASSRLS, so the
+# foreign key — not row visibility — has to do the blocking.
+psql_q "alter role service_role bypassrls;" >/dev/null
+probe_fk="$(t21_probe "${pd21}" | tail -n1)"
+psql_q "alter role service_role nobypassrls;" >/dev/null
+echo "   probe (service_role, BYPASSRLS): ${probe_fk}"
+assert "21. service_role sees the row once RLS is bypassed" \
+  "$(cut -d'|' -f1 <<<"${probe_fk}")" \
+  "service_role"
+assert "21. service_role delete on a report-bearing project raises 23503" \
+  "$(cut -d'|' -f2 <<<"${probe_fk}")" \
+  "23503"
+assert "21. service_role delete removed no project row" \
+  "$(cut -d'|' -f3 <<<"${probe_fk}")" \
+  "0"
+assert "21. service_role BYPASSRLS was restored to the harness default" \
+  "$(psql_q "select rolbypassrls::text from pg_roles where rolname='service_role';")" \
+  "false"
+assert "21. the project survived both probes" \
+  "$(psql_q "select count(*) from public.projects where id='${pd21}';")" \
+  "1"
+assert "21. the artifact survived both probes" \
+  "$(psql_q "select count(*) from public.snapshot_report_artifacts where snapshot_request_id='${d21}';")" \
+  "1"
+
+# Normal lifecycle: a project with no artifact is still deletable.
+free21="$(psql_q "insert into public.projects (domain) values ('t21-free.example.invalid') returning id;")"
+assert "21. a project with no report is still deletable" \
+  "$(psql_expect_error "delete from public.projects where id='${free21}';")" \
+  "NO_ERROR"
+
+# Deleting the request still removes its report — that cascade is retained.
+psql_q "delete from public.snapshot_requests where id='${d21}';" >/dev/null
+assert "21. deleting the request still removes its artifact" \
+  "$(psql_q "select count(*) from public.snapshot_report_artifacts where snapshot_request_id='${d21}';")" \
+  "0"
+assert "21. the project is deletable once its report is gone" \
+  "$(psql_expect_error "delete from public.projects where id='${pd21}';")" \
+  "NO_ERROR"
+
 # ── Summary ──────────────────────────────────────────────────────────────
 
 echo

@@ -196,11 +196,37 @@ export const memoryAdapter: DbAdapter = {
     return { ...artifact };
   },
 
+  /**
+   * Insert-only counterpart of the save path. Mirrors the SQL RPC by
+   * refusing when an artifact already exists. Independent of any
+   * environment variable — the write mode is a Supabase-adapter concern.
+   */
+  async insertSnapshotReportArtifactBackfill(
+    input: SaveSnapshotReportArtifactInput
+  ): Promise<SnapshotReportArtifact | null> {
+    if (
+      memorySnapshotReportArtifacts.has(
+        input.snapshotRequestId
+      )
+    ) {
+      return null;
+    }
+
+    return this.saveSnapshotReportArtifact(input);
+  },
+
   async markSnapshotReportDelivered(
     requestId: string,
     messageId: string,
-    deliveredAt: string
+    deliveredAt: string,
+    resend: boolean
   ): Promise<SnapshotReportArtifact | null> {
+    // `resend` is accepted to mirror the adapter interface. The memory
+    // adapter deliberately keeps its prior unconditional behavior so the
+    // existing delivery tests continue to describe the same contract; the
+    // initial-versus-resend precondition is enforced in SQL.
+    void resend;
+
     const existing =
       memorySnapshotReportArtifacts.get(requestId);
 

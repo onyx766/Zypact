@@ -38,6 +38,8 @@ async function main(): Promise<void> {
           new Date().toISOString(),
       });
 
+  assert.ok(saved);
+
   const loaded =
     await memoryAdapter
       .getSnapshotReportArtifact(

@@ -312,7 +312,8 @@ export async function POST(
       await db.markSnapshotReportDelivered(
         requestId,
         delivery.messageId,
-        deliveredAt
+        deliveredAt,
+        body.resend
       );
 
     if (!updated) {

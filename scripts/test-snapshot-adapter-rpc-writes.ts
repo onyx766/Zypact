@@ -3,9 +3,10 @@
  * Adapter RPC write-path tests.
  *
  * Runs entirely against a stubbed Supabase client — no database, no
- * network. Proves the write mode resolves correctly, that RPC mode calls
- * exactly the right function with exactly the right argument names, and
- * that no error path ever falls back to direct table DML.
+ * network. Proves that snapshot report writes are RPC-only: that the
+ * resolver accepts exactly one value, that each adapter method calls its
+ * approved RPC with exactly the right argument names, that no direct table
+ * mutation is reachable, and that no error path falls back to direct DML.
  */
 
 delete process.env.VERCEL_ENV;
@@ -44,18 +45,57 @@ function threw(fn: () => unknown): boolean {
   }
 }
 
+/** The rejection category, or "" when nothing was thrown. */
+function failureOf(fn: () => unknown): string {
+  try {
+    fn();
+    return "";
+  } catch (error) {
+    return error instanceof SnapshotWriteModeConfigurationError
+      ? error.failure
+      : "";
+  }
+}
+
+/** The rejection message, or "" when nothing was thrown. */
+function messageOf(fn: () => unknown): string {
+  try {
+    fn();
+    return "";
+  } catch (error) {
+    return error instanceof Error ? error.message : "";
+  }
+}
+
 /* ── 1-8. Mode resolver ─────────────────────────────────────────────── */
 
-console.log("\nMode resolver");
-check("1. missing value resolves to direct", resolveSnapshotReportWriteMode({}) === "direct");
+console.log("\nMode resolver — RPC is the only supported mode");
 check(
-  "2. blank value resolves to direct",
-  resolveSnapshotReportWriteMode({ SNAPSHOT_REPORT_WRITE_MODE: "" }) === "direct" &&
-    resolveSnapshotReportWriteMode({ SNAPSHOT_REPORT_WRITE_MODE: "   " }) === "direct"
+  "1. missing value resolves to rpc, not direct",
+  resolveSnapshotReportWriteMode({}) === "rpc"
 );
 check(
-  "3. direct resolves to direct",
-  resolveSnapshotReportWriteMode({ SNAPSHOT_REPORT_WRITE_MODE: "direct" }) === "direct"
+  "2. blank value resolves to rpc",
+  resolveSnapshotReportWriteMode({ SNAPSHOT_REPORT_WRITE_MODE: "" }) === "rpc" &&
+    resolveSnapshotReportWriteMode({ SNAPSHOT_REPORT_WRITE_MODE: "   " }) === "rpc"
+);
+check(
+  "3. direct is rejected as a configuration error",
+  threw(() => resolveSnapshotReportWriteMode({ SNAPSHOT_REPORT_WRITE_MODE: "direct" }))
+);
+check(
+  "3b. the direct rejection is categorised, not generic",
+  failureOf(() =>
+    resolveSnapshotReportWriteMode({ SNAPSHOT_REPORT_WRITE_MODE: "direct" })
+  ) === "direct-no-longer-supported"
+);
+check(
+  "3c. the direct message explains that RPC writes are the only path",
+  /no longer supported/i.test(
+    messageOf(() =>
+      resolveSnapshotReportWriteMode({ SNAPSHOT_REPORT_WRITE_MODE: "direct" })
+    )
+  )
 );
 check(
   "4. rpc resolves to rpc",
@@ -79,15 +119,26 @@ for (const padded of [" rpc", "rpc ", " rpc ", " direct "]) {
     threw(() => resolveSnapshotReportWriteMode({ SNAPSHOT_REPORT_WRITE_MODE: padded }))
   );
 }
+check(
+  "7b. an unsupported value never leaks its raw text into the message",
+  !messageOf(() =>
+    resolveSnapshotReportWriteMode({ SNAPSHOT_REPORT_WRITE_MODE: "s3cr3t-typo" })
+  ).includes("s3cr3t-typo")
+);
 
 const originalMode = process.env.SNAPSHOT_REPORT_WRITE_MODE;
 process.env.SNAPSHOT_REPORT_WRITE_MODE = "rpc";
 const first = snapshotReportWriteMode();
-process.env.SNAPSHOT_REPORT_WRITE_MODE = "direct";
+delete process.env.SNAPSHOT_REPORT_WRITE_MODE;
 const second = snapshotReportWriteMode();
 check(
   "8. resolver reads per invocation, not frozen at import",
-  first === "rpc" && second === "direct"
+  first === "rpc" && second === "rpc"
+);
+process.env.SNAPSHOT_REPORT_WRITE_MODE = "direct";
+check(
+  "8b. snapshotReportWriteMode() itself rejects a live direct value",
+  threw(() => snapshotReportWriteMode())
 );
 
 /* ── Supabase client stub ───────────────────────────────────────────── */
@@ -171,8 +222,10 @@ async function main(): Promise<void> {
     generatedAt: "2026-08-05T00:00:00.000Z",
   };
 
+  // There is only one mode left, so `reset` no longer selects one. It sets
+  // the variable to the single supported value; the "configuration is
+  // enforced" block below deliberately sets unsupported values instead.
   function reset(
-    mode: "direct" | "rpc",
     result: { data: unknown; error: unknown } = {
       data: ARTIFACT_ROW,
       error: null,
@@ -181,7 +234,7 @@ async function main(): Promise<void> {
     rpcCalls = [];
     fromCalls = [];
     rpcResult = result;
-    process.env.SNAPSHOT_REPORT_WRITE_MODE = mode;
+    process.env.SNAPSHOT_REPORT_WRITE_MODE = "rpc";
   }
 
   async function captureError(fn: () => Promise<unknown>): Promise<unknown> {
@@ -196,7 +249,7 @@ async function main(): Promise<void> {
   /* ── 9-17. Normal save in RPC mode ──────────────────────────────────── */
 
   console.log("\nNormal save in RPC mode");
-  reset("rpc");
+  reset();
   const saved = await supabaseAdapter.saveSnapshotReportArtifact(SAVE_INPUT);
 
   check(
@@ -231,13 +284,13 @@ async function main(): Promise<void> {
     saved?.id === ARTIFACT_ROW.id && saved?.publicToken === ARTIFACT_ROW.public_token
   );
 
-  reset("rpc", { data: null, error: null });
+  reset({ data: null, error: null });
   check(
     "15. zero returned rows return null",
     (await supabaseAdapter.saveSnapshotReportArtifact(SAVE_INPUT)) === null
   );
 
-  reset("rpc", { data: null, error: { message: "PGRST202 function not found" } });
+  reset({ data: null, error: { message: "PGRST202 function not found" } });
   const saveErr = await captureError(() =>
     supabaseAdapter.saveSnapshotReportArtifact(SAVE_INPUT)
   );
@@ -251,7 +304,7 @@ async function main(): Promise<void> {
   /* ── 18-22. Backfill in RPC mode ────────────────────────────────────── */
 
   console.log("\nBackfill in RPC mode");
-  reset("rpc");
+  reset();
   const backfilled = await supabaseAdapter.insertSnapshotReportArtifactBackfill(SAVE_INPUT);
 
   check(
@@ -280,13 +333,13 @@ async function main(): Promise<void> {
       backfilled?.id === ARTIFACT_ROW.id
   );
 
-  reset("rpc", { data: null, error: null });
+  reset({ data: null, error: null });
   check(
     "21. zero returned rows return null",
     (await supabaseAdapter.insertSnapshotReportArtifactBackfill(SAVE_INPUT)) === null
   );
 
-  reset("rpc", { data: null, error: { message: "boom" } });
+  reset({ data: null, error: { message: "boom" } });
   const backErr = await captureError(() =>
     supabaseAdapter.insertSnapshotReportArtifactBackfill(SAVE_INPUT)
   );
@@ -298,7 +351,7 @@ async function main(): Promise<void> {
   /* ── 23-29. Delivery in RPC mode ────────────────────────────────────── */
 
   console.log("\nDelivery in RPC mode");
-  reset("rpc");
+  reset();
   const delivered = await supabaseAdapter.markSnapshotReportDelivered(
     ARTIFACT_ROW.snapshot_request_id,
     "msg-initial",
@@ -312,7 +365,7 @@ async function main(): Promise<void> {
   );
   check("24. passes p_resend=false for initial delivery", rpcCalls[0].args.p_resend === false);
 
-  reset("rpc");
+  reset();
   await supabaseAdapter.markSnapshotReportDelivered(
     ARTIFACT_ROW.snapshot_request_id,
     "msg-resend",
@@ -328,7 +381,7 @@ async function main(): Promise<void> {
   );
   check("26b. initial delivery mapped a row", delivered?.id === ARTIFACT_ROW.id);
 
-  reset("rpc", { data: null, error: null });
+  reset({ data: null, error: null });
   check(
     "27. zero returned rows return null",
     (await supabaseAdapter.markSnapshotReportDelivered(
@@ -339,7 +392,7 @@ async function main(): Promise<void> {
     )) === null
   );
 
-  reset("rpc", { data: null, error: { message: "network" } });
+  reset({ data: null, error: { message: "network" } });
   const delErr = await captureError(() =>
     supabaseAdapter.markSnapshotReportDelivered(
       ARTIFACT_ROW.snapshot_request_id,
@@ -351,30 +404,80 @@ async function main(): Promise<void> {
   check("28. RPC errors propagate", delErr !== null);
   check("29. RPC errors never fall back to direct update", fromCalls.length === 0);
 
-  /* ── 30-33. Direct mode ─────────────────────────────────────────────── */
+  /* ── 30-33d. Direct mode is gone, not merely unused ─────────────────── */
+  //
+  // The previous version of this block asserted that `direct` was a working
+  // mode. Migration 0032 revoked the privileges it depended on, so those
+  // assertions now describe an impossible state. They are replaced by
+  // assertions that direct mode is unreachable and that misconfiguration
+  // fails loudly rather than silently writing through some other path.
 
-  console.log("\nDirect compatibility mode");
-  reset("direct");
+  console.log("\nDirect mode is rejected, not silently ignored");
+
+  const methods: Array<[string, () => Promise<unknown>]> = [
+    [
+      "saveSnapshotReportArtifact",
+      () => supabaseAdapter.saveSnapshotReportArtifact(SAVE_INPUT),
+    ],
+    [
+      "insertSnapshotReportArtifactBackfill",
+      () => supabaseAdapter.insertSnapshotReportArtifactBackfill(SAVE_INPUT),
+    ],
+    [
+      "markSnapshotReportDelivered",
+      () =>
+        supabaseAdapter.markSnapshotReportDelivered(
+          ARTIFACT_ROW.snapshot_request_id,
+          "m",
+          "2026-08-05T04:00:00.000Z",
+          false
+        ),
+    ],
+  ];
+
+  let n = 30;
+  for (const [name, call] of methods) {
+    reset();
+    process.env.SNAPSHOT_REPORT_WRITE_MODE = "direct";
+    const err = await captureError(call);
+    check(
+      `${n}. ${name} refuses direct configuration`,
+      err instanceof SnapshotWriteModeConfigurationError,
+      err === null ? "no error thrown" : String((err as Error)?.name)
+    );
+    check(
+      `${n}b. ${name} performed no write while misconfigured`,
+      rpcCalls.length === 0 && fromCalls.length === 0,
+      `rpc=${rpcCalls.length} from=${JSON.stringify(fromCalls)}`
+    );
+    n += 1;
+  }
+
+  // Absence must now reach the RPC, which is the behavioural inverse of the
+  // old default. This is the assertion that would fail if the resolver ever
+  // regressed to defaulting to direct.
+  reset();
+  delete process.env.SNAPSHOT_REPORT_WRITE_MODE;
   await supabaseAdapter.saveSnapshotReportArtifact(SAVE_INPUT);
   check(
-    "30. normal save keeps the direct upsert",
-    rpcCalls.length === 0 &&
-      fromCalls.some(
-        (c) => c.table === "snapshot_report_artifacts" && c.op === "upsert"
-      )
+    "33. absent configuration reaches the RPC, never a direct write",
+    rpcCalls.length === 1 &&
+      rpcCalls[0].fn === "save_snapshot_report_artifact_manual" &&
+      fromCalls.length === 0
   );
 
-  reset("direct");
+  reset();
+  delete process.env.SNAPSHOT_REPORT_WRITE_MODE;
   await supabaseAdapter.insertSnapshotReportArtifactBackfill(SAVE_INPUT);
   check(
-    "31. backfill uses the direct compatibility upsert",
-    rpcCalls.length === 0 &&
-      fromCalls.some(
-        (c) => c.table === "snapshot_report_artifacts" && c.op === "upsert"
-      )
+    "33b. absent configuration reaches the backfill RPC",
+    rpcCalls.length === 1 &&
+      rpcCalls[0].fn === "insert_snapshot_report_artifact_backfill" &&
+      fromCalls.length === 0
   );
 
-  reset("direct");
+  reset();
+  delete process.env.SNAPSHOT_REPORT_WRITE_MODE;
   await supabaseAdapter.markSnapshotReportDelivered(
     ARTIFACT_ROW.snapshot_request_id,
     "m",
@@ -382,14 +485,13 @@ async function main(): Promise<void> {
     false
   );
   check(
-    "32. delivery keeps the direct update",
-    rpcCalls.length === 0 &&
-      fromCalls.some(
-        (c) => c.table === "snapshot_report_artifacts" && c.op === "update"
-      )
+    "33c. absent configuration reaches the delivery RPC",
+    rpcCalls.length === 1 &&
+      rpcCalls[0].fn === "mark_snapshot_report_delivered" &&
+      fromCalls.length === 0
   );
   check(
-    "33. no direct mutation of snapshot_requests introduced",
+    "33d. no direct mutation of snapshot_requests introduced",
     !fromCalls.some(
       (c) => c.table === "snapshot_requests" && c.op !== "select"
     )
@@ -408,14 +510,40 @@ async function main(): Promise<void> {
     ),
   ];
   check(
-    "34. every direct artifact mutation sits in a mode-gated branch",
-    artifactMutations.every((m) => {
-      const before = adapter.slice(0, m.index ?? 0);
-      const guard = before.lastIndexOf('snapshotReportWriteMode() === "rpc"');
-      const marker = before.lastIndexOf("direct compatibility branch");
-      return guard >= 0 && marker > guard;
-    }),
-    `${artifactMutations.length} direct artifact mutations`
+    "34. the adapter contains zero direct artifact mutations",
+    artifactMutations.length === 0,
+    `${artifactMutations.length} direct artifact mutations remain`
+  );
+  check(
+    "34b. no mode-gated compatibility branch survives",
+    !/direct compatibility branch/.test(adapter) &&
+      !/snapshotReportWriteMode\(\) === /.test(adapter)
+  );
+  check(
+    "34c. each of the three methods calls its approved RPC",
+    /save_snapshot_report_artifact_manual/.test(adapter) &&
+      /insert_snapshot_report_artifact_backfill/.test(adapter) &&
+      /mark_snapshot_report_delivered/.test(adapter)
+  );
+  check(
+    "34d. the adapter no longer mints public report tokens",
+    !/createPublicReportToken\(/.test(adapter)
+  );
+
+  const writeMode = read("lib/db/snapshot-write-mode.ts");
+  check(
+    "34e. the mode type admits only rpc",
+    /SnapshotReportWriteMode\s*=\s*"rpc"\s*;/.test(writeMode)
+  );
+  check(
+    "34f. the resolver returns rpc for absent configuration",
+    /raw === undefined \|\| raw\.trim\(\) === ""[\s\S]{0,60}return "rpc"/.test(
+      writeMode
+    )
+  );
+  check(
+    "34g. the resolver has no branch returning direct",
+    !/return "direct"/.test(writeMode)
   );
   check(
     "35. no generic error fallback exists",
@@ -472,15 +600,19 @@ async function main(): Promise<void> {
   else process.env.SNAPSHOT_REPORT_WRITE_MODE = originalMode;
 
   console.log("\n─────────────────────────────────────────────────────────");
+  console.log("Snapshot report writes are RPC-only. Direct mode is removed,");
+  console.log("not merely discouraged: migration 0032 revoked the privileges");
+  console.log("it depended on, so a direct write is permission-denied anyway.");
   console.log(
-    "Direct mode is a temporary deployment compatibility path and is not the"
+    "SNAPSHOT_REPORT_WRITE_MODE may be omitted; when present the only"
   );
-  console.log("final security state.");
+  console.log('supported value is exactly "rpc".');
   console.log(
-    "Changing SNAPSHOT_REPORT_WRITE_MODE on Vercel requires a new deployment"
+    "Changing it on Vercel affects only NEW deployments, so the Production"
   );
-  console.log("before the new value takes effect.");
+  console.log("variable must stay in place until this code is deployed.");
   console.log("A generic RPC-to-direct fallback is forbidden.");
+  console.log("These assertions use a stubbed client — no database was used.");
   console.log("─────────────────────────────────────────────────────────");
 
   console.log(`\n${passed} passed, ${failed} failed`);

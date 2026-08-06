@@ -1,5 +1,8 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { createPublicReportToken } from "@/lib/snapshot-requests/public-report-token";
+// `createPublicReportToken` is deliberately not imported here. Public tokens
+// for snapshot report artifacts are owned by the SQL layer: the RPCs issue
+// them on first write and preserve them on every later write. The in-memory
+// adapter still generates its own, because it has no SQL layer.
 import { snapshotReportWriteMode } from "./snapshot-write-mode";
 import type {
   Competitor,
@@ -697,161 +700,59 @@ export const supabaseAdapter: DbAdapter = {
   async saveSnapshotReportArtifact(
     input: SaveSnapshotReportArtifactInput
   ): Promise<SnapshotReportArtifact | null> {
-    const now = new Date().toISOString();
+    // Validates configuration and throws on any unsupported value. RPC is
+    // the only supported mode, so there is nothing to branch on — this is
+    // called for its validating side effect.
+    snapshotReportWriteMode();
 
-    // RPC mode: the SQL function owns the public token, refuses a
-    // delivered artifact, and enforces manual ownership. No fallback —
-    // an error here is never retried as direct DML.
-    if (snapshotReportWriteMode() === "rpc") {
-      const { data, error } = await getClient()
-        .rpc("save_snapshot_report_artifact_manual", {
-          p_request_id: input.snapshotRequestId,
-          p_project_id: input.projectId,
-          p_full_markdown: input.fullReportMarkdown,
-          p_short_markdown: input.shortReportMarkdown,
-          p_full_filename: input.fullReportFilename,
-          p_short_filename: input.shortReportFilename,
-          p_generated_at: input.generatedAt,
-        })
-        .maybeSingle<SnapshotReportArtifactDbRow>();
-
-      if (error) throw error;
-
-      return data
-        ? mapSnapshotReportArtifact(data)
-        : null;
-    }
-
-    // ── direct compatibility branch — delete after 0032 reaches Production
-    const existing =
-      await this.getSnapshotReportArtifact(
-        input.snapshotRequestId
-      );
-
-    const publicToken =
-      existing?.publicToken ??
-      createPublicReportToken();
-
+    // The SQL function owns the public token, refuses a delivered artifact,
+    // and enforces manual ownership. No fallback — an error here is never
+    // retried as direct DML.
     const { data, error } = await getClient()
-      .from("snapshot_report_artifacts")
-      .upsert(
-        {
-          snapshot_request_id:
-            input.snapshotRequestId,
-          project_id: input.projectId,
-          full_report_markdown:
-            input.fullReportMarkdown,
-          short_report_markdown:
-            input.shortReportMarkdown,
-          full_report_filename:
-            input.fullReportFilename,
-          short_report_filename:
-            input.shortReportFilename,
-          generated_at: input.generatedAt,
-          public_token: publicToken,
+      .rpc("save_snapshot_report_artifact_manual", {
+        p_request_id: input.snapshotRequestId,
+        p_project_id: input.projectId,
+        p_full_markdown: input.fullReportMarkdown,
+        p_short_markdown: input.shortReportMarkdown,
+        p_full_filename: input.fullReportFilename,
+        p_short_filename: input.shortReportFilename,
+        p_generated_at: input.generatedAt,
+      })
+      .maybeSingle<SnapshotReportArtifactDbRow>();
 
-          // Regenerating a report makes the new version
-          // undelivered until the founder sends it again.
-          delivered_at: null,
-          delivery_message_id: null,
-          updated_at: now,
-        },
-        {
-          onConflict: "snapshot_request_id",
-        }
-      )
-      .select("*")
-      .single<SnapshotReportArtifactDbRow>();
+    if (error) throw error;
 
-    if (error || !data) {
-      throw (
-        error ??
-        new Error(
-          "saveSnapshotReportArtifact failed"
-        )
-      );
-    }
-
-    return mapSnapshotReportArtifact(data);
+    return data
+      ? mapSnapshotReportArtifact(data)
+      : null;
   },
 
   async insertSnapshotReportArtifactBackfill(
     input: SaveSnapshotReportArtifactInput
   ): Promise<SnapshotReportArtifact | null> {
+    // Validates configuration and throws on any unsupported value.
+    snapshotReportWriteMode();
+
     // Insert-only, and its SQL counterpart requires `report_ready` — the
     // opposite precondition to the normal save path, which is why this is
     // a separate method rather than a flag.
-    if (snapshotReportWriteMode() === "rpc") {
-      const { data, error } = await getClient()
-        .rpc("insert_snapshot_report_artifact_backfill", {
-          p_request_id: input.snapshotRequestId,
-          p_project_id: input.projectId,
-          p_full_markdown: input.fullReportMarkdown,
-          p_short_markdown: input.shortReportMarkdown,
-          p_full_filename: input.fullReportFilename,
-          p_short_filename: input.shortReportFilename,
-          p_generated_at: input.generatedAt,
-        })
-        .maybeSingle<SnapshotReportArtifactDbRow>();
-
-      if (error) throw error;
-
-      return data
-        ? mapSnapshotReportArtifact(data)
-        : null;
-    }
-
-    // ── direct compatibility branch — delete after 0032 reaches Production
-    // Reproduces the upsert the backfill script used before this slice.
-    const existingBackfill =
-      await this.getSnapshotReportArtifact(
-        input.snapshotRequestId
-      );
-
-    const backfillToken =
-      existingBackfill?.publicToken ??
-      createPublicReportToken();
-
-    const backfillNow = new Date().toISOString();
-
     const { data, error } = await getClient()
-      .from("snapshot_report_artifacts")
-      .upsert(
-        {
-          snapshot_request_id:
-            input.snapshotRequestId,
-          project_id: input.projectId,
-          full_report_markdown:
-            input.fullReportMarkdown,
-          short_report_markdown:
-            input.shortReportMarkdown,
-          full_report_filename:
-            input.fullReportFilename,
-          short_report_filename:
-            input.shortReportFilename,
-          generated_at: input.generatedAt,
-          public_token: backfillToken,
-          delivered_at: null,
-          delivery_message_id: null,
-          updated_at: backfillNow,
-        },
-        {
-          onConflict: "snapshot_request_id",
-        }
-      )
-      .select("*")
-      .single<SnapshotReportArtifactDbRow>();
+      .rpc("insert_snapshot_report_artifact_backfill", {
+        p_request_id: input.snapshotRequestId,
+        p_project_id: input.projectId,
+        p_full_markdown: input.fullReportMarkdown,
+        p_short_markdown: input.shortReportMarkdown,
+        p_full_filename: input.fullReportFilename,
+        p_short_filename: input.shortReportFilename,
+        p_generated_at: input.generatedAt,
+      })
+      .maybeSingle<SnapshotReportArtifactDbRow>();
 
-    if (error || !data) {
-      throw (
-        error ??
-        new Error(
-          "insertSnapshotReportArtifactBackfill failed"
-        )
-      );
-    }
+    if (error) throw error;
 
-    return mapSnapshotReportArtifact(data);
+    return data
+      ? mapSnapshotReportArtifact(data)
+      : null;
   },
 
   async markSnapshotReportDelivered(
@@ -860,40 +761,22 @@ export const supabaseAdapter: DbAdapter = {
     deliveredAt: string,
     resend: boolean
   ): Promise<SnapshotReportArtifact | null> {
-    // RPC mode: the SQL function enforces report_ready plus the
-    // initial-versus-resend precondition and touches only bookkeeping.
-    if (snapshotReportWriteMode() === "rpc") {
-      const { data, error } = await getClient()
-        .rpc("mark_snapshot_report_delivered", {
-          p_request_id: requestId,
-          p_message_id: messageId,
-          p_delivered_at: deliveredAt,
-          p_resend: resend,
-        })
-        .maybeSingle<SnapshotReportArtifactDbRow>();
+    // Validates configuration and throws on any unsupported value.
+    snapshotReportWriteMode();
 
-      if (error) throw error;
-
-      return data
-        ? mapSnapshotReportArtifact(data)
-        : null;
-    }
-
-    // ── direct compatibility branch — delete after 0032 reaches Production
+    // The SQL function enforces report_ready plus the initial-versus-resend
+    // precondition and touches only bookkeeping — it never rewrites report
+    // content and never reissues the public token.
     const { data, error } = await getClient()
-      .from("snapshot_report_artifacts")
-      .update({
-        delivered_at: deliveredAt,
-        delivery_message_id: messageId,
-        updated_at: deliveredAt,
+      .rpc("mark_snapshot_report_delivered", {
+        p_request_id: requestId,
+        p_message_id: messageId,
+        p_delivered_at: deliveredAt,
+        p_resend: resend,
       })
-      .eq("snapshot_request_id", requestId)
-      .select("*")
       .maybeSingle<SnapshotReportArtifactDbRow>();
 
-    if (error) {
-      throw error;
-    }
+    if (error) throw error;
 
     return data
       ? mapSnapshotReportArtifact(data)

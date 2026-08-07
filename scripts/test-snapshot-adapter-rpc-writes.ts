@@ -584,9 +584,15 @@ async function main(): Promise<void> {
       ),
     ].length
   );
+  // The persistence call moved out of the CLI script and into the reusable
+  // execution library, so the CLI and a future worker share one path. The
+  // behavior asserted here is unchanged: approved-snapshot execution still
+  // persists the artifact through the adapter.
   check(
-    "39. run-approved-snapshot.ts still calls saveSnapshotReportArtifact",
-    /db\.saveSnapshotReportArtifact\(/.test(read("scripts/run-approved-snapshot.ts"))
+    "39. approved-snapshot execution still calls saveSnapshotReportArtifact",
+    /db\.saveSnapshotReportArtifact\(/.test(
+      read("lib/snapshot-engine/run-approved-snapshot.ts")
+    )
   );
   check(
     "40. no worker runtime added",

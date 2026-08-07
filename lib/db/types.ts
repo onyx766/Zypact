@@ -375,6 +375,14 @@ export interface SnapshotRequest {
   approvedAt: string | null;
   approvedBy: string | null;
   /**
+   * Founder-reviewed competitor frame, stored at approval (migration 0034).
+   *
+   * Empty before approval and for historical rows — never backfilled. A
+   * claimed request carries this list, so a worker resolves its execution
+   * options without a second database read.
+   */
+  competitors: string[];
+  /**
    * Worker ownership. All three are null together for manual CLI runs,
    * and non-null together once a worker holds the request.
    *
@@ -541,9 +549,18 @@ export interface DbAdapter {
   failSnapshotVerificationDelivery(
     requestId: string
   ): Promise<boolean>;
+  /**
+   * Approves a request and queues it in one authoritative operation.
+   *
+   * `competitors` is the founder-reviewed frame. The RPC normalizes and
+   * validates it (minimum 2, maximum 12) and refuses the approval outright
+   * when it is unusable — a queued request is immediately claimable, so it
+   * must already carry its final list.
+   */
   approveAndQueueSnapshotRequest(
     requestId: string,
-    approvedBy: string
+    approvedBy: string,
+    competitors: string[]
   ): Promise<SnapshotRequest | null>;
   reserveSnapshotRequestProject(
     requestId: string

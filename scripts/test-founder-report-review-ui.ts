@@ -194,7 +194,8 @@ async function main(): Promise<void> {
   const refused =
     await memoryAdapter.approveAndQueueSnapshotRequest(
       created.id,
-      ACTOR
+      ACTOR,
+        ["Alpha Analytics", "Beta Insights"]
     );
   const afterRefusal = await memoryAdapter.getSnapshotRequest(
     created.id
@@ -236,7 +237,8 @@ async function main(): Promise<void> {
   const approvedInMemory =
     await memoryAdapter.approveAndQueueSnapshotRequest(
       created.id,
-      ACTOR
+      ACTOR,
+        ["Alpha Analytics", "Beta Insights"]
     );
   const after = Date.now();
 

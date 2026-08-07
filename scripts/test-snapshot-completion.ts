@@ -56,7 +56,8 @@ async function createRunningRequest(
   await memoryAdapter
     .approveAndQueueSnapshotRequest(
       request.id,
-      randomUUID()
+      randomUUID(),
+      ["Alpha Analytics", "Beta Insights"]
     );
 
   const running =

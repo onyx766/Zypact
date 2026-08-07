@@ -313,6 +313,9 @@ export const memoryAdapter: DbAdapter = {
 
     const now = new Date().toISOString();
     const row: SnapshotRequest = {
+      // Empty until founder approval supplies the frame, matching the
+      // column default in migration 0034.
+      competitors: [],
       id: randomUUID(),
       workEmail: input.workEmail,
       normalizedEmail: input.normalizedEmail,
@@ -489,7 +492,8 @@ export const memoryAdapter: DbAdapter = {
 
   async approveAndQueueSnapshotRequest(
     requestId: string,
-    approvedBy: string
+    approvedBy: string,
+    competitors: string[]
   ): Promise<SnapshotRequest | null> {
     const store = getStore();
     const request =
@@ -510,6 +514,41 @@ export const memoryAdapter: DbAdapter = {
       return null;
     }
 
+    // Mirrors `_normalize_snapshot_competitors`: trim, drop blanks,
+    // deduplicate case-insensitively, keep first-seen casing and order.
+    const seen = new Set<string>();
+    const normalized: string[] = [];
+
+    for (const entry of competitors ?? []) {
+      if (typeof entry !== "string") return null;
+
+      const value = entry.trim();
+      if (value === "") continue;
+
+      const key = value.toLowerCase();
+      if (seen.has(key)) continue;
+
+      seen.add(key);
+      normalized.push(value);
+    }
+
+    // The RPC refuses the approval outright rather than queueing a request
+    // whose frame cannot drive a scan.
+    if (normalized.length < 2 || normalized.length > 12) return null;
+
+    for (const value of normalized) {
+      if (value.length > 200) return null;
+
+      if (
+        value.toLowerCase() ===
+          request.companyName.trim().toLowerCase() ||
+        value.toLowerCase() ===
+          request.normalizedDomain.trim().toLowerCase()
+      ) {
+        return null;
+      }
+    }
+
     const now = new Date().toISOString();
 
     // The database implementation records an intermediate
@@ -523,6 +562,7 @@ export const memoryAdapter: DbAdapter = {
     // argument, stored verbatim.
     const queuedRequest: SnapshotRequest = {
       ...request,
+      competitors: normalized,
       status: "queued",
       approvedAt: now,
       approvedBy,

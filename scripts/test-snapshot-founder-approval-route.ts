@@ -58,12 +58,30 @@ async function main() {
     );
   }
 
-  function invoke(requestId: string) {
+  /**
+   * Approval now carries the founder's competitor frame. The default is a
+   * valid two-competitor list so the auth and allowlist cases below are
+   * unchanged — the route checks identity long before it parses this body.
+   * Pass `null` to exercise a missing frame.
+   */
+  function invoke(
+    requestId: string,
+    competitors: string | null =
+      "Alpha Analytics\nBeta Insights"
+  ) {
     return POST(
       new Request(
         `http://localhost/api/internal/snapshot-requests/${requestId}/approve`,
         {
           method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(
+            competitors === null
+              ? {}
+              : { competitors }
+          ),
         }
       ),
       {
@@ -209,6 +227,94 @@ async function main() {
       "pending_approval"
     );
 
+    // The route validates against the STORED company and domain, not
+    // anything the caller sent, so a self-reference is refused with a
+    // useful message rather than a generic failure.
+    const selfCompany = await invoke(
+      request.id,
+      `Alpha Analytics\n${request.companyName}`
+    );
+
+    assert.equal(selfCompany.status, 400);
+
+    assert.equal(
+      (
+        (await selfCompany.json()) as { error?: string }
+      ).error,
+      "competitor_is_scanned_company"
+    );
+
+    const selfDomain = await invoke(
+      request.id,
+      `Alpha Analytics\n${request.normalizedDomain.toUpperCase()}`
+    );
+
+    assert.equal(selfDomain.status, 400);
+
+    assert.equal(
+      (
+        (await selfDomain.json()) as { error?: string }
+      ).error,
+      "competitor_is_scanned_company"
+    );
+
+    // A caller cannot smuggle a different identity to make a self-reference
+    // look valid: the body's company/domain fields are ignored entirely.
+    const spoofed = await POST(
+      new Request(
+        `http://localhost/api/internal/snapshot-requests/${request.id}/approve`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            competitors: `Alpha Analytics\n${request.companyName}`,
+            companyName: "Something Else",
+            normalizedDomain: "elsewhere.example",
+          }),
+        }
+      ),
+      { params: { requestId: request.id } }
+    );
+
+    assert.equal(spoofed.status, 400);
+
+    assert.equal(
+      (
+        (await spoofed.json()) as { error?: string }
+      ).error,
+      "competitor_is_scanned_company"
+    );
+
+    // Approval without a competitor frame is refused, and the request stays
+    // pending_approval so the founder can correct it.
+    const missingCompetitors =
+      await invoke(request.id, null);
+
+    assert.equal(
+      missingCompetitors.status,
+      400
+    );
+
+    assert.equal(
+      (
+        (await missingCompetitors.json()) as {
+          error?: string;
+        }
+      ).error,
+      "competitors_required"
+    );
+
+    assert.equal(
+      (
+        await db.getSnapshotRequest(
+          request.id
+        )
+      )?.status,
+      "pending_approval"
+    );
+
     const approvalResponse =
       await invoke(request.id);
 
@@ -228,6 +334,16 @@ async function main() {
     assert.equal(
       approvalJson.ok,
       true
+    );
+
+    // The approved row carries the normalized frame the founder submitted.
+    assert.deepEqual(
+      (
+        await db.getSnapshotRequest(
+          request.id
+        )
+      )?.competitors,
+      ["Alpha Analytics", "Beta Insights"]
     );
 
     assert.equal(

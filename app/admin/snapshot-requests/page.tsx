@@ -3,7 +3,6 @@ import { requireFounderForPage } from "@/lib/auth/founder";
 import {
   FOUNDER_ADMIN_PATH,
 } from "@/lib/auth/safe-next-path";
-import { ApproveButton } from "./approve-button";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -345,9 +344,27 @@ export default async function SnapshotRequestsAdminPage() {
 
                         {request.status ===
                         "pending_approval" ? (
-                          <ApproveButton
-                            requestId={request.id}
-                          />
+                          // Approval happens on the detail page, which is
+                          // the only place the founder can review and supply
+                          // the competitor frame. Approving from a table row
+                          // would mean approving without that context.
+                          <a
+                            href={`/admin/snapshot-requests/${request.id}`}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              minHeight: 36,
+                              border: 0,
+                              borderRadius: 999,
+                              padding: "0 14px",
+                              background: "#111",
+                              color: "#fff",
+                              textDecoration: "none",
+                              fontWeight: 600,
+                            }}
+                          >
+                            Review
+                          </a>
                         ) : null}
                       </div>
                     </td>

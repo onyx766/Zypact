@@ -34,6 +34,7 @@ import {
 import { generateGapMap } from "@/lib/pipeline/generate-gap-map";
 import { generateFixBrief } from "@/lib/pipeline/generate-fix-brief";
 import { buildMvpReport } from "@/lib/export/build-mvp-report";
+import { resolveModel, resolveProvider } from "@/lib/llm/call-model";
 import {
   applyPromptShortfallPolicy,
   type PromptShortfallPolicy,
@@ -821,6 +822,11 @@ async function exportReport(args: Args, project: Project, outPath: string): Prom
     process.env.PERPLEXITY_API_KEY,
   ].filter((v): v is string => Boolean(v));
 
+  // Resolved once, through the same function the agents route through.
+  // A throw here means the provider configuration is genuinely broken,
+  // which the agent calls would already have surfaced.
+  const reportedProvider = resolveProvider();
+
   const report = buildMvpReport({
     project,
     mirrorProfile,
@@ -833,9 +839,14 @@ async function exportReport(args: Args, project: Project, outPath: string): Prom
     fixBriefs,
     assets,
     latestQaByAsset,
-    llmProvider: process.env.LLM_PROVIDER || (process.env.OPENAI_API_KEY ? "openai" : "mock"),
-    llmModel: process.env.OPENAI_MODEL || process.env.ANTHROPIC_MODEL || "mock",
-    mockMode: process.env.ZYPACT_MOCK_MODE === "on" || (!process.env.OPENAI_API_KEY && !process.env.ANTHROPIC_API_KEY),
+    // Traceability metadata must describe the execution that actually
+    // happened, so it comes from the same resolvers the agents call rather
+    // than a second, independent reading of the environment. The previous
+    // duplicated logic reported `model: mock` for a genuinely live OpenAI
+    // run whenever OPENAI_MODEL was unset — misleading in a real report.
+    llmProvider: reportedProvider,
+    llmModel: resolveModel(reportedProvider),
+    mockMode: reportedProvider === "mock",
     sensitiveValues,
   });
 

@@ -128,7 +128,113 @@ function extractPageContent($: cheerio.CheerioAPI): { title: string; text: strin
   return { title, text: raw, links };
 }
 
+/**
+ * Marker for the one failure class that earns a retry: the homepage fetch
+ * threw at the network/connection layer. An HTTP status response, a
+ * non-HTML body, or an invalid URL are all *answers* — the host exists and
+ * replied — so they are left exactly as they were.
+ */
+const HOMEPAGE_FETCH_FAILED_PREFIX = "Failed to fetch homepage:";
+
+/**
+ * The single alternate host to try when the submitted homepage is
+ * unreachable, or `null` when no safe alternate exists.
+ *
+ * A customer may enter `company.com` when the site is served only from
+ * `www.company.com` (this cost us a real snapshot run). The mapping is
+ * deliberately narrow, in both directions and nothing else:
+ *
+ *     example.com      → www.example.com
+ *     www.example.com  → example.com
+ *
+ * Everything else returns `null`, so:
+ *   - `app.example.com`, `docs.example.com` and any other subdomain are
+ *     never rewritten to a host the customer did not ask for;
+ *   - `www.www.example.com` cannot be produced, because a `www.` host only
+ *     ever has the prefix removed, never added;
+ *   - a multi-label registrable name like `example.co.uk` gets no `www.`
+ *     added, since telling apex from subdomain there needs a public-suffix
+ *     list this function deliberately does not carry. Stripping a leading
+ *     `www.` from it remains safe and is still allowed.
+ *
+ * Safety properties preserved by construction, because only `hostname` is
+ * ever changed:
+ *   - protocol is carried over untouched — an https submission can never
+ *     be retried over http;
+ *   - port, path, query and hash are preserved;
+ *   - IP literals and single-label hosts (`localhost`) get no alternate,
+ *     so an internal target can never be turned into an external one;
+ *   - a URL carrying credentials gets no alternate at all.
+ */
+export function alternateHostCandidate(startUrl: URL): URL | null {
+  if (startUrl.protocol !== "http:" && startUrl.protocol !== "https:") {
+    return null;
+  }
+
+  // Never carry embedded credentials into a second request.
+  if (startUrl.username !== "" || startUrl.password !== "") return null;
+
+  const host = startUrl.hostname.toLowerCase();
+
+  // IPv6 literals arrive bracket-less from `URL.hostname`; both forms and
+  // IPv4 literals are excluded outright.
+  if (host.includes(":") || /^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return null;
+
+  const labels = host.split(".");
+  if (labels.length < 2) return null; // `localhost` and friends.
+  if (labels.some((label) => label === "")) return null;
+
+  let alternateHost: string;
+  if (labels[0] === "www") {
+    alternateHost = labels.slice(1).join(".");
+    if (alternateHost.split(".").length < 2) return null;
+  } else if (labels.length === 2) {
+    alternateHost = `www.${host}`;
+  } else {
+    return null; // Any other subdomain is left alone.
+  }
+
+  const alternate = new URL(startUrl.toString());
+  alternate.hostname = alternateHost;
+  return alternate;
+}
+
+/**
+ * Crawl a site, retrying at most one alternate apex/www host when — and
+ * only when — the homepage itself was unreachable.
+ *
+ * The retry budget is structural rather than a counter: `crawlSiteOnce`
+ * never consults the alternate, and this function calls it at most twice,
+ * so the fallback cannot recurse or chain.
+ */
 export async function crawlSite(input: CrawlSiteInput): Promise<CrawlSiteResult> {
+  const first = await crawlSiteOnce(input);
+  if (first.ok) return first;
+  if (!first.error.startsWith(HOMEPAGE_FETCH_FAILED_PREFIX)) return first;
+
+  let startUrl: URL;
+  try {
+    startUrl = new URL(input.websiteUrl);
+  } catch {
+    return first;
+  }
+
+  const alternate = alternateHostCandidate(startUrl);
+  if (!alternate) return first;
+
+  // Exactly one alternate attempt. `crawlSiteOnce` re-runs the same
+  // protocol and URL validation on this candidate that the original URL
+  // went through — the fallback gets no relaxed path.
+  const second = await crawlSiteOnce({
+    ...input,
+    websiteUrl: alternate.toString(),
+  });
+
+  // A failing alternate must not mask the original diagnosis.
+  return second.ok ? second : first;
+}
+
+async function crawlSiteOnce(input: CrawlSiteInput): Promise<CrawlSiteResult> {
   const maxPages = Math.max(1, Math.floor(input.maxPages));
   const timeoutMs = input.timeoutMs ?? 15_000;
   const userAgent = input.userAgent ?? DEFAULT_UA;

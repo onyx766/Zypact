@@ -3,23 +3,12 @@
 import "dotenv/config";
 
 import {
-  mkdirSync,
-  readFileSync,
-} from "node:fs";
-import {
-  basename,
-  dirname,
-} from "node:path";
-import {
-  spawnSync,
-} from "node:child_process";
-import {
   createClient,
 } from "@supabase/supabase-js";
 
 import {
-  getDb,
-} from "../lib/db";
+  runApprovedSnapshot,
+} from "../lib/snapshot-engine/run-approved-snapshot";
 
 type CliArgs =
   Record<string, string | boolean>;
@@ -432,230 +421,40 @@ async function executeScan(
   args: ParsedArgs,
   request: ApprovedSnapshotRow
 ): Promise<void> {
-  const db = getDb();
-
-  let projectId =
-    request.project_id;
-
-  if (request.status === "queued") {
-    const reserved =
-      await db.reserveSnapshotRequestProject(
-        request.id
-      );
-
-    if (
-      !reserved ||
-      reserved.status !== "running" ||
-      !reserved.projectId
-    ) {
-      fail(
-        "Snapshot project reservation failed."
-      );
-    }
-
-    projectId =
-      reserved.projectId;
-  }
-
-  if (!projectId) {
-    fail(
-      "No reserved project is available."
-    );
-  }
-
-  const reservedProjectId =
-    projectId;
-
-  const shortReportPath =
-    args.out.replace(/\.md$/i, "") +
-    "-short.md";
-
-  mkdirSync(
-    dirname(args.out),
-    {
-      recursive: true,
-    }
-  );
-
-  const command = spawnSync(
-    "npx",
-    [
-      "tsx",
-      "scripts/mvp-scan.ts",
-      "--brand",
-      request.company_name,
-      "--domain",
-      request.website_url,
-      "--category",
-      request.buyer_category,
-      "--competitors",
-      args.competitors.join(","),
-      "--project-id",
-      reservedProjectId,
-      "--probe-mode",
-      args.probeMode,
-      "--budget-usd",
-      String(args.budgetUsd),
-      "--prompts",
-      String(args.prompts),
-      "--runs",
-      String(args.runs),
-      "--out",
-      args.out,
-    ],
-    {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        SNAPSHOT_REQUEST_ID:
-          request.id,
-      },
-      stdio: "inherit",
-    }
-  );
-
-  const markFailed =
-    async (
-      message: string
-    ): Promise<never> => {
-      const failedRequest =
-        await db.finalizeSnapshotRequest(
-          request.id,
-          reservedProjectId,
-          "failed"
-        );
-
-      if (
-        !failedRequest ||
-        failedRequest.status !== "failed"
-      ) {
-        throw new Error(
-          `${message}\nSnapshot failure state could not be recorded.`
-        );
-      }
-
-      throw new Error(message);
-    };
-
-  if (command.error) {
-    await markFailed(
-      command.error.message
-    );
-  }
-
-  if (command.status !== 0) {
-    await markFailed(
-      `MVP runner exited with status ${command.status ?? "unknown"}.`
-    );
-  }
-
-  const shortReportCommand =
-    spawnSync(
-      "npx",
-      [
-        "tsx",
-        "scripts/render-sales-report.ts",
-        args.out,
-        shortReportPath,
-        "--focus-competitors",
-        args.competitors.join(","),
-      ],
+  // Orchestration lives in the reusable library so a future worker can run
+  // the identical flow after claiming a request. This wrapper keeps only the
+  // console output, which is a command-line concern.
+  const result =
+    await runApprovedSnapshot(
       {
-        cwd: process.cwd(),
-        env: process.env,
-        stdio: "inherit",
+        id: request.id,
+        companyName:
+          request.company_name,
+        websiteUrl:
+          request.website_url,
+        buyerCategory:
+          request.buyer_category,
+        status: request.status,
+        projectId:
+          request.project_id,
+      },
+      {
+        competitors:
+          args.competitors,
+        probeMode: args.probeMode,
+        budgetUsd: args.budgetUsd,
+        prompts: args.prompts,
+        runs: args.runs,
+        out: args.out,
       }
     );
-
-  if (shortReportCommand.error) {
-    await markFailed(
-      `Short report renderer failed: ${shortReportCommand.error.message}`
-    );
-  }
-
-  if (shortReportCommand.status !== 0) {
-    await markFailed(
-      `Short report renderer exited with status ${shortReportCommand.status ?? "unknown"}.`
-    );
-  }
-
-  const {
-    fullReportMarkdown,
-    shortReportMarkdown,
-  } = await (async (): Promise<{
-    fullReportMarkdown: string;
-    shortReportMarkdown: string;
-  }> => {
-    try {
-      return {
-        fullReportMarkdown:
-          readFileSync(
-            args.out,
-            "utf-8"
-          ),
-        shortReportMarkdown:
-          readFileSync(
-            shortReportPath,
-            "utf-8"
-          ),
-      };
-    } catch (error) {
-      return markFailed(
-        `Generated report files could not be read: ${
-          error instanceof Error
-            ? error.message
-            : "unknown_error"
-        }`
-      );
-    }
-  })();
-
-  try {
-    await db.saveSnapshotReportArtifact({
-      snapshotRequestId: request.id,
-      projectId: reservedProjectId,
-      fullReportMarkdown,
-      shortReportMarkdown,
-      fullReportFilename:
-        basename(args.out),
-      shortReportFilename:
-        basename(shortReportPath),
-      generatedAt:
-        new Date().toISOString(),
-    });
-  } catch (error) {
-    await markFailed(
-      `Generated reports could not be persisted: ${
-        error instanceof Error
-          ? error.message
-          : "unknown_error"
-      }`
-    );
-  }
-
-  const completedRequest =
-    await db.finalizeSnapshotRequest(
-      request.id,
-      reservedProjectId,
-      "report_ready"
-    );
-
-  if (
-    !completedRequest ||
-    completedRequest.status !==
-      "report_ready"
-  ) {
-    fail(
-      "Snapshot completion could not be recorded."
-    );
-  }
 
   console.log(
     "Approved snapshot runner completed."
   );
 
   console.log(
-    `projectId       : ${reservedProjectId}`
+    `projectId       : ${result.projectId}`
   );
 
   console.log(
@@ -663,11 +462,11 @@ async function executeScan(
   );
 
   console.log(
-    `report path     : ${args.out}`
+    `report path     : ${result.fullReportPath}`
   );
 
   console.log(
-    `short report    : ${shortReportPath}`
+    `short report    : ${result.shortReportPath}`
   );
 }
 

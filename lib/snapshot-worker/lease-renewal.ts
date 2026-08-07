@@ -179,14 +179,30 @@ export class LeaseRenewer {
     }
   }
 
-  start(): void {
-    if (this.handle !== null) return;
+  /**
+   * Prove ownership, then begin renewing.
+   *
+   * The initial renewal is not a formality. Scheduling alone would let the
+   * scan spend money for a full `renewEveryMs` before anything verified the
+   * claim was still ours, so a revoked or already-expired claim would only
+   * surface after the first paid probes. Periodic renewal is scheduled only
+   * after that first call succeeds; a refused or throwing initial renewal
+   * leaves no timer running and ownership permanently lost.
+   */
+  async start(): Promise<LeaseOwnership> {
+    if (this.handle !== null) return this.state;
+    if (!this.state.owned) return this.state;
 
     this.deadlineAt = this.now() + this.config.maxExecutionMs;
+
+    const initial = await this.renewOnce();
+    if (!initial.owned) return initial;
 
     this.handle = this.setIntervalFn(() => {
       void this.renewOnce();
     }, this.config.renewEveryMs);
+
+    return this.state;
   }
 
   stop(): void {
@@ -256,6 +272,39 @@ export class LeaseRenewer {
     this.stop();
     return this.state;
   }
+}
+
+/**
+ * Reserved after the renderer finishes, before the lease window closes.
+ *
+ * The parent still has to collect the child, read both report files, and
+ * perform the fenced completion RPC. All of that must land inside the lease
+ * `mvp-scan` renewed just before it exited, because a lapsed lease means the
+ * completion write is refused after a fully paid scan.
+ */
+export const COMPLETION_SAFETY_MARGIN_MS = 30_000;
+
+/** Ceiling for the renderer itself. Rendering is fast; this is a backstop. */
+export const MAX_RENDERER_TIMEOUT_MS = 120_000;
+
+/**
+ * Renderer timeout derived from the freshly renewed lease.
+ *
+ * Guaranteed for every valid configuration:
+ *
+ *   0 < rendererTimeoutMs
+ *   rendererTimeoutMs + COMPLETION_SAFETY_MARGIN_MS <= leaseSeconds * 1000
+ *
+ * The lower bound holds because `leaseSeconds` is at least 60, so the lease
+ * window is at least 60000ms and always exceeds the 30000ms margin.
+ */
+export function rendererTimeoutMsFor(leaseSeconds: number): number {
+  const leaseWindowMs = leaseSeconds * 1000;
+
+  return Math.min(
+    leaseWindowMs - COMPLETION_SAFETY_MARGIN_MS,
+    MAX_RENDERER_TIMEOUT_MS
+  );
 }
 
 /** Environment channel used by `run-approved-snapshot` to reach the child. */

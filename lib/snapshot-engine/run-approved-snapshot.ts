@@ -35,6 +35,7 @@ import { spawnSync } from "node:child_process";
 import { getDb } from "@/lib/db";
 import {
   LEASE_ENV_KEYS,
+  rendererTimeoutMsFor,
   validateLeaseRenewalConfig,
   type LeaseRenewalConfig,
 } from "@/lib/snapshot-worker/lease-renewal";
@@ -502,7 +503,17 @@ export async function runApprovedSnapshot(
     ],
     {
       cwd: process.cwd(),
+      // No claim token and no lease values: the renderer needs neither, and
+      // it must not carry worker ownership data.
       env: process.env,
+      // Bounded by the lease `mvp-scan` renewed just before exiting. An
+      // unbounded renderer could outlive that lease, letting the fenced
+      // completion write be refused after a fully paid scan.
+      ...(execution.mode === "worker"
+        ? {
+            timeout: rendererTimeoutMsFor(execution.lease.leaseSeconds),
+          }
+        : {}),
       stdio: "inherit",
     }
   );

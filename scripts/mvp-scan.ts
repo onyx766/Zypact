@@ -1154,7 +1154,18 @@ async function main(): Promise<void> {
   const leaseConfig = readLeaseRenewalConfigFromEnv(process.env);
   if (leaseConfig) {
     leaseRenewer = new LeaseRenewer(leaseConfig, { db: getDb() });
-    leaseRenewer.start();
+
+    // Awaited: startup performs a real renewal, so ownership is proven
+    // before a single provider-capable operation begins. A refused or
+    // throwing initial renewal leaves no timer running and stops the scan
+    // here, before any money is spent.
+    const started = await leaseRenewer.start();
+
+    if (!started.owned) {
+      throw new Error(
+        `Worker lease could not be established (${started.reason}): ${started.detail}`
+      );
+    }
   }
 
   const originalMockMode = process.env.ZYPACT_MOCK_MODE;

@@ -17,9 +17,12 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
+  COMPLETION_SAFETY_MARGIN_MS,
   LeaseRenewer,
   LeaseOwnershipLostError,
   LEASE_ENV_KEYS,
+  MAX_RENDERER_TIMEOUT_MS,
+  rendererTimeoutMsFor,
   MAX_LEASE_SECONDS,
   MIN_LEASE_SECONDS,
   readLeaseRenewalConfigFromEnv,
@@ -67,11 +70,13 @@ function makeHarness(
   let tick: (() => void) | null = null;
   let cleared = 0;
 
+  let mode: "ok" | "refused" | "throw" = behavior.result ?? "ok";
+
   const db: LeaseRenewalDb = {
     async renewSnapshotRequestLease(input) {
       calls.push(input);
-      if (behavior.result === "throw") throw new Error("rpc_exploded");
-      if (behavior.result === "refused") return null;
+      if (mode === "throw") throw new Error("rpc_exploded");
+      if (mode === "refused") return null;
       return {} as unknown as SnapshotRequest;
     },
   };
@@ -97,6 +102,17 @@ function makeHarness(
       clock += ms;
     },
     hasTimer: () => tick !== null,
+    /** Invoke the real scheduled callback — never renewOnce() directly. */
+    fireScheduledTick: async (): Promise<void> => {
+      if (!tick) throw new Error("no scheduled callback registered");
+      tick();
+      // The callback is fire-and-forget; drain the microtask queue so its
+      // renewal settles before assertions run.
+      await new Promise((resolve) => setImmediate(resolve));
+    },
+    setMode: (next: "ok" | "refused" | "throw") => {
+      mode = next;
+    },
   };
 }
 
@@ -167,11 +183,10 @@ async function main(): Promise<void> {
   console.log("\nRenewal");
 
   const ok = makeHarness();
-  ok.renewer.start();
-  await ok.renewer.renewOnce();
+  const okStart = await ok.renewer.start();
 
   check(
-    "9. renewal sends the exact request, token, and lease length",
+    "9. startup renewal sends the exact request, token, and lease length",
     JSON.stringify(ok.calls[0]) ===
       JSON.stringify({
         requestId: REQUEST_ID,
@@ -180,7 +195,15 @@ async function main(): Promise<void> {
       }),
     JSON.stringify(ok.calls[0])
   );
-  check("10. ownership is retained", ok.renewer.ownership().owned);
+  check(
+    "10. startup performs exactly one real renewal before anything else",
+    ok.calls.length === 1 && ok.renewer.renewalCount === 1,
+    `calls=${ok.calls.length}`
+  );
+  check(
+    "10a. startup reports retained ownership and arms the timer",
+    okStart.owned && ok.renewer.ownership().owned && ok.hasTimer()
+  );
   check(
     "11. assertOwned does not throw while owned",
     (() => {
@@ -201,12 +224,115 @@ async function main(): Promise<void> {
     `calls=${ok.calls.length} counted=${ok.renewer.renewalCount}`
   );
 
+  /* ── Startup proves ownership before any provider work ────────────── */
+
+  console.log("\nStartup fails closed");
+
+  const startRefused = makeHarness({ result: "refused" });
+  const refusedStart = await startRefused.renewer.start();
+
+  check(
+    "12a. a refused initial renewal fails startup",
+    !refusedStart.owned && refusedStart.reason === "refused"
+  );
+  check(
+    "12b. no periodic schedule is left running after failed startup",
+    !startRefused.hasTimer()
+  );
+  check(
+    "12c. failed startup marks ownership permanently lost",
+    (() => {
+      try {
+        startRefused.renewer.assertOwned();
+        return false;
+      } catch (error) {
+        return error instanceof LeaseOwnershipLostError;
+      }
+    })()
+  );
+  startRefused.setMode("ok");
+  await startRefused.renewer.start();
+  check(
+    "12d. startup cannot be retried after ownership loss",
+    startRefused.calls.length === 1 && !startRefused.hasTimer(),
+    `calls=${startRefused.calls.length}`
+  );
+
+  const startThrew = makeHarness({ result: "throw" });
+  const threwStart = await startThrew.renewer.start();
+
+  check(
+    "12e. a throwing initial renewal fails startup",
+    !threwStart.owned && threwStart.reason === "error"
+  );
+  check(
+    "12f. no schedule is armed and no claim token leaks in the error",
+    !startThrew.hasTimer() &&
+      !threwStart.owned &&
+      !threwStart.detail.includes(CLAIM_TOKEN)
+  );
+
+  /* ── The scheduled callback itself ────────────────────────────────── */
+
+  console.log("\nScheduled periodic callback");
+
+  const sched = makeHarness();
+  await sched.renewer.start();
+  const afterStart = sched.calls.length;
+
+  await sched.fireScheduledTick();
+  check(
+    "12g. the scheduled callback performs a real renewal",
+    sched.calls.length === afterStart + 1,
+    `calls=${sched.calls.length}`
+  );
+
+  await sched.fireScheduledTick();
+  await sched.fireScheduledTick();
+  check(
+    "12h. repeated callback invocation renews repeatedly",
+    sched.calls.length === afterStart + 3 &&
+      sched.renewer.renewalCount === afterStart + 3,
+    `calls=${sched.calls.length}`
+  );
+  check(
+    "12i. every callback renewal carries the same fenced parameters",
+    sched.calls.every(
+      (call) =>
+        call.requestId === REQUEST_ID &&
+        call.claimToken === CLAIM_TOKEN &&
+        call.leaseSeconds === CONFIG.leaseSeconds
+    )
+  );
+
+  sched.setMode("refused");
+  await sched.fireScheduledTick();
+  check(
+    "12j. a refusal reached through the callback loses ownership",
+    !sched.renewer.ownership().owned &&
+      sched.renewer.ownership().owned === false
+  );
+  check(
+    "12k. the callback stops doing useful work after ownership loss",
+    !sched.hasTimer() && sched.clearedCount() === 1
+  );
+
+  const schedThrow = makeHarness();
+  await schedThrow.renewer.start();
+  schedThrow.setMode("throw");
+  await schedThrow.fireScheduledTick();
+  check(
+    "12l. an error reached through the callback loses ownership",
+    !schedThrow.renewer.ownership().owned && !schedThrow.hasTimer()
+  );
+
   /* ── Refusal is terminal ──────────────────────────────────────────── */
 
   console.log("\nRefusal and error are terminal");
 
-  const refused = makeHarness({ result: "refused" });
-  refused.renewer.start();
+  const refused = makeHarness();
+  await refused.renewer.start();
+  refused.setMode("refused");
   const refusedState = await refused.renewer.renewOnce();
 
   check(
@@ -232,12 +358,13 @@ async function main(): Promise<void> {
   await refused.renewer.renewOnce();
   check(
     "16. it never renews again after losing ownership",
-    refused.calls.length === 1,
+    refused.calls.length === 2,
     `calls=${refused.calls.length}`
   );
 
-  const errored = makeHarness({ result: "throw" });
-  errored.renewer.start();
+  const errored = makeHarness();
+  await errored.renewer.start();
+  errored.setMode("throw");
   const erroredState = await errored.renewer.renewOnce();
 
   check(
@@ -251,7 +378,8 @@ async function main(): Promise<void> {
   await errored.renewer.renewOnce();
   check(
     "19. a thrown renewal also stops all further renewal",
-    errored.calls.length === 1
+    errored.calls.length === 2,
+    `calls=${errored.calls.length}`
   );
 
   /* ── Execution ceiling ────────────────────────────────────────────── */
@@ -259,13 +387,14 @@ async function main(): Promise<void> {
   console.log("\nExecution ceiling");
 
   const bounded = makeHarness();
-  bounded.renewer.start();
+  await bounded.renewer.start();
   bounded.advance(CONFIG.maxExecutionMs - 1);
   await bounded.renewer.renewOnce();
 
   check(
     "20. renewal still works just before the ceiling",
-    bounded.renewer.ownership().owned && bounded.calls.length === 1
+    bounded.renewer.ownership().owned && bounded.calls.length === 2,
+    `calls=${bounded.calls.length}`
   );
 
   bounded.advance(2);
@@ -278,7 +407,7 @@ async function main(): Promise<void> {
   );
   check(
     "22. no renewal RPC is sent after the ceiling",
-    bounded.calls.length === 1,
+    bounded.calls.length === 2,
     `calls=${bounded.calls.length}`
   );
   check(
@@ -301,16 +430,17 @@ async function main(): Promise<void> {
   );
 
   const late = makeHarness();
-  late.renewer.start();
+  await late.renewer.start();
+  const afterLateStart = late.calls.length;
   late.advance(CONFIG.maxExecutionMs + 1);
   check(
-    "25. the ceiling is enforced by assertOwned without any renewal call",
+    "25. the ceiling is enforced by assertOwned without a further renewal",
     (() => {
       try {
         late.renewer.assertOwned();
         return false;
       } catch {
-        return late.calls.length === 0;
+        return late.calls.length === afterLateStart;
       }
     })()
   );
@@ -367,6 +497,54 @@ async function main(): Promise<void> {
         return true;
       }
     })()
+  );
+
+  /* ── Renderer lease-window mathematics ────────────────────────────── */
+
+  console.log("\nRenderer timeout stays inside the renewed lease");
+
+  const everyValidLease = Array.from(
+    { length: MAX_LEASE_SECONDS - MIN_LEASE_SECONDS + 1 },
+    (_, i) => MIN_LEASE_SECONDS + i
+  );
+
+  check(
+    "26a. the renderer timeout is positive for every valid lease",
+    everyValidLease.every((seconds) => rendererTimeoutMsFor(seconds) > 0)
+  );
+  check(
+    "26b. renderer timeout + completion margin never exceeds the lease window",
+    everyValidLease.every(
+      (seconds) =>
+        rendererTimeoutMsFor(seconds) + COMPLETION_SAFETY_MARGIN_MS <=
+        seconds * 1000
+    )
+  );
+  check(
+    "26c. the renderer timeout is strictly inside the lease window",
+    everyValidLease.every(
+      (seconds) => rendererTimeoutMsFor(seconds) < seconds * 1000
+    )
+  );
+  check(
+    "26d. the margin cannot collapse to zero at the minimum lease",
+    rendererTimeoutMsFor(MIN_LEASE_SECONDS) === 30_000 &&
+      COMPLETION_SAFETY_MARGIN_MS === 30_000,
+    `renderer=${rendererTimeoutMsFor(MIN_LEASE_SECONDS)}`
+  );
+  check(
+    "26e. long leases are capped by the renderer ceiling, not the lease",
+    rendererTimeoutMsFor(MAX_LEASE_SECONDS) === MAX_RENDERER_TIMEOUT_MS
+  );
+  check(
+    "26f. a longer lease never shortens the renderer window",
+    everyValidLease
+      .slice(1)
+      .every(
+        (seconds, i) =>
+          rendererTimeoutMsFor(seconds) >=
+          rendererTimeoutMsFor(everyValidLease[i])
+      )
   );
 
   /* ── Scope and safety (static) ────────────────────────────────────── */

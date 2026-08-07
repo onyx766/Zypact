@@ -28,6 +28,10 @@ import {
   type ApprovedSnapshotWorkerDb,
   type SpawnResult,
 } from "@/lib/snapshot-engine/run-approved-snapshot";
+import {
+  COMPLETION_SAFETY_MARGIN_MS,
+  rendererTimeoutMsFor,
+} from "@/lib/snapshot-worker/lease-renewal";
 import type {
   SnapshotReportArtifact,
   SnapshotRequest,
@@ -90,6 +94,8 @@ const OPTIONS = {
 
 interface Recorder {
   calls: string[];
+  spawnOptions: Array<{ timeout?: number }>;
+  spawnArgs: string[][];
   spawnEnvs: NodeJS.ProcessEnv[];
   workerCompletions: unknown[];
   workerFailures: unknown[];
@@ -104,6 +110,8 @@ function makeHarness(overrides: {
 } = {}) {
   const rec: Recorder = {
     calls: [],
+    spawnOptions: [],
+    spawnArgs: [],
     spawnEnvs: [],
     workerCompletions: [],
     workerFailures: [],
@@ -168,6 +176,8 @@ function makeHarness(overrides: {
     spawn(_command, args, options) {
       rec.calls.push(`spawn:${args[1]}`);
       rec.spawnEnvs.push(options.env);
+      rec.spawnOptions.push(options);
+      rec.spawnArgs.push(args);
       const result = spawnResults[spawnIndex] ?? { status: 0 };
       spawnIndex += 1;
       return result;
@@ -489,6 +499,142 @@ async function main(): Promise<void> {
     "25. manual child failure still records failure manually",
     mf.rec.calls.includes("manual:finalize:failed") &&
       !mf.rec.calls.some((c) => c.startsWith("worker:"))
+  );
+
+  /* ── 38-46. Lease plan, env, and spawn bounds ─────────────────────── */
+
+  console.log("\nWorker lease plan");
+
+  // Every invalid plan, and a non-running request, must be refused before
+  // a directory is created, a child runs, a file is read, or anything is
+  // written — the same fail-closed bar as the adapter-completeness guard.
+  const badPlans: Array<{ label: string; ctx: unknown }> = [
+    {
+      label: "38. invalid leaseSeconds",
+      ctx: { mode: "worker", claimToken: CLAIM_TOKEN, lease: { ...LEASE, leaseSeconds: 5 } },
+    },
+    {
+      label: "39. invalid renewEveryMs",
+      ctx: { mode: "worker", claimToken: CLAIM_TOKEN, lease: { ...LEASE, renewEveryMs: 0 } },
+    },
+    {
+      label: "40. renewEveryMs with no margin before expiry",
+      ctx: { mode: "worker", claimToken: CLAIM_TOKEN, lease: { ...LEASE, renewEveryMs: 299_000 } },
+    },
+    {
+      label: "41. invalid maxExecutionMs",
+      ctx: { mode: "worker", claimToken: CLAIM_TOKEN, lease: { ...LEASE, maxExecutionMs: 0 } },
+    },
+  ];
+
+  for (const { label, ctx } of badPlans) {
+    const h = makeHarness();
+    const error = await capture(() =>
+      runApprovedSnapshot(
+        CLAIMED_REQUEST,
+        OPTIONS,
+        h.deps,
+        ctx as Parameters<typeof runApprovedSnapshot>[3]
+      )
+    );
+    check(
+      `${label} — refused before any side effect`,
+      error instanceof ApprovedSnapshotExecutionError &&
+        h.rec.calls.length === 0 &&
+        h.rec.workerCompletions.length === 0 &&
+        h.rec.workerFailures.length === 0 &&
+        h.rec.manualSaves.length === 0 &&
+        !(error as Error).message.includes(CLAIM_TOKEN),
+      `${(error as Error)?.constructor?.name}: ${h.rec.calls.join(" → ")}`
+    );
+  }
+
+  const nr = makeHarness();
+  const nonRunningErr = await capture(() =>
+    runApprovedSnapshot(
+      { ...CLAIMED_REQUEST, status: "report_ready" },
+      OPTIONS,
+      nr.deps,
+      { mode: "worker", claimToken: CLAIM_TOKEN, lease: LEASE }
+    )
+  );
+  check(
+    "42. a non-running worker request is refused before any side effect",
+    nonRunningErr instanceof ApprovedSnapshotExecutionError &&
+      /running/.test((nonRunningErr as Error).message) &&
+      nr.rec.calls.length === 0 &&
+      nr.rec.workerCompletions.length === 0 &&
+      nr.rec.workerFailures.length === 0,
+    nr.rec.calls.join(" → ") || "(none)"
+  );
+
+  const wl = makeHarness();
+  await runApprovedSnapshot(CLAIMED_REQUEST, OPTIONS, wl.deps, {
+    mode: "worker",
+    claimToken: CLAIM_TOKEN,
+    lease: LEASE,
+  });
+
+  const scanEnv = wl.rec.spawnEnvs[0];
+  const renderEnv = wl.rec.spawnEnvs[1];
+
+  check(
+    "43. mvp-scan receives the exact claim token and lease plan",
+    scanEnv.SNAPSHOT_CLAIM_TOKEN === CLAIM_TOKEN &&
+      scanEnv.SNAPSHOT_LEASE_SECONDS === String(LEASE.leaseSeconds) &&
+      scanEnv.SNAPSHOT_LEASE_RENEW_EVERY_MS === String(LEASE.renewEveryMs) &&
+      scanEnv.SNAPSHOT_LEASE_MAX_EXECUTION_MS === String(LEASE.maxExecutionMs),
+    JSON.stringify({
+      s: scanEnv.SNAPSHOT_LEASE_SECONDS,
+      r: scanEnv.SNAPSHOT_LEASE_RENEW_EVERY_MS,
+      m: scanEnv.SNAPSHOT_LEASE_MAX_EXECUTION_MS,
+    })
+  );
+  check(
+    "44. the report renderer receives no claim token and no lease values",
+    renderEnv.SNAPSHOT_CLAIM_TOKEN === undefined &&
+      renderEnv.SNAPSHOT_LEASE_SECONDS === undefined &&
+      renderEnv.SNAPSHOT_LEASE_RENEW_EVERY_MS === undefined &&
+      renderEnv.SNAPSHOT_LEASE_MAX_EXECUTION_MS === undefined
+  );
+
+  const scanTimeout = wl.rec.spawnOptions[0].timeout;
+  const renderTimeout = wl.rec.spawnOptions[1].timeout;
+  const leaseWindowMs = LEASE.leaseSeconds * 1000;
+
+  check(
+    "45. the worker mvp-scan child has a finite timeout above its ceiling",
+    typeof scanTimeout === "number" &&
+      Number.isFinite(scanTimeout) &&
+      scanTimeout > LEASE.maxExecutionMs,
+    String(scanTimeout)
+  );
+  check(
+    "46. the worker renderer timeout is finite and inside the renewed lease",
+    typeof renderTimeout === "number" &&
+      Number.isFinite(renderTimeout) &&
+      renderTimeout > 0 &&
+      renderTimeout === rendererTimeoutMsFor(LEASE.leaseSeconds) &&
+      renderTimeout < leaseWindowMs &&
+      renderTimeout + COMPLETION_SAFETY_MARGIN_MS <= leaseWindowMs,
+    `render=${renderTimeout} window=${leaseWindowMs}`
+  );
+
+  const ml = makeHarness();
+  await runApprovedSnapshot(QUEUED_REQUEST, OPTIONS, ml.deps);
+
+  check(
+    "47. manual children carry no lease env and no spawn timeout",
+    ml.rec.spawnEnvs[0].SNAPSHOT_LEASE_SECONDS === undefined &&
+      ml.rec.spawnEnvs[0].SNAPSHOT_CLAIM_TOKEN === undefined &&
+      ml.rec.spawnOptions[0].timeout === undefined &&
+      ml.rec.spawnOptions[1].timeout === undefined,
+    `t0=${ml.rec.spawnOptions[0].timeout} t1=${ml.rec.spawnOptions[1].timeout}`
+  );
+  check(
+    "48. child argument vectors are identical in manual and worker mode",
+    JSON.stringify(ml.rec.spawnArgs) === JSON.stringify(wl.rec.spawnArgs),
+    "argument vectors diverged"
   );
 
   /* ── 26-32. Scope and safety (static) ─────────────────────────────── */

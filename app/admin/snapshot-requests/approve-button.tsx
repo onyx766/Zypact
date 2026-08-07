@@ -31,18 +31,19 @@ export function ApproveButton({
   scannedDomain,
 }: {
   requestId: string;
+  /** Stored frame, prefilled for editing. */
+  competitors: string[];
   /**
-   * Stored frame, prefilled for editing. Optional so the request list can
-   * keep rendering this button unchanged; there the editor simply starts
-   * empty and Approve stays disabled until a valid frame is entered, which
-   * is the same rule the detail page and the RPC enforce.
+   * Scanned identity, required so the self-competitor check can never be
+   * silently skipped at a call site. The RPC always applies this rule; a
+   * caller that could omit these would show "valid" for input the RPC
+   * rejects.
    */
-  competitors?: string[];
-  scannedCompany?: string | null;
-  scannedDomain?: string | null;
+  scannedCompany: string | null;
+  scannedDomain: string | null;
 }) {
   const [text, setText] = useState(
-    competitorsToText(competitors ?? [])
+    competitorsToText(competitors)
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] =

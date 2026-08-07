@@ -419,8 +419,57 @@ async function main(): Promise<void> {
     "47. the mvp-scan hardcoded fallback is unchanged by this PR",
     /"Profound", "Otterly AI"/.test(read("scripts/mvp-scan.ts"))
   );
+  const listPage = read("app/admin/snapshot-requests/page.tsx");
+  const detailPage = read(
+    "app/admin/snapshot-requests/[requestId]/page.tsx"
+  );
+  const approveButton = read(
+    "app/admin/snapshot-requests/approve-button.tsx"
+  );
+
   check(
-    "48. no worker, poller, or claim invocation was added here",
+    "49. the request list no longer renders the approval editor",
+    !/<ApproveButton/.test(listPage) &&
+      !/approve-button/.test(listPage)
+  );
+  check(
+    "50. a pending row instead navigates to its detail page",
+    /Review/.test(listPage) &&
+      /\/admin\/snapshot-requests\/\$\{request\.id\}/.test(listPage)
+  );
+  check(
+    "51. the detail page is the only approval-editor call site",
+    /<ApproveButton/.test(detailPage) &&
+      /textarea/.test(approveButton)
+  );
+  check(
+    "52. the detail page prefills the stored frame",
+    /competitors=\{\s*request\.competitors\s*\}/.test(
+      detailPage.replace(/\n\s*/g, " ").replace(/\s+/g, " ")
+    ) ||
+      /competitors=\{ request\.competitors \}/.test(
+        detailPage.replace(/\n\s*/g, " ").replace(/\s+/g, " ")
+      )
+  );
+  check(
+    "53. the detail page supplies the scanned identity props",
+    /scannedCompany=/.test(detailPage) &&
+      /scannedDomain=/.test(detailPage)
+  );
+  check(
+    "54. identity props are required, so no call site can omit them",
+    /scannedCompany: string \| null;/.test(approveButton) &&
+      /scannedDomain: string \| null;/.test(approveButton) &&
+      !/scannedCompany\?:/.test(approveButton)
+  );
+  check(
+    "55. the route validates against the stored row, not the request body",
+    /db\.getSnapshotRequest\(requestId\)/.test(route) &&
+      /snapshotRequest\.companyName/.test(route) &&
+      /snapshotRequest\.normalizedDomain/.test(route)
+  );
+  check(
+    "56. no worker, poller, or claim invocation was added here",
     !/claimNextSnapshotRequest\(/.test(route) &&
       !/setInterval/.test(route)
   );

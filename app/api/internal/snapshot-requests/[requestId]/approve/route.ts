@@ -145,11 +145,34 @@ export async function POST(
     );
   }
 
+  // Read after authentication and the founder check, never before. The
+  // identity used for self-competitor validation must come from the stored
+  // row — a client-supplied company or domain could be chosen to make a
+  // self-reference look valid here.
+  const db = getDb();
+
+  const snapshotRequest =
+    await db.getSnapshotRequest(requestId);
+
+  if (!snapshotRequest) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "not_found",
+      },
+      { status: 404 }
+    );
+  }
+
   // Parsed at the boundary so the founder gets a precise message instead of
-  // a generic 409. The RPC re-normalizes and re-validates everything and
-  // remains authoritative — browser and route checks are feedback only.
+  // a generic 409, and with the same self-reference rule the RPC applies, so
+  // local feedback cannot say "valid" for input the RPC will reject. This
+  // read is for feedback only: the RPC re-normalizes, re-validates, and
+  // remains authoritative for any state change between here and approval.
   const parsed = parseCompetitorsInput(
-    await readCompetitorsField(request)
+    await readCompetitorsField(request),
+    snapshotRequest.companyName,
+    snapshotRequest.normalizedDomain
   );
 
   if (!parsed.ok) {
@@ -163,7 +186,7 @@ export async function POST(
   }
 
   const approved =
-    await getDb()
+    await db
       .approveAndQueueSnapshotRequest(
         requestId,
         user.id,

@@ -2,16 +2,69 @@
 
 import { useState } from "react";
 
+import {
+  MAX_COMPETITORS,
+  MIN_COMPETITORS,
+  competitorErrorMessage,
+  competitorsToText,
+  normalizeCompetitorInput,
+  parseCompetitorsInput,
+  type CompetitorValidationError,
+} from "@/lib/snapshot-requests/competitors";
+
+/**
+ * Approve a snapshot request, supplying the competitor frame in the same
+ * action.
+ *
+ * There is deliberately no separate Save: a saved-then-approved list opens a
+ * window where the queued request carries something the founder did not
+ * intend, and a queued request is immediately claimable. Approval sends the
+ * final list, and the RPC stores it and queues in one statement.
+ *
+ * Every check here is feedback only. The RPC re-normalizes and re-validates,
+ * and it is what actually decides.
+ */
 export function ApproveButton({
   requestId,
+  competitors,
+  scannedCompany,
+  scannedDomain,
 }: {
   requestId: string;
+  /**
+   * Stored frame, prefilled for editing. Optional so the request list can
+   * keep rendering this button unchanged; there the editor simply starts
+   * empty and Approve stays disabled until a valid frame is entered, which
+   * is the same rule the detail page and the RPC enforce.
+   */
+  competitors?: string[];
+  scannedCompany?: string | null;
+  scannedDomain?: string | null;
 }) {
+  const [text, setText] = useState(
+    competitorsToText(competitors ?? [])
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] =
     useState<string | null>(null);
 
+  const parsed = parseCompetitorsInput(
+    text,
+    scannedCompany,
+    scannedDomain
+  );
+
+  const count =
+    normalizeCompetitorInput(text).length;
+
   async function approve() {
+    if (!parsed.ok) {
+      setError(
+        competitorErrorMessage(parsed.error)
+      );
+      return;
+    }
+
     setBusy(true);
     setError(null);
 
@@ -22,7 +75,11 @@ export function ApproveButton({
           method: "POST",
           headers: {
             accept: "application/json",
+            "content-type": "application/json",
           },
+          body: JSON.stringify({
+            competitors: text,
+          }),
         }
       );
 
@@ -31,9 +88,15 @@ export function ApproveButton({
         .catch(() => null);
 
       if (!response.ok) {
+        const code = payload?.error as
+          | CompetitorValidationError
+          | undefined;
+
         setError(
-          payload?.error ||
-            "Approval failed."
+          code
+            ? competitorErrorMessage(code) ||
+              code
+            : "Approval failed."
         );
         return;
       }
@@ -47,21 +110,69 @@ export function ApproveButton({
   }
 
   return (
-    <div>
+    <div style={{ maxWidth: 420 }}>
+      <label
+        htmlFor="snapshot-competitors"
+        style={{
+          display: "block",
+          marginBottom: 6,
+          fontSize: 13,
+          fontWeight: 600,
+        }}
+      >
+        Competitors
+      </label>
+
+      <p
+        style={{
+          margin: "0 0 6px",
+          fontSize: 12,
+          color: "#555",
+        }}
+      >
+        Add {MIN_COMPETITORS}–{MAX_COMPETITORS}{" "}
+        competitors. One per line. Company names
+        or domains. {count} entered.
+      </p>
+
+      <textarea
+        id="snapshot-competitors"
+        name="competitors"
+        value={text}
+        onChange={(event) => {
+          setText(event.target.value);
+          setError(null);
+        }}
+        rows={6}
+        disabled={busy}
+        style={{
+          width: "100%",
+          marginBottom: 10,
+          padding: 8,
+          border: "1px solid #ccc",
+          borderRadius: 8,
+          fontFamily: "inherit",
+          fontSize: 13,
+        }}
+      />
+
       <button
         type="button"
         onClick={approve}
-        disabled={busy}
+        disabled={busy || !parsed.ok}
         style={{
           minHeight: 36,
           border: 0,
           borderRadius: 999,
           padding: "0 14px",
-          background: "#111",
+          background:
+            busy || !parsed.ok ? "#888" : "#111",
           color: "#fff",
           cursor: busy
             ? "wait"
-            : "pointer",
+            : parsed.ok
+              ? "pointer"
+              : "not-allowed",
           fontWeight: 600,
         }}
       >
@@ -73,7 +184,6 @@ export function ApproveButton({
           role="alert"
           style={{
             margin: "8px 0 0",
-            maxWidth: 180,
             color: "crimson",
             fontSize: 12,
           }}

@@ -58,12 +58,30 @@ async function main() {
     );
   }
 
-  function invoke(requestId: string) {
+  /**
+   * Approval now carries the founder's competitor frame. The default is a
+   * valid two-competitor list so the auth and allowlist cases below are
+   * unchanged — the route checks identity long before it parses this body.
+   * Pass `null` to exercise a missing frame.
+   */
+  function invoke(
+    requestId: string,
+    competitors: string | null =
+      "Alpha Analytics\nBeta Insights"
+  ) {
     return POST(
       new Request(
         `http://localhost/api/internal/snapshot-requests/${requestId}/approve`,
         {
           method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(
+            competitors === null
+              ? {}
+              : { competitors }
+          ),
         }
       ),
       {
@@ -209,6 +227,34 @@ async function main() {
       "pending_approval"
     );
 
+    // Approval without a competitor frame is refused, and the request stays
+    // pending_approval so the founder can correct it.
+    const missingCompetitors =
+      await invoke(request.id, null);
+
+    assert.equal(
+      missingCompetitors.status,
+      400
+    );
+
+    assert.equal(
+      (
+        (await missingCompetitors.json()) as {
+          error?: string;
+        }
+      ).error,
+      "competitors_required"
+    );
+
+    assert.equal(
+      (
+        await db.getSnapshotRequest(
+          request.id
+        )
+      )?.status,
+      "pending_approval"
+    );
+
     const approvalResponse =
       await invoke(request.id);
 
@@ -228,6 +274,16 @@ async function main() {
     assert.equal(
       approvalJson.ok,
       true
+    );
+
+    // The approved row carries the normalized frame the founder submitted.
+    assert.deepEqual(
+      (
+        await db.getSnapshotRequest(
+          request.id
+        )
+      )?.competitors,
+      ["Alpha Analytics", "Beta Insights"]
     );
 
     assert.equal(

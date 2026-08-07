@@ -58,7 +58,8 @@ async function main() {
     await memoryAdapter
       .approveAndQueueSnapshotRequest(
         request.id,
-        randomUUID()
+        randomUUID(),
+        ["Alpha Analytics", "Beta Insights"]
       );
 
   assert.equal(approved?.status, "queued");

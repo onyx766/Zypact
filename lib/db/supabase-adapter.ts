@@ -81,6 +81,7 @@ function getClient(): SupabaseClient {
 
 interface SnapshotRequestDbRow {
   id: string;
+  competitors?: unknown;
   work_email: string;
   normalized_email: string;
   company_name: string;
@@ -320,8 +321,25 @@ function snapshotLimitCodeFromError(
   return null;
 }
 
+/**
+ * Competitor frame from the stored jsonb array.
+ *
+ * Historical rows predate the column and read as `[]`. Anything that is not
+ * an array of strings is treated as absent rather than partially trusted —
+ * the approval RPC is what guarantees a valid stored list, so a malformed
+ * value here means the row was never approved through it.
+ */
+function mapCompetitors(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.every((entry) => typeof entry === "string")
+    ? (value as string[])
+    : [];
+}
+
 function mapSnapshotRequest(r: SnapshotRequestDbRow): SnapshotRequest {
   return {
+    competitors: mapCompetitors(r.competitors),
     id: r.id,
     workEmail: r.work_email,
     normalizedEmail: r.normalized_email,
@@ -913,7 +931,8 @@ export const supabaseAdapter: DbAdapter = {
 
   async approveAndQueueSnapshotRequest(
     requestId: string,
-    approvedBy: string
+    approvedBy: string,
+    competitors: string[]
   ): Promise<SnapshotRequest | null> {
     const { data, error } = await getClient()
       .rpc(
@@ -921,6 +940,7 @@ export const supabaseAdapter: DbAdapter = {
         {
           p_request_id: requestId,
           p_approved_by: approvedBy,
+          p_competitors: competitors,
         }
       )
       .maybeSingle<SnapshotRequestDbRow>();

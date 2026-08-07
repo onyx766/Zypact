@@ -100,7 +100,8 @@ async function main() {
     const approved =
       await db.approveAndQueueSnapshotRequest(
         requestId,
-        randomUUID()
+        randomUUID(),
+        ["Alpha Analytics", "Beta Insights"]
       );
 
     assert.equal(

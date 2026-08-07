@@ -5,6 +5,9 @@ import {
 import {
   authErrorResponse,
 } from "@/lib/auth/route-helpers";
+import {
+  parseCompetitorsInput,
+} from "@/lib/snapshot-requests/competitors";
 import { getDb } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -38,8 +41,19 @@ function founderEmails(): Set<string> {
   );
 }
 
+async function readCompetitorsField(
+  request: Request
+): Promise<unknown> {
+  try {
+    const body = await request.json();
+    return (body as { competitors?: unknown })?.competitors;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function POST(
-  _request: Request,
+  request: Request,
   context: {
     params: {
       requestId: string;
@@ -131,11 +145,29 @@ export async function POST(
     );
   }
 
+  // Parsed at the boundary so the founder gets a precise message instead of
+  // a generic 409. The RPC re-normalizes and re-validates everything and
+  // remains authoritative — browser and route checks are feedback only.
+  const parsed = parseCompetitorsInput(
+    await readCompetitorsField(request)
+  );
+
+  if (!parsed.ok) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: parsed.error,
+      },
+      { status: 400 }
+    );
+  }
+
   const approved =
     await getDb()
       .approveAndQueueSnapshotRequest(
         requestId,
-        user.id
+        user.id,
+        parsed.competitors
       );
 
   if (!approved) {

@@ -400,6 +400,15 @@ export default async function SnapshotRequestDetailPage({
           >
             <ApproveButton
               requestId={request.id}
+              competitors={
+                request.competitors
+              }
+              scannedCompany={
+                request.companyName
+              }
+              scannedDomain={
+                request.normalizedDomain
+              }
             />
 
             <RejectButton

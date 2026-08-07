@@ -492,21 +492,47 @@ async function main(): Promise<void> {
     handledResult.reason === "shutdown" && handledResult.failed === 1
   );
 
-  const lost = makeHarness({
-    claims: [claimedRequest(), null],
+  // `requestMarkedFailed === false` is ambiguous: the engine raises it for
+  // several worker-contract violations as well as for a refused fenced
+  // write. Continuing would let one misconfiguration drain the queue.
+  const unmarked = makeHarness({
+    claims: [claimedRequest(), claimedRequest(), null],
     engineResult: () => Promise.reject(new EngineError(false)),
   });
-  stopAfter(lost, 2);
-  const lostResult = await runSnapshotWorker(lost.deps, lost.shutdown);
+  // Bounded so a regression that keeps polling fails the assertions below
+  // instead of looping forever — the failure must be diagnosable.
+  stopAfter(unmarked, 3);
+  const unmarkedResult = await runSnapshotWorker(
+    unmarked.deps,
+    unmarked.shutdown
+  );
 
   check(
-    "35. ownership loss receives no repair write",
-    !lost.calls.includes("markFailed")
+    "35. an unmarked engine failure performs no outer repair write",
+    !unmarked.calls.includes("markFailed")
   );
   check(
-    "36. ownership loss is logged and polling continues",
-    lost.logs.some((l) => l.event === "ownership_lost") &&
-      lostResult.reason === "shutdown"
+    "36. it halts with systemic_engine_error rather than continuing",
+    unmarkedResult.reason === "systemic_engine_error",
+    unmarkedResult.reason
+  );
+  check(
+    "36a. it is NOT labelled ownership_lost",
+    !unmarked.logs.some((l) => l.event === "ownership_lost") &&
+      unmarked.logs.some(
+        (l) => l.event === "execution_unmarked_failure"
+      ),
+    unmarked.logs.map((l) => l.event).join(",")
+  );
+  check(
+    "36b. QUEUE-DRAIN REGRESSION: exactly one claim, no second request",
+    unmarked.calls.filter((c) => c === "claim").length === 1 &&
+      unmarked.calls.filter((c) => c === "engine").length === 1,
+    unmarked.calls.join(" ")
+  );
+  check(
+    "36c. no attempt is consumed on any further request",
+    unmarkedResult.claimed === 1
   );
 
   const systemic = makeHarness({
@@ -560,7 +586,7 @@ async function main(): Promise<void> {
     ...perm.logs,
     ...refused.logs,
     ...inFlight.logs,
-    ...lost.logs,
+    ...unmarked.logs,
     ...systemic.logs,
     ...backoff.logs,
   ];

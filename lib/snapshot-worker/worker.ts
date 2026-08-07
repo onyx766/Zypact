@@ -77,6 +77,7 @@ export type WorkerLogEvent =
   | "execution_succeeded"
   | "execution_failed"
   | "ownership_lost"
+  | "execution_unmarked_failure"
   | "worker_shutdown_requested"
   | "worker_stopped"
   | "worker_fatal";
@@ -191,10 +192,14 @@ export class ShutdownSignal {
   }
 }
 
-function isOwnershipLost(error: unknown): boolean {
-  // The engine reports, in a typed field, whether it managed to record the
-  // failure itself. `false` means the fenced write was refused — ownership
-  // is gone and any repair from here would be unfenced.
+/**
+ * An engine failure the engine did NOT record.
+ *
+ * Deliberately not called "ownership lost": the engine sets this field to
+ * `false` for several worker-contract violations as well as for a refused
+ * fenced write, and nothing in the typed contract distinguishes them.
+ */
+function isUnmarkedEngineFailure(error: unknown): boolean {
   return (
     typeof error === "object" &&
     error !== null &&
@@ -384,20 +389,35 @@ export async function runSnapshotWorker(
         continue;
       }
 
-      if (isOwnershipLost(error)) {
-        // The fenced write was refused. Any repair from here is unfenced.
+      // `requestMarkedFailed === false` is NOT uniquely ownership loss. The
+      // engine raises it for an empty claim token, an adapter missing fenced
+      // writes, an invalid lease plan, a non-running request, a missing
+      // project, and a refused failure write alike. Treating it as ownership
+      // loss and continuing would let one misconfiguration drain the queue,
+      // consuming an attempt on every valid request without executing any of
+      // them — and terminalizing them after maxAttempts.
+      //
+      // So an unmarked engine failure is ambiguous and fatal. This halts even
+      // on genuine ownership loss, which is the availability cost of not
+      // guessing. A future typed discriminator on the engine error could
+      // narrow it; string-matching the message never will.
+      if (isUnmarkedEngineFailure(error)) {
         deps.log({
-          event: "ownership_lost",
+          event: "execution_unmarked_failure",
           workerId: deps.workerId,
           requestId: claimed.id,
           durationMs,
+          reason: "engine_did_not_record_failure",
         });
-        continue;
+
+        result.reason = "systemic_engine_error";
+        deps.log({ event: "worker_stopped", workerId: deps.workerId });
+        return result;
       }
 
-      // Not an engine-classified failure: the fault may be in the worker
-      // runtime or its configuration, so it is not attributable to this one
-      // request. Halting beats consuming the rest of the queue with it.
+      // Not an engine-classified failure at all: the fault may be in the
+      // worker runtime or its configuration, so it is not attributable to
+      // this one request. Halting beats consuming the rest of the queue.
       deps.log({
         event: "worker_fatal",
         workerId: deps.workerId,

@@ -27,6 +27,10 @@ import { getOrCreateEvidenceBank } from "@/lib/pipeline/get-or-create-evidence-b
 import { runPerplexityProbe } from "@/lib/probes/perplexity";
 import { analyzeProbeResponse } from "@/lib/pipeline/analyze-probe-response";
 import { discoverCompetitors } from "@/lib/pipeline/discover-competitors";
+import {
+  LeaseRenewer,
+  readLeaseRenewalConfigFromEnv,
+} from "@/lib/snapshot-worker/lease-renewal";
 import { generateGapMap } from "@/lib/pipeline/generate-gap-map";
 import { generateFixBrief } from "@/lib/pipeline/generate-fix-brief";
 import { buildMvpReport } from "@/lib/export/build-mvp-report";
@@ -87,6 +91,25 @@ interface PlanSpendEstimate {
 }
 
 const DEFAULT_USER_ID = "a76f133a-b3ef-4440-b418-dddb3e1ea524";
+/**
+ * Worker lease renewal, active only when a parent passed a claim token.
+ *
+ * `runApprovedSnapshot` blocks in `spawnSync`, so this process is the only
+ * place the lease can be kept alive while probes run. Null for manual CLI
+ * runs, which have no lease and behave exactly as before.
+ */
+let leaseRenewer: LeaseRenewer | null = null;
+
+/**
+ * Call immediately before any provider-capable operation. Throws once
+ * ownership is lost, which unwinds the scan and exits non-zero so the
+ * parent can record failure through its fenced worker RPC. A stale write
+ * is never attempted.
+ */
+function assertLeaseOwnership(): void {
+  leaseRenewer?.assertOwned();
+}
+
 const DEFAULT_PROMPTS = 5;
 const DEFAULT_RUNS = 3;
 const DEFAULT_BUDGET_USD = 2;
@@ -550,6 +573,11 @@ async function runMissingProbes(args: Args, project: Project, promptTargets: Gen
         usedMock = true;
         continue;
       }
+
+      // Per-probe, so ownership loss stops the scan at the next probe
+      // rather than after the whole phase. The in-flight call is allowed
+      // to return; that is the bounded waste the policy accepts.
+      assertLeaseOwnership();
 
       const live = await runPerplexityProbe({ prompt: prompt.prompt, brandName, domain: project.domain });
       usedMock = usedMock || live.usedMock;
@@ -1120,6 +1148,26 @@ async function main(): Promise<void> {
     rawArgs.includes("--dry-run"),
     rawArgs.includes("--allow-unguarded-frame"),
   );
+  // Start renewing before any provider-capable work. A throw here is a
+  // configuration error: a claimed run must never proceed without a plan
+  // to keep its lease alive.
+  const leaseConfig = readLeaseRenewalConfigFromEnv(process.env);
+  if (leaseConfig) {
+    leaseRenewer = new LeaseRenewer(leaseConfig, { db: getDb() });
+
+    // Awaited: startup performs a real renewal, so ownership is proven
+    // before a single provider-capable operation begins. A refused or
+    // throwing initial renewal leaves no timer running and stops the scan
+    // here, before any money is spent.
+    const started = await leaseRenewer.start();
+
+    if (!started.owned) {
+      throw new Error(
+        `Worker lease could not be established (${started.reason}): ${started.detail}`
+      );
+    }
+  }
+
   const originalMockMode = process.env.ZYPACT_MOCK_MODE;
   if (args.probeMode === "simulated") process.env.ZYPACT_MOCK_MODE = "on";
 
@@ -1154,6 +1202,8 @@ async function main(): Promise<void> {
     );
 
   if (existingPrompts.length === 0) {
+    assertLeaseOwnership();
+
     await updateSnapshotProgress(
       args,
       "generating_questions"
@@ -1200,6 +1250,8 @@ async function main(): Promise<void> {
     );
   }
 
+  assertLeaseOwnership();
+
   await updateSnapshotProgress(
     args,
     "checking_ai_visibility"
@@ -1210,6 +1262,8 @@ async function main(): Promise<void> {
     project,
     targets
   );
+
+  assertLeaseOwnership();
 
   await updateSnapshotProgress(
     args,
@@ -1233,6 +1287,8 @@ async function main(): Promise<void> {
       project,
       dry.outputPath
     );
+
+  assertLeaseOwnership();
 
   await updateSnapshotProgress(
     args,
@@ -1270,9 +1326,27 @@ async function main(): Promise<void> {
 
   if (originalMockMode === undefined) delete process.env.ZYPACT_MOCK_MODE;
   else process.env.ZYPACT_MOCK_MODE = originalMockMode;
+
+  // Leave the parent a full lease. Once this process exits, nothing renews
+  // again: the parent still has to render the short report and perform the
+  // fenced completion write, and both are refused if the lease has lapsed.
+  if (leaseRenewer) {
+    const finalOwnership = await leaseRenewer.renewOnce();
+    leaseRenewer.stop();
+
+    if (!finalOwnership.owned) {
+      throw new Error(
+        `Worker lease could not be renewed before report handoff (${finalOwnership.reason}): ${finalOwnership.detail}`
+      );
+    }
+  }
 }
 
 main().catch((err) => {
+  // Stop renewing on any failure. A crashed scan must not keep the request
+  // pinned in `running`; letting the lease lapse makes it reclaimable.
+  leaseRenewer?.stop();
+
   if (err instanceof Error) {
     console.error(err.stack || err.message);
   } else {

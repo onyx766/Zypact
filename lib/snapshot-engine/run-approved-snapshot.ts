@@ -33,6 +33,12 @@ import {
 import { spawnSync } from "node:child_process";
 
 import { getDb } from "@/lib/db";
+import {
+  LEASE_ENV_KEYS,
+  rendererTimeoutMsFor,
+  validateLeaseRenewalConfig,
+  type LeaseRenewalConfig,
+} from "@/lib/snapshot-worker/lease-renewal";
 import type {
   SnapshotProgressStage,
   SnapshotReportArtifact,
@@ -83,9 +89,23 @@ export interface ApprovedSnapshotExecutionOptions {
  * `claim_next_snapshot_request`: every manual RPC refuses a row that carries
  * a claim token, so a worker must use the fenced surface instead.
  */
+export type ApprovedSnapshotWorkerLease = Pick<
+  LeaseRenewalConfig,
+  "leaseSeconds" | "renewEveryMs" | "maxExecutionMs"
+>;
+
 export type ApprovedSnapshotExecutionContext =
   | { mode: "manual" }
-  | { mode: "worker"; claimToken: string };
+  | {
+      mode: "worker";
+      claimToken: string;
+      /**
+       * Renewal plan handed to the child. Required: `spawnSync` blocks this
+       * process, so the child is the only place a lease can be kept alive,
+       * and a claimed run without a plan would silently expire mid-scan.
+       */
+      lease: ApprovedSnapshotWorkerLease;
+    };
 
 /**
  * The fenced write surface, required only in worker mode. Declared as a
@@ -108,6 +128,12 @@ export interface ApprovedSnapshotWorkerDb {
  * The three methods a worker run depends on. Listed once so the runtime
  * guard and the error message cannot drift apart.
  */
+/**
+ * Grace added to the child's own execution ceiling before the OS kills it.
+ * The child should stop itself first; this only covers a wedged process.
+ */
+const SPAWN_TIMEOUT_MARGIN_MS = 30_000;
+
 const FENCED_WORKER_WRITES = [
   "updateSnapshotRequestProgressWorker",
   "completeSnapshotReportWorker",
@@ -164,6 +190,12 @@ export interface SpawnOptions {
   cwd: string;
   env: NodeJS.ProcessEnv;
   stdio: "inherit";
+  /**
+   * Wall-clock ceiling, worker mode only. `spawnSync` enforces it in the
+   * OS, which is the only bound available to a blocked parent. Absent for
+   * manual runs, preserving the CLI's previous behavior exactly.
+   */
+  timeout?: number;
 }
 
 export type SpawnRunner = (
@@ -250,6 +282,29 @@ export async function runApprovedSnapshot(
     if (!hasFencedWorkerWrites(workerDbCandidate)) {
       throw new ApprovedSnapshotExecutionError(
         "Worker execution requires an adapter with token-fenced worker writes.",
+        false
+      );
+    }
+
+    const invalidLease = validateLeaseRenewalConfig({
+      requestId: request.id,
+      claimToken: execution.claimToken,
+      ...execution.lease,
+    });
+
+    if (invalidLease) {
+      throw new ApprovedSnapshotExecutionError(
+        `Worker execution requires a valid lease plan: ${invalidLease}`,
+        false
+      );
+    }
+
+    // A claimed request is always `running`; the claim RPC sets it. Anything
+    // else means the caller passed a stale row, and every fenced write would
+    // be refused at the end — after a full paid scan. Cheaper to stop here.
+    if (request.status !== "running") {
+      throw new ApprovedSnapshotExecutionError(
+        `Worker execution requires a running request, not "${request.status}".`,
         false
       );
     }
@@ -361,6 +416,14 @@ export async function runApprovedSnapshot(
     ],
     {
       cwd: process.cwd(),
+      ...(execution.mode === "worker"
+        ? {
+            // Slightly beyond the child's own deadline so its graceful
+            // ownership-loss exit normally wins; this is the backstop for
+            // a child too wedged to honor it.
+            timeout: execution.lease.maxExecutionMs + SPAWN_TIMEOUT_MARGIN_MS,
+          }
+        : {}),
       env: {
         ...process.env,
         SNAPSHOT_REQUEST_ID: request.id,
@@ -369,8 +432,19 @@ export async function runApprovedSnapshot(
         // progress path unchanged. Never logged or written to disk.
         ...(execution.mode === "worker"
           ? {
-              SNAPSHOT_CLAIM_TOKEN: execution.claimToken,
+              [LEASE_ENV_KEYS.claimToken]: execution.claimToken,
               SNAPSHOT_PROJECT_ID: reservedProjectId,
+              // The child renews from here; this parent is blocked in
+              // `spawnSync` and cannot run a timer of its own.
+              [LEASE_ENV_KEYS.leaseSeconds]: String(
+                execution.lease.leaseSeconds
+              ),
+              [LEASE_ENV_KEYS.renewEveryMs]: String(
+                execution.lease.renewEveryMs
+              ),
+              [LEASE_ENV_KEYS.maxExecutionMs]: String(
+                execution.lease.maxExecutionMs
+              ),
             }
           : {}),
       },
@@ -429,7 +503,17 @@ export async function runApprovedSnapshot(
     ],
     {
       cwd: process.cwd(),
+      // No claim token and no lease values: the renderer needs neither, and
+      // it must not carry worker ownership data.
       env: process.env,
+      // Bounded by the lease `mvp-scan` renewed just before exiting. An
+      // unbounded renderer could outlive that lease, letting the fenced
+      // completion write be refused after a fully paid scan.
+      ...(execution.mode === "worker"
+        ? {
+            timeout: rendererTimeoutMsFor(execution.lease.leaseSeconds),
+          }
+        : {}),
       stdio: "inherit",
     }
   );

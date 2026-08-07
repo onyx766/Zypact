@@ -64,7 +64,23 @@ export type Transport = (input: {
 }) => Promise<{ status: number; headers: Record<string, string>; body: string }>;
 
 /** Caps a response body so a hostile server cannot exhaust memory. */
-const MAX_BODY_BYTES = 5_000_000;
+export const MAX_BODY_BYTES = 5_000_000;
+
+/**
+ * Raised when a response exceeds `MAX_BODY_BYTES`.
+ *
+ * This is a distinct type because the first implementation called
+ * `res.destroy()` and returned nothing: `destroy()` emits neither `end`
+ * nor `error`, so the promise never settled and any oversized page stalled
+ * the crawl until the worker's outer execution bound expired. Capping the
+ * body is only useful if exceeding the cap *terminates* the request.
+ */
+export class ResponseTooLargeError extends Error {
+  constructor(limitBytes: number) {
+    super(`Response body exceeded ${limitBytes} bytes`);
+    this.name = "ResponseTooLargeError";
+  }
+}
 
 export const pinnedTransport: Transport = ({
   url,
@@ -75,6 +91,20 @@ export const pinnedTransport: Transport = ({
   new Promise((resolve, reject) => {
     const isHttps = url.protocol === "https:";
     const requestFn = isHttps ? httpsRequest : httpRequest;
+
+    // Every exit path funnels through here. `destroy()` fires neither
+    // `end` nor `error`, and a destroyed socket can still emit `close`
+    // afterwards, so without a guard the promise could hang or settle
+    // twice. Settling exactly once is the invariant.
+    let settled = false;
+    const finish = (
+      outcome: { ok: true; value: Awaited<ReturnType<Transport>> } | { ok: false; error: Error }
+    ): void => {
+      if (settled) return;
+      settled = true;
+      if (outcome.ok) resolve(outcome.value);
+      else reject(outcome.error);
+    };
 
     // The socket asks for an address; it may only ever be given one that
     // already passed validation. This is the enforcement point.
@@ -120,19 +150,33 @@ export const pinnedTransport: Transport = ({
         },
         servername: isHttps ? url.hostname : undefined,
         lookup: pinnedLookup as never,
+        // No connection pooling. Node's global agent keeps sockets alive,
+        // and a pooled socket is reused *without* calling `lookup` — so a
+        // later request to the same host:port would skip the pin entirely.
+        // A fresh socket per request means every connection re-enters
+        // validation and pinning, with no reuse to inherit.
+        agent: false,
         timeout: timeoutMs,
       },
       (res) => {
         const chunks: Buffer[] = [];
         let total = 0;
+
         res.on("data", (chunk: Buffer) => {
+          if (settled) return;
           total += chunk.length;
           if (total > MAX_BODY_BYTES) {
+            // Stop reading, tear the connection down, and settle now —
+            // rather than waiting for an `end` that will never arrive.
+            chunks.length = 0;
             res.destroy();
+            req.destroy();
+            finish({ ok: false, error: new ResponseTooLargeError(MAX_BODY_BYTES) });
             return;
           }
           chunks.push(chunk);
         });
+
         res.on("end", () => {
           const headers: Record<string, string> = {};
           for (const [key, value] of Object.entries(res.headers)) {
@@ -140,20 +184,34 @@ export const pinnedTransport: Transport = ({
               ? value.join(", ")
               : String(value ?? "");
           }
-          resolve({
-            status: res.statusCode ?? 0,
-            headers,
-            body: Buffer.concat(chunks).toString("utf-8"),
+          finish({
+            ok: true,
+            value: {
+              status: res.statusCode ?? 0,
+              headers,
+              body: Buffer.concat(chunks).toString("utf-8"),
+            },
           });
         });
-        res.on("error", reject);
+
+        res.on("error", (err) => finish({ ok: false, error: err }));
+
+        // A response destroyed by anything other than the cap above must
+        // still settle rather than leave the caller waiting.
+        res.on("close", () => {
+          finish({ ok: false, error: new Error("Response closed before completion") });
+        });
       }
     );
 
     req.on("timeout", () => {
+      // `destroy(err)` surfaces through the request's `error` handler,
+      // which settles; the explicit finish keeps that guaranteed even if
+      // the socket was already gone.
       req.destroy(new Error("request timed out"));
+      finish({ ok: false, error: new Error("request timed out") });
     });
-    req.on("error", reject);
+    req.on("error", (err) => finish({ ok: false, error: err }));
     req.end();
   });
 

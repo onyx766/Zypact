@@ -185,11 +185,33 @@ function isPublicIpv6(address: string): boolean {
   return true;
 }
 
+/**
+ * Strips the surrounding brackets WHATWG keeps on IPv6 hosts.
+ *
+ * `new URL("http://[::1]/").hostname` is `"[::1]"`, brackets included, and
+ * `net.isIP("[::1]")` is 0. Without this, no IPv6 literal was ever
+ * recognised as an address: they all fell through to the DNS branch and
+ * were rejected as `dns_resolution_failed`. That failed closed, but it
+ * meant the entire IPv6 classifier — including the IPv4-mapped and NAT64
+ * decoding — was dead code for URL input, and legitimate public IPv6
+ * literals were refused.
+ *
+ * Only an exact leading `[` with matching trailing `]` is removed, so
+ * ordinary hostnames pass through untouched.
+ */
+export function canonicalHost(hostname: string): string {
+  if (hostname.length >= 2 && hostname.startsWith("[") && hostname.endsWith("]")) {
+    return hostname.slice(1, -1);
+  }
+  return hostname;
+}
+
 /** True only for ordinary, globally routable unicast addresses. */
 export function isPublicAddress(address: string): boolean {
-  const family = isIP(address);
-  if (family === 4) return isPublicIpv4(address);
-  if (family === 6) return isPublicIpv6(address);
+  const host = canonicalHost(address);
+  const family = isIP(host);
+  if (family === 4) return isPublicIpv4(host);
+  if (family === 6) return isPublicIpv6(host);
   return false;
 }
 
@@ -278,11 +300,15 @@ export async function validateOutboundUrl(
   const url = assertUrlShapeIsSafe(raw);
 
   // An IP literal needs no resolution; it is already the destination.
-  if (isIP(url.hostname) !== 0) {
-    if (!isPublicAddress(url.hostname)) {
+  // Brackets are removed first so IPv6 literals reach the IPv6 policy
+  // instead of being mistaken for a hostname.
+  const literal = canonicalHost(url.hostname);
+  if (isIP(literal) !== 0) {
+    if (!isPublicAddress(literal)) {
       throw new UnsafeOutboundUrlError("non_public_address");
     }
-    return { url, hostname: url.hostname, addresses: [url.hostname] };
+    // The socket is pinned to the bare address, never the bracketed form.
+    return { url, hostname: url.hostname, addresses: [literal] };
   }
 
   let resolved: Array<{ address: string; family: number }>;

@@ -15,7 +15,14 @@ import {
   validateOutboundUrl,
   type DnsLookup,
 } from "@/lib/crawler/outbound-url-safety";
-import { pinnedTransport, safeFetch, type Transport } from "@/lib/crawler/safe-fetch";
+import {
+  MAX_BODY_BYTES,
+  ResponseTooLargeError,
+  pinnedTransport,
+  safeFetch,
+  type Transport,
+} from "@/lib/crawler/safe-fetch";
+import { createServer } from "node:http";
 import { UNSAFE_DESTINATION_ERROR, crawlSite } from "@/lib/crawler/crawl-site";
 
 let failures = 0;
@@ -323,6 +330,138 @@ async function main(): Promise<void> {
     });
     check("discovered pages also pinned to validated addresses",
       connections.length >= 2 && connections.every((c) => c.addresses.join() === PUBLIC_V4));
+  }
+
+  // ---------- IPv6 literals reach the IPv6 classifier ----------
+  // Before the bracket fix these were rejected as `dns_resolution_failed`,
+  // so the IPv6 policy never ran and a public IPv6 literal was refused.
+  // Asserting the *reason* is the point: rejection alone would still pass
+  // if the classifier were deleted.
+  console.log("\n [IPv6 literals classified, not DNS-failed]");
+  for (const [label, url] of [
+    ["::1", "http://[::1]/"],
+    ["::", "http://[::]/"],
+    ["fe80::1", "http://[fe80::1]/"],
+    ["fc00::1", "http://[fc00::1]/"],
+    ["fd00::1", "http://[fd00::1]/"],
+    ["ff02::1", "http://[ff02::1]/"],
+    ["2001:db8::1 (docs)", "http://[2001:db8::1]/"],
+    ["IPv4-mapped loopback", "http://[::ffff:127.0.0.1]/"],
+    ["IPv4-mapped RFC1918", "http://[::ffff:10.0.0.1]/"],
+    ["NAT64 loopback", "http://[64:ff9b::7f00:1]/"],
+    ["NAT64 RFC1918", "http://[64:ff9b::a00:1]/"],
+  ] as Array<[string, string]>) {
+    await expectRejected(
+      `IPv6 ${label} rejected as non_public_address`,
+      () => validateOutboundUrl(url, dnsOf({})),
+      "non_public_address"
+    );
+  }
+  {
+    // A public IPv6 literal must now be accepted, and pinned to the bare
+    // (unbracketed) address.
+    const d = await validateOutboundUrl(`http://[${PUBLIC_V6}]/`, dnsOf({}));
+    check("public IPv6 literal allowed", d.addresses.join() === PUBLIC_V6);
+    check("public IPv6 literal not bracketed in pinned set", !d.addresses[0].includes("["));
+    check("IPV6_CLASSIFIER_REACHED_FOR_IPV6_LITERAL", isPublicAddress("[::1]") === false);
+  }
+
+  // ---------- pinnedTransport: real socket behaviour ----------
+  // Loopback only; nothing leaves this machine. The hostname is a
+  // `.invalid` name that can never resolve, so if the request reaches the
+  // server it can only be because the custom lookup drove the socket.
+  console.log("\n [pinnedTransport real socket, loopback only]");
+  {
+    const seen: Array<{ host?: string; url?: string }> = [];
+    let mode: "small" | "huge" | "slow" = "small";
+    const server = createServer((req, res) => {
+      seen.push({ host: req.headers.host, url: req.url });
+      res.writeHead(200, { "content-type": "text/html" });
+      if (mode === "small") { res.end("<html><title>t</title></html>"); return; }
+      const chunk = "x".repeat(500_000);
+      const total = MAX_BODY_BYTES + 2_000_000;
+      let written = 0;
+      const pump = (): void => {
+        while (written < total) {
+          written += chunk.length;
+          if (!res.write(chunk)) { res.once("drain", pump); return; }
+          if (mode === "slow") { setTimeout(pump, 5); return; }
+        }
+        res.end();
+      };
+      pump();
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as { port: number }).port;
+    const base = { addresses: ["127.0.0.1"], timeoutMs: 4000, userAgent: "test" };
+
+    // Guarded: if the custom lookup is ever removed, this rejects with
+    // ENOTFOUND and the assertion below reports it, rather than escaping
+    // as an unhandled rejection.
+    let r1: { status: number } | null = null;
+    let pinError = "";
+    try {
+      r1 = await pinnedTransport({ url: new URL(`http://pin-test.invalid:${port}/p?q=1`), ...base });
+    } catch (err) {
+      pinError = (err as Error).message;
+    }
+    check(
+      `socket used the pinned address for an unresolvable host${pinError ? ` (got: ${pinError})` : ""}`,
+      r1?.status === 200
+    );
+    check("Host header preserved (original host:port)", seen[0]?.host === `pin-test.invalid:${port}`);
+    check("path and query preserved", seen[0]?.url === "/p?q=1");
+
+    let refused = false;
+    try {
+      await pinnedTransport({ url: new URL(`http://pin-test.invalid:${port}/`), addresses: [], timeoutMs: 2000, userAgent: "test" });
+    } catch { refused = true; }
+    check("empty validated set refuses, no native DNS fallback", refused);
+
+    // Oversized body must reject promptly, not hang.
+    mode = "huge";
+    const t0 = Date.now();
+    let outcome = "HUNG";
+    await Promise.race([
+      pinnedTransport({ url: new URL(`http://pin-test.invalid:${port}/big`), ...base })
+        .then(() => { outcome = "resolved"; })
+        .catch((e) => { outcome = e instanceof ResponseTooLargeError ? "too-large" : `other:${(e as Error).message}`; }),
+      new Promise((r) => setTimeout(r, 8000)),
+    ]);
+    check("oversized body rejects with ResponseTooLargeError", outcome === "too-large");
+    check("oversized body settles promptly (< 8s harness deadline)", Date.now() - t0 < 8000);
+
+    // Same, delivered slowly in chunks.
+    mode = "slow";
+    let slowOutcome = "HUNG";
+    await Promise.race([
+      pinnedTransport({ url: new URL(`http://pin-test.invalid:${port}/slow`), ...base })
+        .then(() => { slowOutcome = "resolved"; })
+        .catch((e) => { slowOutcome = e instanceof ResponseTooLargeError ? "too-large" : `other:${(e as Error).message}`; }),
+      new Promise((r) => setTimeout(r, 9000)),
+    ]);
+    check("slow oversized body still terminates at the cap", slowOutcome === "too-large");
+
+    // Timeout path: server never responds.
+    const stalled = createServer(() => { /* deliberately no response */ });
+    await new Promise<void>((r) => stalled.listen(0, "127.0.0.1", r));
+    const sport = (stalled.address() as { port: number }).port;
+    let timedOut = "HUNG";
+    await Promise.race([
+      pinnedTransport({ url: new URL(`http://pin-test.invalid:${sport}/`), addresses: ["127.0.0.1"], timeoutMs: 700, userAgent: "test" })
+        .then(() => { timedOut = "resolved"; })
+        .catch((e) => { timedOut = (e as Error).message; }),
+      new Promise((r) => setTimeout(r, 6000)),
+    ]);
+    check("request timeout rejects and settles", timedOut !== "HUNG" && timedOut !== "resolved");
+    stalled.close();
+
+    // Small body still fine after all of the above.
+    mode = "small";
+    const r2 = await pinnedTransport({ url: new URL(`http://pin-test.invalid:${port}/again`), ...base });
+    check("normal body still resolves after cap/timeout paths", r2.status === 200);
+
+    server.close();
   }
 
   console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);

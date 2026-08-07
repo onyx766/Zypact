@@ -46,6 +46,13 @@ function check(name: string, condition: boolean, detail = ""): void {
   }
 }
 
+/** The methods the engine's completeness guard requires. */
+const FENCED_METHODS = [
+  "updateSnapshotRequestProgressWorker",
+  "completeSnapshotReportWorker",
+  "markSnapshotRequestFailedWorker",
+];
+
 const CLAIM_TOKEN = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const PROJECT_ID = "22222222-2222-4222-8222-222222222222";
 
@@ -124,6 +131,14 @@ function makeHarness(overrides: {
   };
 
   const workerDb: ApprovedSnapshotWorkerDb = {
+    // The parent never calls this — `mvp-scan` writes progress from the
+    // child. It is required by the type, and the completeness guard checks
+    // it, so a stub records any unexpected parent-side use.
+    async updateSnapshotRequestProgressWorker(input) {
+      rec.calls.push("worker:progress");
+      void input;
+      return {} as unknown as SnapshotRequest;
+    },
     async completeSnapshotReportWorker(input) {
       rec.calls.push("worker:complete");
       rec.workerCompletions.push(input);
@@ -154,6 +169,7 @@ function makeHarness(overrides: {
       rec.calls.push("mkdir");
     },
     readReportFile(path) {
+      rec.calls.push("read");
       return path.endsWith("-short.md") ? "# short" : "# full";
     },
     now: () => new Date("2026-08-07T00:00:00.000Z"),
@@ -347,6 +363,68 @@ async function main(): Promise<void> {
     !wq.rec.calls.includes("manual:reserve")
   );
 
+  /* ── 34-37. Incomplete worker adapters fail closed ─────────────────── */
+
+  // An adapter may legitimately lack the optional worker methods — the
+  // in-memory adapter lacks all three, and `getDb()` can return it. Each
+  // case must be refused before mkdir, before either child runs, and
+  // before any database write, because a child that has already run has
+  // spent real provider budget.
+  const EXPECTED_GUARD_MESSAGE =
+    "Worker execution requires an adapter with token-fenced worker writes.";
+
+  const partialAdapters: Array<{ label: string; omit: string[] }> = [
+    { label: "34. all three missing", omit: FENCED_METHODS },
+    {
+      label: "35. only updateSnapshotRequestProgressWorker missing",
+      omit: ["updateSnapshotRequestProgressWorker"],
+    },
+    {
+      label: "36. only completeSnapshotReportWorker missing",
+      omit: ["completeSnapshotReportWorker"],
+    },
+    {
+      label: "37. only markSnapshotRequestFailedWorker missing",
+      omit: ["markSnapshotRequestFailedWorker"],
+    },
+  ];
+
+  for (const { label, omit } of partialAdapters) {
+    const h = makeHarness();
+    const partial = { ...(h.workerDb as unknown as Record<string, unknown>) };
+    for (const method of omit) delete partial[method];
+
+    const error = await capture(() =>
+      runApprovedSnapshot(
+        CLAIMED_REQUEST,
+        OPTIONS,
+        {
+          ...h.deps,
+          workerDb: partial as unknown as ApprovedSnapshotWorkerDb,
+        },
+        { mode: "worker", claimToken: CLAIM_TOKEN }
+      )
+    );
+
+    const err = error as Error;
+
+    check(
+      `${label} — fails closed with a typed, token-free error`,
+      err instanceof ApprovedSnapshotExecutionError &&
+        err.message === EXPECTED_GUARD_MESSAGE &&
+        !err.message.includes(CLAIM_TOKEN),
+      `${err?.constructor?.name}: ${err?.message}`
+    );
+    check(
+      `${label} — no directory, child, read, or database write occurred`,
+      h.rec.calls.length === 0 &&
+        h.rec.workerCompletions.length === 0 &&
+        h.rec.workerFailures.length === 0 &&
+        h.rec.manualSaves.length === 0,
+      h.rec.calls.join(" → ") || "(none)"
+    );
+  }
+
   /* ── 18-24. Manual mode is unchanged ──────────────────────────────── */
 
   console.log("\nManual mode — unchanged");
@@ -450,11 +528,31 @@ async function main(): Promise<void> {
     !/console\.[a-z]+\([^)]*claimToken/i.test(executable(lib)) &&
       !/console\.[a-z]+\([^)]*CLAIM_TOKEN/i.test(executable(scan))
   );
+  // `mvp-scan` runs in a child process, so its routing cannot be driven
+  // through stubs here. A presence-only check is not enough: disabling the
+  // branch (`claimToken ? …` → `false ? …`) leaves every name in place and
+  // silently sends worker progress to the manual RPC. These pin the actual
+  // routing decision — the condition, the fenced consequent, and the manual
+  // alternate — against whitespace-normalized executable source.
+  const scanRouting = executable(scan).replace(/\s+/g, " ");
   check(
-    "30. mvp-scan uses the fenced progress RPC only when a token exists",
-    /SNAPSHOT_CLAIM_TOKEN/.test(scan) &&
-      /updateSnapshotRequestProgressWorker/.test(scan) &&
-      /updateSnapshotRequestProgress\(/.test(scan)
+    "30. mvp-scan reads the claim token from the child environment",
+    /const claimToken = process\.env\.SNAPSHOT_CLAIM_TOKEN\?\.trim\(\)/.test(
+      scanRouting
+    )
+  );
+  check(
+    "30a. the fenced progress RPC is gated on that token, not a constant",
+    /const updated = claimToken \? await db\.updateSnapshotRequestProgressWorker\?\.\(/.test(
+      scanRouting
+    ),
+    scanRouting.match(/const updated =.{0,60}/)?.[0] ?? "not found"
+  );
+  check(
+    "30b. the manual progress RPC remains the untokenized alternate",
+    /\) : await db\.updateSnapshotRequestProgress\( requestId, args\.projectId, stage \)/.test(
+      scanRouting
+    )
   );
   check(
     "31. the CLI file was not modified by this change",

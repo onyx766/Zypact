@@ -93,7 +93,7 @@ export type ApprovedSnapshotExecutionContext =
  * though the methods are optional on the shared adapter interface.
  */
 export interface ApprovedSnapshotWorkerDb {
-  updateSnapshotRequestProgressWorker?(
+  updateSnapshotRequestProgressWorker(
     input: SnapshotWorkerProgressInput
   ): Promise<SnapshotRequest | null>;
   completeSnapshotReportWorker(
@@ -102,6 +102,36 @@ export interface ApprovedSnapshotWorkerDb {
   markSnapshotRequestFailedWorker(
     input: SnapshotWorkerFailureInput
   ): Promise<SnapshotRequest | null>;
+}
+
+/**
+ * The three methods a worker run depends on. Listed once so the runtime
+ * guard and the error message cannot drift apart.
+ */
+const FENCED_WORKER_WRITES = [
+  "updateSnapshotRequestProgressWorker",
+  "completeSnapshotReportWorker",
+  "markSnapshotRequestFailedWorker",
+] as const;
+
+/**
+ * Runtime narrowing for the fenced write surface.
+ *
+ * `getDb()` is typed `DbAdapter`, where all three methods are optional —
+ * the in-memory adapter has none of them. A cast cannot detect that, so
+ * this predicate is what establishes the type, and it must run before any
+ * side effect. Nothing downstream may assert the shape instead.
+ */
+function hasFencedWorkerWrites(
+  candidate: unknown
+): candidate is ApprovedSnapshotWorkerDb {
+  if (typeof candidate !== "object" || candidate === null) return false;
+
+  const methods = candidate as Record<string, unknown>;
+
+  return FENCED_WORKER_WRITES.every(
+    (method) => typeof methods[method] === "function"
+  );
 }
 
 export interface ApprovedSnapshotDb {
@@ -195,19 +225,52 @@ export async function runApprovedSnapshot(
   execution: ApprovedSnapshotExecutionContext = { mode: "manual" }
 ): Promise<ApprovedSnapshotResult> {
   const db = deps.db ?? getDb();
-  const workerDb =
-    deps.workerDb ??
-    (db as unknown as ApprovedSnapshotWorkerDb);
 
-  if (
-    execution.mode === "worker" &&
-    execution.claimToken.trim() === ""
-  ) {
-    throw new ApprovedSnapshotExecutionError(
-      "Worker execution requires a claim token.",
-      false
-    );
+  // Deliberately `unknown`: the effective worker adapter is unverified
+  // until `hasFencedWorkerWrites` narrows it below. Typing it as the
+  // worker interface here would reintroduce the unchecked assumption this
+  // guard exists to remove.
+  const workerDbCandidate: unknown = deps.workerDb ?? db;
+
+  let fencedWorkerDb: ApprovedSnapshotWorkerDb | null = null;
+
+  if (execution.mode === "worker") {
+    if (execution.claimToken.trim() === "") {
+      throw new ApprovedSnapshotExecutionError(
+        "Worker execution requires a claim token.",
+        false
+      );
+    }
+
+    // Must precede ensureDirectory, spawn, readReportFile, and every
+    // database write. A missing method used to surface as a raw TypeError
+    // only after both children had run at full provider cost, which also
+    // destroyed the original error and stranded the request in `running`
+    // until its lease expired.
+    if (!hasFencedWorkerWrites(workerDbCandidate)) {
+      throw new ApprovedSnapshotExecutionError(
+        "Worker execution requires an adapter with token-fenced worker writes.",
+        false
+      );
+    }
+
+    fencedWorkerDb = workerDbCandidate;
   }
+
+  // Worker mode cannot reach here with a null value: the guard above
+  // either assigned it or threw. This keeps the call sites free of
+  // non-null assertions without asserting the shape a second time.
+  const workerDb = (): ApprovedSnapshotWorkerDb => {
+    if (!fencedWorkerDb) {
+      throw new ApprovedSnapshotExecutionError(
+        "Worker execution requires an adapter with token-fenced worker writes.",
+        false
+      );
+    }
+
+    return fencedWorkerDb;
+  };
+
   const spawn: SpawnRunner =
     deps.spawn ??
     ((command, args, spawnOptions) =>
@@ -323,7 +386,7 @@ export async function runApprovedSnapshot(
     // leave the request stranded in `running` until its lease expired.
     const failedRequest =
       execution.mode === "worker"
-        ? await workerDb.markSnapshotRequestFailedWorker({
+        ? await workerDb().markSnapshotRequestFailedWorker({
             requestId: request.id,
             projectId: reservedProjectId,
             claimToken: execution.claimToken,
@@ -409,7 +472,7 @@ export async function runApprovedSnapshot(
 
     try {
       completedArtifact =
-        await workerDb.completeSnapshotReportWorker({
+        await workerDb().completeSnapshotReportWorker({
           requestId: request.id,
           projectId: reservedProjectId,
           claimToken: execution.claimToken,

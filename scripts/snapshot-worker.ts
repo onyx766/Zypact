@@ -15,6 +15,8 @@
  */
 
 import { randomBytes } from "node:crypto";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { getDb } from "@/lib/db";
 import { runApprovedSnapshot } from "@/lib/snapshot-engine/run-approved-snapshot";
@@ -153,14 +155,43 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch(() => {
-  console.log(
-    JSON.stringify({
-      ts: new Date().toISOString(),
-      level: "error",
-      event: "worker_fatal",
-      reason: "startup_failed",
-    })
-  );
-  process.exitCode = 1;
-});
+/**
+ * Is this module the program being run, rather than one being imported?
+ *
+ * Importing this file must never start a worker. Without this guard the
+ * module's top-level call ran on import: it evaluated the startup gate,
+ * wrote worker logs, mutated `process.exitCode`, and — with the cost
+ * estimate configured — would have reached `getDb()` and begun polling the
+ * live queue. Any test, tool, or bundler that touched the module could have
+ * started the worker.
+ *
+ * Compares resolved file URLs rather than matching on the filename, so a
+ * different file that merely ends in the same name is not mistaken for this
+ * one. Exported to be testable without executing anything.
+ */
+export function isDirectExecution(
+  argv1: string | undefined,
+  moduleUrl: string
+): boolean {
+  if (typeof argv1 !== "string" || argv1.trim() === "") return false;
+
+  try {
+    return pathToFileURL(resolve(argv1)).href === moduleUrl;
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectExecution(process.argv[1], import.meta.url)) {
+  main().catch(() => {
+    console.log(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        level: "error",
+        event: "worker_fatal",
+        reason: "startup_failed",
+      })
+    );
+    process.exitCode = 1;
+  });
+}

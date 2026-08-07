@@ -14,6 +14,7 @@ delete process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
   ERROR_BACKOFF_MS,
@@ -28,7 +29,10 @@ import {
   type WorkerLogFields,
 } from "@/lib/snapshot-worker/worker";
 import { WorkerExecutionOptionsError } from "@/lib/snapshot-worker/execution-options";
-import { costEstimateIsConfigured } from "@/scripts/snapshot-worker";
+import {
+  costEstimateIsConfigured,
+  isDirectExecution,
+} from "@/scripts/snapshot-worker";
 import type { SnapshotRequest } from "@/lib/db/types";
 
 let passed = 0;
@@ -305,6 +309,9 @@ async function main(): Promise<void> {
       "projectId"
     ),
   });
+  // Bounded so a mutation removing the halt fails the assertions below
+  // instead of polling forever.
+  stopAfter(impossible, 3);
   const impResult = await runSnapshotWorker(
     impossible.deps,
     impossible.shutdown
@@ -539,6 +546,7 @@ async function main(): Promise<void> {
     claims: [claimedRequest(), null],
     engineResult: () => Promise.reject(new TypeError("undefined is not a fn")),
   });
+  stopAfter(systemic, 3);
   const sysResult = await runSnapshotWorker(systemic.deps, systemic.shutdown);
 
   check(
@@ -672,6 +680,70 @@ async function main(): Promise<void> {
   check(
     "67. package.json is not modified for the worker",
     !/snapshot-worker\.ts/.test(read("package.json"))
+  );
+
+  /* ── Entrypoint import safety ─────────────────────────────────────── */
+
+  console.log("\nEntrypoint import safety");
+
+  const entrySource = read("scripts/snapshot-worker.ts");
+
+  check(
+    "68. main() is not called unconditionally at module top level",
+    !/^main\(\)\.catch\(/m.test(entrySource) &&
+      /if \(isDirectExecution\(process\.argv\[1\], import\.meta\.url\)\)/.test(
+        entrySource
+      )
+  );
+  check(
+    "69. importing this test did not mutate process.exitCode",
+    process.exitCode === undefined || process.exitCode === 0,
+    String(process.exitCode)
+  );
+  check(
+    "70. the guard treats a matching program path as direct execution",
+    isDirectExecution(
+      join(process.cwd(), "scripts/snapshot-worker.ts"),
+      pathToFileURL(
+        join(process.cwd(), "scripts/snapshot-worker.ts")
+      ).href
+    )
+  );
+  check(
+    "71. an importing module's path is NOT direct execution",
+    !isDirectExecution(
+      join(process.cwd(), "scripts/test-snapshot-worker.ts"),
+      pathToFileURL(
+        join(process.cwd(), "scripts/snapshot-worker.ts")
+      ).href
+    )
+  );
+  check(
+    "72. a missing or blank argv[1] is not direct execution",
+    !isDirectExecution(undefined, "file:///anything") &&
+      !isDirectExecution("", "file:///anything") &&
+      !isDirectExecution("   ", "file:///anything")
+  );
+  check(
+    "73. a same-named file elsewhere is not direct execution",
+    !isDirectExecution(
+      "/somewhere/else/snapshot-worker.ts",
+      pathToFileURL(
+        join(process.cwd(), "scripts/snapshot-worker.ts")
+      ).href
+    )
+  );
+  check(
+    "74. the guard is decided independently of the cost gate",
+    !/costEstimate[^\n]*isDirectExecution|isDirectExecution[^\n]*costEstimate/.test(
+      entrySource
+    )
+  );
+  check(
+    "75. getDb and the controller are only reached inside main()",
+    /async function main\(\)[\s\S]*getDb\(\)[\s\S]*runSnapshotWorker\(/.test(
+      entrySource
+    ) && !/^const db = getDb\(\)/m.test(entrySource)
   );
 
   console.log("\n─────────────────────────────────────────────────────────");

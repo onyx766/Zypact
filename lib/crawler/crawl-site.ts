@@ -1,5 +1,11 @@
 import * as cheerio from "cheerio";
 
+import {
+  UnsafeOutboundUrlError,
+  type DnsLookup,
+} from "@/lib/crawler/outbound-url-safety";
+import { safeFetch, type SafeFetchResponse, type Transport } from "@/lib/crawler/safe-fetch";
+
 /**
  * Minimal Sprint 1 crawler.
  *
@@ -41,6 +47,13 @@ export interface CrawlSiteInput {
   timeoutMs?: number;
   /** Fetch user-agent. */
   userAgent?: string;
+  /**
+   * Injected DNS/transport seams. Production supplies neither, so every
+   * crawl goes through the real validating, address-pinned path; tests
+   * drive the policy without touching a network.
+   */
+  dnsLookup?: DnsLookup;
+  transport?: Transport;
 }
 
 export type CrawlSiteResult =
@@ -91,21 +104,21 @@ function looksLikeAsset(u: URL): boolean {
   return NON_CONTENT_EXT.test(u.pathname);
 }
 
-async function fetchWithTimeout(url: string, timeoutMs: number, userAgent: string): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, {
-      signal: controller.signal,
-      redirect: "follow",
-      headers: {
-        "user-agent": userAgent,
-        accept: "text/html,application/xhtml+xml",
-      },
-    });
-  } finally {
-    clearTimeout(timer);
-  }
+/**
+ * Every outbound request the crawler makes goes through here.
+ *
+ * `safeFetch` validates protocol, credentials, hostname, and resolved
+ * addresses, then pins the socket to those addresses and revalidates each
+ * redirect hop. There is no unvalidated path left in this file.
+ */
+async function fetchPage(
+  url: string,
+  timeoutMs: number,
+  userAgent: string,
+  dnsLookup: DnsLookup | undefined,
+  transport: Transport | undefined
+): Promise<SafeFetchResponse> {
+  return safeFetch(url, { timeoutMs, userAgent, dnsLookup, transport });
 }
 
 function extractPageContent($: cheerio.CheerioAPI): { title: string; text: string; links: string[] } {
@@ -135,6 +148,14 @@ function extractPageContent($: cheerio.CheerioAPI): { title: string; text: strin
  * replied — so they are left exactly as they were.
  */
 const HOMEPAGE_FETCH_FAILED_PREFIX = "Failed to fetch homepage:";
+
+/**
+ * Customer-facing text for a destination the outbound policy refused.
+ * Deliberately free of resolved addresses, hostnames, and credentials: it
+ * says the destination was rejected, not what it resolved to.
+ */
+export const UNSAFE_DESTINATION_ERROR =
+  "Website could not be crawled: the address is not a public internet destination";
 
 /**
  * The single alternate host to try when the submitted homepage is
@@ -273,22 +294,37 @@ async function crawlSiteOnce(input: CrawlSiteInput): Promise<CrawlSiteResult> {
 
     let html: string;
     try {
-      const res = await fetchWithTimeout(key, timeoutMs, userAgent);
+      const res = await fetchPage(
+        key,
+        timeoutMs,
+        userAgent,
+        input.dnsLookup,
+        input.transport
+      );
       if (!res.ok) {
         if (next.isRoot) {
           return { ok: false, error: `Homepage returned HTTP ${res.status}` };
         }
         continue;
       }
-      const contentType = res.headers.get("content-type") ?? "";
+      const contentType = res.contentType;
       if (!contentType.includes("text/html") && !contentType.includes("application/xhtml")) {
         if (next.isRoot) {
           return { ok: false, error: `Homepage is not HTML (${contentType})` };
         }
         continue;
       }
-      html = await res.text();
+      html = res.text;
     } catch (err) {
+      // A security rejection is a verdict, not a transport hiccup. It gets
+      // its own terminal error so the apex/www fallback cannot treat it as
+      // "unreachable" and go probing a second host.
+      if (err instanceof UnsafeOutboundUrlError) {
+        if (next.isRoot) {
+          return { ok: false, error: UNSAFE_DESTINATION_ERROR };
+        }
+        continue;
+      }
       if (next.isRoot) {
         const msg = err instanceof Error ? err.message : String(err);
         return { ok: false, error: `Failed to fetch homepage: ${msg}` };

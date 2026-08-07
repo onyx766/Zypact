@@ -119,6 +119,42 @@ export function resolveProvider(hint?: LlmProvider): LlmProvider {
   return "mock";
 }
 
+/**
+ * The exact model name the next call will use, for a given provider.
+ *
+ * This exists because report metadata used to re-derive the model from
+ * `OPENAI_MODEL`/`ANTHROPIC_MODEL` on its own and fell back to the literal
+ * string "mock" when neither was set. A live OpenAI run with no
+ * `OPENAI_MODEL` therefore produced a genuine report labelled
+ * `model: mock` — misleading to anyone reading it, including a customer.
+ *
+ * The defaults below are the single source of truth: `callOpenAi` and
+ * `callAnthropic` call this rather than repeating the `??` chain, so the
+ * reported model cannot drift from the executed one.
+ *
+ * Side-effect free, and never throws for the mock provider, so metadata
+ * builders can call it unconditionally.
+ */
+export const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
+export const DEFAULT_ANTHROPIC_MODEL = "claude-3-5-sonnet-latest";
+
+export function resolveModel(
+  provider: LlmProvider,
+  override?: string
+): string {
+  if (override) return override;
+
+  if (provider === "openai") {
+    return process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
+  }
+  if (provider === "anthropic") {
+    return process.env.ANTHROPIC_MODEL || DEFAULT_ANTHROPIC_MODEL;
+  }
+
+  // Only a genuinely mock execution reports "mock".
+  return "mock";
+}
+
 export async function callModel(input: CallModelInput): Promise<CallModelResult> {
   const provider = resolveProvider(input.provider);
 
@@ -146,7 +182,7 @@ export async function callModel(input: CallModelInput): Promise<CallModelResult>
 async function callOpenAi(input: CallModelInput): Promise<CallModelResult> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
-  const model = input.model || process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const model = resolveModel("openai", input.model);
 
   const body: Record<string, unknown> = {
     model,
@@ -196,7 +232,7 @@ async function callOpenAi(input: CallModelInput): Promise<CallModelResult> {
 async function callAnthropic(input: CallModelInput): Promise<CallModelResult> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set");
-  const model = input.model || process.env.ANTHROPIC_MODEL || "claude-3-5-sonnet-latest";
+  const model = resolveModel("anthropic", input.model);
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",

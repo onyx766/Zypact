@@ -402,6 +402,33 @@ export interface RenewSnapshotRequestLeaseInput {
   leaseSeconds: number;
 }
 
+/**
+ * Shared shape of every token-fenced worker write. `projectId` is not
+ * redundant with `requestId`: the SQL guard requires the pair to match, so
+ * a worker holding a stale project cannot write against a reclaimed row.
+ */
+export interface SnapshotWorkerWriteInput {
+  requestId: string;
+  projectId: string;
+  claimToken: string;
+}
+
+export interface SnapshotWorkerProgressInput
+  extends SnapshotWorkerWriteInput {
+  stage: SnapshotProgressStage;
+}
+
+export interface SnapshotWorkerCompletionInput
+  extends SnapshotWorkerWriteInput {
+  fullReportMarkdown: string;
+  shortReportMarkdown: string;
+  fullReportFilename: string;
+  shortReportFilename: string;
+  generatedAt: string;
+}
+
+export type SnapshotWorkerFailureInput = SnapshotWorkerWriteInput;
+
 
 export interface SnapshotReportArtifact {
   id: string;
@@ -536,6 +563,34 @@ export interface DbAdapter {
    */
   renewSnapshotRequestLease(
     input: RenewSnapshotRequestLeaseInput
+  ): Promise<SnapshotRequest | null>;
+  /**
+   * Token-fenced worker writes (migration 0031).
+   *
+   * A claimed request carries a `claim_token`, and every *manual* RPC
+   * refuses such a row outright. These three are the only write surface a
+   * worker may use, and each one re-validates ownership in SQL: matching
+   * project, `status = 'running'`, exact token, and an unexpired lease. A
+   * refusal returns null — it never throws and never falls back.
+   *
+   * Optional on the adapter because the in-memory adapter has no worker
+   * surface. The execution engine requires them structurally in worker
+   * mode, so a caller cannot reach a fenced path without them.
+   */
+  updateSnapshotRequestProgressWorker?(
+    input: SnapshotWorkerProgressInput
+  ): Promise<SnapshotRequest | null>;
+  /**
+   * Persist the report and finalize the request in ONE fenced statement.
+   * The worker equivalent of manual save-then-finalize, which cannot be
+   * split without leaving a window where ownership has moved on.
+   */
+  completeSnapshotReportWorker?(
+    input: SnapshotWorkerCompletionInput
+  ): Promise<SnapshotReportArtifact | null>;
+  /** Record failure for a claimed request. Clears the claim. */
+  markSnapshotRequestFailedWorker?(
+    input: SnapshotWorkerFailureInput
   ): Promise<SnapshotRequest | null>;
   updateSnapshotRequestProgress(
     requestId: string,

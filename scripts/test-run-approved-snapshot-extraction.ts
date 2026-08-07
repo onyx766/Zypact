@@ -473,8 +473,11 @@ async function main(): Promise<void> {
   );
   check(
     "33. no claim or lease RPC entered the library",
+    // Scans executable lines only: the worker-safe docblock *names*
+    // `claim_next_snapshot_request` to explain why manual RPCs refuse a
+    // claimed row. Naming it in prose is not invoking it.
     !/claimNextSnapshotRequest|renewSnapshotRequestLease|claim_next|renew_snapshot/.test(
-      lib
+      libExecutable
     )
   );
   check(

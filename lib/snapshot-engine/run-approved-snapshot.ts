@@ -34,8 +34,12 @@ import { spawnSync } from "node:child_process";
 
 import { getDb } from "@/lib/db";
 import type {
+  SnapshotProgressStage,
   SnapshotReportArtifact,
   SnapshotRequest,
+  SnapshotWorkerCompletionInput,
+  SnapshotWorkerFailureInput,
+  SnapshotWorkerProgressInput,
 } from "@/lib/db/types";
 
 export type SnapshotProbeMode = "live" | "simulated";
@@ -71,6 +75,65 @@ export interface ApprovedSnapshotExecutionOptions {
  * The subset of the database adapter this flow touches. Declared structurally
  * so a test can supply three functions instead of a whole adapter.
  */
+/**
+ * Which lifecycle a run uses.
+ *
+ * `manual` is the founder's CLI path and stays the default, so existing
+ * callers are unaffected. `worker` is for a request already claimed through
+ * `claim_next_snapshot_request`: every manual RPC refuses a row that carries
+ * a claim token, so a worker must use the fenced surface instead.
+ */
+export type ApprovedSnapshotExecutionContext =
+  | { mode: "manual" }
+  | { mode: "worker"; claimToken: string };
+
+/**
+ * The fenced write surface, required only in worker mode. Declared as a
+ * separate required type so worker callers cannot compile without it, even
+ * though the methods are optional on the shared adapter interface.
+ */
+export interface ApprovedSnapshotWorkerDb {
+  updateSnapshotRequestProgressWorker(
+    input: SnapshotWorkerProgressInput
+  ): Promise<SnapshotRequest | null>;
+  completeSnapshotReportWorker(
+    input: SnapshotWorkerCompletionInput
+  ): Promise<SnapshotReportArtifact | null>;
+  markSnapshotRequestFailedWorker(
+    input: SnapshotWorkerFailureInput
+  ): Promise<SnapshotRequest | null>;
+}
+
+/**
+ * The three methods a worker run depends on. Listed once so the runtime
+ * guard and the error message cannot drift apart.
+ */
+const FENCED_WORKER_WRITES = [
+  "updateSnapshotRequestProgressWorker",
+  "completeSnapshotReportWorker",
+  "markSnapshotRequestFailedWorker",
+] as const;
+
+/**
+ * Runtime narrowing for the fenced write surface.
+ *
+ * `getDb()` is typed `DbAdapter`, where all three methods are optional —
+ * the in-memory adapter has none of them. A cast cannot detect that, so
+ * this predicate is what establishes the type, and it must run before any
+ * side effect. Nothing downstream may assert the shape instead.
+ */
+function hasFencedWorkerWrites(
+  candidate: unknown
+): candidate is ApprovedSnapshotWorkerDb {
+  if (typeof candidate !== "object" || candidate === null) return false;
+
+  const methods = candidate as Record<string, unknown>;
+
+  return FENCED_WORKER_WRITES.every(
+    (method) => typeof methods[method] === "function"
+  );
+}
+
 export interface ApprovedSnapshotDb {
   reserveSnapshotRequestProject(
     requestId: string
@@ -116,6 +179,11 @@ export type SpawnRunner = (
  */
 export interface ApprovedSnapshotDeps {
   db?: ApprovedSnapshotDb;
+  /**
+   * Fenced worker surface. Defaults to the same adapter instance as `db`,
+   * which carries these methods in production.
+   */
+  workerDb?: ApprovedSnapshotWorkerDb;
   spawn?: SpawnRunner;
   ensureDirectory?: (directory: string) => void;
   readReportFile?: (path: string) => string;
@@ -153,9 +221,56 @@ export function shortReportPathFor(out: string): string {
 export async function runApprovedSnapshot(
   request: ApprovedSnapshotExecutionRequest,
   options: ApprovedSnapshotExecutionOptions,
-  deps: ApprovedSnapshotDeps = {}
+  deps: ApprovedSnapshotDeps = {},
+  execution: ApprovedSnapshotExecutionContext = { mode: "manual" }
 ): Promise<ApprovedSnapshotResult> {
   const db = deps.db ?? getDb();
+
+  // Deliberately `unknown`: the effective worker adapter is unverified
+  // until `hasFencedWorkerWrites` narrows it below. Typing it as the
+  // worker interface here would reintroduce the unchecked assumption this
+  // guard exists to remove.
+  const workerDbCandidate: unknown = deps.workerDb ?? db;
+
+  let fencedWorkerDb: ApprovedSnapshotWorkerDb | null = null;
+
+  if (execution.mode === "worker") {
+    if (execution.claimToken.trim() === "") {
+      throw new ApprovedSnapshotExecutionError(
+        "Worker execution requires a claim token.",
+        false
+      );
+    }
+
+    // Must precede ensureDirectory, spawn, readReportFile, and every
+    // database write. A missing method used to surface as a raw TypeError
+    // only after both children had run at full provider cost, which also
+    // destroyed the original error and stranded the request in `running`
+    // until its lease expired.
+    if (!hasFencedWorkerWrites(workerDbCandidate)) {
+      throw new ApprovedSnapshotExecutionError(
+        "Worker execution requires an adapter with token-fenced worker writes.",
+        false
+      );
+    }
+
+    fencedWorkerDb = workerDbCandidate;
+  }
+
+  // Worker mode cannot reach here with a null value: the guard above
+  // either assigned it or threw. This keeps the call sites free of
+  // non-null assertions without asserting the shape a second time.
+  const workerDb = (): ApprovedSnapshotWorkerDb => {
+    if (!fencedWorkerDb) {
+      throw new ApprovedSnapshotExecutionError(
+        "Worker execution requires an adapter with token-fenced worker writes.",
+        false
+      );
+    }
+
+    return fencedWorkerDb;
+  };
+
   const spawn: SpawnRunner =
     deps.spawn ??
     ((command, args, spawnOptions) =>
@@ -172,7 +287,23 @@ export async function runApprovedSnapshot(
 
   let projectId = request.projectId;
 
-  if (request.status === "queued") {
+  // A claimed request already has a project: `claim_next_snapshot_request`
+  // reserves one inside the claim. Reservation is manual-only, and the
+  // manual RPC refuses worker-owned rows anyway.
+  if (
+    execution.mode === "worker" &&
+    !projectId
+  ) {
+    throw new ApprovedSnapshotExecutionError(
+      "Worker execution requires a claimed request with a reserved project.",
+      false
+    );
+  }
+
+  if (
+    execution.mode === "manual" &&
+    request.status === "queued"
+  ) {
     const reserved =
       await db.reserveSnapshotRequestProject(request.id);
 
@@ -233,6 +364,15 @@ export async function runApprovedSnapshot(
       env: {
         ...process.env,
         SNAPSHOT_REQUEST_ID: request.id,
+        // Present only in worker mode. `mvp-scan` uses it to write progress
+        // through the fenced RPC; without it the child keeps the manual
+        // progress path unchanged. Never logged or written to disk.
+        ...(execution.mode === "worker"
+          ? {
+              SNAPSHOT_CLAIM_TOKEN: execution.claimToken,
+              SNAPSHOT_PROJECT_ID: reservedProjectId,
+            }
+          : {}),
       },
       stdio: "inherit",
     }
@@ -241,11 +381,21 @@ export async function runApprovedSnapshot(
   // Records the failure, then throws. Mirrors the previous `markFailed`,
   // including its behavior when the failure itself cannot be recorded.
   const markFailed = async (message: string): Promise<never> => {
-    const failedRequest = await db.finalizeSnapshotRequest(
-      request.id,
-      reservedProjectId,
-      "failed"
-    );
+    // Worker mode must record failure through the fenced RPC. The manual
+    // one silently refuses a row that carries a claim token, which would
+    // leave the request stranded in `running` until its lease expired.
+    const failedRequest =
+      execution.mode === "worker"
+        ? await workerDb().markSnapshotRequestFailedWorker({
+            requestId: request.id,
+            projectId: reservedProjectId,
+            claimToken: execution.claimToken,
+          })
+        : await db.finalizeSnapshotRequest(
+            request.id,
+            reservedProjectId,
+            "failed"
+          );
 
     if (!failedRequest || failedRequest.status !== "failed") {
       throw new ApprovedSnapshotExecutionError(
@@ -312,21 +462,76 @@ export async function runApprovedSnapshot(
     );
   }
 
+  const generatedAt = now().toISOString();
+
+  if (execution.mode === "worker") {
+    // One fenced statement persists the report AND finalizes the request.
+    // Splitting it the way the manual path does would leave a window in
+    // which the lease could lapse between the two writes.
+    let completedArtifact: SnapshotReportArtifact | null;
+
+    try {
+      completedArtifact =
+        await workerDb().completeSnapshotReportWorker({
+          requestId: request.id,
+          projectId: reservedProjectId,
+          claimToken: execution.claimToken,
+          fullReportMarkdown,
+          shortReportMarkdown,
+          fullReportFilename: basename(options.out),
+          shortReportFilename: basename(shortReportPath),
+          generatedAt,
+        });
+    } catch (error) {
+      return markFailed(
+        `Generated reports could not be persisted: ${
+          error instanceof Error ? error.message : "unknown_error"
+        }`
+      );
+    }
+
+    // A null result is a refused fence — wrong token, expired lease, or the
+    // request moved on. It is a failure, not a success with no rows.
+    if (!completedArtifact) {
+      return markFailed(
+        "Worker completion was refused: the claim is no longer valid."
+      );
+    }
+
+    return {
+      projectId: reservedProjectId,
+      fullReportPath: options.out,
+      shortReportPath,
+    };
+  }
+
+  let savedArtifact: SnapshotReportArtifact | null;
+
   try {
-    await db.saveSnapshotReportArtifact({
+    savedArtifact = await db.saveSnapshotReportArtifact({
       snapshotRequestId: request.id,
       projectId: reservedProjectId,
       fullReportMarkdown,
       shortReportMarkdown,
       fullReportFilename: basename(options.out),
       shortReportFilename: basename(shortReportPath),
-      generatedAt: now().toISOString(),
+      generatedAt,
     });
   } catch (error) {
-    await markFailed(
+    return markFailed(
       `Generated reports could not be persisted: ${
         error instanceof Error ? error.message : "unknown_error"
       }`
+    );
+  }
+
+  // Previously only a thrown error was treated as a failure. The RPC can
+  // also refuse by returning no rows — a delivered artifact, for instance —
+  // and execution used to continue to finalization as though the report had
+  // been stored.
+  if (!savedArtifact) {
+    return markFailed(
+      "Generated reports could not be persisted: the save was refused."
     );
   }
 

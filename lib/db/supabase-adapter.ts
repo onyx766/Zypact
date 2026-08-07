@@ -991,6 +991,72 @@ export const supabaseAdapter: DbAdapter = {
       : null;
   },
 
+  async updateSnapshotRequestProgressWorker(input) {
+    const { data, error } = await getClient()
+      .rpc(
+        "update_snapshot_request_progress_worker",
+        {
+          p_request_id: input.requestId,
+          p_project_id: input.projectId,
+          p_claim_token: input.claimToken,
+          p_progress_stage: input.stage,
+        }
+      )
+      .maybeSingle<SnapshotRequestDbRow>();
+
+    if (error) throw error;
+
+    // Null means the SQL fence refused: wrong project, wrong token,
+    // expired lease, or the request is no longer running. Never retried
+    // and never downgraded to the manual RPC.
+    return data
+      ? mapSnapshotRequest(data)
+      : null;
+  },
+
+  async completeSnapshotReportWorker(input) {
+    const { data, error } = await getClient()
+      .rpc(
+        "complete_snapshot_report_worker",
+        {
+          p_request_id: input.requestId,
+          p_project_id: input.projectId,
+          p_claim_token: input.claimToken,
+          p_full_markdown: input.fullReportMarkdown,
+          p_short_markdown: input.shortReportMarkdown,
+          p_full_filename: input.fullReportFilename,
+          p_short_filename: input.shortReportFilename,
+          p_generated_at: input.generatedAt,
+        }
+      )
+      .maybeSingle<SnapshotReportArtifactDbRow>();
+
+    if (error) throw error;
+
+    return data
+      ? mapSnapshotReportArtifact(data)
+      : null;
+  },
+
+  async markSnapshotRequestFailedWorker(input) {
+    const { data, error } = await getClient()
+      .rpc(
+        "mark_snapshot_request_failed_worker",
+        {
+          p_request_id: input.requestId,
+          p_project_id: input.projectId,
+          p_claim_token: input.claimToken,
+        }
+      )
+      .maybeSingle<SnapshotRequestDbRow>();
+
+    if (error) throw error;
+
+    return data
+      ? mapSnapshotRequest(data)
+      : null;
+  },
+
   async updateSnapshotRequestProgress(
     requestId,
     projectId,

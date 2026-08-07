@@ -1042,12 +1042,26 @@ async function updateSnapshotProgress(
     );
   }
 
-  const updated =
-    await getDb().updateSnapshotRequestProgress(
-      requestId,
-      args.projectId,
-      stage
-    );
+  // Under a worker, the request carries a claim token and every manual RPC
+  // refuses it. The token arrives through the environment from the reusable
+  // execution function and is never logged or written to disk.
+  const claimToken =
+    process.env.SNAPSHOT_CLAIM_TOKEN?.trim();
+
+  const db = getDb();
+
+  const updated = claimToken
+    ? await db.updateSnapshotRequestProgressWorker?.({
+        requestId,
+        projectId: args.projectId,
+        claimToken,
+        stage,
+      })
+    : await db.updateSnapshotRequestProgress(
+        requestId,
+        args.projectId,
+        stage
+      );
 
   if (!updated) {
     throw new Error(

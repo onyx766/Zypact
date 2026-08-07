@@ -54,6 +54,13 @@ const FENCED_METHODS = [
 ];
 
 const CLAIM_TOKEN = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+
+/** Valid renewal plan: renews twice per lease, with a finite ceiling. */
+const LEASE = {
+  leaseSeconds: 300,
+  renewEveryMs: 60_000,
+  maxExecutionMs: 1_800_000,
+};
 const PROJECT_ID = "22222222-2222-4222-8222-222222222222";
 
 const CLAIMED_REQUEST = {
@@ -197,7 +204,7 @@ async function main(): Promise<void> {
     CLAIMED_REQUEST,
     OPTIONS,
     w.deps,
-    { mode: "worker", claimToken: CLAIM_TOKEN }
+    { mode: "worker", claimToken: CLAIM_TOKEN, lease: LEASE }
   );
 
   check(
@@ -256,7 +263,7 @@ async function main(): Promise<void> {
   const wfErr = await capture(() =>
     runApprovedSnapshot(CLAIMED_REQUEST, OPTIONS, wf.deps, {
       mode: "worker",
-      claimToken: CLAIM_TOKEN,
+      claimToken: CLAIM_TOKEN, lease: LEASE,
     })
   );
 
@@ -284,7 +291,7 @@ async function main(): Promise<void> {
   const wrErr = await capture(() =>
     runApprovedSnapshot(CLAIMED_REQUEST, OPTIONS, wr.deps, {
       mode: "worker",
-      claimToken: CLAIM_TOKEN,
+      claimToken: CLAIM_TOKEN, lease: LEASE,
     })
   );
 
@@ -303,7 +310,7 @@ async function main(): Promise<void> {
   const wrfErr = await capture(() =>
     runApprovedSnapshot(CLAIMED_REQUEST, OPTIONS, wrf.deps, {
       mode: "worker",
-      claimToken: CLAIM_TOKEN,
+      claimToken: CLAIM_TOKEN, lease: LEASE,
     })
   );
 
@@ -324,7 +331,7 @@ async function main(): Promise<void> {
   const emptyTokenErr = await capture(() =>
     runApprovedSnapshot(CLAIMED_REQUEST, OPTIONS, wg.deps, {
       mode: "worker",
-      claimToken: "   ",
+      claimToken: "   ", lease: LEASE,
     })
   );
   check(
@@ -339,7 +346,7 @@ async function main(): Promise<void> {
       { ...CLAIMED_REQUEST, projectId: null },
       OPTIONS,
       wnp.deps,
-      { mode: "worker", claimToken: CLAIM_TOKEN }
+      { mode: "worker", claimToken: CLAIM_TOKEN, lease: LEASE }
     )
   );
   check(
@@ -355,7 +362,7 @@ async function main(): Promise<void> {
       { ...CLAIMED_REQUEST, status: "queued" },
       OPTIONS,
       wq.deps,
-      { mode: "worker", claimToken: CLAIM_TOKEN }
+      { mode: "worker", claimToken: CLAIM_TOKEN, lease: LEASE }
     )
   );
   check(
@@ -402,7 +409,7 @@ async function main(): Promise<void> {
           ...h.deps,
           workerDb: partial as unknown as ApprovedSnapshotWorkerDb,
         },
-        { mode: "worker", claimToken: CLAIM_TOKEN }
+        { mode: "worker", claimToken: CLAIM_TOKEN, lease: LEASE }
       )
     );
 

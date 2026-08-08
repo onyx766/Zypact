@@ -145,8 +145,35 @@ function parsePromptRows(markdown: string): PromptRow[] {
   return rows;
 }
 
+/** Rendered in place of a recommendation when no Fix Brief exists. */
+export const NO_FIX_BRIEF_STATEMENT =
+  "No evidence-backed recommended fix was produced in this snapshot. " +
+  "A fix is only stated once a Fix Brief has been generated from the stored probe evidence.";
+
+/** Rendered in place of a buyer frame when no scored prompt can be extracted. */
+export const NO_FOCUS_PROMPT_STATEMENT =
+  "No evidence-backed under-performance frame is available in this snapshot.";
+
+/**
+ * The full report titles this subsection with the client's own brand:
+ *
+ *     ### Which prompts ${brandName} lost or under-performed
+ *
+ * This parser previously matched one literal prospect brand name, so for
+ * every other client the section was never found, `lostPrompts` came back
+ * empty, and the renderer fell through to a fabricated buyer frame. Matching
+ * structurally — fixed words around an arbitrary brand — works for any brand,
+ * including names with spaces or punctuation, and for the brandless variant.
+ */
+const LOST_PROMPTS_HEADING =
+  /(?:^|\n)###\s+Which prompts\b[^\n]*?lost or under-performed\s*\n([\s\S]*?)(?=\n###\s+|\n##\s+|$)/i;
+
+function extractLostPromptsSection(markdown: string): string {
+  return markdown.match(LOST_PROMPTS_HEADING)?.[1]?.trim() ?? "";
+}
+
 function extractLostPrompts(markdown: string): string[] {
-  const section = extractSubsection(markdown, "Which prompts Vugio lost or under-performed") || extractSubsection(markdown, "Which prompts lost or under-performed");
+  const section = extractLostPromptsSection(markdown);
   const prompts: string[] = [];
   for (const line of section.split(/\r?\n/)) {
     const m = line.match(/^-\s+(.+?)\s+\(/);
@@ -984,10 +1011,23 @@ export function buildSalesReportFromMvpMarkdown(markdown: string, options: Build
         }`
     );
 
+  // Only a prompt that genuinely appears in the report may frame the
+  // commercial argument. The previous literal fallback invented a buyer frame
+  // present in no stored run — exactly the claim this report must never make.
   const focusPrompt =
     fixBrief.lostPrompt ||
     lostPrompts[0] ||
-    "Alternatives in the core buying category";
+    "";
+  const hasFocusPrompt = focusPrompt !== "";
+
+  /**
+   * A Fix Brief is the only sanctioned source of a recommended fix.
+   *
+   * `parseFixBrief` returns empty strings when the full report says "No Fix
+   * Brief generated yet", so a real brief is one that actually carries a
+   * recommendation.
+   */
+  const hasFixBrief = fixBrief.recommendedFix.trim() !== "";
 
   const frameCompetitorRows =
     promptCompetitorsFor(
@@ -1023,21 +1063,27 @@ export function buildSalesReportFromMvpMarkdown(markdown: string, options: Build
         )
       : null;
 
-  const sourceFirstFix =
-    fixBrief.recommendedFix ||
-    extractBullet(
-      markdown,
-      "Next recommended fix"
-    ) ||
-    "Publish a focused, evidence-backed page for the missing buyer question.";
-
-  const firstFix =
-    frameAwareFix(
-      brand,
-      focusPrompt,
-      frameCompetitors,
-      sourceFirstFix
-    );
+  /**
+   * The recommended fix is rendered from the persisted Fix Brief and nothing
+   * else.
+   *
+   * Previously this fell back to a "Next recommended fix" bullet and then to
+   * a hardcoded sentence, and passed the result through `frameAwareFix`
+   * unconditionally. A snapshot whose full report said "No Fix Brief
+   * generated yet" therefore still shipped a confident "First recommended
+   * fix" to the client — a recommendation with no evidence behind it.
+   *
+   * `frameAwareFix` is only reachable inside this branch, so no absent-brief
+   * path can invoke it.
+   */
+  const firstFix = hasFixBrief
+    ? frameAwareFix(
+        brand,
+        focusPrompt,
+        frameCompetitors,
+        fixBrief.recommendedFix
+      )
+    : NO_FIX_BRIEF_STATEMENT;
 
   const firstEvidence =
     fixBrief.evidenceNeeded.length > 0
@@ -1154,23 +1200,35 @@ ${
 
 AI answers increasingly behave like shortlists. When a buyer asks for alternatives or options in a category, brands that appear in the answer get the introduction. Brands that do not appear are invisible at the moment of consideration.
 
-For ${brand}, the ${opportunityLabel(tone)} is:
+${
+  hasFocusPrompt
+    ? `For ${brand}, the ${opportunityLabel(tone)} is:
 
 > ${focusPrompt}
 
-${frameRecommendationSentence(brand, tone, frameCompetitors)}
+${frameRecommendationSentence(brand, tone, frameCompetitors)}`
+    : NO_FOCUS_PROMPT_STATEMENT
+}
 
 ## 4. First recommended fix
 
-**${fixHeading(tone, frameCompetitors.length > 0)}**
+${
+  hasFixBrief
+    ? `**${fixHeading(tone, frameCompetitors.length > 0)}**
 
 ${firstFix}
 
-${firstFixSafetySentence}
+${firstFixSafetySentence}`
+    : firstFix
+}
 
-### Evidence needed before publish-ready copy
+${
+  hasFixBrief
+    ? `### Evidence needed before publish-ready copy
 
-${firstEvidence.length > 0 ? firstEvidence.map((item) => `- ${item}`).join("\n") : "- Specific product offerings, pricing details, and proof points that can be verified on the site."}
+${firstEvidence.length > 0 ? firstEvidence.map((item) => `- ${item}`).join("\n") : "- Specific product offerings, pricing details, and proof points that can be verified on the site."}`
+    : ""
+}
 
 ## 5. Suggested next step
 

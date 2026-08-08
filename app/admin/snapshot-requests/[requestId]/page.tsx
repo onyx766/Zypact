@@ -479,6 +479,15 @@ export default async function SnapshotRequestDetailPage({
                   alreadyDelivered={Boolean(
                     artifact.deliveredAt
                   )}
+                  expectedArtifactId={artifact.id}
+                  expectedRevision={
+                    toSnapshotReportPublicationState(
+                      artifact
+                    ).revision
+                  }
+                  deliveryClaimActive={
+                    artifact.deliveryClaimActive
+                  }
                 />
 
                 <a

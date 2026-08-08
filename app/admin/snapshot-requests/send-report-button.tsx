@@ -11,10 +11,17 @@ export function SendReportButton({
   requestId,
   recipientEmail,
   alreadyDelivered,
+  expectedArtifactId,
+  expectedRevision,
+  deliveryClaimActive,
 }: {
   requestId: string;
   recipientEmail: string;
   alreadyDelivered: boolean;
+  /** From authoritative publication state — never recomputed client-side. */
+  expectedArtifactId: string;
+  expectedRevision: string;
+  deliveryClaimActive: boolean;
 }) {
   const router = useRouter();
 
@@ -25,10 +32,10 @@ export function SendReportButton({
     useState<string | null>(null);
 
   async function sendReport() {
+    // Delivered reports are terminal in this workflow, so there is no
+    // "send it again" branch left to confirm.
     const confirmed = window.confirm(
-      alreadyDelivered
-        ? `This report was already delivered. Send it again to ${recipientEmail}?`
-        : `Send the private report to ${recipientEmail}?`
+      `Send the private report to ${recipientEmail}?`
     );
 
     if (!confirmed) {
@@ -47,10 +54,12 @@ export function SendReportButton({
             "Content-Type":
               "application/json",
           },
-          // Resending is explicit: the route refuses to send again
-          // without this flag, so a stray click cannot re-email a client.
+          // The exact artifact and revision the founder is looking at. The
+          // route fences on these, so a concurrent replacement is refused
+          // rather than silently emailed.
           body: JSON.stringify({
-            resend: alreadyDelivered,
+            expectedArtifactId,
+            expectedRevision,
           }),
         }
       );
@@ -59,10 +68,14 @@ export function SendReportButton({
         (await response.json()) as {
           ok?: boolean;
           error?: string;
+          message?: string;
         };
 
       if (!response.ok || !payload.ok) {
+        // The server phrases each outcome deliberately — uncertain delivery
+        // and unconfirmed finalization both tell the founder NOT to resend.
         throw new Error(
+          payload.message ||
           payload.error ||
           "Report delivery failed."
         );
@@ -85,7 +98,11 @@ export function SendReportButton({
       <button
         type="button"
         onClick={sendReport}
-        disabled={pending}
+        disabled={
+          pending ||
+          alreadyDelivered ||
+          deliveryClaimActive
+        }
         style={{
           minHeight: 38,
           border: "1px solid #111",
@@ -105,7 +122,7 @@ export function SendReportButton({
         {pending
           ? "Sending…"
           : alreadyDelivered
-            ? "Resend report"
+            ? "Report delivered"
             : "Send report"}
       </button>
 

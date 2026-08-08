@@ -560,21 +560,13 @@ async function main(): Promise<void> {
       )
   );
   check(
-    "37. route passes the resend boolean",
-    /markSnapshotReportDelivered\(\s*requestId,\s*delivery\.messageId,\s*deliveredAt,\s*body\.resend/.test(
-      read(
-        "app/api/internal/snapshot-requests/[requestId]/send-report/route.ts"
-      ).replace(/\s+/g, " ")
-        .replace(
-          /markSnapshotReportDelivered\( requestId, delivery\.messageId, deliveredAt, body\.resend/,
-          "markSnapshotReportDelivered( requestId, delivery.messageId, deliveredAt, body.resend"
-        )
-    ) ||
-      /body\.resend/.test(
-        read(
-          "app/api/internal/snapshot-requests/[requestId]/send-report/route.ts"
-        )
-      )
+    // Founder decision: a delivered report is terminal in this workflow. The
+    // route must not accept a resend flag; re-delivery would need a separate
+    // audited workflow. This assertion previously required the opposite.
+    "37. route carries no resend flag",
+    !/body\.resend|resend\s*:/.test(
+      read("app/api/internal/snapshot-requests/[requestId]/send-report/route.ts")
+    )
   );
   check(
     "38. snapshot_requests is never mutated directly in the adapter",

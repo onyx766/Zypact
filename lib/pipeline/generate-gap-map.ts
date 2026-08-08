@@ -1,7 +1,13 @@
 import { runGapMapAgent } from "@/lib/agents/gap-map";
+import {
+  buildScorecardCompetitorEvidence,
+  evidencedCompetitorKeys,
+  isRecoveryEligible,
+  normalizeCompetitorKey,
+} from "@/lib/pipeline/scorecard-competitors";
 import { getDb } from "@/lib/db";
 import { buildProbeSetSummary } from "@/lib/probe-results/report-selection";
-import type { Gap, GapInput, GapMapRow } from "@/lib/db/types";
+import type { Competitor, Gap, GapInput, GapMapRow } from "@/lib/db/types";
 import {
   SiteReaderOutputSchema,
   type SiteReaderOutput,
@@ -80,7 +86,54 @@ export async function generateGapMap(
     return { ok: false, error: NO_PROBE_RESULTS_MESSAGE };
   }
 
-  const competitors = await db.getCompetitorsByProject(input.projectId);
+  // Competitor evidence is grounded in the scored buyer probes rather than
+  // the project-wide discovery table. That table mixes crawled vendors and
+  // cited sources with genuine shortlist rivals and carries no prompt
+  // provenance, which is how reporting vendors displaced the products AI
+  // actually recommended against the client and left zero usable gaps.
+  //
+  // Only prompt groups that can support a *recovery* gap contribute: a won
+  // prompt is positive evidence and must never be read as a loss.
+  const competitorEvidence = buildScorecardCompetitorEvidence(
+    probeSummary.scorecardPromptGroups
+  ).filter((entry) => isRecoveryEligible(entry.outcome));
+
+  const evidencedKeys = evidencedCompetitorKeys(competitorEvidence);
+  const projectCompetitors = await db.getCompetitorsByProject(input.projectId);
+
+  // Project rows may enrich a product the scored runs already evidenced
+  // (website, ids, threat level). They may not introduce one: a name with no
+  // recommendation evidence has not been shown to compete for this buyer.
+  const enrichmentByKey = new Map(
+    projectCompetitors.map((row) => [normalizeCompetitorKey(row.name), row])
+  );
+
+  const competitors: Competitor[] = Array.from(evidencedKeys).map((key) => {
+    const evidenced = competitorEvidence
+      .flatMap((entry) => entry.competitors)
+      .filter((c) => c.nameKey === key);
+    const strongest = evidenced.reduce((best, c) =>
+      c.recommendationCount > best.recommendationCount ? c : best
+    );
+    const enrichment = enrichmentByKey.get(key);
+
+    return {
+      id: enrichment?.id ?? `scorecard:${key}`,
+      projectId: input.projectId,
+      name: enrichment?.name ?? strongest.name,
+      website: enrichment?.website ?? null,
+      discoverySource: "ai_answer",
+      mentionCount: evidenced.reduce((sum, c) => sum + c.recommendationCount, 0),
+      promptIds: enrichment?.promptIds ?? [],
+      threatLevel: enrichment?.threatLevel ?? "medium",
+      confidence: enrichment?.confidence ?? "unverified",
+      isPhantom: enrichment?.isPhantom ?? false,
+      isBlindSpot: enrichment?.isBlindSpot ?? false,
+      createdAt: enrichment?.createdAt ?? new Date(0).toISOString(),
+      updatedAt: enrichment?.updatedAt ?? new Date(0).toISOString(),
+    };
+  });
+
   if (competitors.length === 0) {
     return { ok: false, error: NO_COMPETITORS_MESSAGE };
   }
@@ -88,7 +141,13 @@ export async function generateGapMap(
   try {
     const agent = await withPipelineStep(
       { projectId: input.projectId, agent: "gap-map" },
-      () => runGapMapAgent({ mirrorProfile, probeResults, competitors })
+      () =>
+        runGapMapAgent({
+          mirrorProfile,
+          probeResults,
+          competitors,
+          competitorEvidence,
+        })
     );
 
     const gapMapRow = await db.saveGapMap(input.projectId, agent.output);

@@ -1,4 +1,5 @@
 import { callModel } from "@/lib/llm/call-model";
+import type { PromptCompetitorEvidence } from "@/lib/pipeline/scorecard-competitors";
 import { parseJsonOrRetry } from "@/lib/llm/parse-json-or-retry";
 import { GAP_MAP_SYSTEM_PROMPT } from "@/lib/agent-prompts/gap-map.prompt";
 import {
@@ -43,7 +44,19 @@ import {
 export interface RunGapMapInput {
   mirrorProfile: SiteReaderOutput;
   probeResults: ProbeResult[];
+  /**
+   * Flat competitor list. Retained for LLM context and distance scoring only —
+   * it carries no provenance, so it must not decide which competitor explains
+   * which prompt.
+   */
   competitors: Competitor[];
+  /**
+   * Prompt-scoped recommendation evidence. When supplied, deterministic gap
+   * attribution derives from this instead of the flat list, so a gap can never
+   * imply that a product recommended for one buyer question explains a loss on
+   * another. Optional: callers that omit it keep the prior behaviour.
+   */
+  competitorEvidence?: PromptCompetitorEvidence[];
 }
 
 export interface RunGapMapResult {
@@ -302,7 +315,83 @@ function isClientSelf(name: string, profile: SiteReaderOutput): boolean {
   return key === company || key === website;
 }
 
-function buildDeterministicPrioritizedGaps(
+/**
+ * Single source of truth for turning dimension hits into prioritized gaps.
+ *
+ * Both the normalization path and the provider-free mock path build gaps; when
+ * each owned its own copy, only one of them received prompt-scoped attribution
+ * and the other silently kept describing a gap with the global union of
+ * competitors. Extracting it means the two cannot drift again.
+ *
+ * Scoring is untouched: the >= 6 threshold, dimension set, and severity
+ * function are exactly as before. Only attribution is centralised.
+ */
+export function buildPrioritizedGapsFromEvidence(params: {
+  competitorDistances: CompetitorDistance[];
+  competitorEvidence?: PromptCompetitorEvidence[];
+  fallbackAffectedPrompts: Record<keyof GapScores, Set<string>>;
+  explanationSuffix: string;
+}): PrioritizedGap[] {
+  const { competitorDistances, fallbackAffectedPrompts, explanationSuffix } = params;
+
+  // Only lost/partial groups can justify a recovery gap. A won prompt is
+  // positive evidence and must never be presented back to a client as a loss.
+  const recoveryEvidence = (params.competitorEvidence ?? []).filter(
+    (entry) => entry.outcome === "lost" || entry.outcome === "partial"
+  );
+
+  return GAP_DIMENSIONS.map((dim) => {
+    const hits = competitorDistances.filter((d) => d.gapScores[dim] >= 6);
+    return { dim, hits };
+  })
+    .filter((g) => g.hits.length > 0)
+    .sort((a, b) => b.hits.length - a.hits.length)
+    .slice(0, 5)
+    .map((g) => {
+      const hitKeys = new Set(
+        g.hits.map((h) => h.competitor.trim().toLowerCase())
+      );
+
+      // Each entry keeps only the competitors that this prompt actually
+      // recommended, intersected with the dimension's hits — so Prompt A can
+      // never be explained by Prompt B's products.
+      const promptEvidence = recoveryEvidence
+        .map((entry) => ({
+          prompt: entry.prompt,
+          promptKey: entry.promptKey,
+          verdict: entry.outcome as "lost" | "partial",
+          competitors: entry.competitors
+            .filter((c) => hitKeys.has(c.nameKey))
+            .map((c) => c.name),
+        }))
+        .filter((entry) => entry.competitors.length > 0);
+
+      const hasPromptEvidence = promptEvidence.length > 0;
+
+      // Derived views — never computed independently from the global list.
+      const competitorsHit = hasPromptEvidence
+        ? Array.from(new Set(promptEvidence.flatMap((e) => e.competitors)))
+        : g.hits.map((h) => h.competitor);
+      const affectedPrompts = hasPromptEvidence
+        ? Array.from(new Set(promptEvidence.map((e) => e.prompt)))
+        : Array.from(fallbackAffectedPrompts[g.dim]);
+
+      const compList = competitorsHit.join(", ");
+      const count = competitorsHit.length;
+
+      return {
+        type: g.dim,
+        severity: severityFromCount(g.hits.length),
+        explanation: `${count} competitor${count === 1 ? "" : "s"} (${compList}) show${count === 1 ? "s" : ""} a material gap on "${HUMAN_TYPE[g.dim]}"${explanationSuffix}`,
+        affectedPrompts,
+        suggestedFixDirection: FIX_DIRECTION[g.dim],
+        ...(hasPromptEvidence ? { promptEvidence } : {}),
+      };
+    });
+}
+
+/** Exported for tests: the real deterministic attribution path. */
+export function buildDeterministicPrioritizedGaps(
   input: RunGapMapInput,
   competitorDistances: CompetitorDistance[],
 ): PrioritizedGap[] {
@@ -328,23 +417,12 @@ function buildDeterministicPrioritizedGaps(
     }
   }
 
-  return GAP_DIMENSIONS.map((dim) => {
-    const hits = competitorDistances.filter((d) => d.gapScores[dim] >= 6);
-    return { dim, hits };
-  })
-    .filter((g) => g.hits.length > 0)
-    .sort((a, b) => b.hits.length - a.hits.length)
-    .slice(0, 5)
-    .map((g) => {
-      const compList = g.hits.map((h) => h.competitor).join(", ");
-      return {
-        type: g.dim,
-        severity: severityFromCount(g.hits.length),
-        explanation: `${g.hits.length} competitor${g.hits.length === 1 ? "" : "s"} (${compList}) show${g.hits.length === 1 ? "s" : ""} a material gap on "${HUMAN_TYPE[g.dim]}" in the selected probe set.`,
-        affectedPrompts: Array.from(affectedPromptsByDim[g.dim]),
-        suggestedFixDirection: FIX_DIRECTION[g.dim],
-      };
-    });
+  return buildPrioritizedGapsFromEvidence({
+    competitorDistances,
+    competitorEvidence: input.competitorEvidence,
+    fallbackAffectedPrompts: affectedPromptsByDim,
+    explanationSuffix: " in the selected probe set.",
+  });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -598,35 +676,12 @@ export function buildMockGapMap(
   }
 
   // Prioritized gaps: aggregate competitors with each dimension score >= 6.
-  const gapsByDim: Array<{
-    dim: keyof GapScores;
-    hitCount: number;
-    competitorsHit: string[];
-  }> = GAP_DIMENSIONS.map((dim) => {
-    const hits = competitorDistances.filter((d) => d.gapScores[dim] >= 6);
-    return {
-      dim,
-      hitCount: hits.length,
-      competitorsHit: hits.map((h) => h.competitor),
-    };
+  const prioritizedGaps: PrioritizedGap[] = buildPrioritizedGapsFromEvidence({
+    competitorDistances,
+    competitorEvidence: input.competitorEvidence,
+    fallbackAffectedPrompts: affectedPromptsByDim,
+    explanationSuffix: ".",
   });
-
-  const prioritizedGaps: PrioritizedGap[] = gapsByDim
-    .filter((g) => g.hitCount > 0)
-    .sort((a, b) => b.hitCount - a.hitCount)
-    .slice(0, 5)
-    .map((g) => {
-      const severity = severityFromCount(g.hitCount);
-      const affected = Array.from(affectedPromptsByDim[g.dim]);
-      const compList = g.competitorsHit.join(", ");
-      return {
-        type: g.dim,
-        severity,
-        explanation: `${g.hitCount} competitor${g.hitCount === 1 ? "" : "s"} (${compList}) show${g.hitCount === 1 ? "s" : ""} a material gap on "${HUMAN_TYPE[g.dim]}".`,
-        affectedPrompts: affected,
-        suggestedFixDirection: FIX_DIRECTION[g.dim],
-      };
-    });
 
   competitorDistances.sort(
     (a, b) =>

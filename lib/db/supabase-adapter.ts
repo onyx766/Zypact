@@ -38,6 +38,14 @@ import type {
   SnapshotRequest,
   SnapshotRequestLimitCode,
   SitePage,
+
+  ReplaceUndeliveredSnapshotReportArtifactInput,
+  SnapshotReportArtifactRevision,
+  BeginSnapshotReportDeliveryInput,
+  BegunSnapshotReportDelivery,
+  FinalizeSnapshotReportDeliveryInput,
+  FinalizedSnapshotReportDelivery,
+  ReleaseSnapshotReportDeliveryClaimInput,
 } from "./types";
 import { SnapshotRequestLimitError } from "./types";
 
@@ -104,6 +112,8 @@ interface SnapshotRequestDbRow {
 }
 
 interface SnapshotReportArtifactDbRow {
+  delivery_claim_token?: string | null;
+  delivery_claimed_at?: string | null;
   id: string;
   snapshot_request_id: string;
   project_id: string;
@@ -385,6 +395,10 @@ function mapSnapshotReportArtifact(
       row.short_report_filename,
     generatedAt: row.generated_at,
     publicToken: row.public_token,
+    // Derived, never carried: the raw claim token must not reach a browser,
+    // so it is reduced to a boolean here rather than stripped downstream.
+    deliveryClaimActive: row.delivery_claim_token != null,
+    deliveryClaimedAt: row.delivery_claimed_at ?? null,
     deliveredAt: row.delivered_at,
     deliveryMessageId:
       row.delivery_message_id,
@@ -749,6 +763,125 @@ export const supabaseAdapter: DbAdapter = {
     return data
       ? mapSnapshotReportArtifact(data)
       : null;
+  },
+
+  /* ---- migration 0035 delivery fencing --------------------------------- */
+  //
+  // Send and Replace race across an external email call that no row lock can
+  // span. These four RPCs carry the exclusion instead: a persistent claim
+  // reserves the artifact, returns the exact markdown it covers, and only a
+  // matching token can finalize or release it.
+  //
+  // Errors propagate. A conflict here is a real state conflict — the caller
+  // maps it to 409 and the founder refreshes; it is never retried against a
+  // newer revision, and never falls back to direct DML.
+
+  async replaceUndeliveredSnapshotReportArtifact(
+    input: ReplaceUndeliveredSnapshotReportArtifactInput
+  ): Promise<SnapshotReportArtifactRevision | null> {
+    snapshotReportWriteMode();
+
+    const { data, error } = await getClient()
+      .rpc("replace_undelivered_snapshot_report_artifact", {
+        p_snapshot_request_id: input.snapshotRequestId,
+        p_expected_artifact_id: input.expectedArtifactId,
+        p_expected_revision: input.expectedRevision,
+        p_full_report_markdown: input.fullReportMarkdown,
+        p_short_report_markdown: input.shortReportMarkdown,
+      })
+      .maybeSingle<{ artifact_id: string; revision: string }>();
+
+    if (error) throw error;
+
+    return data ? { artifactId: data.artifact_id, revision: data.revision } : null;
+  },
+
+  /**
+   * Reserves a delivery and returns the markdown the claim covers.
+   *
+   * The caller must email exactly `shortReportMarkdown` from this result.
+   * Re-reading the artifact afterwards would reopen the race this closes,
+   * because a replacement could land between the read and the send.
+   *
+   * `deliveryClaimToken` is server-only and must never reach a browser.
+   */
+  async beginSnapshotReportDelivery(
+    input: BeginSnapshotReportDeliveryInput
+  ): Promise<BegunSnapshotReportDelivery | null> {
+    snapshotReportWriteMode();
+
+    const { data, error } = await getClient()
+      .rpc("begin_snapshot_report_delivery", {
+        p_snapshot_request_id: input.snapshotRequestId,
+        p_expected_artifact_id: input.expectedArtifactId,
+        p_expected_revision: input.expectedRevision,
+      })
+      .maybeSingle<{
+        artifact_id: string;
+        revision: string;
+        delivery_claim_token: string;
+        full_report_markdown: string;
+        short_report_markdown: string;
+      }>();
+
+    if (error) throw error;
+
+    return data
+      ? {
+          artifactId: data.artifact_id,
+          revision: data.revision,
+          deliveryClaimToken: data.delivery_claim_token,
+          fullReportMarkdown: data.full_report_markdown,
+          shortReportMarkdown: data.short_report_markdown,
+        }
+      : null;
+  },
+
+  /** The only path that may set `delivered_at` / `delivery_message_id`. */
+  async finalizeSnapshotReportDelivery(
+    input: FinalizeSnapshotReportDeliveryInput
+  ): Promise<FinalizedSnapshotReportDelivery | null> {
+    snapshotReportWriteMode();
+
+    const { data, error } = await getClient()
+      .rpc("finalize_snapshot_report_delivery", {
+        p_snapshot_request_id: input.snapshotRequestId,
+        p_artifact_id: input.artifactId,
+        p_delivery_claim_token: input.deliveryClaimToken,
+        p_delivery_message_id: input.deliveryMessageId,
+      })
+      .maybeSingle<{ artifact_id: string; delivered_at: string }>();
+
+    if (error) throw error;
+
+    return data
+      ? { artifactId: data.artifact_id, deliveredAt: data.delivered_at }
+      : null;
+  },
+
+  /**
+   * Releases a claim.
+   *
+   * Only safe after a failure that provably reached no provider. An ambiguous
+   * outcome must leave the claim in place — the provider may have accepted the
+   * email before the process died, and releasing would permit a duplicate send.
+   */
+  async releaseSnapshotReportDeliveryClaim(
+    input: ReleaseSnapshotReportDeliveryClaimInput
+  ): Promise<{ artifactId: string } | null> {
+    snapshotReportWriteMode();
+
+    const { data, error } = await getClient()
+      .rpc("release_snapshot_report_delivery_claim", {
+        p_snapshot_request_id: input.snapshotRequestId,
+        p_artifact_id: input.artifactId,
+        p_delivery_claim_token: input.deliveryClaimToken,
+      })
+      .maybeSingle<{ artifact_id: string }>();
+
+    if (error) throw error;
+
+    return data ? { artifactId: data.artifact_id } : null;
   },
 
   async insertSnapshotReportArtifactBackfill(

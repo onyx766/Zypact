@@ -181,6 +181,8 @@ export const memoryAdapter: DbAdapter = {
       publicToken:
         existing?.publicToken ??
         createPublicReportToken(),
+      deliveryClaimActive: false,
+      deliveryClaimedAt: null,
       deliveredAt: null,
       deliveryMessageId: null,
       createdAt:
@@ -1435,6 +1437,48 @@ export const memoryAdapter: DbAdapter = {
     }
     return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   },
+
+  /* migration 0035 delivery fencing.
+
+   *
+
+   * Unimplemented on purpose. The fencing guarantees live in SQL —
+
+   * row locks, revision comparison and claim exclusion — and an
+
+   * in-memory imitation would certify safety it cannot provide.
+
+   * Tests exercise these against the real RPCs or explicit fakes.
+
+   */
+
+  async replaceUndeliveredSnapshotReportArtifact(): Promise<never> {
+
+    throw new Error("replaceUndeliveredSnapshotReportArtifact requires the SQL adapter");
+
+  },
+
+
+  async beginSnapshotReportDelivery(): Promise<never> {
+
+    throw new Error("beginSnapshotReportDelivery requires the SQL adapter");
+
+  },
+
+
+  async finalizeSnapshotReportDelivery(): Promise<never> {
+
+    throw new Error("finalizeSnapshotReportDelivery requires the SQL adapter");
+
+  },
+
+
+  async releaseSnapshotReportDeliveryClaim(): Promise<never> {
+
+    throw new Error("releaseSnapshotReportDeliveryClaim requires the SQL adapter");
+
+  },
+
 
   async getLatestQaReportForAsset(
     generatedAssetId: string

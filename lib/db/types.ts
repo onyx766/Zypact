@@ -448,6 +448,9 @@ export interface SnapshotReportArtifact {
   shortReportFilename: string;
   generatedAt: string;
   publicToken: string;
+  /** True while a delivery claim is held. The raw token is never exposed. */
+  deliveryClaimActive: boolean;
+  deliveryClaimedAt: string | null;
   deliveredAt: string | null;
   deliveryMessageId: string | null;
   createdAt: string;
@@ -518,6 +521,20 @@ export interface DbAdapter {
    * two paths have incompatible source-status preconditions in SQL, and
    * this one is insert-only. Returns null when an artifact already exists.
    */
+  /* migration 0035 delivery fencing — RPC-only, service path */
+  replaceUndeliveredSnapshotReportArtifact(
+    input: ReplaceUndeliveredSnapshotReportArtifactInput
+  ): Promise<SnapshotReportArtifactRevision | null>;
+  beginSnapshotReportDelivery(
+    input: BeginSnapshotReportDeliveryInput
+  ): Promise<BegunSnapshotReportDelivery | null>;
+  finalizeSnapshotReportDelivery(
+    input: FinalizeSnapshotReportDeliveryInput
+  ): Promise<FinalizedSnapshotReportDelivery | null>;
+  releaseSnapshotReportDeliveryClaim(
+    input: ReleaseSnapshotReportDeliveryClaimInput
+  ): Promise<{ artifactId: string } | null>;
+
   insertSnapshotReportArtifactBackfill(
     input: SaveSnapshotReportArtifactInput
   ): Promise<SnapshotReportArtifact | null>;
@@ -728,4 +745,60 @@ export interface DbAdapter {
   getLatestQaReportForAsset(
     generatedAssetId: string
   ): Promise<QaReportRow | null>;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Migration 0035 — snapshot report delivery fencing                          */
+/* -------------------------------------------------------------------------- */
+
+export interface ReplaceUndeliveredSnapshotReportArtifactInput {
+  snapshotRequestId: string;
+  expectedArtifactId: string;
+  /** Canonical content revision from `snapshotReportArtifactRevision`. */
+  expectedRevision: string;
+  fullReportMarkdown: string;
+  shortReportMarkdown: string;
+}
+
+export interface SnapshotReportArtifactRevision {
+  artifactId: string;
+  revision: string;
+}
+
+export interface BeginSnapshotReportDeliveryInput {
+  snapshotRequestId: string;
+  expectedArtifactId: string;
+  expectedRevision: string;
+}
+
+/**
+ * The delivery payload a claim covers.
+ *
+ * `deliveryClaimToken` is server-only and must never be serialised to a
+ * browser. `shortReportMarkdown` is what the provider must receive verbatim.
+ */
+export interface BegunSnapshotReportDelivery {
+  artifactId: string;
+  revision: string;
+  deliveryClaimToken: string;
+  fullReportMarkdown: string;
+  shortReportMarkdown: string;
+}
+
+export interface FinalizeSnapshotReportDeliveryInput {
+  snapshotRequestId: string;
+  artifactId: string;
+  deliveryClaimToken: string;
+  deliveryMessageId: string;
+}
+
+export interface FinalizedSnapshotReportDelivery {
+  artifactId: string;
+  deliveredAt: string;
+}
+
+export interface ReleaseSnapshotReportDeliveryClaimInput {
+  snapshotRequestId: string;
+  artifactId: string;
+  deliveryClaimToken: string;
 }

@@ -433,8 +433,17 @@ function isGenericCompetitorLabel(
 
 function promptLossType(
   prompt: string,
-  competitors: PromptCompetitorCount[]
+  competitors: PromptCompetitorCount[],
+  verdict?: string
 ): string {
+  // A question the brand won is not a loss of any kind, and a partial result
+  // is not a clean one. Labelling either as a loss contradicted the outcome
+  // column standing next to it.
+  const outcome = (verdict ?? "").trim().toLowerCase();
+  if (outcome === "won") return "Won — brand recommended";
+  if (outcome === "partial") return "Present but not prioritized";
+  if (outcome === "not_relevant") return "Not relevant";
+
   const normalized = clean(prompt).toLowerCase();
   const hasNamedProduct = competitors.some(
     (item) => !isGenericCompetitorLabel(item.name)
@@ -699,12 +708,26 @@ function brandedReputationDisplay(
     : "Not tested in this snapshot";
 }
 
+/**
+ * The strategic reading in section 1.
+ *
+ * `competitors` must be scoped to the SAME buyer question the report goes on
+ * to name as the priority frame. It used to receive the project-wide tally,
+ * so the summary could tell a client to defend against products that were
+ * only recommended for a different question — or, worse, for a question they
+ * won — while section 3 named an entirely different set. When the selected
+ * question has no competing product on record the clause is dropped rather
+ * than backfilled from the global list.
+ */
 function executiveInterpretation(
   brand: string,
   brandedReputation: string,
   tone: VisibilityTone,
   competitors: string[]
 ): string {
+  // `formatList` substitutes a placeholder for an empty list, which would
+  // render as "against not enough evidence yet". Decide on the list itself.
+  const hasCompetitors = competitors.length > 0;
   const competitorText =
     formatList(competitors.slice(0, 3));
 
@@ -719,7 +742,10 @@ function executiveInterpretation(
         ? ` When the brand was named directly, the branded reputation check was **${brandedReputation}**, which supports a visibility-consolidation interpretation.`
         : " Branded reputation was not tested in this snapshot.";
 
-    return `${brand} was recommended in most of the unbranded buying prompts tested. The opportunity is not basic recovery from invisibility; it is consolidation — becoming the primary recommendation more often, improving cited-source coverage, and defending the position against ${competitorText}.${reputationSentence}`;
+    const defence = hasCompetitors
+      ? ` and defending the position against ${competitorText} in that frame`
+      : "";
+    return `${brand} was recommended in most of the unbranded buying prompts tested. The opportunity is not basic recovery from invisibility; it is consolidation — becoming the primary recommendation more often, improving cited-source coverage${defence}.${reputationSentence}`;
   }
 
   if (tone === "mixed") {
@@ -728,7 +754,10 @@ function executiveInterpretation(
         ? ` When the brand was named directly, the branded reputation check was **${brandedReputation}**.`
         : " Branded reputation was not tested in this snapshot.";
 
-    return `${brand} was recommended in some of the unbranded buyer runs tested, but not consistently as the primary recommendation. The opportunity is to consolidate that visibility into a stronger primary shortlist position against ${competitorText}.${reputationSentence}`;
+    const against = hasCompetitors
+      ? ` against ${competitorText} in the buying frame below`
+      : "";
+    return `${brand} was recommended in some of the unbranded buyer runs tested, but not consistently as the primary recommendation. The opportunity is to consolidate that visibility into a stronger primary shortlist position${against}.${reputationSentence}`;
   }
 
   if (
@@ -1138,7 +1167,8 @@ export function buildSalesReportFromMvpMarkdown(markdown: string, options: Build
             const lossType =
               promptLossType(
                 row.prompt,
-                rowCompetitors
+                rowCompetitors,
+                row.productVerdict
               );
 
             return `| ${row.prompt} | ${row.runs} | ${row.recommendedAsProduct} | ${row.citedAsSource} | ${row.productVerdict} | ${lossType} | ${competitorCell} |`;
@@ -1176,11 +1206,11 @@ ${trendLine()}
   )
 }:** ${formatList(competitorDisplay.competitors)}.
 
-${executiveInterpretation(brand, brandedReputation, tone, focusCompetitors)}
+${executiveInterpretation(brand, brandedReputation, tone, frameCompetitors)}
 ${brandedEvidenceBlock(brand, brandedEvidence)}
 ## 2. What happened in the AI probes
 ${promptFilterNote}
-| Buyer prompt tested | Runs | Recommended ${brand}? | Cited ${brand} as source? | Outcome | Loss type | Brands / products observed |
+| Buyer prompt tested | Runs | Recommended ${brand}? | Cited ${brand} as source? | Outcome | Result type | Brands / products observed |
 |---|---:|---:|---:|---|---|---|
 ${scorecardTable}
 
@@ -1238,7 +1268,7 @@ Send the evidence listed above and we can generate the publish-ready page draft,
 
 ## 6. Integrity notes
 
-- Probe source: live Perplexity Sonar responses from a live scan performed on ${reportDate}.
+- Probe source: live Perplexity Sonar responses from the stored scan for this project. This report was generated on ${reportDate}; that is the render date, not the scan date.
 - Sample size: small snapshot, not a market-wide benchmark.
 - Scope: unbranded prompts are used for visibility; branded prompts are tracked separately for reputation.
 - No new probes, LLM calls, or database writes are needed to render this short report.

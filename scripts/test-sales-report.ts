@@ -130,7 +130,11 @@ assert(
 );
 assert(vugioBody.includes("This snapshot covered 2 targeted buyer prompts for Vugio"), "renders scope CTA");
 assert(vugioBody.includes("generate the publish-ready page draft, verified against that evidence"), "renders concierge next step");
-assert(vugioBody.includes("from a live scan performed on 2026-07-10"), "uses client-safe integrity source wording");
+// The render date is no longer presented as the scan date: the renderer has
+// no trustworthy scan timestamp, so it labels what it actually knows.
+assert(vugioBody.includes("responses from the stored scan for this project"), "attributes probes to the stored scan");
+assert(vugioBody.includes("generated on 2026-07-10; that is the render date, not the scan date"), "labels the render date honestly");
+assert(!vugioBody.includes("live scan performed on 2026-07-10"), "no longer presents the render date as the scan date");
 assert(vugioBody.includes("B&H Photo"), "keeps in-frame competitor B&H Photo");
 assert(vugioBody.includes("KEH Camera"), "keeps in-frame competitor KEH Camera");
 assert(vugioBody.includes("MPB"), "keeps in-frame competitor MPB");

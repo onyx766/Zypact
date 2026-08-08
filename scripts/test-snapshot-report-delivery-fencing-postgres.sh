@@ -74,6 +74,28 @@ SQL
 }
 rev(){ q "select public.snapshot_report_artifact_revision(\$\$$1\$\$, \$\$$2\$\$);"; }
 
+# Topology check. pgcrypto sits in `public` on a stock cluster (repository CI)
+# and in `extensions` on Supabase, and migration 0035 discovers which at
+# migration time. Rather than forcing one layout, detect whichever is present
+# and assert the generated revision function actually baked THAT schema in —
+# so a regression to a hardcoded schema fails here on either environment.
+PGC_SCHEMA="$("$PSQL_BIN" "$URL" -qtA -c "select n.nspname from pg_extension e join pg_namespace n on n.oid=e.extnamespace where e.extname='pgcrypto';" 2>/dev/null)"
+if [ -z "$PGC_SCHEMA" ]; then
+  echo "FATAL: pgcrypto is not installed in the target database"
+  exit 2
+fi
+BAKED="$("$PSQL_BIN" "$URL" -qtA -c "select (regexp_match(pg_get_functiondef('public.snapshot_report_artifact_revision(text,text)'::regprocedure),'([a-zA-Z_\"-]+)\.digest'))[1];" 2>/dev/null | tr -d '\"')"
+if [ "$BAKED" != "$PGC_SCHEMA" ]; then
+  echo "FATAL: revision function references '${BAKED:-<none>}'.digest but pgcrypto is in '${PGC_SCHEMA}'"
+  exit 2
+fi
+DYN="$("$PSQL_BIN" "$URL" -qtA -c "select (pg_get_functiondef('public.snapshot_report_artifact_revision(text,text)'::regprocedure) ~* 'execute |pg_extension')::text;" 2>/dev/null)"
+if [ "$DYN" != "false" ]; then
+  echo "FATAL: revision function contains runtime dynamic SQL"
+  exit 2
+fi
+echo "  topology: pgcrypto in '${PGC_SCHEMA}'; revision function baked ${BAKED}.digest, no runtime dynamic SQL"
+
 echo "test-snapshot-report-delivery-fencing-postgres"
 reset_fixture
 

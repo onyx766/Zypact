@@ -45,7 +45,41 @@ comment on column public.snapshot_report_artifacts.delivery_claimed_at is
 -- makes the boundary unambiguous, so no combination of report bodies can
 -- collide by shifting text across the join. Both columns are NOT NULL, so
 -- there is no null case to define.
+--
+-- pgcrypto lives in different schemas depending on the environment: `public`
+-- on a stock cluster (repository CI), `extensions` on Supabase. An
+-- unqualified `digest()` cannot resolve under this function's pinned
+-- search_path on Supabase; a hardcoded `extensions.digest` cannot resolve on
+-- a stock cluster. So the schema is discovered from pg_extension at MIGRATION
+-- time and baked into the function body as a literal identifier.
+--
+-- The dynamic SQL below is DDL generation only. The function it produces is
+-- fully static: no EXECUTE, no format(), no catalog lookup at runtime. The
+-- only interpolated value is a schema name read from pg_extension and quoted
+-- with %I — nothing user- or application-controlled participates.
+do $do$
+declare
+  v_pgcrypto_schema text;
+  v_digest regprocedure;
+begin
+  select n.nspname
+    into v_pgcrypto_schema
+    from pg_extension e
+    join pg_namespace n on n.oid = e.extnamespace
+    where e.extname = 'pgcrypto';
 
+  if v_pgcrypto_schema is null then
+    raise exception 'pgcrypto extension is not installed; migration 0035 requires it';
+  end if;
+
+  -- Resolve the exact signature, not merely the name: `digest(bytea, text)`
+  -- is the overload this function relies on.
+  v_digest := to_regprocedure(format('%I.digest(bytea,text)', v_pgcrypto_schema));
+  if v_digest is null then
+    raise exception 'pgcrypto schema % does not provide digest(bytea,text)', v_pgcrypto_schema;
+  end if;
+
+  execute format($fn$
 create or replace function public.snapshot_report_artifact_revision(
   p_full_report_markdown text,
   p_short_report_markdown text
@@ -54,16 +88,19 @@ returns text
 language sql
 immutable
 set search_path = public, pg_temp
-as $$
+as $body$
   select encode(
-    digest(
-      digest(convert_to(p_full_report_markdown, 'UTF8'), 'sha256')
-      || digest(convert_to(p_short_report_markdown, 'UTF8'), 'sha256'),
-      'sha256'
+    %1$I.digest(
+      %1$I.digest(convert_to(p_full_report_markdown, 'UTF8'), 'sha256'::text)
+      || %1$I.digest(convert_to(p_short_report_markdown, 'UTF8'), 'sha256'::text),
+      'sha256'::text
     ),
     'hex'
   );
-$$;
+$body$;
+$fn$, v_pgcrypto_schema);
+end
+$do$;
 
 -- ---------------------------------------------------------------------------
 -- Replace an undelivered, unclaimed artifact

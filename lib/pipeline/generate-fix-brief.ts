@@ -11,6 +11,14 @@ import {
   type SiteReaderOutput,
 } from "@/lib/schemas/site-reader.schema";
 import type { FixBriefOutput, FixBriefStatus } from "@/lib/schemas/fix-brief.schema";
+import {
+  buildDeterministicRootCause,
+  buildFixBriefGroundingContext,
+  buildGroundedFixBriefOutput,
+  formatCompetitorRecommended,
+  hasUnsupportedQuantifiedClaim,
+} from "./fix-brief-grounding";
+import { GapMapOutputSchema } from "@/lib/schemas/gap-map.schema";
 import { withPipelineStep } from "./save-pipeline-step";
 
 /**
@@ -27,6 +35,22 @@ export const EVIDENCE_BANK_REQUIRED_MESSAGE =
 
 export const NO_LOST_PROBE_MESSAGE =
   "Run at least one lost or partial probe analysis before generating fix briefs.";
+
+/**
+ * Raised when a gap cannot be tied to one buyer question and that question's
+ * own competitors. Generation stops rather than falling back to project-wide
+ * evidence — see `fix-brief-grounding`.
+ */
+/**
+ * Replaces generated impact text that asserts a magnitude or timeline. A
+ * snapshot measures no uplift, so any such number is invention.
+ */
+export const GENERIC_EXPECTED_IMPACT =
+  "Addressing this gap creates a clearer evidence surface for this buyer " +
+  "question, which can be re-tested in a later scan.";
+
+export const UNGROUNDED_GAP_MESSAGE =
+  "This gap cannot be grounded to a single buyer question with its own competitor evidence.";
 
 export const GAP_NOT_FOUND_MESSAGE =
   "Gap not found for this project.";
@@ -46,39 +70,6 @@ export type GenerateFixBriefResult =
       usedRetry: boolean;
     }
   | { ok: false; error: string; status?: number };
-
-/**
- * Prefer a ProbeResult whose generatedPromptId is in `gap.affectedPrompts`,
- * with a lost/partial verdict when available. Falls back to the latest
- * lost/partial ProbeResult on the project. Returns `null` when nothing on
- * the project qualifies (the pipeline surfaces this as NO_LOST_PROBE).
- */
-function findProbeResultForGap(
-  affectedPrompts: string[],
-  probeResults: ProbeResult[]
-): ProbeResult | null {
-  const affected = new Set(affectedPrompts);
-  const sorted = [...probeResults].sort((a, b) =>
-    b.createdAt.localeCompare(a.createdAt)
-  );
-
-  const matchesGap = sorted.filter(
-    (r) => r.generatedPromptId && affected.has(r.generatedPromptId)
-  );
-  const lostFirst = (list: ProbeResult[]) => [
-    ...list.filter((r) => r.verdict === "lost" || r.verdict === "partial"),
-    ...list.filter((r) => r.verdict !== "lost" && r.verdict !== "partial"),
-  ];
-
-  const bestGapMatch = lostFirst(matchesGap)[0];
-  if (bestGapMatch) return bestGapMatch;
-
-  // Fallback: latest lost/partial anywhere on the project.
-  const anyLost = sorted.find(
-    (r) => r.verdict === "lost" || r.verdict === "partial"
-  );
-  return anyLost ?? null;
-}
 
 function statusFromOutput(output: FixBriefOutput): FixBriefStatus {
   return output.evidenceNeeded.length > 0 ? "needs_evidence" : "ready_for_assets";
@@ -142,7 +133,39 @@ export async function generateFixBrief(
   }
 
   const probeResults = await db.getProbeResultsByProject(input.projectId);
-  const probeResult = findProbeResultForGap(gap.affectedPrompts, probeResults);
+
+  // Provenance lives in the Gap Map JSON, not on the gap row: PR #23 records
+  // `prioritizedGaps[].promptEvidence` there, and `replaceGapsForProject`
+  // does not carry it onto individual rows. Re-read it rather than duplicate
+  // it into the schema.
+  const gapMapRow = await db.getLatestGapMap(input.projectId);
+  if (!gapMapRow) {
+    return { ok: false, error: UNGROUNDED_GAP_MESSAGE, status: 409 };
+  }
+  const gapMapParsed = GapMapOutputSchema.safeParse(gapMapRow.json);
+  if (!gapMapParsed.success) {
+    return {
+      ok: false,
+      error: `${UNGROUNDED_GAP_MESSAGE} Stored Gap Map failed schema validation.`,
+      status: 409,
+    };
+  }
+
+  const grounding = buildFixBriefGroundingContext({
+    gapRow: gap,
+    prioritizedGaps: gapMapParsed.data.prioritizedGaps,
+    probeResults,
+  });
+  if (!grounding.ok) {
+    return {
+      ok: false,
+      error: `${UNGROUNDED_GAP_MESSAGE} ${grounding.reason}`,
+      status: 409,
+    };
+  }
+  const context = grounding.context;
+
+  const probeResult = probeResults.find((r) => r.id === context.probeResultId);
   if (!probeResult) {
     return { ok: false, error: NO_LOST_PROBE_MESSAGE, status: 409 };
   }
@@ -152,28 +175,40 @@ export async function generateFixBrief(
       { projectId: input.projectId, agent: "fix-brief" },
       () =>
         runFixBriefAgent({
-          gap,
+          grounding: context,
           probeResult,
           mirrorProfile,
           evidenceBank,
         })
     );
 
+    // The grounded values replace the model's on the returned output too:
+    // a caller rendering `result.output` must not see causal prose or a
+    // competitor list the stored evidence does not support.
+    const groundedOutput = buildGroundedFixBriefOutput<FixBriefOutput>({
+      agentOutput: agent.output,
+      context,
+      genericImpact: GENERIC_EXPECTED_IMPACT,
+    });
+
     const status = statusFromOutput(agent.output);
 
     const rowInput: FixBriefRowInput = {
       gapId: gap.id,
       probeResultId: probeResult.id,
-      lostPrompt: agent.output.lostPrompt,
-      competitorRecommended: agent.output.competitorRecommended,
-      rootCause: agent.output.rootCause,
+      // Assembled from stored evidence, never from model output. The model
+      // has no way to introduce a competitor from another buyer question or
+      // to assert a cause the scan did not observe.
+      lostPrompt: groundedOutput.lostPrompt,
+      competitorRecommended: groundedOutput.competitorRecommended,
+      rootCause: groundedOutput.rootCause,
       recommendedFix: agent.output.recommendedFix,
       fixType: agent.output.fixType,
       assetsToGenerate: [...agent.output.assetsToGenerate],
       evidenceNeeded: [...agent.output.evidenceNeeded],
       evidenceAvailable: [...agent.output.evidenceAvailable],
       priority: agent.output.priority,
-      expectedImpact: agent.output.expectedImpact,
+      expectedImpact: groundedOutput.expectedImpact,
       status,
     };
 
@@ -183,7 +218,7 @@ export async function generateFixBrief(
       ok: true,
       projectId: input.projectId,
       fixBrief: saved,
-      output: agent.output,
+      output: groundedOutput,
       usedMock: agent.usedMock,
       usedRetry: agent.usedRetry,
     };

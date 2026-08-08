@@ -1,3 +1,4 @@
+import type { FixBriefGroundingContext } from "@/lib/pipeline/fix-brief-grounding";
 import { callModel } from "@/lib/llm/call-model";
 import { parseJsonOrRetry } from "@/lib/llm/parse-json-or-retry";
 import { FIX_AGENT_SYSTEM_PROMPT } from "@/lib/agent-prompts/fix-agent.prompt";
@@ -45,10 +46,36 @@ export type FixBriefMode = "fix_brief";
 export const FIX_BRIEF_MODE: FixBriefMode = "fix_brief";
 
 export interface RunFixBriefInput {
-  gap: Gap;
+  /**
+   * Deterministic, prompt-scoped grounding built before the agent runs. The
+   * agent no longer receives the persisted `gaps` row: that row's
+   * `explanation` carries the global competitor union across every affected
+   * buyer question, which is how competitors from one question came to
+   * explain a loss on another.
+   */
+  grounding: FixBriefGroundingContext;
   probeResult: ProbeResult;
   mirrorProfile: SiteReaderOutput;
   evidenceBank: EvidenceBankOutput;
+}
+
+/**
+ * A gap shape for the existing template helpers, carrying only what the
+ * grounding permits: one buyer question, its own competitors, and a
+ * prompt-scoped explanation.
+ */
+function gapFromGrounding(g: FixBriefGroundingContext): Gap {
+  return {
+    id: g.gapId,
+    projectId: "",
+    competitorName: g.promptLocalCompetitors[0] ?? null,
+    type: g.gapType,
+    severity: g.severity,
+    explanation: g.groundedExplanation,
+    affectedPrompts: [g.selectedPrompt],
+    suggestedFixDirection: g.suggestedFixDirection,
+    createdAt: "",
+  };
 }
 
 export interface RunFixBriefResult {
@@ -109,7 +136,7 @@ function buildUserMessage(input: RunFixBriefInput): string {
   return [
     `<mode>${FIX_BRIEF_MODE}</mode>`,
     "<gap>",
-    JSON.stringify(slimGap(input.gap), null, 2),
+    JSON.stringify(slimGap(gapFromGrounding(input.grounding)), null, 2),
     "</gap>",
     "<probe_result>",
     JSON.stringify(slimProbeResult(input.probeResult), null, 2),
@@ -345,7 +372,8 @@ function buildRecommendedFix(
 }
 
 export function buildMockFixBrief(input: RunFixBriefInput): FixBriefOutput {
-  const { gap, probeResult, mirrorProfile, evidenceBank } = input;
+  const { probeResult, mirrorProfile, evidenceBank } = input;
+  const gap = gapFromGrounding(input.grounding);
 
   const competitor = chooseCompetitor(gap, probeResult);
   const fixType = inferFixType(gap.type, gap.suggestedFixDirection);

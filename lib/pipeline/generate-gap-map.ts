@@ -1,7 +1,12 @@
 import { runGapMapAgent } from "@/lib/agents/gap-map";
+import {
+  buildDiagnosticCompetitors,
+  buildScorecardCompetitorEvidence,
+  isRecoveryEligible,
+} from "@/lib/pipeline/scorecard-competitors";
 import { getDb } from "@/lib/db";
 import { buildProbeSetSummary } from "@/lib/probe-results/report-selection";
-import type { Gap, GapInput, GapMapRow } from "@/lib/db/types";
+import type { Competitor, Gap, GapInput, GapMapRow } from "@/lib/db/types";
 import {
   SiteReaderOutputSchema,
   type SiteReaderOutput,
@@ -80,7 +85,26 @@ export async function generateGapMap(
     return { ok: false, error: NO_PROBE_RESULTS_MESSAGE };
   }
 
-  const competitors = await db.getCompetitorsByProject(input.projectId);
+  // Competitor evidence is grounded in the scored buyer probes rather than
+  // the project-wide discovery table. That table mixes crawled vendors and
+  // cited sources with genuine shortlist rivals and carries no prompt
+  // provenance, which is how reporting vendors displaced the products AI
+  // actually recommended against the client and left zero usable gaps.
+  //
+  // Only prompt groups that can support a *recovery* gap contribute: a won
+  // prompt is positive evidence and must never be read as a loss.
+  const competitorEvidence = buildScorecardCompetitorEvidence(
+    probeSummary.scorecardPromptGroups
+  ).filter((entry) => isRecoveryEligible(entry.outcome));
+
+  const projectCompetitors = await db.getCompetitorsByProject(input.projectId);
+
+  const competitors: Competitor[] = buildDiagnosticCompetitors({
+    projectId: input.projectId,
+    competitorEvidence,
+    projectCompetitors,
+  });
+
   if (competitors.length === 0) {
     return { ok: false, error: NO_COMPETITORS_MESSAGE };
   }
@@ -88,7 +112,13 @@ export async function generateGapMap(
   try {
     const agent = await withPipelineStep(
       { projectId: input.projectId, agent: "gap-map" },
-      () => runGapMapAgent({ mirrorProfile, probeResults, competitors })
+      () =>
+        runGapMapAgent({
+          mirrorProfile,
+          probeResults,
+          competitors,
+          competitorEvidence,
+        })
     );
 
     const gapMapRow = await db.saveGapMap(input.projectId, agent.output);

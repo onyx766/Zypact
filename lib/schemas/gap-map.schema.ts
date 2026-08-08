@@ -88,12 +88,34 @@ export const CompetitorDistanceSchema = z.object({
 });
 export type CompetitorDistance = z.infer<typeof CompetitorDistanceSchema>;
 
+/**
+ * Competitor evidence for one scored prompt inside a dimension-level gap.
+ *
+ * A gap is keyed by dimension, but the competitors that justify it belong to
+ * specific buyer questions. Without this, a gap could imply that a product
+ * recommended for one prompt explains a loss on a different one. Each entry
+ * therefore owns its own competitors, drawn only from that prompt's scored
+ * runs.
+ */
+export const GapPromptEvidenceSchema = z.object({
+  prompt: z.string().min(1),
+  promptKey: z.string().min(1),
+  verdict: z.enum(["lost", "partial"]),
+  competitors: z.array(z.string()),
+});
+export type GapPromptEvidence = z.infer<typeof GapPromptEvidenceSchema>;
+
 export const PrioritizedGapSchema = z.object({
   type: z.string().min(1),
   severity: Severity,
   explanation: z.string().min(1),
   affectedPrompts: z.array(z.string()),
   suggestedFixDirection: z.string().min(1),
+  /**
+   * Optional so gap maps stored before this field existed still parse — they
+   * live as JSON in `gap_maps.json`, so no migration is involved.
+   */
+  promptEvidence: z.array(GapPromptEvidenceSchema).optional(),
 });
 export type PrioritizedGap = z.infer<typeof PrioritizedGapSchema>;
 

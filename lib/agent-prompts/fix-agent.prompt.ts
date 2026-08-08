@@ -67,4 +67,18 @@ Return ONLY valid JSON:
   "content": "the full asset in Markdown (or a JSON-LD string for schema)",
   "placeholders": ["list of every [EVIDENCE NEEDED] inserted"],
   "claimsUsed": [{"claim": "", "source": "evidence_bank|mirror_profile"}]
-}`;
+}
+
+GROUNDING RULES (enforced deterministically after you answer):
+- Name only the competitors supplied for this buyer question. Do not
+  introduce any other competitor brand in any field.
+- Do not state why an AI system recommended, omitted, or ranked anything.
+  The runs record an outcome, not a mechanism. Never write that an AI
+  "could not find", "had no basis", "did not trust", or "ignored" a brand,
+  and never promise that a change will make an AI trust or recommend it.
+- Do not promise numeric outcomes — percentages, ranking gains, traffic or
+  revenue lifts, or fixed timelines — unless supplied as evidence. Counts
+  inside an implementation instruction are fine.
+- recommendedFix describes the action to take.
+- expectedImpact stays qualitative and re-testable.
+`;

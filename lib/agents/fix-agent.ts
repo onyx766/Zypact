@@ -1,4 +1,5 @@
 import type { FixBriefGroundingContext } from "@/lib/pipeline/fix-brief-grounding";
+import { validateFixBriefGeneratedFields } from "@/lib/pipeline/fix-brief-grounding";
 import { callModel } from "@/lib/llm/call-model";
 import { parseJsonOrRetry } from "@/lib/llm/parse-json-or-retry";
 import { FIX_AGENT_SYSTEM_PROMPT } from "@/lib/agent-prompts/fix-agent.prompt";
@@ -154,6 +155,31 @@ function buildUserMessage(input: RunFixBriefInput): string {
 /*  Agent entry point                                                         */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * `FixBriefOutputSchema` plus the grounding checks on generated prose.
+ *
+ * Wiring the semantic rules into the schema is what lets a violation reuse
+ * the existing single repair retry: `parseJsonOrRetry` sees a failed parse
+ * and asks the model to correct it once, then fails closed. No extra
+ * provider call, and no path that persists an unvalidated claim.
+ */
+export function buildValidatedFixBriefSchema(grounding: FixBriefGroundingContext) {
+  return FixBriefOutputSchema.superRefine((output, ctx) => {
+    for (const issue of validateFixBriefGeneratedFields({
+      recommendedFix: output.recommendedFix,
+      expectedImpact: output.expectedImpact,
+      allowedCompetitors: grounding.promptLocalCompetitors,
+      knownCompetitors: grounding.knownCompetitors,
+    })) {
+      ctx.addIssue({
+        code: "custom",
+        path: [issue.field],
+        message: `${issue.kind}: ${issue.field} ${issue.detail}`,
+      });
+    }
+  });
+}
+
 export async function runFixBriefAgent(
   input: RunFixBriefInput
 ): Promise<RunFixBriefResult> {
@@ -170,9 +196,14 @@ export async function runFixBriefAgent(
     mockResponse,
   };
 
+  // Semantic grounding is enforced through the schema so a violation
+  // re-enters the existing single repair retry — no extra provider call, and
+  // no path that persists an unvalidated claim.
+  const schema = buildValidatedFixBriefSchema(input.grounding);
+
   const initial = await callModel(call);
   const parsed = await parseJsonOrRetry({
-    schema: FixBriefOutputSchema,
+    schema,
     rawOutput: initial.content,
     originalCall: call,
   });

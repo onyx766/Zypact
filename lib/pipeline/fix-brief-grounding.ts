@@ -24,7 +24,10 @@
  * Pure: no database, no provider, no network.
  */
 
-import { normalizePromptKey } from "@/lib/pipeline/scorecard-competitors";
+import {
+  normalizeCompetitorKey,
+  normalizePromptKey,
+} from "@/lib/pipeline/scorecard-competitors";
 import type { PrioritizedGap } from "@/lib/schemas/gap-map.schema";
 import type { Gap, ProbeResult } from "@/lib/db/types";
 
@@ -45,6 +48,13 @@ export interface FixBriefGroundingContext {
   probeResultId: string;
   /** Grounded, prompt-scoped replacement for the global-union explanation. */
   groundedExplanation: string;
+  /**
+   * Every competitor named anywhere in the matched gap's evidence, across
+   * all of its buyer questions. Generated prose may mention those in
+   * `promptLocalCompetitors`; naming any other known competitor is
+   * cross-prompt contamination and is rejected.
+   */
+  knownCompetitors: string[];
 }
 
 export type FixBriefGroundingResult =
@@ -234,6 +244,9 @@ export function buildFixBriefGroundingContext(params: {
       selectedVerdict: entry.verdict,
       promptLocalCompetitors,
       probeResultId: picked.probeResult.id,
+      knownCompetitors: Array.from(
+        new Set((matched.gap.promptEvidence ?? []).flatMap((e) => e.competitors))
+      ).filter((n) => n.trim() !== ""),
       groundedExplanation: buildGroundedExplanation(entry.prompt, entry.verdict, promptLocalCompetitors),
     },
   };
@@ -291,7 +304,8 @@ export function buildDeterministicRootCause(context: FixBriefGroundingContext): 
 }
 
 /** Numeric-claim shapes that stored evidence cannot support. */
-const UNSUPPORTED_NUMERIC = /\b\d+(?:\.\d+)?\s*(?:%|percent|x\b|×)|\b(?:\d+\s*(?:days?|weeks?|months?)\b)|#\s?\d+\b/i;
+const UNSUPPORTED_NUMERIC =
+  /\b\d+(?:\.\d+)?\s*(?:%|percent|x\b|×)|\b\d+\s*(?:days?|weeks?|months?)\b|#\s?\d+\b|\b\d+\s*(?:ranking|rank|position|place|spot)s?\b/i;
 
 /**
  * Rejects generated impact text that asserts a magnitude or timeline.
@@ -299,8 +313,22 @@ const UNSUPPORTED_NUMERIC = /\b\d+(?:\.\d+)?\s*(?:%|percent|x\b|×)|\b(?:\d+\s*(
  * Nothing in a snapshot measures uplift, so a number here is invention
  * regardless of how plausible it reads. Qualitative claims pass.
  */
+/** Outcome nouns a magnitude claim would attach to. */
+const OUTCOME_NOUN =
+  "(?:visibility|share of voice|share|recommendation rate|recommendations?|mention rate|" +
+  "mentions?|traffic|revenue|rankings?|rank|positions?|conversions?|citations?|leads?|pipeline)";
+/**
+ * Word-form multipliers ("double AI visibility"). The negative lookahead
+ * keeps "double-check the comparison table" — an implementation
+ * instruction — out of the claim class.
+ */
+const UNSUPPORTED_MULTIPLIER = new RegExp(
+  `\\b(?:doubl|tripl|quadrupl|halv)(?:e|es|ed|ing)\\b(?!-)[^.]{0,40}\\b${OUTCOME_NOUN}\\b`,
+  "i"
+);
+
 export function hasUnsupportedQuantifiedClaim(text: string): boolean {
-  return UNSUPPORTED_NUMERIC.test(text);
+  return UNSUPPORTED_NUMERIC.test(text) || UNSUPPORTED_MULTIPLIER.test(text);
 }
 
 /**
@@ -329,4 +357,147 @@ export function buildGroundedFixBriefOutput<
       ? genericImpact
       : agentOutput.expectedImpact,
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Generated free-text validation                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Whether `text` names `competitor` as an entity.
+ *
+ * Matched on normalized word boundaries rather than raw substring, so
+ * "Salesforce" does not match inside "Salesforce Revenue Intelligence" when
+ * only the longer name is known, and "People.ai" survives its punctuation.
+ */
+function mentionsCompetitor(text: string, competitor: string): boolean {
+  const needle = normalizeCompetitorKey(competitor);
+  if (needle === "") return false;
+  const hay = ` ${normalizeCompetitorKey(text).replace(/[^a-z0-9. ]+/g, " ").replace(/\s+/g, " ")} `;
+  const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Allow sentence punctuation to follow the entity ("…against Dreamdata.").
+  return new RegExp(`(^| )${esc}[.,;:!?]?( |$)`).test(hay);
+}
+
+/**
+ * Known competitors named in `text` that the selected buyer question does
+ * not license.
+ *
+ * Scope note: this detects contamination from the *stored* competitor
+ * universe — the products the Gap Map recorded for this gap's other buyer
+ * questions. That is exactly the production defect. It is not named-entity
+ * recognition and makes no claim about brands absent from stored evidence.
+ */
+export function foreignCompetitorsMentioned(
+  text: string,
+  allowed: readonly string[],
+  known: readonly string[]
+): string[] {
+  const allowedKeys = new Set(allowed.map(normalizeCompetitorKey));
+  return known.filter(
+    (name) => !allowedKeys.has(normalizeCompetitorKey(name)) && mentionsCompetitor(text, name)
+  );
+}
+
+/**
+ * Assertions about *why* an AI system produced a recommendation, or promises
+ * about how it will behave.
+ *
+ * Deliberately narrow: it targets a subject (the AI/model/assistant, or a
+ * competitor winning) bound to a reason or a trust/recommend promise. A scan
+ * records an outcome and never a mechanism, so these are unsupported
+ * regardless of how they are phrased.
+ */
+const AI_SUBJECT =
+  "(?:ai|a\\.i\\.|llm|model|assistant|assistants|chatgpt|perplexity|gemini|claude|search engines?)";
+/** Verbs describing a recommendation outcome an AI system produced. */
+const OUTCOME_VERB =
+  "(?:favou?r(?:s|ed|ing)?|prefer(?:s|red|ring)?|choos(?:e|es|ing)|chose|overlook(?:s|ed|ing)?|" +
+  "surfac(?:e|es|ed|ing)|rank(?:s|ed|ing)?|recommend(?:s|ed|ing)?|trust(?:s|ed|ing)?|" +
+  "ignor(?:e|es|ed|ing)|omit(?:s|ted|ting)?|prioriti[sz]e[sd]?|list(?:s|ed)?)";
+/** Connectives that bind an outcome to an asserted reason. */
+const CAUSAL_CONNECTIVE =
+  "(?:because|due to|since|as|thanks to|owing to|on account of)";
+
+/**
+ * Assertions about *why* an AI system produced a recommendation, or promises
+ * about how it will behave.
+ *
+ * Deliberately scoped: each pattern requires an AI/model subject (or a
+ * passive recommendation outcome) bound to a reason or a future promise. A
+ * causal sentence with no AI recommendation in it — "Create a page because
+ * the sales team needs one" — is not this class and stays allowed.
+ *
+ * A scan records an outcome, never a mechanism, so these are unsupported
+ * however they are phrased.
+ */
+const AI_CAUSAL_PATTERNS: RegExp[] = [
+  // "AI favors Clari due to stronger content" / "The model prefers Gong since …"
+  new RegExp(`${AI_SUBJECT}\\b[^.]{0,60}\\b${OUTCOME_VERB}\\b[^.]{0,60}\\b${CAUSAL_CONNECTIVE}\\b`, "i"),
+  // Fronted cause: "Because <brand> lacks proof, AI recommends alternatives."
+  new RegExp(`\\b${CAUSAL_CONNECTIVE}\\b[^.]{0,120}?\\b${AI_SUBJECT}\\b[^.]{0,40}\\b${OUTCOME_VERB}\\b`, "i"),
+  // Passive outcome + reason: "<brand> is overlooked because its site …"
+  new RegExp(`\\b(?:is|was|are|were|isn't|is not|aren't)\\b[^.]{0,40}\\b(?:${OUTCOME_VERB})\\b[^.]{0,60}\\b${CAUSAL_CONNECTIVE}\\b`, "i"),
+  // Noun cause: "The lack of third-party proof is why <brand> isn't recommended."
+  new RegExp(`\\bis (?:the reason )?why\\b[^.]{0,80}\\b${OUTCOME_VERB}\\b`, "i"),
+  new RegExp(`\\bthe reason\\b[^.]{0,60}\\b${OUTCOME_VERB}\\b`, "i"),
+  // Forward promise: "will cause AI systems to recommend …" / "make AI trust …"
+  new RegExp(`\\b(?:will|would|should|can|could)\\b[^.]{0,40}\\b(?:cause|make|lead|get|drive|push)\\b[^.]{0,40}${AI_SUBJECT}\\b`, "i"),
+  new RegExp(`${AI_SUBJECT}\\b[^.]{0,60}\\b(?:will|would|should)\\b[^.]{0,40}\\b(?:start|begin)?\\s*\\b${OUTCOME_VERB}\\b`, "i"),
+  // "AI could not find / had no basis / did not trust"
+  new RegExp(`${AI_SUBJECT}\\b[^.]{0,80}\\b(?:could not|couldn't|cannot|can't|did not|didn't|does not|doesn't|has no|had no)\\b[^.]{0,40}\\b(?:find|see|trust|basis|reason|recogni[sz]e|understand)\\b`, "i"),
+  // "Clari wins because AI sees it as more authoritative."
+  /\b(?:wins?|won|outranks?|beats?)\b[^.]{0,60}\bbecause\b/i,
+];
+
+/** Sentences asserting an unproven AI causal mechanism. */
+export function assertsAiCausalClaim(text: string): boolean {
+  return AI_CAUSAL_PATTERNS.some((re) => re.test(text));
+}
+
+export interface FixBriefFieldIssue {
+  field: "recommendedFix" | "expectedImpact";
+  kind: "foreign_competitor" | "unsupported_quantified_claim" | "unsupported_causal_claim";
+  detail: string;
+}
+
+/**
+ * Validates the fields the model still writes.
+ *
+ * Runs before persistence and before the pipeline returns, and is wired
+ * through the schema so a violation re-enters the existing single repair
+ * retry rather than adding a provider call.
+ */
+export function validateFixBriefGeneratedFields(params: {
+  recommendedFix: string;
+  expectedImpact: string;
+  allowedCompetitors: readonly string[];
+  knownCompetitors: readonly string[];
+}): FixBriefFieldIssue[] {
+  const { allowedCompetitors, knownCompetitors } = params;
+  const issues: FixBriefFieldIssue[] = [];
+
+  for (const field of ["recommendedFix", "expectedImpact"] as const) {
+    const text = params[field];
+    const foreign = foreignCompetitorsMentioned(text, allowedCompetitors, knownCompetitors);
+    if (foreign.length > 0) {
+      issues.push({
+        field, kind: "foreign_competitor",
+        detail: `names ${foreign.join(", ")}, evidenced for a different buyer question`,
+      });
+    }
+    if (hasUnsupportedQuantifiedClaim(text)) {
+      issues.push({
+        field, kind: "unsupported_quantified_claim",
+        detail: "asserts a magnitude or timeline the stored evidence does not measure",
+      });
+    }
+    if (assertsAiCausalClaim(text)) {
+      issues.push({
+        field, kind: "unsupported_causal_claim",
+        detail: "asserts why an AI system produced its recommendation",
+      });
+    }
+  }
+  return issues;
 }

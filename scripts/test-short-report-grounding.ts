@@ -95,6 +95,22 @@ No Fix Brief generated yet.
 |---|---|
 ${[...opts.lostCompetitors, ...opts.otherCompetitors].map((c) => `| ${c} | 3 |`).join("\n")}
 
+### Live Perplexity Sonar probe · product verdict: **lost**
+
+- **prompt**: ${opts.lostPrompt}
+- **scorecard status**: included
+- **competitors mentioned (position | name | mentions)**:
+${opts.lostCompetitors.map((c, i) => `| ${i + 1} | ${c} | 3 |`).join("\n")}
+- **sources cited**:
+
+### Live Perplexity Sonar probe · product verdict: **partial**
+
+- **prompt**: ${opts.otherPrompt}
+- **scorecard status**: included
+- **competitors mentioned (position | name | mentions)**:
+${opts.otherCompetitors.map((c, i) => `| ${i + 1} | ${c} | 3 |`).join("\n")}
+- **sources cited**:
+
 ${fixBrief}`;
 }
 
@@ -198,6 +214,12 @@ console.log("\n [H real Fix Brief renders that brief]");
 }
 
 // ---------- I/J grounding and no cross-prompt leakage ----------
+// The earlier version of this block was vacuous: the fixture carried only the
+// global "Which competitors appeared instead" table, so `frameCompetitors`
+// was always empty and "X does not leak" passed because no competitor name
+// ever reached the sentence. A mutation pointing the lookup at the wrong
+// prompt therefore survived. The fixture now carries real per-prompt probe
+// blocks, and fixture quality is asserted before the grounding claim.
 console.log("\n [I/J prompt grounding, no cross-prompt leakage]");
 {
   const md = fixture({
@@ -208,6 +230,15 @@ console.log("\n [I/J prompt grounding, no cross-prompt leakage]");
   });
   const out = buildSalesReportFromMvpMarkdown(md).markdown;
   const section3 = (out.split("## 3.")[1] ?? "").split("## 4.")[0] ?? "";
+
+  // Fixture quality: the frame must actually name competitors, otherwise
+  // every leakage assertion below is meaningless.
+  const focusHits = HS_LOST_COMPETITORS.filter((c) => section3.includes(c));
+  check(`fixture quality: focus prompt contributes competitors (${focusHits.length} of ${HS_LOST_COMPETITORS.length})`,
+    focusHits.length > 0);
+  check("fixture quality: the two prompts have distinct competitor sets",
+    HS_LOST_COMPETITORS.every((c) => !HS_PARTIAL_COMPETITORS.includes(c)));
+
   check("why-this-matters quotes a real stored prompt", section3.includes(HS_LOST));
   check("frame does not quote the other prompt", !section3.includes(HS_PARTIAL));
   for (const leaked of HS_PARTIAL_COMPETITORS) {

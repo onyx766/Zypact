@@ -6,6 +6,8 @@ import {
 import { ApproveButton } from "../approve-button";
 import { RejectButton } from "../reject-button";
 import { SendReportButton } from "../send-report-button";
+import { ReplaceReportPanel } from "../replace-report-panel";
+import { toSnapshotReportPublicationState } from "@/lib/snapshot-requests/report-publication-state";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -607,6 +609,14 @@ export default async function SnapshotRequestDetailPage({
           )}
         </section>
       </section>
+            {artifact ? (
+              <ReplaceReportPanel
+                requestId={request.id}
+                state={toSnapshotReportPublicationState(
+                  artifact
+                )}
+              />
+            ) : null}
     </main>
   );
 }

@@ -9,12 +9,14 @@
  */
 
 import {
+  buildDiagnosticCompetitors,
   buildPromptCompetitorEvidence,
   buildScorecardCompetitorEvidence,
   evidencedCompetitorKeys,
   isRecoveryEligible,
 } from "@/lib/pipeline/scorecard-competitors";
 import type { PromptProbeAggregate } from "@/lib/probe-results/report-selection";
+import type { Competitor } from "@/lib/db/types";
 
 let failures = 0;
 function check(label: string, condition: boolean): void {
@@ -173,6 +175,46 @@ console.log("test-scorecard-competitors");
   } as unknown as PromptProbeAggregate;
   check("malformed mentions are skipped without throwing",
     buildPromptCompetitorEvidence(bad).competitors.length === 0);
+}
+
+// ---------- production handoff: project rows may enrich, never introduce ----
+// This exercises the real assembly used by generate-gap-map.ts. It is the
+// invariant at the heart of the original defect: the project discovery table
+// mixes crawled vendors and cited sources with genuine rivals, and it used to
+// define the Gap Map competitor set outright.
+console.log("\n [production handoff: buildDiagnosticCompetitors]");
+{
+  const evidence = [
+    buildPromptCompetitorEvidence(lostGroup),     // Clari, Gong, SRI, People.ai
+    buildPromptCompetitorEvidence(partialGroup),  // Dreamdata, Ruler Analytics
+  ];
+  const projectRow = (name: string, extra: Partial<Competitor> = {}): Competitor => ({
+    id: `proj-${name}`, projectId: "proj", name, website: `https://${name}.com`,
+    discoverySource: "client_site", mentionCount: 99, promptIds: ["x"],
+    threatLevel: "high", confidence: "verified", isPhantom: false, isBlindSpot: false,
+    createdAt: "2020-01-01T00:00:00.000Z", updatedAt: "2020-01-01T00:00:00.000Z",
+    ...extra,
+  });
+  const result = buildDiagnosticCompetitors({
+    projectId: "proj",
+    competitorEvidence: evidence,
+    // "clari" is a normalization variant of the scored "Clari".
+    projectCompetitors: [projectRow("clari"), projectRow("Whatagraph"), projectRow("Supermetrics")],
+  });
+  const keys = result.map((c) => c.name.trim().toLowerCase());
+
+  check("scored products are present", ["clari", "gong", "dreamdata"].every((n) => keys.includes(n)));
+  check("PROJECT_ONLY 'Whatagraph' excluded", !keys.includes("whatagraph"));
+  check("PROJECT_ONLY 'Supermetrics' excluded", !keys.includes("supermetrics"));
+  check("no project-only row inflated the set", result.length === 6);
+  const clari = result.find((c) => c.name.trim().toLowerCase() === "clari");
+  check("matched project row enriches by normalized key (website carried)",
+    clari?.website === "https://clari.com");
+  check("enrichment does not override scored mention count",
+    clari?.mentionCount === 3);
+  const gong = result.find((c) => c.name === "Gong");
+  check("scored product without a project row still present", gong !== undefined);
+  check("unenriched product gets neutral defaults", gong?.website === null);
 }
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);

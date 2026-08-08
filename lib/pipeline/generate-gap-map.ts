@@ -1,9 +1,8 @@
 import { runGapMapAgent } from "@/lib/agents/gap-map";
 import {
+  buildDiagnosticCompetitors,
   buildScorecardCompetitorEvidence,
-  evidencedCompetitorKeys,
   isRecoveryEligible,
-  normalizeCompetitorKey,
 } from "@/lib/pipeline/scorecard-competitors";
 import { getDb } from "@/lib/db";
 import { buildProbeSetSummary } from "@/lib/probe-results/report-selection";
@@ -98,40 +97,12 @@ export async function generateGapMap(
     probeSummary.scorecardPromptGroups
   ).filter((entry) => isRecoveryEligible(entry.outcome));
 
-  const evidencedKeys = evidencedCompetitorKeys(competitorEvidence);
   const projectCompetitors = await db.getCompetitorsByProject(input.projectId);
 
-  // Project rows may enrich a product the scored runs already evidenced
-  // (website, ids, threat level). They may not introduce one: a name with no
-  // recommendation evidence has not been shown to compete for this buyer.
-  const enrichmentByKey = new Map(
-    projectCompetitors.map((row) => [normalizeCompetitorKey(row.name), row])
-  );
-
-  const competitors: Competitor[] = Array.from(evidencedKeys).map((key) => {
-    const evidenced = competitorEvidence
-      .flatMap((entry) => entry.competitors)
-      .filter((c) => c.nameKey === key);
-    const strongest = evidenced.reduce((best, c) =>
-      c.recommendationCount > best.recommendationCount ? c : best
-    );
-    const enrichment = enrichmentByKey.get(key);
-
-    return {
-      id: enrichment?.id ?? `scorecard:${key}`,
-      projectId: input.projectId,
-      name: enrichment?.name ?? strongest.name,
-      website: enrichment?.website ?? null,
-      discoverySource: "ai_answer",
-      mentionCount: evidenced.reduce((sum, c) => sum + c.recommendationCount, 0),
-      promptIds: enrichment?.promptIds ?? [],
-      threatLevel: enrichment?.threatLevel ?? "medium",
-      confidence: enrichment?.confidence ?? "unverified",
-      isPhantom: enrichment?.isPhantom ?? false,
-      isBlindSpot: enrichment?.isBlindSpot ?? false,
-      createdAt: enrichment?.createdAt ?? new Date(0).toISOString(),
-      updatedAt: enrichment?.updatedAt ?? new Date(0).toISOString(),
-    };
+  const competitors: Competitor[] = buildDiagnosticCompetitors({
+    projectId: input.projectId,
+    competitorEvidence,
+    projectCompetitors,
   });
 
   if (competitors.length === 0) {

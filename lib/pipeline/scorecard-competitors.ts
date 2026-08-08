@@ -26,7 +26,7 @@
  */
 
 import type { PromptProbeAggregate } from "@/lib/probe-results/report-selection";
-import type { ProbeResult } from "@/lib/db/types";
+import type { Competitor, ProbeResult } from "@/lib/db/types";
 
 /** Where a piece of competitor evidence came from. */
 export type CompetitorEvidenceSource = "probe_recommended_product";
@@ -203,4 +203,54 @@ export function evidencedCompetitorKeys(
     for (const competitor of entry.competitors) keys.add(competitor.nameKey);
   }
   return keys;
+}
+
+/**
+ * The competitor set handed to the Gap Map.
+ *
+ * Built from scored recommendation evidence only. Project rows — the
+ * discovery table that mixes crawled vendors and cited sources with genuine
+ * rivals — may enrich a product the scored runs already evidenced, but can
+ * never introduce one: the result is keyed by `evidencedCompetitorKeys`, so
+ * a name absent from that set has no entry to attach to.
+ *
+ * Pure: no database, no provider. `projectId` is data for the returned rows.
+ */
+export function buildDiagnosticCompetitors(params: {
+  projectId: string;
+  competitorEvidence: PromptCompetitorEvidence[];
+  projectCompetitors: Competitor[];
+}): Competitor[] {
+  const { projectId, competitorEvidence, projectCompetitors } = params;
+
+  const evidencedKeys = evidencedCompetitorKeys(competitorEvidence);
+  const enrichmentByKey = new Map(
+    projectCompetitors.map((row) => [normalizeCompetitorKey(row.name), row])
+  );
+
+  return Array.from(evidencedKeys).map((key) => {
+    const evidenced = competitorEvidence
+      .flatMap((entry) => entry.competitors)
+      .filter((c) => c.nameKey === key);
+    const strongest = evidenced.reduce((best, c) =>
+      c.recommendationCount > best.recommendationCount ? c : best
+    );
+    const enrichment = enrichmentByKey.get(key);
+
+    return {
+      id: enrichment?.id ?? `scorecard:${key}`,
+      projectId,
+      name: enrichment?.name ?? strongest.name,
+      website: enrichment?.website ?? null,
+      discoverySource: "ai_answer",
+      mentionCount: evidenced.reduce((sum, c) => sum + c.recommendationCount, 0),
+      promptIds: enrichment?.promptIds ?? [],
+      threatLevel: enrichment?.threatLevel ?? "medium",
+      confidence: enrichment?.confidence ?? "unverified",
+      isPhantom: enrichment?.isPhantom ?? false,
+      isBlindSpot: enrichment?.isBlindSpot ?? false,
+      createdAt: enrichment?.createdAt ?? new Date(0).toISOString(),
+      updatedAt: enrichment?.updatedAt ?? new Date(0).toISOString(),
+    };
+  });
 }

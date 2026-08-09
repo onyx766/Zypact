@@ -367,8 +367,24 @@ function isFixBriefStaleForProbeSet(fb: FixBriefRow, input: BuildMvpReportInput,
   return Boolean(latest && timeValueForReport(fb.updatedAt || fb.createdAt) < timeValueForReport(latest));
 }
 
+/**
+ * The single boundary between stored Fix Briefs and anything a client reads.
+ *
+ * `historical` is dropped here rather than at each call site. Every caller of
+ * this helper renders a recommendation to the customer, and a brief is marked
+ * historical precisely because its recommendation must no longer be acted on
+ * — HockeyStack's was retracted for asserting a cause the evidence never
+ * established. Filtering centrally also removes the ordering hazard: ties
+ * break on createdAt, so a newer historical brief could otherwise become the
+ * headline fix.
+ *
+ * Staleness is a separate, weaker signal and keeps its existing behaviour —
+ * stale briefs still render, sorted last and labelled.
+ */
 function sortFixBriefsForDisplay(briefs: FixBriefRow[], input: BuildMvpReportInput, brandName?: string): FixBriefRow[] {
-  return [...briefs].sort((a, b) => {
+  return briefs
+    .filter((fb) => fb.status !== "historical")
+    .sort((a, b) => {
     const aStale = isFixBriefStaleForProbeSet(a, input, brandName) ? 1 : 0;
     const bStale = isFixBriefStaleForProbeSet(b, input, brandName) ? 1 : 0;
     return (aStale - bStale) || (a.priority - b.priority) || (timeValueForReport(b.createdAt) - timeValueForReport(a.createdAt));
@@ -1400,10 +1416,11 @@ function sectionRecommendedNextActions(
   parts.push("");
   if (input.gaps.length === 0) {
     parts.push("_No prioritized gaps to translate into gap-recovery actions yet._");
-    if (input.fixBriefs.length > 0) {
+    const consolidationBriefs = sortFixBriefsForDisplay(input.fixBriefs, input, brandName);
+    if (consolidationBriefs.length > 0) {
       parts.push("");
       parts.push("### Consolidation actions");
-      for (const fb of sortFixBriefsForDisplay(input.fixBriefs, input, brandName)) {
+      for (const fb of consolidationBriefs) {
         const stale = isFixBriefStaleForProbeSet(fb, input, brandName);
         const prefix = stale ? "Historical Fix Brief — regenerate before using:" : "Current Fix Brief:";
         parts.push(`- ${prefix} **${fb.fixType}** — ${mdEscape(fb.recommendedFix)} Expected impact: ${mdEscape(fb.expectedImpact)}`);
@@ -1427,9 +1444,10 @@ function sectionRecommendedNextActions(
   });
   parts.push("");
   // Also expose Fix Brief-derived asset generation as a follow-up action.
-  if (input.fixBriefs.length > 0) {
+  const followUpBriefs = sortFixBriefsForDisplay(input.fixBriefs, input, brandName);
+  if (followUpBriefs.length > 0) {
     parts.push("### From the Fix Briefs");
-    for (const fb of sortFixBriefsForDisplay(input.fixBriefs, input, brandName)) {
+    for (const fb of followUpBriefs) {
       const stale = isFixBriefStaleForProbeSet(fb, input, brandName);
       const prefix = stale ? "Historical Fix Brief — regenerate before using:" : "Publish";
       const line = `- ${prefix} **${fb.fixType}** to answer the lost prompt _\"${mdEscape(fb.lostPrompt)}\"_ — expected impact: ${mdEscape(fb.expectedImpact)}`;
@@ -1514,13 +1532,15 @@ function sectionFixBrief(input: BuildMvpReportInput): string {
   const parts: string[] = [];
   parts.push(`## ${REPORT_SECTIONS[12]}`);
   parts.push("");
-  if (input.fixBriefs.length === 0) {
+  const brandName = resolveCompanyName(input.project, input.mirrorProfile).name;
+  const sorted = sortFixBriefsForDisplay(input.fixBriefs, input, brandName);
+  // A project whose only briefs are historical reads the same as one with no
+  // brief at all: the established empty state, never retracted content.
+  if (sorted.length === 0) {
     parts.push("_No Fix Brief generated yet._");
     parts.push("");
     return parts.join("\n");
   }
-  const brandName = resolveCompanyName(input.project, input.mirrorProfile).name;
-  const sorted = sortFixBriefsForDisplay(input.fixBriefs, input, brandName);
   for (const fb of sorted) {
     const displayStatus = derivedFixBriefStatus(input, fb, brandName);
     parts.push(`### Fix Brief · \`${fb.id}\` · priority ${fb.priority} · status: **${displayStatus}**`);

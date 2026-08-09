@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { ZypactLogo } from "@/components/zypact-logo";
 import { getDb } from "@/lib/db";
-import { PRICING_PLANS } from "@/lib/pricing/plans";
 import {
   isValidPublicReportToken,
 } from "@/lib/snapshot-requests/public-report-token";
@@ -28,14 +27,6 @@ export const metadata: Metadata = {
     },
   },
 };
-
-const growthUrl =
-  process.env.STRIPE_GROWTH_URL ||
-  "/#pricing";
-
-const proUrl =
-  process.env.STRIPE_PRO_URL ||
-  "/#pricing";
 
 function MetricCard({
   label,
@@ -343,73 +334,30 @@ export default async function PublicReportPage({
           ) : null}
         </section>
 
+        {/*
+          Validation phase: this preview is a founder-led conversation, not a
+          self-service checkout. No price, no plan card, no Stripe link. There
+          is no booking route in this app yet, so the copy renders without a
+          button rather than pointing somewhere invented.
+        */}
         <section className="report-upgrade">
           <p className="report-section-label">
-            Continue with Zypact
+            Want to go deeper?
           </p>
-
-          <h2>
-            Turn this snapshot into
-            recurring fixes
-          </h2>
 
           <p>
-            {report.nextStep ||
-              "Expand prompt coverage, track competitor movement, and turn the findings into evidence-verified fixes."}
+            I can walk you through the buyer
+            question you&rsquo;re losing, the
+            evidence behind it, and the first
+            fix worth testing.
           </p>
 
-          <div className="report-plan-grid">
-            <article>
-              <span>
-                {
-                  PRICING_PLANS.growth
-                    .name
-                }
-              </span>
-              <strong>
-                {
-                  PRICING_PLANS.growth
-                    .billingLabel
-                }
-              </strong>
-              <p>
-                {
-                  PRICING_PLANS.growth
-                    .positioning
-                }
-              </p>
-              <a
-                href={growthUrl}
-                className="button button-primary"
-              >
-                Start Growth
-              </a>
-            </article>
-
-            <article>
-              <span>
-                {PRICING_PLANS.pro.name}
-              </span>
-              <strong>
-                {
-                  PRICING_PLANS.pro
-                    .billingLabel
-                }
-              </strong>
-              <p>
-                {
-                  PRICING_PLANS.pro
-                    .positioning
-                }
-              </p>
-              <a
-                href={proUrl}
-                className="button button-secondary"
-              >
-                Start Pro
-              </a>
-            </article>
-          </div>
+          <p>
+            If useful, we can also expand the
+            snapshot across more buyer
+            questions and re-test what changes
+            after the fix.
+          </p>
         </section>
 
         <details className="report-integrity">

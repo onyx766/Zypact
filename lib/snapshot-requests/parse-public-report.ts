@@ -344,11 +344,14 @@ export function parsePublicSnapshotReport(
       executive,
       "Branded reputation"
     ),
+    // These counts are a global tally across every tested prompt, so some of
+    // the brands listed also appeared on prompts the client won or partially
+    // won. Saying they "appeared where the brand did not" overstated it.
     competitorLabel:
       /Competitors AI recommended/i.test(
         clean(competitorMatch?.[1])
       )
-        ? `Brands appearing where ${brand} did not`
+        ? "Most-mentioned brands across the tested buyer prompts"
         : clean(competitorMatch?.[1]) ||
           "Competitors observed",
     competitors:

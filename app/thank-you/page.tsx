@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 
 export default function ThankYouPage() {
   return (
-    <main className="page">
+    <main className="page thankyou-page">
       <header className="header">
         <a href="/" className="wordmark">
           Zypact

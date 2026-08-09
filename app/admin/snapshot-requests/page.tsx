@@ -42,12 +42,14 @@ export default async function SnapshotRequestsAdminPage() {
 
   return (
     <main
+      className="founder-page founder-requests-page"
       style={{
         minHeight: "100vh",
         background: "#fafafa",
       }}
     >
       <header
+        className="founder-topbar"
         style={{
           borderBottom: "1px solid #eaeaea",
           background: "#fff",
@@ -113,6 +115,7 @@ export default async function SnapshotRequestsAdminPage() {
       </header>
 
       <section
+        className="founder-shell"
         style={{
           maxWidth: 1280,
           margin: "0 auto",
@@ -165,6 +168,7 @@ export default async function SnapshotRequestsAdminPage() {
 
         {requests.length === 0 ? (
           <div
+            className="founder-empty-card"
             style={{
               border: "1px solid #e5e5e5",
               borderRadius: 14,
@@ -177,6 +181,7 @@ export default async function SnapshotRequestsAdminPage() {
           </div>
         ) : (
           <div
+            className="founder-table-card"
             style={{
               overflowX: "auto",
               border: "1px solid #e5e5e5",
@@ -279,6 +284,7 @@ export default async function SnapshotRequestsAdminPage() {
 
                     <td style={{ padding: 16 }}>
                       <span
+                        className={`founder-status founder-status-${request.status}`}
                         style={{
                           display: "inline-flex",
                           borderRadius: 999,

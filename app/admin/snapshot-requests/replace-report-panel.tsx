@@ -101,7 +101,7 @@ export function ReplaceReportPanel({
   }
 
   return (
-    <section className="mt-8 rounded-lg border border-slate-200 p-4">
+    <section className="founder-replacement-panel mt-8 rounded-lg border border-slate-200 p-4">
       <h2 className="text-base font-semibold">Stored report artifact</h2>
 
       <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-sm sm:grid-cols-4">

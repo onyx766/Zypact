@@ -96,6 +96,7 @@ export function SendReportButton({
   return (
     <div>
       <button
+        className="founder-button founder-button-primary"
         type="button"
         onClick={sendReport}
         disabled={

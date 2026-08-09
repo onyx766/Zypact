@@ -247,7 +247,11 @@ export default async function PublicReportPage({
                       </td>
                       <td>{row.cited}</td>
                       <td>
-                        <span className="report-outcome">
+                        <span
+                          className={`report-outcome report-outcome-${row.outcome
+                            .toLowerCase()
+                            .replace(/[^a-z0-9]+/g, "-")}`}
+                        >
                           {row.outcome}
                         </span>
                       </td>

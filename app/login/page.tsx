@@ -35,14 +35,10 @@ export default async function LoginPage({
       : null;
 
   return (
-    <section
-      style={{
-        maxWidth: 520,
-        margin: "0 auto",
-        padding: "96px 24px",
-      }}
-    >
+    <main className="founder-login-page">
+      <section className="founder-login-card">
       <p
+        className="founder-login-eyebrow"
         style={{
           margin: "0 0 12px",
           color: "#999",
@@ -55,6 +51,7 @@ export default async function LoginPage({
       </p>
 
       <h1
+        className="founder-login-title"
         style={{
           margin: 0,
           fontSize: 42,
@@ -65,6 +62,7 @@ export default async function LoginPage({
       </h1>
 
       <p
+        className="founder-login-copy"
         style={{
           margin: "18px 0 28px",
           color: "#666",
@@ -91,6 +89,7 @@ export default async function LoginPage({
           {errorMsg}
         </p>
       ) : null}
-    </section>
+      </section>
+    </main>
   );
 }

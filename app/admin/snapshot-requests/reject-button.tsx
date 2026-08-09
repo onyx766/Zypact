@@ -61,6 +61,7 @@ export function RejectButton({
   return (
     <div>
       <button
+        className="founder-button founder-button-danger"
         type="button"
         onClick={reject}
         disabled={busy}

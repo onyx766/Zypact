@@ -158,6 +158,7 @@ export function ApproveButton({
       />
 
       <button
+        className="founder-button founder-button-primary"
         type="button"
         onClick={approve}
         disabled={busy || !parsed.ok}

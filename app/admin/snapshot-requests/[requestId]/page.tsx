@@ -118,6 +118,7 @@ function ReportPreview({
 
   return (
     <section
+      className="founder-report-preview"
       style={{ marginTop: 24 }}
     >
       <h3
@@ -213,12 +214,14 @@ export default async function SnapshotRequestDetailPage({
 
   return (
     <main
+      className="founder-page founder-request-detail"
       style={{
         minHeight: "100vh",
         background: "#fafafa",
       }}
     >
       <section
+        className="founder-shell"
         style={{
           maxWidth: 1040,
           margin: "0 auto",
@@ -286,6 +289,7 @@ export default async function SnapshotRequestDetailPage({
           </div>
 
           <span
+            className={`founder-status founder-status-${request.status}`}
             style={{
               display:
                 "inline-flex",
@@ -304,6 +308,7 @@ export default async function SnapshotRequestDetailPage({
         </div>
 
         <section
+          className="founder-info-card"
           style={{
             border:
               "1px solid #e5e5e5",
@@ -393,6 +398,7 @@ export default async function SnapshotRequestDetailPage({
         {request.status ===
         "pending_approval" ? (
           <section
+            className="founder-decision-row"
             style={{
               display: "flex",
               gap: 12,
@@ -420,6 +426,7 @@ export default async function SnapshotRequestDetailPage({
         ) : null}
 
         <section
+          className="founder-report-card"
           style={{
             border:
               "1px solid #e5e5e5",

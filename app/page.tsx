@@ -1,20 +1,19 @@
 import type { Metadata } from "next";
 import { ZypactLogo } from "@/components/zypact-logo";
+import { HeroProcessViz, HowItWorks, LandingNav, SyntheticDemo } from "@/components/landing-interactions";
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://zypact.com";
 const snapshotFormUrl = "/scan";
 
 export const metadata: Metadata = {
-  title: "Zypact — AI visibility diagnostics for B2B SaaS teams",
+  title: "Zypact — See why AI recommends competitors instead of you",
   description:
-    "See why AI answers recommend competitors instead of your B2B SaaS brand, then get the first evidence-backed fix worth testing.",
-  alternates: {
-    canonical: siteUrl,
-  },
+    "Zypact helps B2B SaaS marketing teams see which buyer questions they lose in AI, which competitors appear instead, and the first evidence-backed fix worth testing.",
+  alternates: { canonical: siteUrl },
   openGraph: {
-    title: "Zypact — AI visibility diagnostics for B2B SaaS teams",
+    title: "Zypact — AI visibility intelligence for B2B SaaS",
     description:
-      "Test real buyer questions, see where competitors win, identify the evidence gap, and get the first fix worth testing.",
+      "Test buyer questions, see where competitors appear instead, identify the evidence gap, and get the first fix worth testing.",
     url: siteUrl,
     siteName: "Zypact",
     type: "website",
@@ -25,278 +24,179 @@ function getJsonLd() {
   return {
     "@context": "https://schema.org",
     "@graph": [
-      {
-        "@type": "Organization",
-        name: "Zypact",
-        url: siteUrl,
-      },
+      { "@type": "Organization", name: "Zypact", url: siteUrl },
       {
         "@type": "Service",
         name: "Zypact AI visibility snapshot",
         serviceType: "AI visibility diagnostic for B2B SaaS marketing teams",
         url: siteUrl,
-        provider: {
-          "@type": "Organization",
-          name: "Zypact",
-          url: siteUrl,
-        },
+        provider: { "@type": "Organization", name: "Zypact", url: siteUrl },
         description:
-          "Zypact tests buyer-style questions in live AI answers, shows where a brand is recommended, cited, or absent, and identifies the first evidence-backed fix worth testing.",
-        audience: {
-          "@type": "BusinessAudience",
-          audienceType: "B2B SaaS marketing teams",
-        },
+          "Zypact tests buyer-style questions using live Perplexity Sonar answers, shows where a brand is recommended, cited, mentioned, or absent, and identifies the first evidence-backed fix worth testing.",
+        audience: { "@type": "BusinessAudience", audienceType: "B2B SaaS marketing teams" },
       },
     ],
   };
 }
 
-const snapshotItems = [
-  "Buyer questions your brand wins or loses",
-  "Competitors that appear in the same buying frame",
-  "Whether your brand is recommended or cited",
-  "The evidence gap behind the loss",
-  "The first fix worth making",
-  "What to re-test after the change",
-];
-
-const workflow = [
-  ["01", "Buyer question", "Start with the category, comparison, alternative, and buying-intent questions that matter."],
-  ["02", "Live AI runs", "Run the questions repeatedly in the current live snapshot engine: Perplexity Sonar."],
-  ["03", "Evidence", "Separate what the answers actually showed from assumptions, then inspect the competing sources and proof."],
-  ["04", "First fix", "Prioritize one evidence-backed intervention instead of handing you a long generic checklist."],
-  ["05", "Re-test", "Run the same buyer question again after the change and compare what actually moved."],
-];
+const deliverables = [
+  ["01", "Buyer questions won or lost", "Know exactly which tested questions put you on a shortlist — and which hand the opportunity elsewhere."],
+  ["02", "Competitors in your buying frame", "See which brands appear in the specific buyer questions being tested instead of relying on a generic competitor list."],
+  ["03", "Recommended vs. cited status", "Separate being absent, mentioned, cited, and recommended so the signal is easy to interpret."],
+  ["04", "Evidence gap behind the loss", "See what evidence appears missing before making a fix, without turning an observed outcome into a causal claim."],
+  ["05", "First fix worth making", "Get one prioritized, evidence-backed action instead of a generic 40-item audit."],
+  ["06", "What to re-test afterward", "Know which buyer question should be checked again after the intervention so you can observe what changed."],
+] as const;
 
 const faqs = [
   {
-    question: "What does Zypact actually test?",
+    question: "What does the free snapshot include?",
     answer:
-      "Zypact tests buyer-style questions around categories, comparisons, alternatives, and product choice using live AI answers. The goal is to see whether your brand is recommended, cited, mentioned, or absent in the buying frames that matter.",
+      "A focused set of buyer-style questions, repeated live checks where appropriate, prompt-level recommendation and citation evidence, the competitors or sources that appeared, and the first evidence-backed fix worth testing.",
   },
   {
-    question: "Is Zypact an SEO audit?",
+    question: "Which AI platform do you test?",
     answer:
-      "No. Zypact focuses on what AI answers recommend or cite when buyers ask product, category, and comparison questions. It can complement SEO, but it is not a traditional technical SEO audit.",
+      "Perplexity Sonar only right now. The current snapshot does not represent automated coverage of ChatGPT, Gemini, Claude, or the entire AI search market.",
   },
   {
-    question: "Which AI platform does the snapshot test today?",
+    question: "Is this an SEO audit?",
     answer:
-      "The current live snapshot uses Perplexity Sonar. Zypact does not present the snapshot as equivalent coverage of ChatGPT, Gemini, Claude, or the entire AI search market.",
+      "No. Zypact focuses on what live AI answers recommend or cite when buyers ask category, comparison, alternative, and product-choice questions. It can complement SEO, but it is not a traditional technical SEO audit.",
   },
   {
-    question: "How many questions are tested?",
+    question: "Is this a full market audit?",
     answer:
-      "The free snapshot uses a focused sample of buyer questions and repeats runs where appropriate. It is a diagnostic snapshot designed to surface useful evidence, not a market-wide benchmark.",
+      "No. It is a focused diagnostic snapshot using a small set of commercially relevant buyer questions. It is designed to surface evidence and a useful next action, not to claim market-wide coverage.",
   },
   {
-    question: "What happens if my brand is missing?",
+    question: "Do you guarantee ranking or recommendation improvements?",
     answer:
-      "Zypact identifies the buying frame, the competing brands or sources that appeared, and the evidence gap behind the result. Then it recommends the first evidence-backed fix worth testing.",
+      "No. AI answers vary. Zypact records what happened, identifies evidence-backed opportunities, and gives you something specific to test rather than promising rankings, citations, recommendations, or visibility lift.",
   },
   {
-    question: "Can Zypact guarantee that AI will recommend my company?",
+    question: "What if my brand is not mentioned at all?",
     answer:
-      "No. AI answers vary. Zypact measures the evidence, records what happened, recommends a grounded intervention, and re-tests what changes rather than promising a ranking or recommendation.",
+      "That is still useful evidence. We show the exact buyer frame where your brand was absent, what brands or sources appeared when available, and the first evidence gap worth investigating.",
   },
   {
-    question: "What happens after the free snapshot?",
+    question: "What happens after the snapshot?",
     answer:
-      "The snapshot is founder-reviewed before delivery. If the finding is useful, we can walk through the lost buyer question, decide whether deeper work makes sense, apply an evidence-backed fix, and re-test the same buying frame.",
+      "A founder reviews the snapshot before delivery. If the finding is useful, deeper diagnostic or implementation work is optional — the free snapshot does not lock you into anything.",
+  },
+  {
+    question: "Do I need a subscription?",
+    answer:
+      "No subscription is required to request the free snapshot. The current launch is founder-led rather than a fully self-serve subscription checkout.",
   },
 ];
 
 export default function LandingPage() {
   return (
-    <main className="page landing-page">
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(getJsonLd()) }}
-      />
+    <main id="top" className="di-page">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(getJsonLd()) }} />
+      <LandingNav snapshotFormUrl={snapshotFormUrl} />
 
-      <header className="header landing-header">
-        <ZypactLogo href="#top" priority className="wordmark" />
-
-        <nav className="nav" aria-label="Primary navigation">
-          <a href="#snapshot">What you get</a>
-          <a href="#how-it-works">How it works</a>
-          <a href="#faq">FAQ</a>
-          <a href={snapshotFormUrl} className="button button-primary">
-            Run free snapshot
-          </a>
-        </nav>
-
-        <a href={snapshotFormUrl} className="button button-primary mobile-cta">
-          Run free snapshot
-        </a>
-      </header>
-
-      <section id="top" className="landing-hero">
-        <div className="landing-hero-copy">
-          <p className="eyebrow">AI visibility for B2B SaaS marketing teams</p>
-          <h1>See why AI assistants recommend your competitors instead of you.</h1>
-          <p className="hero-copy landing-hero-description">
-            Zypact tests real buyer questions, shows where your brand loses, identifies the evidence gap, and gives you the first fix worth testing.
-          </p>
-
-          <div className="hero-actions landing-hero-actions">
-            <a href={snapshotFormUrl} className="button button-primary button-large">
-              Run your free AI visibility snapshot
-            </a>
-          </div>
-
-          <div className="trust-row" aria-label="Snapshot trust signals">
-            <span>Founder-reviewed</span>
-            <span>Live Perplexity Sonar answers</span>
-            <span>No invented claims</span>
-          </div>
-        </div>
-
-        <div className="snapshot-visual" aria-label="Synthetic example of a Zypact AI visibility snapshot">
-          <div className="snapshot-visual-topline">
-            <div>
-              <p className="snapshot-kicker">Buyer question</p>
-              <h2>How do buyers compare platforms in this category?</h2>
+      <section className="di-hero" aria-labelledby="hero-heading">
+        <div className="di-grid-bg" aria-hidden="true" />
+        <div className="di-hero-glow" aria-hidden="true" />
+        <div className="di-shell di-hero-inner">
+          <div className="di-hero-copy">
+            <div className="di-pulse-badge"><span aria-hidden="true" /> AI visibility intelligence · Perplexity Sonar</div>
+            <h1 id="hero-heading">See why AI assistants <em>recommend your competitors</em> instead of you.</h1>
+            <p className="di-hero-subtitle">
+              Zypact tests real buyer questions, shows where your brand loses, identifies the evidence gaps, and surfaces the first fix worth testing.
+            </p>
+            <div className="di-hero-actions">
+              <a href={snapshotFormUrl} className="di-button di-button-primary di-button-large">Request free snapshot</a>
+              <a href="#demo" className="di-text-link">See how the snapshot works <span aria-hidden="true">↘</span></a>
             </div>
-            <span className="snapshot-live">Live answer</span>
+            <div className="di-trust-strip" aria-label="Snapshot trust signals">
+              <span>FOUNDER-REVIEWED</span><span>LIVE PERPLEXITY ANSWERS</span><span>NO INVENTED CLAIMS</span>
+            </div>
+            <p className="di-scope-note">Small Perplexity snapshot. Not a market-wide benchmark and not ChatGPT, Gemini, or Claude coverage.</p>
           </div>
 
-          <div className="snapshot-status-grid">
-            <div className="snapshot-status-card">
-              <span className="snapshot-kicker">Your brand</span>
-              <strong>Absent</strong>
-            </div>
-            <div className="snapshot-status-card">
-              <span className="snapshot-kicker">AI recommended</span>
-              <div className="competitor-pills">
-                <span>Competitor A</span>
-                <span>Competitor B</span>
-                <span>Competitor C</span>
-              </div>
-            </div>
+          <div className="di-hero-orbit">
+            <HeroProcessViz />
           </div>
-
-          <div className="snapshot-diagnosis">
-            <div>
-              <span className="snapshot-kicker">Evidence gap</span>
-              <strong>Missing comparison proof</strong>
-            </div>
-            <div>
-              <span className="snapshot-kicker">First fix</span>
-              <strong>Build an evidence-backed comparison page</strong>
-            </div>
-          </div>
-
-          <div className="progression" aria-label="Visibility progression from absent to recommended">
-            <span className="progression-step is-current">Absent</span>
-            <span className="progression-line" aria-hidden="true" />
-            <span className="progression-step">Mentioned</span>
-            <span className="progression-line" aria-hidden="true" />
-            <span className="progression-step">Cited</span>
-            <span className="progression-line" aria-hidden="true" />
-            <span className="progression-step">Recommended</span>
-          </div>
-
-          <p className="snapshot-example-note">Synthetic example — no customer data or performance claim.</p>
         </div>
       </section>
 
-      <section id="snapshot" className="section landing-section">
-        <div className="container landing-container">
-          <div className="section-heading-row">
+      <section id="demo" className="di-section di-demo-section">
+        <div className="di-shell">
+          <div className="di-section-heading di-section-heading-split">
             <div>
-              <p className="section-label">What your snapshot shows</p>
-              <h2>Move from “AI visibility” to a specific buyer question you can act on.</h2>
+              <span className="di-kicker">— synthetic demo</span>
+              <h2>Where your brand shows up — or doesn&apos;t.</h2>
             </div>
-            <p className="section-copy">
-              You get a focused diagnosis of where your brand appears, where it disappears, and which evidence-backed intervention is worth testing first.
-            </p>
+            <p>Explore a simulated snapshot interface. The brands and results below are synthetic and are not customer data or live probe results.</p>
+          </div>
+          <SyntheticDemo />
+        </div>
+      </section>
+
+      <section id="what-you-get" className="di-section di-section-deep">
+        <div className="di-shell">
+          <div className="di-section-heading di-section-heading-split">
+            <div>
+              <span className="di-kicker">— what you get</span>
+              <h2>Six outputs. One buying frame to act on first.</h2>
+            </div>
+            <p>The free snapshot is intentionally focused: it moves from an observed buyer-question loss to the evidence and intervention worth testing next.</p>
           </div>
 
-          <div className="snapshot-item-grid">
-            {snapshotItems.map((item, index) => (
-              <article className="snapshot-item" key={item}>
-                <span className="snapshot-item-number">0{index + 1}</span>
-                <h3>{item}</h3>
+          <div className="di-deliverables-grid">
+            {deliverables.map(([number, title, copy]) => (
+              <article className="di-deliverable-card" key={number}>
+                <span className="di-deliverable-number">{number}</span>
+                <div>
+                  <h3>{title}</h3>
+                  <p>{copy}</p>
+                </div>
+                <span className="di-card-arrow" aria-hidden="true">↗</span>
               </article>
             ))}
           </div>
         </div>
       </section>
 
-      <section id="how-it-works" className="section section-muted landing-section">
-        <div className="container landing-container">
-          <p className="section-label">How it works</p>
-          <h2>Buyer question → live AI runs → evidence → first fix → re-test.</h2>
-          <p className="section-copy">
-            The current live snapshot uses Perplexity Sonar. Every step stays tied to the stored answers and the evidence you can verify.
-          </p>
-
-          <div className="workflow-grid">
-            {workflow.map(([number, title, description]) => (
-              <article className="workflow-card" key={number}>
-                <span className="workflow-number">{number}</span>
-                <h3>{title}</h3>
-                <p>{description}</p>
-              </article>
-            ))}
+      <section id="how-it-works" className="di-section">
+        <div className="di-shell">
+          <div className="di-section-heading">
+            <span className="di-kicker">— how it works</span>
+            <h2>From buyer question to the first fix worth testing.</h2>
+            <p>The current real snapshot uses Perplexity Sonar. Every recommendation stays tied to stored answers and evidence you can verify.</p>
           </div>
+          <HowItWorks />
         </div>
       </section>
 
-      <section className="section landing-section">
-        <div className="container landing-container why-grid">
+      <section className="di-section di-proof-section">
+        <div className="di-shell di-proof-grid">
           <div>
-            <p className="section-label">Why it matters</p>
-            <h2>AI answers can become the shortlist before a buyer ever reaches your website.</h2>
+            <span className="di-kicker">— why this matters</span>
+            <h2>The AI answer can become the shortlist before the click.</h2>
           </div>
-          <div className="why-copy">
-            <p>
-              When a buyer asks which product to use, compare, or consider, the answer can shape which brands make the first cut. If your company is absent, the useful question is not just “what is our score?”
-            </p>
-            <p className="why-emphasis">It is: which buyer question are we losing, what evidence is missing, and what should we test first?</p>
-          </div>
-        </div>
-      </section>
-
-      <section className="section section-muted landing-section">
-        <div className="container landing-container audience-grid">
-          <div>
-            <p className="section-label">Who it is for</p>
-            <h2>Built for B2B SaaS marketing teams.</h2>
-            <p className="section-copy">
-              Especially teams already investing in visibility and category positioning who want to understand what happens when buyers ask AI which product to choose.
-            </p>
-          </div>
-          <div className="audience-card">
-            <p className="audience-card-label">Useful when your team already invests in</p>
-            <div className="audience-tags">
-              <span>Content</span>
-              <span>SEO</span>
-              <span>Category positioning</span>
-              <span>Demand generation</span>
-            </div>
-            <p>
-              Zypact adds the buyer-question layer: what the AI answer actually says, who appears, and which proof is worth strengthening next.
-            </p>
+          <div className="di-proof-copy">
+            <p>When a buyer asks which product to use, compare, or consider, the answer can shape which brands make the first cut.</p>
+            <blockquote>Which buyer question are we losing, what evidence is missing, and what should we test first?</blockquote>
+            <div className="di-proof-tags"><span>B2B SaaS</span><span>Marketing</span><span>Growth</span><span>Content</span></div>
           </div>
         </div>
       </section>
 
-      <section id="faq" className="section landing-section">
-        <div className="container landing-container faq-layout">
-          <div className="faq-intro">
-            <p className="section-label">FAQ</p>
+      <section id="faq" className="di-section di-section-deep">
+        <div className="di-shell di-faq-layout">
+          <div className="di-faq-intro">
+            <span className="di-kicker">— FAQ</span>
             <h2>What the current snapshot does — and does not — claim.</h2>
-            <p className="section-copy">
-              Zypact is deliberately narrow about the evidence it has today. The free snapshot is a starting diagnostic, not a promise of market-wide coverage.
-            </p>
+            <p>Clear scope is part of the product. The snapshot is useful because it stays narrow about what the evidence actually shows.</p>
           </div>
-
-          <div className="faq-list">
-            {faqs.map((faq) => (
-              <details className="faq-item" key={faq.question}>
-                <summary>{faq.question}</summary>
+          <div className="di-faq-list">
+            {faqs.map((faq, index) => (
+              <details className="di-faq-item" key={faq.question}>
+                <summary><span className="di-faq-number">0{index + 1}</span>{faq.question}<span className="di-faq-plus" aria-hidden="true">+</span></summary>
                 <p>{faq.answer}</p>
               </details>
             ))}
@@ -304,24 +204,22 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <section className="final-cta-section">
-        <div className="final-cta-card">
-          <p className="section-label">Private founder-reviewed snapshot</p>
-          <h2>See what AI recommends when your buyers ask.</h2>
-          <p>
-            Run a private snapshot of the buyer questions that matter to your category, then get the first evidence-backed fix worth testing.
-          </p>
-          <a href={snapshotFormUrl} className="button button-primary button-large">
-            Run your free AI visibility snapshot
-          </a>
-          <span className="final-cta-note">Current live snapshot uses Perplexity Sonar.</span>
+      <section className="di-final-cta">
+        <div className="di-final-glow" aria-hidden="true" />
+        <div className="di-shell di-final-inner">
+          <span className="di-kicker">— start with evidence</span>
+          <h2>Start with a free AI visibility snapshot.</h2>
+          <p>We&apos;ll test real buyer-style questions, show where competitors appear instead of your company, and identify the first fix worth testing.</p>
+          <a href={snapshotFormUrl} className="di-button di-button-primary di-button-large">Request free snapshot</a>
+          <span className="di-final-note">NO CARD REQUIRED · FOUNDER REVIEWED</span>
         </div>
       </section>
 
-      <footer className="footer landing-footer">
-        <p>
-          Zypact currently runs as a founder-reviewed AI visibility diagnostic for B2B SaaS teams. No guaranteed rankings, recommendations, or visibility lift.
-        </p>
+      <footer className="di-footer">
+        <div className="di-shell di-footer-inner">
+          <ZypactLogo href="#top" className="di-wordmark" />
+          <span>© 2026 Zypact</span>
+        </div>
       </footer>
     </main>
   );

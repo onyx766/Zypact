@@ -99,7 +99,7 @@ export function ScanForm({
         {
           sitekey: siteKey,
           action: "snapshot_request",
-          theme: "light",
+          theme: "dark",
           size: "flexible",
           callback(token) {
             setTurnstileToken(token);

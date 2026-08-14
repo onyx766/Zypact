@@ -17,6 +17,9 @@ postcss.config.disabled-*.js
 postcss.config.disabled-*.mjs
 
 # Local and generated MVP artifacts
+# Scan output holds raw probe evidence and client report artifacts for real
+# prospects. It must never be committed.
+/output/
 .validation-runs/
 exports/
 tsconfig.tsbuildinfo

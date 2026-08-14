@@ -1,5 +1,19 @@
 # Zypact MVP — Scope
 
+> **Superseded for scope purposes.** This document describes Sprint 0 and
+> Sprint 1 from the beginning of the project, when the only goal was a Site
+> Reader Agent producing a Mirror Profile. It is retained as accurate project
+> history and as a record of the original build order and guiding rules.
+>
+> **The approved current scope is
+> [`docs/Zypact_V1_Engineering_Audit_Brief.md`](docs/Zypact_V1_Engineering_Audit_Brief.md).**
+> Version boundaries are in [`docs/ROADMAP.md`](docs/ROADMAP.md); implementation
+> status is in [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md).
+>
+> Where this file and the V1 brief disagree, the brief wins. See
+> [Reconciliation with V1](#reconciliation-with-v1) at the end of this document
+> for the specific contradictions.
+
 ## What Zypact MVP is
 
 Zypact is an AI visibility product for B2B SaaS marketing teams.
@@ -69,3 +83,35 @@ Before writing any new code, ask:
 > "Is this needed to produce a Mirror Profile from a website URL?"
 
 If **no**, stop.
+
+---
+
+## Reconciliation with V1
+
+Added during the V1 documentation pass. The sections above are unchanged; this
+section records where they no longer describe the product.
+
+### Still accurate
+
+- The pipeline shape — site read → Mirror Profile → buyer prompts → AI answers →
+  lost prompts → gap analysis → fixes → QA — is still the engine's structure.
+- The guiding rules remain sound: engine before UI, raw outputs before design,
+  and no publish-ready claim without QA.
+
+### Superseded
+
+| This document says | Current position |
+| --- | --- |
+| "Only Sprint 0 + Sprint 1" and "Sprint 1 = Site Reader Agent only" | The scan pipeline, report renderers, snapshot delivery, and founder back-office are all built. Scope is now defined by the V1 brief, not by sprint numbering. |
+| The "Explicitly NOT in Sprint 0 or Sprint 1" list bars the AI Probe agent, Fix Agent, QA Agent, exports, landing page, and pricing page | All of these now exist in the repository. The list describes an early build order, not a current boundary. |
+| "Stripe after the product works. Pricing lives in a config file only." | Still directionally true: `lib/pricing/plans.ts` holds plan definitions, and no checkout path is wired into the current product surface. Public SaaS pricing was deliberately removed from the client-facing surfaces for the founder-led phase. |
+| "3D map later" / "no visualizations" | Unchanged as a V1 boundary. Trends and movement analytics are V2 — see the roadmap. |
+
+### Not covered here at all
+
+The V1 brief adds requirements this document predates: three runs per approved
+question with exact request and response preserved, brand-self exclusion,
+prompt-scoped competitor claims, `needs_evidence` gating, same-question retest
+with preserved prompt identity, founder review before a client-ready report,
+and the separation of observation from inference. Those are defined in the
+brief and graded in `docs/CURRENT_STATUS.md`.

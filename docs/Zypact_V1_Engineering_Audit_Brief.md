@@ -313,7 +313,7 @@ For each option, provide:
 | Product UI |  |  |  |  |  |  |
 | Retest/hardening |  |  |  |  |  |  |
 
-The founder has not approved a final engineering budget. Do not optimize the estimate around a presumed `$700` ceiling. First estimate the real work; then identify the safest reduced-scope alternative if the full amount is unaffordable.
+Provide an independent estimate based on the repository audit and the actual work required. Do not infer or optimize around an assumed founder budget. State your proposed hours, price, assumptions, and exclusions for each option, then identify the safest reduced-scope alternative separately.
 
 ## 11. Access and change-control rules
 

@@ -77,10 +77,11 @@ before/after.
 
 Also state, per option: operating costs at pilot volume, and maintenance terms.
 
-**On budget:** no final engineering budget has been approved. Do not optimise
-the estimate around a presumed ceiling. Estimate the real work first, then
-identify the safest reduced-scope alternative if the full amount is
-unaffordable.
+**On budget:** provide an independent estimate based on the repository audit
+and the actual work required. Do not infer or optimize around an assumed
+founder budget. State your proposed hours, price, assumptions, and exclusions
+for each option, then identify the safest reduced-scope alternative
+separately.
 
 ## Questions to answer after reviewing the repository
 

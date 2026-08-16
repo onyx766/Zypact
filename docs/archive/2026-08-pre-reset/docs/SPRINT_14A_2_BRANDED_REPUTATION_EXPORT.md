@@ -1,3 +1,5 @@
+> **Superseded historical record — archived 2026-08-16. Do not use this file for current product scope, methodology, engineering estimates, or operating decisions. Use the active canonical documentation listed in the repository README.**
+
 # Sprint 14A.2 — Branded reputation export hardening
 
 Purpose: fix the remaining client-facing export inconsistency found in the Vugio report after Sprint 14A.1.

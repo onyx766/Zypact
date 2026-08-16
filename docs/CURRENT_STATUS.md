@@ -1,172 +1,292 @@
-# Zypact — Current Implementation Status
+# Zypact Current Status
 
-**Grounded in:** repository inspection on branch `main` at commit
-`9aa914b` (35 migrations, 73 `scripts/test-*.ts` files, one GitHub Actions
-workflow).
+- **Status:** Canonical repository-state record
+- **As of:** 2026-08-16
+- **Official repository baseline audited:** `ZypactHQ/zypact-clean-mvp` at `b339d42a28014d8436c180a7da0cb0ad876178b8`
+- **Audit type:** Static tracked-tree inspection plus founder-supplied private execution evidence
+- **Not established by this audit:** Production, preview, staging, or worker deployment state
 
-**Scope reference:** [`Zypact_V1_Engineering_Audit_Brief.md`](./Zypact_V1_Engineering_Audit_Brief.md)
-· **Boundaries:** [`ROADMAP.md`](./ROADMAP.md)
+## 1. Reading rule
 
-## How to read this document
+This file distinguishes repository facts from deployment facts and planned V1 behavior.
 
-Every row carries one of the following grades. The grade describes what the
-repository shows, not what the product intends.
+| Label | Meaning |
+|---|---|
+| **Verified in code** | Directly observed in the audited tracked tree |
+| **Demonstrated privately** | Supported by founder-supplied terminal output or private artifacts; the evidence is intentionally not committed |
+| **Partial** | A reusable path exists but does not satisfy the canonical V1 contract |
+| **Missing** | No implementation matching the requirement was found in the audited tree |
+| **Deployment unknown** | Repository code exists, but operation in a managed environment was not verified |
+| **Legacy unsafe** | Existing behavior is retained in code/history but cannot be used for new external claims under the canonical methodology |
 
-| Grade | Meaning |
-| --- | --- |
-| **Verified** | Located in the repository and covered by a test, a migration, or direct inspection cited here |
-| **Partial** | Present but incomplete, or complete only along one path |
-| **Documented, unverified** | Described in repository documentation but not confirmed by inspection during this pass |
-| **Missing** | No implementation located |
-| **Unreliable** | Known to produce inconsistent or untrustworthy output |
-| **Deferred** | Explicitly V2 or V3 |
+Documentation is not implementation. An engineer must re-fetch the official repository, identify the actual base, and update this inventory during M0.
 
-This document is not an engineering audit. It is a founder-maintained
-inventory written to make the audit cheaper. **A read-only engineering audit
-must confirm or correct every row before pricing or production changes.**
+## 2. Executive status
 
-## Implemented (verified by inspection)
+Zypact is not a greenfield build. The repository contains a real Next.js application, PostgreSQL/Supabase persistence, a manual live-scan path, a database-backed worker with concurrency protections, analysis stages, reports, and secured founder delivery.
 
-| Capability | Evidence |
-| --- | --- |
-| Next.js app with auth, project pages, public snapshot request, and founder back-office | `app/` routes: `login`, `scan`, `projects/new`, `projects/[id]/*`, `admin/snapshot-requests/*`, `report/[secureToken]` |
-| Supabase persistence with 35 tracked migrations | `supabase/migrations/0001…0035` |
-| Live Perplexity probe path | `scripts/run-live-perplexity-probes.ts`, `npm run probe:perplexity` |
-| Command-line MVP scan runner | `scripts/mvp-scan.ts`, `npm run mvp:scan` |
-| Pipeline stages: Mirror Profile, Prompt Mirror, probe analysis, competitor discovery, Gap Map, Evidence Bank, Fix Brief, generated assets, QA | `lib/pipeline/*`, with per-stage suites registered as `test:mirror`, `test:prompts`, `test:probe`, `test:competitors`, `test:gap-map`, `test:evidence`, `test:fix-brief`, `test:assets`, `test:qa` |
-| Report renderers (full MVP report and short client report) | `lib/export/build-mvp-report.ts`, `lib/export/build-sales-report.ts` |
-| Snapshot report artifact storage with RPC-only writes | Migrations `0032`–`0035`; `test:snapshot-adapter-rpc-writes`, `test:snapshot-worker-dml-revocation-contract` |
-| Atomic, fenced report replacement (expected artifact + revision) | Migration `0035`; `scripts/test-replace-report-route.ts` |
-| Fenced report delivery with fail-closed provider handling | `lib/snapshot-requests/send-report-handler.ts`; `scripts/test-send-report-fencing.ts` |
-| Founder review before delivery | `app/admin/snapshot-requests/[requestId]`; delivery requires founder action |
-| Historical Fix Briefs excluded from client-facing recommendations | `scripts/test-historical-fix-brief-exclusion.ts` |
-| Prompt-scoped competitor claims in the short report | `scripts/test-short-report-prompt-scoped.ts` |
-| Dedicated snapshot worker service | `scripts/snapshot-worker.ts`, claim/lease tests |
-| CI concurrency harness | `.github/workflows/snapshot-worker-postgres-level2.yml` |
+The paid-pilot V1 is nevertheless incomplete. The highest-risk gaps are not landing-page polish: they are exact immutable evidence, one canonical reporting contract, replacement of legacy score semantics, approved bounded sampling with reservation before each paid attempt, a customer-operable workflow, integrity-gated delivery, and registered retest with uncertainty.
 
-## Partial
+Legacy client reports remain frozen for new external use until they are individually reconciled or the new integrity contract is implemented.
 
-| Capability | What exists | What is missing |
-| --- | --- | --- |
-| Account and project model | Login, project creation, per-project pages | No company/workspace entity, no onboarding flow capturing category/audience/primary competitors |
-| Core dashboard | Per-artifact pages under `projects/[id]/*` and a project layout | **No `projects/[id]/page.tsx`** — there is no project dashboard summarising status, latest scan, priority gap, or recommended action |
-| Prompt approval | Prompts are stored and selected | Founder approval of questions *before* paid AI calls not confirmed as an enforced gate |
-| Evidence Bank | Storage, intake, and review scripts | Review status is not confirmed to block publish-ready copy in every path |
-| Report share/export | Public tokenised report route and client package builder | PDF and general share/export coverage unconfirmed |
+## 3. Audited repository inventory
 
-## Missing
+| Item | Verified value at the audited commit |
+|---|---|
+| Framework | Next.js `14.2.5`, React `18.3.1`, TypeScript |
+| SQL migrations | 35 files, `0001` through `0035_snapshot_report_delivery_fencing.sql` |
+| Test source files | 73 files matching `scripts/test-*.ts` |
+| Registered test commands | 24 `test:*` scripts in `package.json` |
+| Registered verification commands | 2 `verify:*` scripts in `package.json` |
+| GitHub Actions workflows | 1 tracked workflow |
+| Primary database adapter | Supabase/PostgreSQL adapter plus a legacy memory adapter |
+| Initial provider path | Perplexity Sonar |
+| Long-running execution code | Snapshot worker, database claim queue, leases, fencing, and recovery |
 
-| Capability | Evidence |
-| --- | --- |
-| **Same-question retest and before/after** | Symbol search for `retest` across `lib/`, `app/`, `scripts/`, `supabase/` returns **zero** matches. Not implemented in any layer, including the data model. |
-| **Buyer-journey stage metadata** | Search for `journey_stage` / `buyer_journey` returns zero matches in `supabase/` and `lib/` |
-| Company/workspace entity and onboarding | No workspace model located |
-| Project dashboard | See Partial, above |
-| Notifications on completion/failure | Not located |
-| Stripe/billing in the product surface | Only references are two stale backup files, `app/page.before-design-pass-*.tsx` and `app/page.tailwind-broken-*.tsx`. `lib/pricing/plans.ts` retains plan definitions as source of truth, but no checkout path is wired into the current landing page or app. |
+The number 73 describes files, not 73 independently registered commands. The repository does not support a statement that “76 test scripts passed” without an exact command log.
 
-## Requires manual terminal operation
+## 4. Working and reusable foundations
 
-The controlled workflow is **not** currently completable by an end user without
-a terminal. These require an operator:
+### 4.1 Public and founder request flow — verified in code
 
-- Running a scan (`npm run mvp:scan`)
-- Running live probes (`npm run probe:perplexity`)
-- Regenerating Gap Maps and recommendations (`regenerate:live-gap-map`,
-  `regenerate:live-recommendations`)
-- Re-running QA on assets and fix briefs (`rerun:qa-asset`, `rerun:qa-fix-brief`)
-- Backfilling and reviewing the Evidence Bank (`review:evidence-bank`)
+The audited application contains:
 
-Brief §8 Stage 2 exit criterion — *a new company can complete one safe
-controlled scan with no terminal-only intervention by the end user* — is **not
-met today**.
+- landing, request, email-verification, thank-you, login, and auth callback routes;
+- public snapshot request creation and email verification;
+- founder/admin request list and request detail;
+- founder approve and reject routes;
+- secure-token report rendering;
+- fenced report-artifact replacement and send routes;
+- request limits and status transitions.
 
-## Known evidence-integrity risks
+This is a founder-controlled snapshot flow, not yet the canonical customer question/protocol approval workflow.
 
-Graded against Brief §6. These are the founder's understanding; the engineer
-must reproduce and classify each one.
+### 4.2 Analysis pipeline — verified in code; legacy semantics remain
 
-| # | Issue | Status here |
-| --- | --- | --- |
-| P0-1 | File-extension/content mismatch | **Reproduced.** `output/hadrius-manual-evidence.json` has a `.json` extension and contains Markdown beginning `# Zypact MVP — Client Report`. `output/hadrius-raw-probes.json` is genuine JSON. |
-| P0-2 | Brand counted as its own competitor | **Unverified.** No brand-self exclusion guard was located by symbol search in `lib/pipeline/scorecard-competitors.ts`. Absence of a symbol is not proof of absent behaviour — the engineer must confirm by execution. |
-| P0-3 | Inconsistent competitor counts across prompt-level, discovery, Gap Map, and executive summary | **Unverified in this pass.** A related defect was previously corrected for the short report only (`test-short-report-prompt-scoped.ts`). Cross-surface agreement is not proven. |
-| P0-4 | Over-broad Gap Map combining weakly related brands | **Consistent with observed output.** A rendered full report has been observed presenting a single high-severity gap that enumerates more than twenty competitor names in one line. Fitness for client use is questionable; correctness of the underlying rule is unverified. |
-| P0-5 | Alias duplication (`StratiFi` vs `StratiFi (ComplianceIQ)`) | **Unverified.** Alias-related code exists in `lib/pipeline/analyze-probe-response.ts` and `lib/client-package/build-client-package.ts`; determinism and reversibility unproven. |
-| P0-6 | Unsupported causality in report language | **Partially mitigated.** Fix Brief grounding work added observation-only phrasing and free-text validation (`test-fix-brief-grounding.ts`, `test-fix-brief-free-text.ts`). Full-report language has not been audited end to end. |
-| P0-7 | Fix-brief drift to competitors that do not represent the exact question | **Partially mitigated** for the short report; unverified for the full report. |
-| P0-8 | Renderer inconsistency across short report, full report, raw export, and database aggregates | **Open.** No single canonical definition layer was located. This is the highest-value structural item in the brief (Stage 1). |
+Reusable stages exist for:
 
-### Hadrius five-question scan — exact wording
+- site crawling and reading;
+- Mirror Profile generation;
+- buyer-prompt generation/selection;
+- live or simulated probe execution;
+- probe analysis;
+- Evidence Bank generation;
+- competitor discovery;
+- Gap Map generation;
+- Fix Brief and asset generation;
+- QA;
+- full and short reports;
+- exports and client packages.
 
-The stored source report states **0 won, 2 partial, and 3 lost prompt groups
-across 5 prompts and 15 live runs**.
+A founder-supplied private execution demonstrated that the manual terminal runner can complete live Perplexity calls and persist results. Prospect names, questions, raw responses, and generated reports are not reproduced here.
 
-This is verified as a statement contained in the stored report artifact. It has
-**not** been independently reproduced from the current database state during
-this documentation pass. Brief §5.2 additionally cites a 40% product
-recommendation rate and a 40% cited-as-source rate for the same scan; those
-figures are quoted from the brief and were likewise not recomputed here.
+The active implementation still uses legacy `won`, `partial`, and `lost` verdicts in schemas, prompts, pages, aggregation, Gap Map/Fix Brief logic, and reports. Those paths are migration inputs, not approved external V1 semantics.
 
-Reproducing this scan from canonical stored rows — and confirming that the
-report, the database aggregates, and the raw runs agree — is audit work, not a
-settled fact.
+### 4.3 Worker and concurrency controls — verified in code; deployment unknown
 
-### Execution-safety items (Brief §6, P0)
+The worker is not merely a future idea. The audited tree includes:
 
-Not verified during this pass and explicitly listed as audit work: paid-probe
-reservation and budget enforcement, retry/idempotency behaviour on the paid
-path, dry-run guarantees, unsupported-flag fail-closed behaviour, and
-consistent environment loading. Secrets handling in the delivery path *is*
-covered by tests asserting no claim token or credential reaches the browser.
+- `scripts/snapshot-worker.ts` as the process entry point;
+- `lib/snapshot-worker/worker.ts` for the claim loop and recovery behavior;
+- `lib/snapshot-worker/execution-options.ts` for fail-closed request resolution;
+- `lib/snapshot-engine/run-approved-snapshot.ts` for reusable execution;
+- claim, lease renewal, attempt limits, fencing tokens, idempotent completion, DML revocation, and delivery-fencing migrations/tests.
 
-## Additional repository risks found during this pass
+The database claim RPC acts as the queue. Existing code prevents two workers from owning the same active claim and provides bounded reclaim behavior. This should be evaluated and reused rather than assumed absent.
 
-1. **`output/` contains real prospect data and is not git-ignored.** It holds
-   `hadrius-raw-probes.json` and `hadrius-manual-evidence.json`. A careless
-   `git add -A` would commit client evidence. Recommend adding `output/` to
-   `.gitignore` before any further commits.
-2. **Stale backup page files are tracked in `app/`** —
-   `page.before-design-pass-20260711-163323.tsx` and
-   `page.tailwind-broken-20260711-161805.tsx`. They still contain Stripe
-   references and should be removed or moved out of the app directory.
-3. **`README.md` stated migration `0033`** while the repository contains
-   through `0035`. Corrected in this documentation pass.
+What remains unknown is the operating environment: process manager/container, restart policy, health endpoint, metrics, alerting, queue-age monitoring, cost monitoring, deployment ownership, and incident recovery have not been verified in a Zypact-controlled live environment.
 
-## What must be verified before another client scan
+### 4.4 Founder delivery fencing — verified in code; not the new integrity model
 
-1. Reproduce every P0 item in Brief §6 against a safe fixture.
-2. Establish one canonical definition layer so raw rows, database aggregates,
-   UI, short report, and full report agree for the same project (Brief Stage 1
-   exit criterion).
-3. Confirm the brand can never be counted as its own competitor.
-4. Confirm prompt-level competitor claims come only from runs for that exact
-   prompt, and that cross-prompt totals are visibly labelled as aggregates.
-5. Confirm paid-probe budgeting, idempotency, and dry-run safety on the real
-   execution path.
-6. Confirm live, simulated, historical, and current rows are never mixed.
+Current report delivery uses `report_ready`, secure tokens, insert-only/fenced artifact operations, and idempotent send protections. This is valuable infrastructure.
 
-## Demo-ready versus paid-pilot-ready
+`report_ready` does not implement the canonical `integrity_passed`, `needs_review`, and `blocked` decision contract. Delivery is founder-triggered, not automatic after a machine-enforced integrity pass.
 
-These are different bars and should be priced separately.
+## 5. Trust gaps
 
-**Demo-ready (Brief Option A)** — plausible today with founder operation. The
-path `buyer question → three live answers → brand/competitor evidence →
-controlled gap/fix → founder-reviewed report` has been executed end to end and
-its evidence is stored. What remains manual: scan execution, regeneration
-steps, and report review, all from a terminal. The known P0 integrity issues
-are still visible in generated output, so a demo must be driven from reviewed
-material.
+### 5.1 Exact raw evidence — partial
 
-**Paid-pilot-ready (Brief Option B)** — **not met.** The blocking gaps are
-structural, not cosmetic:
+Current schema/adapter fields include `raw_response` and `raw_probe_request`, but the provider implementation does not yet meet the canonical evidence contract:
 
-- same-question retest and before/after do not exist in any layer;
-- no project dashboard for a pilot user to land on;
-- no company/workspace or onboarding model;
-- the controlled scan cannot be completed without a terminal;
-- renderer/aggregate consistency is unproven, so client-facing numbers are not
-  yet defensible across surfaces.
+- the Perplexity response is parsed with `res.json()`;
+- `raw_response` is then reconstructed from answer text, citations, and search results;
+- `raw_probe_request` stores the buyer prompt, not the complete outbound HTTP body;
+- no per-attempt SHA-256 of exact request/response bytes was found;
+- HTTP status, latency, provider request ID, usage, full failure body/metadata, and retry relationship are not preserved as one complete attempt record;
+- database-enforced immutability of the raw evidence fields was not found.
 
-An external customer should not be onboarded onto the controlled workflow until
-Stage 1 and Stage 2 exit criteria in the brief are met.
+Therefore current stored content may be useful evidence, but it is not a byte-identical, tamper-evident provider transcript.
+
+### 5.2 Sampling and paid-call control — partial and legacy unsafe
+
+The worker execution resolver currently fixes:
+
+- 5 requested prompts;
+- 3 runs per selected prompt;
+- `WORKER_BUDGET_USD = 2`, an estimated provider-cost guard—not an engineering budget or a measured spend cap.
+
+The code comments correctly state that this budget is a projected-cost admission guard, not a measured spend circuit breaker. The audited tree does not show:
+
+- an approved versioned sample plan per question/protocol;
+- variable external run counts without a hidden three-run fallback;
+- reservation immediately before every provider attempt;
+- per-attempt cost reconciliation after terminal outcomes;
+- a complete operator-configured run/spend/rate/concurrency policy tied to the approved protocol.
+
+Project reservation and worker claim fencing are not substitutes for per-paid-attempt reservation.
+
+### 5.3 Approval identity — partial
+
+Founder approval of a snapshot request and competitor frame exists. The audited tree does not implement a customer-visible, immutable question version plus protocol version approved before every paid probe sequence.
+
+### 5.4 Canonical figures — partial and legacy unsafe
+
+The full report is assembled from database-derived summaries, while the short report is derived by parsing generated Markdown. The dashboard/pages and report formats do not yet consume one shared structured canonical evidence snapshot.
+
+Consequences include avoidable disagreement risk across:
+
+- database rows;
+- project pages;
+- short report;
+- full report;
+- export/client package;
+- future Outcome Card.
+
+The canonical V1 requires one versioned aggregation contract and integrity tests across every renderer.
+
+### 5.5 Competitor and Gap Map integrity — partial
+
+The code contains useful protections:
+
+- competitor-frame validation;
+- some audited-brand and platform-name filtering;
+- prompt-scoped scorecard competitor helpers;
+- Gap Map grounding that uses prompt evidence for eligible legacy groups.
+
+The audited tree does not yet provide the complete required contract:
+
+- deterministic, versioned, reversible alias/entity resolution;
+- brand-self exclusion enforced at every ingestion/aggregation boundary;
+- one canonical supporting-run map for every prompt-scoped competitor, claim, gap, and intervention;
+- safe handling of unresolved entities and mixed results under the new methodology.
+
+### 5.6 Client claims and report gates — legacy unsafe
+
+Legacy pages and reports still contain language such as “buyer questions won or lost,” “lost moments,” and `won/partial/lost` scorecards. The current report builder does not enforce all canonical surface, uncertainty, causality, denominator, entity, and evidence-hash gates.
+
+Existing `needs_evidence` behavior for some Fix Brief/assets is not the same as the report-level `needs_review` state.
+
+## 6. Missing paid-pilot V1 capabilities
+
+No complete implementation matching these requirements was found at the audited commit:
+
+1. stable buyer-question and protocol identities with immutable versions;
+2. explicit customer question/protocol approval before paid execution;
+3. configurable bounded sampling and uncertainty-aware interpretation;
+4. per-paid-attempt reservation and cost reconciliation;
+5. one basic project dashboard route that represents the entire canonical workflow;
+6. registered intervention record with implementation evidence;
+7. observation-window eligibility and scheduling;
+8. same-question registered retest;
+9. comparison engine and Outcome Card using only approved statuses;
+10. automatic delivery after `integrity_passed` with exception-only review;
+11. deployed worker health, monitoring, alerting, and operator recovery demonstration.
+
+Project-specific pages exist under `app/projects/[id]/`, but no `app/projects/[id]/page.tsx` project dashboard was found.
+
+## 7. Test-command inventory
+
+### Baseline compile/build
+
+```bash
+npm run typecheck
+NEXT_TELEMETRY_DISABLED=1 npm run build
+```
+
+### Registered `test:*` commands
+
+```bash
+npm run test:mirror
+npm run test:prompts
+npm run test:probe
+npm run test:competitors
+npm run test:gap-map
+npm run test:evidence
+npm run test:fix-brief
+npm run test:assets
+npm run test:qa
+npm run test:full-pipeline
+npm run test:auth
+npm run test:export
+npm run test:export-route
+npm run test:pipeline-integrity
+npm run test:mvp-scan
+npm run test:prompt-cardinality
+npm run test:db-adapter-selection
+npm run test:snapshot-send-idempotency
+npm run test:snapshot-worker-claim
+npm run test:snapshot-worker-migration-contract
+npm run test:snapshot-worker-fencing-migration-contract
+npm run test:snapshot-worker-dml-revocation-contract
+npm run test:snapshot-adapter-rpc-writes
+npm run test:snapshot-artifact-cascade-contract
+```
+
+### Registered `verify:*` commands
+
+```bash
+npm run verify:anon-hardened
+npm run verify:export-readonly-live
+```
+
+These commands are an inventory, not a claim that they all pass in every environment. M0 must:
+
+1. identify credential, database, Docker, network, or production dependencies;
+2. run every safe applicable command against approved resources;
+3. explain every skipped or failed command;
+4. inventory unregistered `scripts/test-*.ts` files and their intended harness;
+5. include all existing and new milestone tests in acceptance evidence.
+
+## 8. Security and dependency status
+
+- Next.js is pinned to `14.2.5`; whether it is affected by a relevant current advisory must be verified against authoritative advisories during M0.
+- Server-side secret boundaries and Supabase DML/RPC restrictions have substantial existing tests, but the full tenant model for the new workflow does not exist yet.
+- No active self-serve Stripe checkout was found in the audited application route tree. Billing is not a prerequisite for the trust layer.
+- `output/` is already ignored by `.gitignore`; generated evidence and reports must remain outside source control.
+
+## 9. Deployment unknowns
+
+This tracked-tree audit does not establish:
+
+- which commit is live on Vercel or any worker host;
+- production, preview, or staging environment-variable completeness;
+- production and preview migration ledgers;
+- whether the worker is deployed and continuously supervised;
+- DNS, email delivery, provider, monitoring, or alert health;
+- backup/restore readiness;
+- actual production cost and rate-limit configuration.
+
+Do not convert a repository capability into a production claim until M0 captures environment-specific evidence.
+
+## 10. Safe operating status
+
+- **Founder Institute demo:** use a non-confidential, founder-audited manual/terminal flow; disclose what is manual and what remains planned.
+- **New free company score:** do not offer a fixed three-run visibility score.
+- **Legacy short/full reports:** do not send as new sales assets without case-specific reconciliation and safe labeling.
+- **Paid pilot sales:** may continue as a transparent founder-operated offer, subject to lawful contracting/payment authority and no promise that unfinished automation already exists.
+- **Category benchmark:** planned acquisition experiment, not yet a shipped feature.
+- **Production code mutation:** requires an approved milestone, branch/PR, staging evidence, and explicit authorization.
+
+## 11. Immediate engineering action
+
+M0 must update this file with:
+
+- actual base branch and hash;
+- environment/deployment topology;
+- migration ledger by environment;
+- exact command-by-command test results;
+- dependency/security findings;
+- data flow from approval through provider attempt, canonical snapshot, delivery, and retest;
+- code references for every `working`, `partial`, `missing`, `unsafe`, or `unknown` classification;
+- reuse/refactor/replace recommendation for the current worker and report pipeline;
+- revised milestones, dependencies, operating costs, exclusions, schedule, and warranty.

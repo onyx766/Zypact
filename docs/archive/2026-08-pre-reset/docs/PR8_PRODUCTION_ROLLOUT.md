@@ -1,3 +1,5 @@
+> **Superseded historical record — archived 2026-08-16. Do not use this file for current product scope, methodology, engineering estimates, or operating decisions. Use the active canonical documentation listed in the repository README.**
+
 # PR #8 — RPC-only snapshot report writes
 
 **Internal technical rollout record.** This is an engineering change log and

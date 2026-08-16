@@ -1,3 +1,5 @@
+> **Superseded historical record — archived 2026-08-16. Do not use this file for current product scope, methodology, engineering estimates, or operating decisions. Use the active canonical documentation listed in the repository README.**
+
 # Sprint 14B.3 — Positive-case sales report guard
 
 Purpose: ensure the short sales renderer does not fabricate a negative pain story when the brand is already winning the sampled AI visibility scorecard.

@@ -1,107 +1,130 @@
 # Zypact
 
-AI visibility diagnostics for B2B SaaS marketing teams. Zypact tests real buyer
-questions against AI search and reports where a brand is recommended, where it
-is absent, and which competitors appear instead.
+- **Documentation status:** Canonical for V1 planning and engineering estimates
+- **Documentation reset date:** 2026-08-16
+- **Repository baseline audited:** official `ZypactHQ/zypact-clean-mvp` main at `b339d42a28014d8436c180a7da0cb0ad876178b8`
+- **Code effect of this reset:** None
 
-## Zypact V1
+Zypact is building an evidence-backed workflow for examining whether a B2B company appears in AI-generated vendor recommendations for approved buyer questions.
 
-Zypact is an **AI Buyer Journey Intelligence** product for B2B SaaS companies.
-Its job is to reveal which AI-assisted buyer decisions a company is losing,
-which competitors enter the shortlist instead, the evidence contained in the
-exact AI answers, what to test first, and whether the result changes on retest.
+The current V1 offer is:
 
-**The V1 promise:** run a controlled scan, see where the brand loses an
-AI-assisted buyer decision, inspect the evidence, choose the first fix worth
-testing, and retest the same question.
+> **Evidence-Backed Shortlist Diagnostic + Registered Retest**
 
-**The controlled V1 workflow:**
+Zypact records what one defined AI surface returned under documented conditions, preserves the evidence, shows observed brands, competitors, claims, and sources, registers one intervention hypothesis, and retests under a recorded protocol. It reports observed change, no clear change, or an inconclusive result. It does not promise causal proof, lost sales, or revenue impact.
 
-```
-create account -> company/workspace -> project -> Mirror Profile ->
-buyer questions -> approval -> AI runs -> raw evidence -> competitors ->
-gaps -> controlled fix -> same-question retest -> before/after ->
-founder-reviewed report
-```
+## Documentation authority
 
-V1 is controlled and founder-reviewed. It is **not** continuous monitoring and
-**not** predictive — those are V2 and V3. See [`docs/ROADMAP.md`](docs/ROADMAP.md).
+No single document governs every domain. When documents appear to conflict, use the document that owns the relevant decision:
 
-### Implementation status
+| Document | Authority |
+|---|---|
+| [`docs/ENGINEER_START_HERE.md`](docs/ENGINEER_START_HERE.md) | Required engineering entry point and reading order |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | Approved dated decisions and superseded assumptions |
+| [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) | Evidence, sampling, metrics, uncertainty, retest, and claim limits |
+| [`docs/V1_SCOPE.md`](docs/V1_SCOPE.md) | Current product scope, workflow, inclusions, and exclusions |
+| [`docs/ENGINEERING_PLAN.md`](docs/ENGINEERING_PLAN.md) | Technical milestones, dependencies, acceptance tests, and estimate format |
+| [`docs/PILOT_RUNBOOK.md`](docs/PILOT_RUNBOOK.md) | Founder-led qualification, operation, delivery, and escalation |
+| [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) | Verified repository reality, gaps, and deployment unknowns |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Sequencing, dependencies, dates, and kill gates |
 
-Graded against repository evidence, not intent. Full inventory in
-[`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md).
+Every engineer starts with [`docs/ENGINEER_START_HERE.md`](docs/ENGINEER_START_HERE.md). Archived documents are historical evidence only and cannot override this package.
 
-| Area | Status |
-| --- | --- |
-| Live Perplexity Sonar probe path, three runs per question, raw evidence stored | Implemented |
-| Pipeline: Mirror Profile, prompts, probe analysis, competitors, Gap Map, Evidence Bank, Fix Brief, QA | Implemented |
-| Report renderers, fenced report replacement, fenced delivery, founder review before delivery | Implemented |
-| Account, projects, per-artifact project pages | Implemented |
-| Company/workspace entity, onboarding, project dashboard | Missing |
-| **Same-question retest and before/after** | **Missing** — no implementation in any layer |
-| Buyer-journey stage metadata | Missing |
-| Running a controlled scan without a terminal | Not possible today — operator-only |
-| Cross-surface agreement between raw rows, aggregates, UI, short report, full report | Unverified |
+Non-binding context:
 
-The live snapshot path uses **Perplexity Sonar only**. Do not describe the
-product as testing ChatGPT, Gemini, or Claude.
+- [`docs/CEO_NORTH_STAR.md`](docs/CEO_NORTH_STAR.md) describes the founder's long-term strategic hypotheses.
+- [`docs/TECHNICAL_COFOUNDER_VISION.md`](docs/TECHNICAL_COFOUNDER_VISION.md) describes the long-term technical direction and leadership mandate.
 
-> **An engineering audit is required before any pricing decision or production
-> change.** The scope, the known P0 integrity issues, and the required audit
-> deliverables are in
-> [`docs/Zypact_V1_Engineering_Audit_Brief.md`](docs/Zypact_V1_Engineering_Audit_Brief.md).
-> Known issues include competitor contamination, inconsistent competitor counts
-> across surfaces, alias duplication, over-broad Gap Maps, and renderer
-> inconsistency. Until those are reproduced and classified, client-facing
-> numbers are not defensible.
+These two vision files do not authorize V1 work or override the authority table above.
 
-## Getting started
+## Current V1 boundary
 
-Run all commands from the repository root.
+- Initial live surface: **Perplexity Sonar**, labeled as a directional proxy.
+- External sampling: approved, configurable, and bounded; no fixed three-run client score.
+- Paid calls: explicit question/protocol approval, admission control, and reservation before each attempt.
+- Evidence: exact provider request/response plus audit metadata, hashes, and database-enforced immutability.
+- Reporting: one canonical evidence snapshot across the dashboard, reports, exports, and Outcome Card.
+- Retest: preserved question/protocol identity, registered intervention, observation window, and auditable before/after comparison.
+- Delivery: automatic only after `integrity_passed`; founder/admin review only for `needs_review`; `blocked` never delivers.
+- Claims: observed change only; no causal, revenue, or market-wide claim.
+
+Full multi-model coverage, continuous monitoring, full AI Buyer Journey Intelligence, predictive scoring, CRM integrations, enterprise features, and causal/revenue attribution are outside V1.
+
+## Verified code baseline
+
+The 2026-08-16 static audit found reusable application, database, and worker foundations rather than a greenfield project:
+
+- public landing, request, email-verification, founder approval/rejection, and secure report routes;
+- manual live scan orchestration and Perplexity integration;
+- crawler, site reader, prompt, evidence, competitor, Gap Map, Fix Brief, report, and delivery code;
+- a PostgreSQL-backed worker claim queue with leases, fencing, idempotency, and recovery logic;
+- 35 tracked SQL migrations, ending at `0035`;
+- 73 `scripts/test-*.ts` files, 24 registered `test:*` commands, 2 registered `verify:*` commands, and 1 GitHub Actions workflow.
+
+The same audit also found that legacy outputs still use fixed three-run settings and `won/partial/lost`, the raw provider response is reconstructed after JSON parsing rather than stored byte-for-byte, report renderers do not yet consume one structured canonical snapshot, and registered retest/uncertainty/Outcome Card behavior is not implemented. See [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) for the precise inventory.
+
+## Founder Institute demonstration
+
+The 2026-09-03 demonstration does not depend on a newly completed customer platform. It uses the existing manual/terminal engine with a non-confidential fixture and shows:
+
+1. an approved buyer question;
+2. a recorded Perplexity test context;
+3. raw evidence and run-level observations;
+4. prompt-scoped competitors and sources;
+5. an evidence-backed intervention hypothesis; and
+6. a registered retest that may still be inside its observation window.
+
+The demo must not present a partial retest as complete or a fixed three-run sample as a reliable market score.
+
+## Local setup
+
+Run commands from the repository root.
 
 ```bash
 npm install
-cp .env.example .env.local   # then fill in the values you need locally
+cp .env.example .env.local
 npm run dev
 ```
 
-## Validation
+Fill only the values required for the approved local or staging task. Never commit `.env.local` or secret values.
+
+## Baseline validation
 
 ```bash
 npm run typecheck
 NEXT_TELEMETRY_DISABLED=1 npm run build
 ```
 
-Targeted suites are registered in `package.json` under `test:*`, for example:
+The exact registered test and verification commands are listed in [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md). M0 must run the safe applicable set and record every command and result; a file count is not test evidence.
 
-```bash
-npm run test:snapshot-adapter-rpc-writes
-npm run test:snapshot-worker-dml-revocation-contract
-npm run test:snapshot-artifact-cascade-contract
-```
+## Database authority
 
-The PostgreSQL Level 2 concurrency harness runs in CI against a disposable
-PostgreSQL service container. It is triggered by changes to
-`supabase/migrations/**`, the harness script, or its workflow file.
+The executable schema authority is `supabase/migrations/`. The audited tree contains 35 migrations through `0035_snapshot_report_delivery_fencing.sql`.
 
-## Documentation
+This repository audit does not prove the production, preview, or staging migration ledger. M0 must verify each environment before any schema work. Historical schema notes are archived because they stop at older migrations and are not an authoritative current schema inventory.
 
-| Document | Contents |
-| --- | --- |
-| `DATABASE_SCHEMA.md` | Tables, columns, constraints, and the snapshot-report RPC surface |
-| `docs/PR8_PRODUCTION_ROLLOUT.md` | Record of the RPC-only snapshot-report rollout |
-| `docs/MVP_VALIDATION_REPORT.md` | Internal validation history |
-| `docs/MVP-OPERATOR-RUNBOOK.md` | Operator procedures |
-| [`MVP_SCOPE.md`](MVP_SCOPE.md), `AGENT_PIPELINE.md` | Original sprint scope (superseded by the V1 brief) and pipeline design |
-| [`docs/Zypact_V1_Engineering_Audit_Brief.md`](docs/Zypact_V1_Engineering_Audit_Brief.md) | Approved V1 scope and engineering audit brief |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | V1 / V2 / V3 boundaries |
-| [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) | Implementation status graded against repository evidence |
-| [`docs/ENGINEERING_ESTIMATE_REQUEST.md`](docs/ENGINEERING_ESTIMATE_REQUEST.md) | What the engineer must deliver before an estimate |
+## Historical documentation
 
-## Database
+Superseded material is retained under [`docs/archive/`](docs/archive/README.md) for auditability. It may describe completed sprints or working code, but its old product promises, score labels, fixed run counts, prices, and acceptance criteria are not active requirements.
 
-Production and Preview are both at migration `0035`. Snapshot report writes go
-through approved `SECURITY DEFINER` RPCs only — direct table writes to
-`snapshot_requests` and `snapshot_report_artifacts` are revoked. See
-`DATABASE_SCHEMA.md` for the full contract.
+## Active terminology
+
+Allowed Outcome Card statuses:
+
+- `increase_observed`
+- `decrease_observed`
+- `no_clear_change`
+- `inconclusive`
+
+Prohibited commercial verdicts and claims include `won`, `lost`, `partial`, “lost sale,” “this fix caused the result,” and “this represents all AI buyers.” Legacy code may still contain those terms; their presence is a documented migration target, not permission to show them to customers.
+
+## Change control
+
+1. Work on feature branches through pull requests; no direct changes to `main`.
+2. Do not force-push or rewrite published history.
+3. Do not modify production without explicit milestone authorization.
+4. Preserve unrelated founder/user work.
+5. Never commit secrets, environment files, prospect evidence, generated reports, or raw client outputs.
+6. Any change to evidence, sampling, scoring, protocol, retest, or report behavior must update the owning canonical document and tests.
+7. Product behavior is not implemented merely because it appears in documentation.
+8. Contractor prices and negotiations do not belong in canonical product or methodology files.

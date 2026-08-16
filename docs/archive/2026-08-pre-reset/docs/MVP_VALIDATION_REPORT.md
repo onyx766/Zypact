@@ -1,3 +1,5 @@
+> **Superseded historical record — archived 2026-08-16. Do not use this file for current product scope, methodology, engineering estimates, or operating decisions. Use the active canonical documentation listed in the repository README.**
+
 # Zypact MVP — Validation Report
 
 > **Internal technical record.** This document is an internal engineering

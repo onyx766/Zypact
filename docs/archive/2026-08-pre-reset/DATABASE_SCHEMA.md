@@ -1,3 +1,5 @@
+> **Superseded historical record — archived 2026-08-16. Do not use this file for current product scope, methodology, engineering estimates, or operating decisions. Use the active canonical documentation listed in the repository README.**
+
 # Database Schema — Sprints 1, 2, 3, 4, 5, 6, 7 & 8
 
 Sprints 1–8 use twelve tables. Everything else waits for later sprints.

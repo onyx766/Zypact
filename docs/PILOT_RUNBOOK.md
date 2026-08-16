@@ -1,0 +1,348 @@
+# Zypact V1 Pilot Runbook
+
+- **Status:** Canonical founder-operated V1 runbook
+- **Runbook date:** 2026-08-16
+- **Offer:** Evidence-Backed Shortlist Diagnostic + Registered Retest
+- **Initial surface:** Perplexity Sonar
+
+## 1. Purpose
+
+This runbook defines how the first Zypact pilots are qualified, sold, operated, reviewed, and delivered while the product remains hybrid and founder-led.
+
+It is designed to let sales and customer learning continue without sending legacy reports or promising that Zypact has already established causal lift.
+
+## 2. Pilot boundaries
+
+The pilot provides:
+
+- approved buyer-question intake;
+- a bounded Perplexity Sonar baseline under a recorded protocol;
+- immutable raw evidence and traceability;
+- prompt-scoped observed competitors, claims, citations, and sources;
+- one evidence-backed intervention hypothesis;
+- implementation and observation-window tracking;
+- registered same-question retest;
+- an Outcome Card reporting observed change, no clear change, or an inconclusive result.
+
+The pilot does not provide:
+
+- a guarantee of recommendation, citation, lead, sale, or revenue;
+- total ChatGPT/Gemini/Copilot/Claude visibility;
+- a global company visibility score;
+- proof that an intervention caused a change;
+- unlimited runs or open-ended monitoring;
+- full-service content, PR, or development execution unless contracted separately;
+- a finished self-serve platform experience during the founder-led phase.
+
+## 3. Initial ICP
+
+Prioritize:
+
+- B2B SaaS companies;
+- approximately 20–200 employees;
+- United States, Canada, or United Kingdom;
+- English-language category and buyer questions;
+- meaningful contract value or high-consideration buying process;
+- identifiable competitors;
+- accessible product marketing, growth, demand generation, or founder buyer;
+- capacity to implement one intervention and remain through the retest window.
+
+Deprioritize:
+
+- low-consideration consumer/local purchases;
+- companies unable to change content, product evidence, PR, or technical assets;
+- prospects seeking guaranteed rankings or immediate revenue attribution;
+- prospects unwilling to supply/approve buyer questions or wait for observation/retest;
+- accounts that require enterprise security or procurement features outside V1.
+
+## 4. Acquisition paths
+
+### Request Demo
+
+The website and outreach primary CTA is **Request Demo**.
+
+The demo invitation should be prospect-specific and based on verified public facts. Do not attach a legacy report or generate a generic AI-written message that claims knowledge not established by research.
+
+### One-question category benchmark
+
+The scalable free asset is a documented benchmark for one exact category question. It may be shared with relevant prospects only after methodology and evidence review pass.
+
+The benchmark is not a personalized company audit and must display its question, surface, dates, sample, uncertainty, and limitations.
+
+### Manual evidence preview
+
+For the first few design prospects, the founder may present a manually verified evidence preview during a call. It must be labeled as a recorded observation, not a stable company score.
+
+## 5. Lead qualification call
+
+Confirm:
+
+1. company category and target buyer;
+2. why the prospect cares now;
+3. whether AI-assisted comparison appears in buyer conversations;
+4. access to 10–15 possible buyer questions or a smaller defensible starting set;
+5. the five highest-value questions or initial priority question;
+6. ability to approve and implement one intervention;
+7. decision owner and implementation owner;
+8. tolerance for observation and retest timing;
+9. data/confidentiality constraints;
+10. budget and contracting path;
+11. willingness to receive an honest negative or inconclusive outcome;
+12. optional case-study/data rights, handled explicitly rather than assumed.
+
+A verified email address or platform identity does not prove buying intent or explain non-response.
+
+## 6. Proposal and agreement
+
+The written pilot agreement should define:
+
+- exact company/category scope;
+- included buyer questions;
+- initial surface;
+- diagnostic and retest deliverables;
+- sampling-planning process and hard caps;
+- estimated provider/hosting costs and who bears them;
+- intervention responsibilities;
+- observation-window and schedule assumptions;
+- what happens if indexing or implementation is delayed;
+- acceptance process;
+- data handling and confidentiality;
+- case-study/publication permissions;
+- payment schedule;
+- cancellation, refund, and out-of-scope rules;
+- statement that results may be positive, negative, unchanged, or inconclusive;
+- no causal, citation, lead, or revenue guarantee.
+
+Legal form, entity, tax, immigration, and payment authority must be handled through appropriate professional guidance outside this runbook.
+
+## 7. Intake
+
+Collect the minimum necessary information:
+
+- company name and domain;
+- category and target customer;
+- approved brand/product aliases;
+- known competitors and aliases;
+- product claims and supporting URLs/evidence;
+- forbidden or unverified claims;
+- buyer questions and provenance;
+- buyer stage, persona, constraints, and priority;
+- intervention capabilities and likely owner;
+- confidentiality/publication preferences.
+
+Do not ingest complete calls, CRM exports, customer lists, or sensitive personal data when an approved extracted buyer question is sufficient.
+
+## 8. Question review and approval
+
+For each proposed question:
+
+- remove unnecessary brand naming for unbranded discovery/comparison tests;
+- confirm category and decision context;
+- identify ambiguity or multiple intents;
+- record provenance;
+- assign stable identity/version;
+- document buyer stage/persona/constraints;
+- obtain explicit approval before paid execution.
+
+Model-generated questions are suggestions until approved.
+
+## 9. Protocol and budget approval
+
+Before execution, document:
+
+- question versions;
+- surface/model/mode and known configuration;
+- planned baseline/retest runs;
+- staged/exploratory sampling, if used;
+- controls or paraphrases, if any;
+- primary metric and decision threshold;
+- sample and dependency limitations;
+- planned attempts and cost estimate;
+- project/provider hard caps;
+- execution window;
+- proposed observation-window rule;
+- approval actor and timestamp.
+
+If the sample required for a useful decision exceeds the cap or customer value, stop or explicitly label the work exploratory.
+
+## 10. Baseline execution
+
+### Preflight
+
+- verify approval and protocol version;
+- verify environment and provider configuration;
+- verify project/tenant identity;
+- verify remaining budget and caps;
+- verify worker/operator health;
+- verify output destination and privacy;
+- run a dry/simulated preflight when appropriate without paid calls or persistent client evidence.
+
+### Execution
+
+- reserve before every paid attempt;
+- log attempt lifecycle without secrets;
+- store exact response and metadata;
+- reconcile failures, timeouts, retries, and spend;
+- stop at approved bounds;
+- do not add convenient extra runs outside the protocol.
+
+### Founder/operator review during hybrid phase
+
+The founder verifies that:
+
+- counts and evidence reconcile;
+- entities and aliases are sensible;
+- no brand-self competitor exists;
+- prompt-scoped statements use prompt-scoped evidence;
+- limitations are visible;
+- the result does not overstate sample stability.
+
+This operational review does not make founder delivery mandatory when the software integrity state is `integrity_passed`.
+
+## 11. Diagnostic delivery
+
+The diagnostic should include:
+
+- exact buyer questions;
+- surface/configuration and execution dates;
+- planned/completed/failed/excluded counts;
+- observed brand presence/position per run or approved summary;
+- uncertainty/sample status;
+- prompt-scoped competitors and citations;
+- Decision Evidence Map;
+- evidence gaps and alternative explanations;
+- one proposed intervention hypothesis;
+- evidence still needed;
+- explicit surface and causal limitations.
+
+The diagnostic must not say the prospect lost a sale, is invisible to all AI buyers, or will improve after the recommended intervention.
+
+## 12. Intervention registration
+
+The founder and customer choose one intervention, then record:
+
+- hypothesis;
+- evidence supporting it;
+- expected mechanism;
+- action type, target, and owner;
+- required approved claims/evidence;
+- artifact/action hash or stable reference;
+- implementation deadline;
+- expected time before retrieval/retest;
+- alternative explanations;
+- confounders to monitor;
+- outcome threshold that would change the next business decision.
+
+Interventions may be implemented by the customer, Zypact under a separate scope, or an approved execution partner. Zypact's default role is measurement and learning, not guaranteed execution.
+
+## 13. Implementation confirmation and observation window
+
+Before the retest clock starts:
+
+- confirm the intervention is actually live or completed;
+- preserve implementation evidence and timestamp;
+- confirm material deviations from the approved intervention;
+- open the recorded observation window;
+- schedule retrieval/index checks when relevant;
+- record unrelated customer/market changes.
+
+Do not retest early merely to meet a demo, sales, or reporting deadline.
+
+## 14. Retest
+
+The retest uses:
+
+- the same question identity/version unless the change is explicit;
+- the registered surface and configuration where possible;
+- approved bounded sampling;
+- treatment/control structure when justified;
+- the same canonical evidence and observation rules;
+- documented provider/model/configuration changes;
+- visible failures and exclusions.
+
+A disagreement or underpowered result is not forced into a positive or negative claim.
+
+## 15. Outcome Card
+
+Allowed status:
+
+- `increase_observed`
+- `decrease_observed`
+- `no_clear_change`
+- `inconclusive`
+
+Required content:
+
+- baseline and retest question/protocol versions;
+- execution and implementation dates;
+- numerator, denominator, failures/exclusions, and uncertainty;
+- observed competitors, citations, claims, and evidence changes;
+- controls and their behavior when used;
+- confounders and protocol deviations;
+- next decision;
+- links to supporting evidence under access controls.
+
+Required footer:
+
+> **This Outcome Card documents an observed change under the recorded conditions. It does not establish that the intervention caused the change.**
+
+## 16. Delivery states
+
+- `integrity_passed`: generate and deliver automatically.
+- `needs_review`: founder/admin resolves a specific flagged issue before delivery.
+- `blocked`: do not deliver until the unsafe condition is resolved.
+
+Every review or override is recorded. Founder review is not used to conceal or manually rewrite deterministic facts.
+
+## 17. Existing-report remediation
+
+Legacy reports are frozen as sales assets.
+
+Create a private recipient inventory containing:
+
+- prospect/company;
+- date sent;
+- exact artifact/version;
+- sample and surface;
+- figures and conclusions shown;
+- known inconsistency or overstatement;
+- whether the recipient engaged;
+- recommended action.
+
+Classify each case:
+
+- **Lower risk:** raw evidence and limitations were clear; no stable or causal claim.
+- **Moderate risk:** small-sample percentage or broad score was presented.
+- **High risk:** inconsistent figures, brand-self competitor, unsupported cause, or false file/output contract.
+
+Do not send a mass apology. Prepare a prospect-specific correction only when the actual artifact and relationship justify it. Silence alone does not establish that the report caused non-response.
+
+## 18. Pilot review
+
+After every pilot, record:
+
+- what the customer paid for and valued;
+- qualification and objection patterns;
+- time to approved question and first useful evidence;
+- provider and infrastructure cost;
+- founder/manual hours;
+- integrity/review/block incidents;
+- intervention implementation delay;
+- retest completion and outcome;
+- whether the customer continued, referred, or stopped;
+- what should be automated, standardized, or removed.
+
+## 19. Escalation rules
+
+Stop delivery and escalate when:
+
+- evidence or hashes are missing;
+- counts disagree;
+- question/protocol identity is unclear;
+- alias resolution materially changes the result;
+- a report implies causality or revenue impact;
+- the sample cannot support the language shown;
+- provider configuration changed materially;
+- client evidence may expose confidential information;
+- implementation cannot be verified;
+- a contractual/legal/data-permission issue is unresolved.

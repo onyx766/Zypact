@@ -1,3 +1,5 @@
+> **Superseded historical record — archived 2026-08-16. Do not use this file for current product scope, methodology, engineering estimates, or operating decisions. Use the active canonical documentation listed in the repository README.**
+
 # Zypact — Agent Pipeline
 
 This document is the map of the full 7-agent pipeline defined in

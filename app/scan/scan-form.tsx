@@ -99,7 +99,7 @@ export function ScanForm({
         {
           sitekey: siteKey,
           action: "snapshot_request",
-          theme: "dark",
+          theme: "light",
           size: "flexible",
           callback(token) {
             setTurnstileToken(token);
@@ -268,9 +268,10 @@ export function ScanForm({
 
         <p>
           We sent a private verification link.
-          After verification, your request waits
-          for a fit review. No AI scan has
-          started.
+          Verification records your request; it
+          does not approve a protocol or start an
+          AI scan. Zypact will contact you about
+          access to the V1 workflow.
         </p>
 
         <p className="scan-privacy-note">
@@ -500,8 +501,8 @@ export function ScanForm({
         </button>
 
         <p className="scan-privacy-note">
-          Founder reviewed. No AI call starts
-          automatically.
+          Request only. Automation begins after
+          the question and protocol are approved.
         </p>
       </form>
     </>

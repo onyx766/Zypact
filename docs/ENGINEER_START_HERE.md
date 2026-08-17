@@ -71,13 +71,7 @@ Do not quote a new worker or a rebuild merely because hosting is incomplete. Sep
 
 The exact known gaps and registered test commands are in [`CURRENT_STATUS.md`](CURRENT_STATUS.md).
 
-## 4. Founder Institute demo is not your delivery deadline
-
-The 2026-09-03 Founder Institute demo uses the existing manual/terminal engine. New engineering completed before the demo is a bonus, not a dependency.
-
-Do not reduce tests, bypass integrity rules, or present a partial retest as completed to meet the demo date.
-
-## 5. Your first deliverable — M0 only
+## 4. Your first deliverable — M0 only
 
 Before quoting or committing to the full implementation, return:
 
@@ -92,7 +86,7 @@ Before quoting or committing to the full implementation, return:
 9. recommendation on which current code to retain, refactor, or replace;
 10. revised milestones, hours, fixed price, dependencies, acceptance evidence, exclusions, operating costs, schedule, warranty, and maintenance terms.
 
-## 6. Estimate against these outcomes
+## 5. Estimate against these outcomes
 
 | Milestone | Required outcome |
 |---|---|
@@ -108,7 +102,7 @@ Before quoting or committing to the full implementation, return:
 
 For each milestone, state existing code reused, work included, hours, fixed price, dependencies, acceptance evidence, and exclusions. Do not optimize around a presumed founder budget.
 
-## 7. Change-control and access rules
+## 6. Change-control and access rules
 
 - Initial audit is read-only where practical.
 - Use a feature branch and pull request; do not commit directly to `main`.
@@ -122,14 +116,14 @@ For each milestone, state existing code reused, work included, hours, fixed pric
 - Every schema change requires migration and recovery notes.
 - Critical infrastructure and accounts remain controlled by Zypact.
 
-## 8. Documents that do not define your contracted scope
+## 7. Documents that do not define your contracted scope
 
 - materials not included in this engineering repository;
 - roadmap items beyond the approved milestone.
 
 Only the active canonical package and signed milestone agreement authorize work.
 
-## 9. Stop and ask when
+## 8. Stop and ask when
 
 - repository reality materially contradicts `CURRENT_STATUS.md`;
 - a requirement would violate `METHODOLOGY.md`;

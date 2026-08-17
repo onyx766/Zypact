@@ -106,25 +106,7 @@ Each entry records:
 - **Effect:** Until a benchmark is ready, outreach may book calls but does not attach legacy reports.
 - **Revisit trigger:** Lead quality, benchmark cost, conversion, and methodology performance.
 
-## D-011 — The Founder Institute demo uses the existing manual engine
-
-- **Date:** 2026-08-16
-- **Status:** Approved
-- **Decision:** The 2026-09-03 demo uses the real manual/terminal engine already demonstrated. Newly completed platform automation is a bonus, not a dependency.
-- **Reason:** Engineering selection, revised estimates, contracting, and onboarding cannot credibly guarantee a complete trust layer before the demo.
-- **Effect:** Demo preparation proceeds independently from engineer selection.
-- **Revisit trigger:** None for the 2026-09-03 event.
-
-## D-012 — An in-progress retest is a valid demo state
-
-- **Date:** 2026-08-16
-- **Status:** Approved
-- **Decision:** The demo may show: “Registered retest — baseline recorded, intervention implemented, observation window open, retest scheduled for [date].”
-- **Reason:** A complete baseline, intervention, indexing/observation window, and retest cannot be forced into the remaining demo schedule without compromising integrity.
-- **Effect:** A partial retest cannot be presented as a completed Outcome Card.
-- **Revisit trigger:** None for the demo; future customer timing follows the approved protocol.
-
-## D-013 — Internal feasibility is not generalization
+## D-011 — Internal feasibility is not generalization
 
 - **Date:** 2026-08-16
 - **Status:** Approved
@@ -133,7 +115,7 @@ Each entry records:
 - **Effect:** The feasibility plan includes internal testing plus external replication gates.
 - **Revisit trigger:** Completed replicated outcomes and methodological review.
 
-## D-014 — One canonical documentation package precedes code commitments
+## D-012 — One canonical documentation package precedes code commitments
 
 - **Date:** 2026-08-16
 - **Status:** Approved
@@ -142,11 +124,11 @@ Each entry records:
 - **Effect:** Documentation reset precedes code milestones. Contractor prices stay in contracts, not canonical product documents.
 - **Revisit trigger:** None; future scope changes must follow the same change-control principle.
 
-## D-015 — Long-term vision is non-binding
+## D-013 — Future roadmap is non-binding
 
 - **Date:** 2026-08-16
 - **Status:** Approved
-- **Decision:** CEO and technical-cofounder vision documents describe possible future direction but cannot authorize work or override current methodology, scope, engineering, or status documents.
-- **Reason:** A long-term vision should guide decisions without creating accidental contractor scope.
-- **Effect:** Every vision document carries an explicit non-binding header and horizon.
+- **Decision:** Future roadmap phases do not authorize work or override current methodology, scope, engineering, or status documents.
+- **Reason:** Future direction must not create accidental contractor scope.
+- **Effect:** Only the active canonical package and an accepted milestone agreement authorize engineering work.
 - **Revisit trigger:** The authority index may be revised when company governance changes.

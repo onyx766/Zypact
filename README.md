@@ -57,19 +57,6 @@ The 2026-08-16 static audit found reusable application, database, and worker fou
 
 The same audit also found that legacy outputs still use fixed three-run settings and `won/partial/lost`, the raw provider response is reconstructed after JSON parsing rather than stored byte-for-byte, report renderers do not yet consume one structured canonical snapshot, and registered retest/uncertainty/Outcome Card behavior is not implemented. See [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) for the precise inventory.
 
-## Founder Institute demonstration
-
-The 2026-09-03 demonstration does not depend on a newly completed customer platform. It uses the existing manual/terminal engine with a non-confidential fixture and shows:
-
-1. an approved buyer question;
-2. a recorded Perplexity test context;
-3. raw evidence and run-level observations;
-4. prompt-scoped competitors and sources;
-5. an evidence-backed intervention hypothesis; and
-6. a registered retest that may still be inside its observation window.
-
-The demo must not present a partial retest as complete or a fixed three-run sample as a reliable market score.
-
 ## Local setup
 
 Run commands from the repository root.

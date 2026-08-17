@@ -50,6 +50,29 @@ async function main() {
 
   console.log("✓ plain-text version contains the link and expiry");
 
+  assert.equal(
+    rendered.subject,
+    "Verify your email for your Zypact demo request"
+  );
+  assert.ok(
+    rendered.text.includes(
+      "Zypact V1 demo request"
+    )
+  );
+  assert.ok(
+    rendered.text.includes(
+      "No AI scan starts automatically"
+    )
+  );
+  assert.equal(
+    rendered.text.includes(
+      "AI visibility snapshot"
+    ),
+    false
+  );
+
+  console.log("✓ verification copy matches the V1 demo request journey");
+
   const config = {
     apiKey: "re_mock_api_key",
     from: "Zypact <verify@updates.zypact.com>",
@@ -222,7 +245,7 @@ async function main() {
   console.log("✓ missing configuration fails before any network call");
 
   console.log(
-    "\n9/9 checks passed. Snapshot verification email delivery PASSED."
+    "\n10/10 checks passed. Snapshot verification email delivery PASSED."
   );
 }
 

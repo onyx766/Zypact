@@ -124,13 +124,14 @@ export function VerifyEmailClient() {
         </p>
 
         <h1 className="verification-title">
-          Your snapshot request is waiting for approval.
+          Your demo request is waiting for a fit review.
         </h1>
 
         <p className="verification-copy">
           Your email has been confirmed. No AI scan
-          has started yet. Zypact will review the
-          request before placing it in the scan queue.
+          has started. Zypact will review the request
+          and contact you before any pilot work or
+          provider call.
         </p>
 
         <div className="verification-actions">
@@ -169,7 +170,7 @@ export function VerifyEmailClient() {
             href="/scan"
             className="button button-primary"
           >
-            Request another snapshot
+            Request another demo
           </a>
         </div>
       </div>
@@ -189,7 +190,7 @@ export function VerifyEmailClient() {
   return (
     <div className="verification-result">
       <p className="verification-label">
-        Free AI visibility snapshot
+        Zypact V1 demo request
       </p>
 
       <h1 className="verification-title">
@@ -197,9 +198,9 @@ export function VerifyEmailClient() {
       </h1>
 
       <p className="verification-copy">
-        Continue your Zypact snapshot request. After
-        verification, the request will wait for
-        approval before any AI scan begins.
+        Continue your Zypact demo request. After
+        verification, the request will wait for a
+        fit review. No AI scan starts automatically.
       </p>
 
       {feedback ? (

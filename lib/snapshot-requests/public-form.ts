@@ -197,7 +197,7 @@ export async function submitSnapshotRequest(
     if (response.status === 429) {
       return genericFailure(
         "limit",
-        "A free snapshot was already requested recently for this email, domain, or network."
+        "A demo request was already submitted recently for this email, domain, or network."
       );
     }
 
@@ -215,7 +215,7 @@ export async function submitSnapshotRequest(
     if (response.status === 503) {
       return genericFailure(
         "unavailable",
-        "Free snapshot requests are temporarily unavailable."
+        "Demo requests are temporarily unavailable."
       );
     }
 

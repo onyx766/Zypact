@@ -40,26 +40,26 @@ export default function ScanPage() {
       <section className="scan-shell">
         <div className="scan-intro">
           <p className="eyebrow">
-            Evidence-backed diagnostic + registered retest
+            Zypact V1 · Founder-led pilot
           </p>
 
           <h1>
-            Bring one buyer question worth testing.
+            Request a Zypact V1 demo.
           </h1>
 
           <p className="scan-intro-copy">
-            Request a conversation about a
-            founder-led V1 pilot. No AI call starts
-            from this form. If the fit is right,
-            Zypact and your team approve the
-            question, protocol, limits, and
-            observation window before execution.
+            We&apos;ll review your category and discuss
+            one commercially important buyer
+            question. No AI call starts from this
+            form. If the pilot is a fit, we agree
+            on the question, protocol, limits, and
+            observation window before anything runs.
           </p>
 
           <ul className="scan-summary">
             <li>
               One commercially meaningful buyer
-              question
+              question, agreed together
             </li>
             <li>
               Exact Perplexity evidence, observed

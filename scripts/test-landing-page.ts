@@ -114,6 +114,10 @@ async function main(): Promise<void> {
   check("new visual stylesheet is imported last", layoutSource.indexOf('"./landing-v1.css"') > layoutSource.indexOf('"./globals.css"'));
   check("warm light evidence palette exists", cssSource.includes("--ev-canvas: #f6f5f1") && cssSource.includes("--ev-accent: #214f73"));
   check("12-column-ready 1200px container exists", cssSource.includes("width: min(1200px, calc(100% - 48px))"));
+  check("desktop hero type stays in the calibrated 52–56px range", cssSource.includes("font-size: clamp(3.25rem, 4.4vw, 3.5rem)") && cssSource.includes("line-height: 1.02") && cssSource.includes("letter-spacing: -.025em") && cssSource.includes("font-weight: 690"));
+  check("hero copy keeps a readable measure and supporting scale", cssSource.includes(".ev-hero h1 { max-width: 620px") && cssSource.includes("font-size: clamp(17px, 1.35vw, 18px)") && cssSource.includes("line-height: 1.58"));
+  check("diagram labels are product-readable", cssSource.includes(".ev-orbit-node strong { display: block; margin-top: 2px; font-size: 13px") && cssSource.includes(".ev-orbit-node small { display: block; margin-top: 3px; color: var(--ev-muted); font-size: 11px"));
+  check("mobile headline stays in the 38–42px range", cssSource.includes("font-size: clamp(2.375rem, 10.5vw, 2.625rem); line-height: 1.05"));
   check("status meaning is not color-only", pageSource.includes("ev-status-primary\">Primary") && pageSource.includes("ev-status-not-observed\">Not observed"));
   check("mobile breakpoint preserves single-column records", cssSource.includes("@media (max-width: 600px)") && cssSource.includes(".ev-brand-rows,"));
   check("reduced-motion CSS exists", cssSource.includes("prefers-reduced-motion: reduce"));

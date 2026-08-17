@@ -37,7 +37,7 @@ async function main(): Promise<void> {
   ].join("\n");
 
   check("dark intelligence root renders", html.includes('class="di-page"'));
-  check("bounded V1 positioning renders", flat.includes("See which competitors") && flat.includes("one buyer question surfaces") && flat.includes("what to test first"));
+  check("bounded V1 positioning renders", flat.includes("See which competitors appear for one critical buyer question.") && flat.includes("Choose what to test next."));
   check("V1 mechanism renders", flat.includes("one commercially important buyer question") && flat.includes("one evidence-backed intervention") && flat.includes("after the observation window"));
   check("primary CTA uses the protected request route", flat.includes("Request Demo") && /href=["']\/scan["']/.test(html));
   check("real section anchors exist", html.includes('id="what-you-get"') && html.includes('id="how-it-works"') && html.includes('id="faq"'));
@@ -78,6 +78,8 @@ async function main(): Promise<void> {
     "See why AI assistants",
     "shows where your brand loses",
     "tests real buyer questions",
+    "one buyer question surfaces",
+    "what to test first",
   ];
   for (const banned of bannedPublicCopy) {
     check("legacy public copy removed: " + banned, !publicJourneySource.includes(banned));
@@ -108,8 +110,8 @@ async function main(): Promise<void> {
   check("Pro pricing source remains intact", plans.includes("priceMonthlyUsd: 199"));
   check("saved-project entitlements remain 0/3/5", /free:[\s\S]*projects:\s*0/.test(plans) && /growth:[\s\S]*projects:\s*3/.test(plans) && /pro:[\s\S]*projects:\s*5/.test(plans));
 
-  check("protected request route is preserved", scanPageSource.includes("Request a Zypact V1 demo") && scanPageSource.includes("Perplexity Sonar"));
-  check("request form is reframed as a demo", scanFormSource.includes("Request Demo") && scanFormSource.includes("No AI scan has"));
+  check("protected request route is preserved", scanPageSource.includes("Request a Zypact V1 demo") && scanPageSource.includes("Zypact V1 · Founder-led pilot") && scanPageSource.includes("question, agreed together") && scanPageSource.includes("Perplexity Sonar"));
+  check("request form is reframed as a demo", scanFormSource.includes("Request Demo") && scanFormSource.includes("Founder reviewed. No AI call starts") && scanFormSource.includes("No AI scan has"));
   check("verification journey is reframed as a demo", verifyPageSource.includes("Zypact V1 demo request") && verifyClientSource.includes("demo request") && verificationEmailSource.includes("Zypact V1 demo request"));
   check("public errors refer to demo requests", publicFormSource.includes("Demo requests are temporarily unavailable."));
 

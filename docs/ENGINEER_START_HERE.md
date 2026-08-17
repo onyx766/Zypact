@@ -124,15 +124,10 @@ For each milestone, state existing code reused, work included, hours, fixed pric
 
 ## 8. Documents that do not define your contracted scope
 
-- archived/superseded MVP or engineering-estimate documents;
-- archived `CLAUDE.md`, schema notes, validation reports, and sprint records;
-- [`CEO_NORTH_STAR.md`](CEO_NORTH_STAR.md);
-- [`TECHNICAL_COFOUNDER_VISION.md`](TECHNICAL_COFOUNDER_VISION.md);
-- long-term market research;
-- sales conversations or historical price proposals;
+- materials not included in this engineering repository;
 - roadmap items beyond the approved milestone.
 
-They may provide context, but only the active canonical package and signed milestone agreement authorize work.
+Only the active canonical package and signed milestone agreement authorize work.
 
 ## 9. Stop and ask when
 

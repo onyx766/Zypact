@@ -28,14 +28,8 @@ No single document governs every domain. When documents appear to conflict, use 
 | [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) | Verified repository reality, gaps, and deployment unknowns |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Sequencing, dependencies, dates, and kill gates |
 
-Every engineer starts with [`docs/ENGINEER_START_HERE.md`](docs/ENGINEER_START_HERE.md). Archived documents are historical evidence only and cannot override this package.
+Every engineer starts with [`docs/ENGINEER_START_HERE.md`](docs/ENGINEER_START_HERE.md). This active package is the only documentation included in the engineering handoff.
 
-Non-binding context:
-
-- [`docs/CEO_NORTH_STAR.md`](docs/CEO_NORTH_STAR.md) describes the founder's long-term strategic hypotheses.
-- [`docs/TECHNICAL_COFOUNDER_VISION.md`](docs/TECHNICAL_COFOUNDER_VISION.md) describes the long-term technical direction and leadership mandate.
-
-These two vision files do not authorize V1 work or override the authority table above.
 
 ## Current V1 boundary
 
@@ -103,9 +97,6 @@ The executable schema authority is `supabase/migrations/`. The audited tree cont
 
 This repository audit does not prove the production, preview, or staging migration ledger. M0 must verify each environment before any schema work. Historical schema notes are archived because they stop at older migrations and are not an authoritative current schema inventory.
 
-## Historical documentation
-
-Superseded material is retained under [`docs/archive/`](docs/archive/README.md) for auditability. It may describe completed sprints or working code, but its old product promises, score labels, fixed run counts, prices, and acceptance criteria are not active requirements.
 
 ## Active terminology
 

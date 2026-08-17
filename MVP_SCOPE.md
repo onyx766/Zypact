@@ -9,6 +9,6 @@ Use these documents with it:
 - [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) for verified repository reality;
 - [`docs/DECISIONS.md`](docs/DECISIONS.md) for dated decisions.
 
-The original contents of this file were superseded on 2026-08-16 and are preserved at [`docs/archive/2026-08-pre-reset/MVP_SCOPE.md`](docs/archive/2026-08-pre-reset/MVP_SCOPE.md).
+The superseded Sprint 0/Sprint 1 document is intentionally excluded from this engineering repository.
 
-Do not estimate or implement V1 from the archived Sprint 0/Sprint 1 scope.
+Do not estimate or implement V1 from any superseded Sprint 0/Sprint 1 scope.

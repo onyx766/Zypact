@@ -114,10 +114,16 @@ async function main(): Promise<void> {
   check("new visual stylesheet is imported last", layoutSource.indexOf('"./landing-v1.css"') > layoutSource.indexOf('"./globals.css"'));
   check("warm light evidence palette exists", cssSource.includes("--ev-canvas: #f6f5f1") && cssSource.includes("--ev-accent: #214f73"));
   check("12-column-ready 1200px container exists", cssSource.includes("width: min(1200px, calc(100% - 48px))"));
-  check("desktop hero type stays in the calibrated 52–56px range", cssSource.includes("font-size: clamp(3.25rem, 4.4vw, 3.5rem)") && cssSource.includes("line-height: 1.02") && cssSource.includes("letter-spacing: -.025em") && cssSource.includes("font-weight: 690"));
+  check("desktop hero type stays in the refined 50–54px range", cssSource.includes("font-size: clamp(3.125rem, 4.2vw, 3.375rem)") && cssSource.includes("line-height: 1.02") && cssSource.includes("letter-spacing: -.025em") && cssSource.includes("font-weight: 680"));
+  check("section headings stay in the refined 36–42px range", cssSource.includes("font-size: clamp(2.25rem, 3.6vw, 2.625rem)") && cssSource.includes("line-height: 1.12"));
   check("hero copy keeps a readable measure and supporting scale", cssSource.includes(".ev-hero h1 { max-width: 620px") && cssSource.includes("font-size: clamp(17px, 1.35vw, 18px)") && cssSource.includes("line-height: 1.58"));
   check("diagram labels are product-readable", cssSource.includes(".ev-orbit-node strong { display: block; margin-top: 2px; font-size: 13px") && cssSource.includes(".ev-orbit-node small { display: block; margin-top: 3px; color: var(--ev-muted); font-size: 11px"));
-  check("mobile headline stays in the 38–42px range", cssSource.includes("font-size: clamp(2.375rem, 10.5vw, 2.625rem); line-height: 1.05"));
+  check("secondary copy no longer drops below the readable product scale", cssSource.includes(".ev-fit-grid li") && cssSource.includes("font-size: 16px; line-height: 1.55") && cssSource.includes(".ev-deliverables p") && cssSource.includes("font-size: 15px; line-height: 1.6"));
+  check("muted text meets normal-text contrast on the canvas", cssSource.includes("--ev-muted: #5f6b76"));
+  check("active workflow step is visually dominant", cssSource.includes("min-height: 70px; color: var(--ev-accent); background: var(--ev-accent-soft)") && cssSource.includes("box-shadow: inset 3px 0 0 var(--ev-accent)"));
+  check("FAQ is denser without shrinking its copy", cssSource.includes(".ev-faq { padding-top: 100px; padding-bottom: 100px") && cssSource.includes(".ev-faq-list summary { min-height: 62px") && cssSource.includes("font-size: 16px; font-weight: 700"));
+  check("mobile headline stays in the 38–40px range", cssSource.includes("font-size: clamp(2.375rem, 10vw, 2.5rem); line-height: 1.05"));
+  check("mobile section headings stay in the 30–34px range", cssSource.includes("font-size: clamp(1.875rem, 8vw, 2.125rem)"));
   check("status meaning is not color-only", pageSource.includes("ev-status-primary\">Primary") && pageSource.includes("ev-status-not-observed\">Not observed"));
   check("mobile breakpoint preserves single-column records", cssSource.includes("@media (max-width: 600px)") && cssSource.includes(".ev-brand-rows,"));
   check("reduced-motion CSS exists", cssSource.includes("prefers-reduced-motion: reduce"));

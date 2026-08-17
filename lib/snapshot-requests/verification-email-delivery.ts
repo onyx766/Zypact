@@ -130,18 +130,18 @@ export function renderSnapshotVerificationEmail(input: {
     input.companyName.trim() || "your company";
 
   const subject =
-    "Verify your email for your Zypact snapshot";
+    "Verify your email for your Zypact demo request";
 
   const text = [
-    `Confirm your email to continue the Zypact AI visibility snapshot for ${companyName}.`,
+    `Confirm your email to continue the Zypact V1 demo request for ${companyName}.`,
     "",
     input.verificationLink,
     "",
     `This private link expires in ${input.expiresInMinutes} minutes and can be used only once.`,
     "",
-    "After verification, your request will wait for approval before any AI scan is started.",
+    "After verification, your request will wait for a fit review. No AI scan starts automatically.",
     "",
-    "You can ignore this email if you did not request the snapshot.",
+    "You can ignore this email if you did not request a Zypact demo.",
   ].join("\n");
 
   const safeCompanyName = escapeHtml(companyName);
@@ -160,7 +160,7 @@ export function renderSnapshotVerificationEmail(input: {
         </p>
 
         <p style="margin:0 0 20px;line-height:1.6;">
-          Confirm your email to continue the Zypact AI visibility snapshot for
+          Confirm your email to continue the Zypact V1 demo request for
           <strong>${safeCompanyName}</strong>.
         </p>
 
@@ -178,11 +178,11 @@ export function renderSnapshotVerificationEmail(input: {
         </p>
 
         <p style="margin:0 0 14px;line-height:1.6;color:#52525b;">
-          After verification, your request will wait for approval before any AI scan is started.
+          After verification, your request will wait for a fit review. No AI scan starts automatically.
         </p>
 
         <p style="margin:0;line-height:1.6;color:#71717a;font-size:14px;">
-          You can ignore this email if you did not request the snapshot.
+          You can ignore this email if you did not request a Zypact demo.
         </p>
       </div>
     </div>

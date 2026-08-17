@@ -1,19 +1,19 @@
 import type { Metadata } from "next";
 import { ZypactLogo } from "@/components/zypact-logo";
-import { HeroProcessViz, HowItWorks, LandingNav, SyntheticDemo } from "@/components/landing-interactions";
+import { HeroProcessViz, HowItWorks, LandingNav, ProtocolDemo } from "@/components/landing-interactions";
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://zypact.com";
-const snapshotFormUrl = "/scan";
+const demoRequestUrl = "/scan";
 
 export const metadata: Metadata = {
-  title: "Zypact — See why AI recommends competitors instead of you",
+  title: "Zypact — Evidence-backed AI visibility diagnostic and registered retest",
   description:
-    "Zypact helps B2B SaaS marketing teams see which buyer questions they lose in AI, which competitors appear instead, and the first evidence-backed fix worth testing.",
+    "Bring one commercially important buyer question. Zypact preserves the exact Perplexity evidence, helps register one intervention, and retests the same question after an explicit observation window.",
   alternates: { canonical: siteUrl },
   openGraph: {
-    title: "Zypact — AI visibility intelligence for B2B SaaS",
+    title: "Zypact — Evidence-backed diagnostic and registered retest",
     description:
-      "Test buyer questions, see where competitors appear instead, identify the evidence gap, and get the first fix worth testing.",
+      "Inspect exact Perplexity evidence for one important buyer question, register one intervention, and retest the same question after the observation window.",
     url: siteUrl,
     siteName: "Zypact",
     type: "website",
@@ -27,67 +27,70 @@ function getJsonLd() {
       { "@type": "Organization", name: "Zypact", url: siteUrl },
       {
         "@type": "Service",
-        name: "Zypact AI visibility snapshot",
-        serviceType: "AI visibility diagnostic for B2B SaaS marketing teams",
+        name: "Zypact Evidence-Backed Shortlist Diagnostic + Registered Retest",
+        serviceType: "Founder-led AI visibility diagnostic and registered retest for B2B SaaS",
         url: siteUrl,
         provider: { "@type": "Organization", name: "Zypact", url: siteUrl },
         description:
-          "Zypact tests buyer-style questions using live Perplexity Sonar answers, shows where a brand is recommended, cited, mentioned, or absent, and identifies the first evidence-backed fix worth testing.",
-        audience: { "@type": "BusinessAudience", audienceType: "B2B SaaS marketing teams" },
+          "Zypact runs an approved, bounded protocol on Perplexity Sonar, preserves exact evidence, supports one registered intervention, and retests the same buyer question after an explicit observation window.",
+        audience: {
+          "@type": "BusinessAudience",
+          audienceType: "English-language B2B SaaS marketing and product-marketing teams",
+        },
       },
     ],
   };
 }
 
 const deliverables = [
-  ["01", "Buyer questions won or lost", "Know exactly which tested questions put you on a shortlist — and which hand the opportunity elsewhere."],
-  ["02", "Competitors in your buying frame", "See which brands appear in the specific buyer questions being tested instead of relying on a generic competitor list."],
-  ["03", "Recommended vs. cited status", "Separate being absent, mentioned, cited, and recommended so the signal is easy to interpret."],
-  ["04", "Evidence gap behind the loss", "See what evidence appears missing before making a fix, without turning an observed outcome into a causal claim."],
-  ["05", "First fix worth making", "Get one prioritized, evidence-backed action instead of a generic 40-item audit."],
-  ["06", "What to re-test afterward", "Know which buyer question should be checked again after the intervention so you can observe what changed."],
+  ["01", "Approved buyer question", "Start with one commercially meaningful question, its purpose, context, and an immutable approved version."],
+  ["02", "Bounded protocol", "Agree on the Perplexity surface, sampling plan, limits, decision threshold, and observation window before paid calls."],
+  ["03", "Exact evidence", "Preserve the outbound request, raw response, sources, metadata, and integrity hash behind every observation."],
+  ["04", "Observed competitor frame", "Inspect prompt-scoped positions, competitors, claims, and sources without converting an observation into a causal explanation."],
+  ["05", "Registered intervention", "Choose one evidence-backed hypothesis, record the owner and implementation proof, and open the observation window."],
+  ["06", "Auditable Outcome Card", "Retest the same question after eligibility and report increase observed, decrease observed, no clear change, or an inconclusive result."],
 ] as const;
 
 const faqs = [
   {
-    question: "What does the free snapshot include?",
+    question: "What does the V1 pilot include?",
     answer:
-      "A focused set of buyer-style questions, repeated live checks where appropriate, prompt-level recommendation and citation evidence, the competitors or sources that appeared, and the first evidence-backed fix worth testing.",
+      "One approved buyer question, a bounded Perplexity protocol, exact evidence, prompt-scoped observations, one registered intervention, an explicit observation window, a same-question retest, and an auditable Outcome Card.",
   },
   {
     question: "Which AI platform do you test?",
     answer:
-      "Perplexity Sonar only right now. The current snapshot does not represent automated coverage of ChatGPT, Gemini, Claude, or the entire AI search market.",
+      "Perplexity Sonar is the initial live V1 surface. The pilot does not claim automated coverage of ChatGPT, Gemini, Claude, or the entire AI-search market.",
+  },
+  {
+    question: "Why is there no fixed number of runs?",
+    answer:
+      "AI answers vary. Sampling is an approved protocol parameter based on the question, uncertainty, decision threshold, limits, and budget. Zypact does not silently treat three runs—or any universal number—as a reliable external measurement.",
   },
   {
     question: "Is this an SEO audit?",
     answer:
-      "No. Zypact focuses on what live AI answers recommend or cite when buyers ask category, comparison, alternative, and product-choice questions. It can complement SEO, but it is not a traditional technical SEO audit.",
+      "No. Zypact records what one defined AI surface returns for an approved buyer question. The resulting intervention may involve positioning, content, evidence, reviews, PR, or no action at all.",
   },
   {
-    question: "Is this a full market audit?",
+    question: "Do you guarantee ranking, recommendation, or revenue improvement?",
     answer:
-      "No. It is a focused diagnostic snapshot using a small set of commercially relevant buyer questions. It is designed to surface evidence and a useful next action, not to claim market-wide coverage.",
+      "No. Zypact guarantees the agreed process and evidence contract, not a favorable model response. The report never converts observed movement into causal or revenue attribution.",
   },
   {
-    question: "Do you guarantee ranking or recommendation improvements?",
+    question: "What if nothing clearly changes?",
     answer:
-      "No. AI answers vary. Zypact records what happened, identifies evidence-backed opportunities, and gives you something specific to test rather than promising rankings, citations, recommendations, or visibility lift.",
+      "That is a valid result. The Outcome Card reports increase observed, decrease observed, no clear change, or inconclusive evidence, preserves the limitations and confounders, and supports a decision to continue, revise, or stop.",
   },
   {
-    question: "What if my brand is not mentioned at all?",
+    question: "What happens after I request a demo?",
     answer:
-      "That is still useful evidence. We show the exact buyer frame where your brand was absent, what brands or sources appeared when available, and the first evidence gap worth investigating.",
-  },
-  {
-    question: "What happens after the snapshot?",
-    answer:
-      "A founder reviews the snapshot before delivery. If the finding is useful, deeper diagnostic or implementation work is optional — the free snapshot does not lock you into anything.",
+      "No AI scan starts from the form. Zypact first reviews fit with you. If you proceed, the buyer question, protocol, limits, intervention responsibilities, and observation window are approved before execution.",
   },
   {
     question: "Do I need a subscription?",
     answer:
-      "No subscription is required to request the free snapshot. The current launch is founder-led rather than a fully self-serve subscription checkout.",
+      "No self-serve subscription is required for the initial founder-led pilot. Scope, timing, price, and responsibilities are agreed for the bounded engagement before work begins.",
   },
 ];
 
@@ -95,26 +98,26 @@ export default function LandingPage() {
   return (
     <main id="top" className="di-page">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(getJsonLd()) }} />
-      <LandingNav snapshotFormUrl={snapshotFormUrl} />
+      <LandingNav demoRequestUrl={demoRequestUrl} />
 
       <section className="di-hero" aria-labelledby="hero-heading">
         <div className="di-grid-bg" aria-hidden="true" />
         <div className="di-hero-glow" aria-hidden="true" />
         <div className="di-shell di-hero-inner">
           <div className="di-hero-copy">
-            <div className="di-pulse-badge"><span aria-hidden="true" /> AI visibility intelligence · Perplexity Sonar</div>
-            <h1 id="hero-heading">See why AI assistants <em>recommend your competitors</em> instead of you.</h1>
+            <div className="di-pulse-badge"><span aria-hidden="true" /> Evidence-backed diagnostic · Registered retest</div>
+            <h1 id="hero-heading">See which competitors <em>one buyer question surfaces</em>—and what to test first.</h1>
             <p className="di-hero-subtitle">
-              Zypact tests real buyer questions, shows where your brand loses, identifies the evidence gaps, and surfaces the first fix worth testing.
+              Bring one commercially important buyer question. Zypact records how Perplexity answers it, shows the competitors and sources observed, helps register one evidence-backed intervention, and checks the same question again after the observation window.
             </p>
             <div className="di-hero-actions">
-              <a href={snapshotFormUrl} className="di-button di-button-primary di-button-large">Request free snapshot</a>
-              <a href="#demo" className="di-text-link">See how the snapshot works <span aria-hidden="true">↘</span></a>
+              <a href={demoRequestUrl} className="di-button di-button-primary di-button-large">Request Demo</a>
+              <a href="#how-it-works" className="di-text-link">See the V1 method <span aria-hidden="true">↘</span></a>
             </div>
-            <div className="di-trust-strip" aria-label="Snapshot trust signals">
-              <span>FOUNDER-REVIEWED</span><span>LIVE PERPLEXITY ANSWERS</span><span>NO INVENTED CLAIMS</span>
+            <div className="di-trust-strip" aria-label="V1 trust signals">
+              <span>APPROVED PROTOCOL</span><span>EXACT EVIDENCE</span><span>HONEST OUTCOMES</span>
             </div>
-            <p className="di-scope-note">Small Perplexity snapshot. Not a market-wide benchmark and not ChatGPT, Gemini, or Claude coverage.</p>
+            <p className="di-scope-note">Current V1 surface: Perplexity Sonar. No market-wide score, causal promise, or revenue attribution.</p>
           </div>
 
           <div className="di-hero-orbit">
@@ -127,12 +130,12 @@ export default function LandingPage() {
         <div className="di-shell">
           <div className="di-section-heading di-section-heading-split">
             <div>
-              <span className="di-kicker">— synthetic demo</span>
-              <h2>Where your brand shows up — or doesn&apos;t.</h2>
+              <span className="di-kicker">— synthetic V1 example</span>
+              <h2>From one approved question to an auditable next decision.</h2>
             </div>
-            <p>Explore a simulated snapshot interface. The brands and results below are synthetic and are not customer data or live probe results.</p>
+            <p>Explore a simulated protocol view. Brands, evidence states, and outcomes are synthetic—not customer data or live probe results.</p>
           </div>
-          <SyntheticDemo />
+          <ProtocolDemo />
         </div>
       </section>
 
@@ -140,10 +143,10 @@ export default function LandingPage() {
         <div className="di-shell">
           <div className="di-section-heading di-section-heading-split">
             <div>
-              <span className="di-kicker">— what you get</span>
-              <h2>Six outputs. One buying frame to act on first.</h2>
+              <span className="di-kicker">— what the pilot delivers</span>
+              <h2>Six parts. One bounded learning loop.</h2>
             </div>
-            <p>The free snapshot is intentionally focused: it moves from an observed buyer-question loss to the evidence and intervention worth testing next.</p>
+            <p>V1 moves from an approved buyer question to exact evidence, one registered intervention, and an honest same-question retest.</p>
           </div>
 
           <div className="di-deliverables-grid">
@@ -164,9 +167,9 @@ export default function LandingPage() {
       <section id="how-it-works" className="di-section">
         <div className="di-shell">
           <div className="di-section-heading">
-            <span className="di-kicker">— how it works</span>
-            <h2>From buyer question to the first fix worth testing.</h2>
-            <p>The current real snapshot uses Perplexity Sonar. Every recommendation stays tied to stored answers and evidence you can verify.</p>
+            <span className="di-kicker">— how V1 works</span>
+            <h2>Approve the question. Preserve the evidence. Retest after the window.</h2>
+            <p>Every visible conclusion stays tied to a versioned protocol and exact evidence. A partial or unsafe result is reviewed or blocked—not delivered as certainty.</p>
           </div>
           <HowItWorks />
         </div>
@@ -175,13 +178,15 @@ export default function LandingPage() {
       <section className="di-section di-proof-section">
         <div className="di-shell di-proof-grid">
           <div>
-            <span className="di-kicker">— why this matters</span>
-            <h2>The AI answer can become the shortlist before the click.</h2>
+            <span className="di-kicker">— why the protocol matters</span>
+            <h2>One answer is an observation—not a strategy.</h2>
           </div>
           <div className="di-proof-copy">
-            <p>When a buyer asks which product to use, compare, or consider, the answer can shape which brands make the first cut.</p>
-            <blockquote>Which buyer question are we losing, what evidence is missing, and what should we test first?</blockquote>
-            <div className="di-proof-tags"><span>B2B SaaS</span><span>Marketing</span><span>Growth</span><span>Content</span></div>
+            <p>AI answers vary. V1 therefore approves sampling, limits, and a decision threshold before paid calls, preserves every attempt, and makes uncertainty visible.</p>
+            <blockquote>What did we observe, what are we changing, and what will we check again?</blockquote>
+            <div className="di-proof-tags">
+              <span>B2B SaaS</span><span>Exact evidence</span><span>Registered intervention</span><span>Honest retest</span>
+            </div>
           </div>
         </div>
       </section>
@@ -190,8 +195,8 @@ export default function LandingPage() {
         <div className="di-shell di-faq-layout">
           <div className="di-faq-intro">
             <span className="di-kicker">— FAQ</span>
-            <h2>What the current snapshot does — and does not — claim.</h2>
-            <p>Clear scope is part of the product. The snapshot is useful because it stays narrow about what the evidence actually shows.</p>
+            <h2>What the V1 pilot does—and does not claim.</h2>
+            <p>Clear boundaries are part of the product. V1 reports what the approved evidence supports, including when the result is inconclusive.</p>
           </div>
           <div className="di-faq-list">
             {faqs.map((faq, index) => (
@@ -207,11 +212,11 @@ export default function LandingPage() {
       <section className="di-final-cta">
         <div className="di-final-glow" aria-hidden="true" />
         <div className="di-shell di-final-inner">
-          <span className="di-kicker">— start with evidence</span>
-          <h2>Start with a free AI visibility snapshot.</h2>
-          <p>We&apos;ll test real buyer-style questions, show where competitors appear instead of your company, and identify the first fix worth testing.</p>
-          <a href={snapshotFormUrl} className="di-button di-button-primary di-button-large">Request free snapshot</a>
-          <span className="di-final-note">NO CARD REQUIRED · FOUNDER REVIEWED</span>
+          <span className="di-kicker">— start with one question</span>
+          <h2>Bring one buyer question worth testing.</h2>
+          <p>Request a conversation about an evidence-backed diagnostic and registered retest. No AI scan starts from the form.</p>
+          <a href={demoRequestUrl} className="di-button di-button-primary di-button-large">Request Demo</a>
+          <span className="di-final-note">FOUNDER-LED PILOT · NO AUTOMATIC SCAN</span>
         </div>
       </section>
 

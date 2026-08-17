@@ -224,17 +224,17 @@ export function ScanForm({
     return (
       <div className="scan-unavailable">
         <p className="scan-status-label">
-          Free snapshot
+          V1 demo request
         </p>
 
         <h2>
-          Snapshot requests are not open yet.
+          Demo requests are not open yet.
         </h2>
 
         <p>
           The protected request flow is being
           prepared. No information has been
-          submitted.
+          submitted and no AI call has started.
         </p>
 
         <a
@@ -268,9 +268,9 @@ export function ScanForm({
 
         <p>
           We sent a private verification link.
-          Your request will wait for approval
-          after verification. No AI scan has
-          started yet.
+          After verification, your request waits
+          for a fit review. No AI scan has
+          started.
         </p>
 
         <p className="scan-privacy-note">
@@ -496,13 +496,13 @@ export function ScanForm({
         >
           {submitting
             ? "Sending request…"
-            : "Request free snapshot"}
+            : "Request Demo"}
         </button>
 
         <p className="scan-privacy-note">
           No account or card required. Email
-          verification and founder approval
-          happen before any AI scan starts.
+          verification and a founder fit review
+          happen before any pilot work or AI call.
         </p>
       </form>
     </>

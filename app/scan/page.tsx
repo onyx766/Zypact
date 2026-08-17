@@ -3,9 +3,9 @@ import { ScanForm } from "./scan-form";
 
 export const metadata: Metadata = {
   title:
-    "Free AI visibility snapshot — Zypact",
+    "Request a Zypact V1 demo",
   description:
-    "Request a free Zypact snapshot to see which competitors AI recommends instead of your company.",
+    "Request a conversation about Zypact's evidence-backed diagnostic and registered retest for one commercially important buyer question.",
   alternates: {
     canonical: "/scan",
   },
@@ -40,30 +40,41 @@ export default function ScanPage() {
       <section className="scan-shell">
         <div className="scan-intro">
           <p className="eyebrow">
-            Free AI visibility snapshot
+            Evidence-backed diagnostic + registered retest
           </p>
 
           <h1>
-            See which competitors AI recommends
-            instead of your company.
+            Bring one buyer question worth testing.
           </h1>
 
           <p className="scan-intro-copy">
-            We test five unbranded buyer
-            questions three times in Perplexity:
-            15 real recommendation checks.
+            Request a conversation about a
+            founder-led V1 pilot. No AI call starts
+            from this form. If the fit is right,
+            Zypact and your team approve the
+            question, protocol, limits, and
+            observation window before execution.
           </p>
 
           <ul className="scan-summary">
-            <li>Recommendation and citation rate</li>
-            <li>Buyer questions your company loses</li>
-            <li>Top competitor, sources, and first fix</li>
+            <li>
+              One commercially meaningful buyer
+              question
+            </li>
+            <li>
+              Exact Perplexity evidence, observed
+              competitors, and sources
+            </li>
+            <li>
+              One registered intervention and a
+              same-question retest
+            </li>
           </ul>
 
           <p className="scan-caveat">
-            This is a small Perplexity snapshot.
-            It does not represent ChatGPT,
-            Gemini, Claude, or the entire market.
+            Initial V1 surface: Perplexity Sonar.
+            No market-wide score, causal promise,
+            or revenue attribution.
           </p>
         </div>
 

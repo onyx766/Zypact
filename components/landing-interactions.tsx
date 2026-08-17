@@ -3,58 +3,57 @@
 import { useEffect, useState } from "react";
 import { ZypactLogo } from "@/components/zypact-logo";
 
-const demoQueries = [
+const demoQuestions = [
   {
-    question: "What are the best AI visibility tools for B2B SaaS?",
-    signal: "Competitive discovery",
-    recommendationRate: "20%",
-    citationRate: "0%",
-    topCompetitor: "Competitor A",
-    firstFix: "Add an evidence-led category comparison page",
+    question: "Which AI visibility platforms are suitable for a B2B SaaS team that needs auditable evidence?",
+    protocol: "Approved",
+    evidenceState: "Preserved",
+    observedCompetitor: "Competitor A",
+    retestState: "Scheduled",
+    intervention: "Strengthen one approved category-proof claim and record the implementation evidence.",
     brands: [
-      ["Competitor A", "Recommended"],
-      ["Competitor B", "Cited"],
-      ["Your Brand", "Absent"],
-      ["Competitor C", "Mentioned"],
+      ["Competitor A", "Primary", "recommended"],
+      ["Competitor B", "Listed", "cited"],
+      ["Your Brand", "Not observed", "absent"],
+      ["Competitor C", "Ambiguous", "mentioned"],
     ],
   },
   {
-    question: "What should a growth team use for AI visibility diagnostics?",
-    signal: "Category association",
-    recommendationRate: "40%",
-    citationRate: "20%",
-    topCompetitor: "Competitor B",
-    firstFix: "Strengthen proof around the buyer use case",
+    question: "What should a product-marketing team use to inspect competitor evidence in AI answers?",
+    protocol: "Approved",
+    evidenceState: "Preserved",
+    observedCompetitor: "Competitor B",
+    retestState: "Window open",
+    intervention: "Publish the approved use-case evidence and wait through the recorded observation window.",
     brands: [
-      ["Competitor B", "Recommended"],
-      ["Your Brand", "Mentioned"],
-      ["Competitor A", "Cited"],
-      ["Competitor C", "Absent"],
+      ["Competitor B", "Primary", "recommended"],
+      ["Your Brand", "Listed", "cited"],
+      ["Competitor A", "Ambiguous", "mentioned"],
+      ["Competitor C", "Not observed", "absent"],
     ],
   },
   {
-    question: "What tools help B2B SaaS teams understand why AI recommends competitors?",
-    signal: "Proof gap",
-    recommendationRate: "60%",
-    citationRate: "20%",
-    topCompetitor: "Competitor C",
-    firstFix: "Publish specific proof for the losing buying frame",
+    question: "Which tools help B2B SaaS teams connect an AI-answer observation to one testable intervention?",
+    protocol: "Approved",
+    evidenceState: "Preserved",
+    observedCompetitor: "Competitor C",
+    retestState: "Not yet eligible",
+    intervention: "Register one comparison-page hypothesis before implementation and preserve the exact baseline.",
     brands: [
-      ["Your Brand", "Cited"],
-      ["Competitor C", "Recommended"],
-      ["Competitor A", "Mentioned"],
-      ["Competitor B", "Absent"],
+      ["Your Brand", "Primary", "recommended"],
+      ["Competitor C", "Listed", "cited"],
+      ["Competitor A", "Ambiguous", "mentioned"],
+      ["Competitor B", "Not observed", "absent"],
     ],
   },
 ] as const;
 
-
 const heroProcess = [
-  { number: "01", tag: "INPUT", title: "Buyer question", detail: "Commercial prompt selected" },
-  { number: "02", tag: "PROBE", title: "AI run", detail: "Perplexity answer captured" },
-  { number: "03", tag: "MAP", title: "Evidence map", detail: "Brands + sources observed" },
-  { number: "04", tag: "FIX", title: "First fix", detail: "One action prioritized" },
-  { number: "05", tag: "RETEST", title: "Re-test", detail: "Same buyer frame checked again" },
+  { number: "01", tag: "QUESTION", title: "Approved question", detail: "Commercial context recorded" },
+  { number: "02", tag: "PROTOCOL", title: "Bounded protocol", detail: "Sampling + limits approved" },
+  { number: "03", tag: "EVIDENCE", title: "Exact baseline", detail: "Attempts preserved immutably" },
+  { number: "04", tag: "INTERVENTION", title: "One hypothesis", detail: "Owner + implementation recorded" },
+  { number: "05", tag: "RETEST", title: "Outcome Card", detail: "Retest after the window" },
 ] as const;
 
 function useReducedMotion(): boolean {
@@ -84,16 +83,16 @@ export function HeroProcessViz() {
   }, [reducedMotion]);
 
   return (
-    <div className="di-process-card" aria-label="Illustration of the Zypact snapshot workflow">
+    <div className="di-process-card" aria-label="Illustration of the bounded Zypact V1 pilot workflow">
       <div className="di-process-head">
-        <span className="di-mono-label">SNAPSHOT FLOW</span>
-        <span className="di-process-auto">AUTO · EXAMPLE</span>
+        <span className="di-mono-label">V1 PILOT FLOW</span>
+        <span className="di-process-auto">BOUNDED · EXAMPLE</span>
       </div>
       <div className="di-process-track">
         {heroProcess.map((step, index) => (
           <div
             key={step.number}
-            className={`di-process-step ${index === active ? "is-active" : ""} ${index < active ? "is-done" : ""}`}
+            className={"di-process-step " + (index === active ? "is-active" : "") + " " + (index < active ? "is-done" : "")}
           >
             <span className="di-process-number">{step.number}</span>
             <span className="di-process-copy">
@@ -105,9 +104,9 @@ export function HeroProcessViz() {
         ))}
       </div>
       <div className="di-process-foot">
-        <span>Observed evidence</span>
+        <span>Auditable evidence</span>
         <span aria-hidden="true">→</span>
-        <strong>one testable next step</strong>
+        <strong>honest next decision</strong>
       </div>
     </div>
   );
@@ -116,37 +115,37 @@ export function HeroProcessViz() {
 const workflow = [
   {
     number: "01",
-    title: "Buyer question",
-    tag: "INPUT",
-    copy: "We start from a real question a buyer could ask when evaluating your category, alternatives, or product options.",
+    title: "Approve the buyer question",
+    tag: "QUESTION",
+    copy: "Record one commercially meaningful buyer question, its source, context, intent, and immutable approved version.",
   },
   {
     number: "02",
-    title: "Live AI runs",
-    tag: "PROBE",
-    copy: "The question is tested through Perplexity Sonar in real time — no cached or synthetic answers in the real snapshot.",
+    title: "Approve the protocol",
+    tag: "PROTOCOL",
+    copy: "Agree on the Perplexity configuration, sampling plan, limits, decision threshold, estimated cost, and observation-window rule before paid calls.",
   },
   {
     number: "03",
-    title: "Evidence mapping",
-    tag: "ANALYZE",
-    copy: "We map the competitors, sources, and observable evidence around the result without pretending to know the model's hidden causal reasoning.",
+    title: "Preserve baseline evidence",
+    tag: "EVIDENCE",
+    copy: "Run the bounded baseline asynchronously and preserve every exact request, raw response, source, failure, and canonical observation.",
   },
   {
     number: "04",
-    title: "First fix",
-    tag: "FIX",
-    copy: "We surface one specific, evidence-backed action worth testing instead of a generic audit checklist.",
+    title: "Register one intervention",
+    tag: "INTERVENTION",
+    copy: "Choose one evidence-backed hypothesis, record the owner and implementation proof, note confounders, and open the observation window.",
   },
   {
     number: "05",
-    title: "Re-test path",
+    title: "Retest after eligibility",
     tag: "RETEST",
-    copy: "You know which buyer question to check again after the intervention so progress can be observed against the same frame.",
+    copy: "Check the same question under the preserved or explicitly versioned protocol and issue an Outcome Card with limitations and uncertainty.",
   },
 ] as const;
 
-export function LandingNav({ snapshotFormUrl }: { snapshotFormUrl: string }) {
+export function LandingNav({ demoRequestUrl }: { demoRequestUrl: string }) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -160,8 +159,8 @@ export function LandingNav({ snapshotFormUrl }: { snapshotFormUrl: string }) {
           <a href="#faq">FAQ</a>
         </nav>
 
-        <a href={snapshotFormUrl} className="di-button di-button-primary di-nav-cta">
-          Request free snapshot
+        <a href={demoRequestUrl} className="di-button di-button-primary di-nav-cta">
+          Request Demo
         </a>
 
         <button
@@ -177,28 +176,28 @@ export function LandingNav({ snapshotFormUrl }: { snapshotFormUrl: string }) {
         </button>
       </div>
 
-      <div id="di-mobile-menu" className={`di-mobile-menu ${open ? "is-open" : ""}`} hidden={!open}>
+      <div id="di-mobile-menu" className={"di-mobile-menu " + (open ? "is-open" : "")} hidden={!open}>
         <a href="#what-you-get" onClick={() => setOpen(false)}>What you get</a>
         <a href="#how-it-works" onClick={() => setOpen(false)}>How it works</a>
         <a href="#faq" onClick={() => setOpen(false)}>FAQ</a>
-        <a href={snapshotFormUrl} className="di-button di-button-primary" onClick={() => setOpen(false)}>
-          Request free snapshot
+        <a href={demoRequestUrl} className="di-button di-button-primary" onClick={() => setOpen(false)}>
+          Request Demo
         </a>
       </div>
     </header>
   );
 }
 
-export function SyntheticDemo() {
+export function ProtocolDemo() {
   const [selected, setSelected] = useState(0);
   const [manual, setManual] = useState(false);
   const reducedMotion = useReducedMotion();
-  const demo = demoQueries[selected];
+  const demo = demoQuestions[selected];
 
   useEffect(() => {
     if (manual || reducedMotion) return;
     const timer = window.setInterval(() => {
-      setSelected((current) => (current + 1) % demoQueries.length);
+      setSelected((current) => (current + 1) % demoQuestions.length);
     }, 5200);
     return () => window.clearInterval(timer);
   }, [manual, reducedMotion]);
@@ -206,18 +205,22 @@ export function SyntheticDemo() {
   return (
     <div className="di-demo-layout">
       <div className="di-demo-auto-bar" aria-hidden="true">
-        <span>{manual ? "MANUAL" : "AUTO DEMO"}</span>
-        <div>{demoQueries.map((query, index) => <i key={query.question} className={index === selected ? "is-active" : ""} />)}</div>
+        <span>{manual ? "MANUAL" : "V1 EXAMPLE"}</span>
+        <div>{demoQuestions.map((query, index) => <i key={query.question} className={index === selected ? "is-active" : ""} />)}</div>
       </div>
-      <div className="di-query-picker" role="tablist" aria-label="Synthetic buyer question examples">
-        {demoQueries.map((query, index) => (
+
+      <div className="di-query-picker" role="tablist" aria-label="Synthetic approved buyer question examples">
+        {demoQuestions.map((query, index) => (
           <button
             key={query.question}
             type="button"
             role="tab"
             aria-selected={selected === index}
-            className={`di-query-button ${selected === index ? "is-active" : ""}`}
-            onClick={() => { setManual(true); setSelected(index); }}
+            className={"di-query-button " + (selected === index ? "is-active" : "")}
+            onClick={() => {
+              setManual(true);
+              setSelected(index);
+            }}
           >
             <span className="di-query-index">0{index + 1}</span>
             <span>{query.question}</span>
@@ -228,31 +231,31 @@ export function SyntheticDemo() {
       <div className="di-signal-panel" role="tabpanel">
         <div className="di-panel-topline">
           <div>
-            <span className="di-mono-label">AI VISIBILITY EXAMPLE</span>
+            <span className="di-mono-label">BOUNDED PROTOCOL EXAMPLE</span>
             <p>{demo.question}</p>
           </div>
           <span className="di-simulation-badge">SIMULATION</span>
         </div>
 
         <div className="di-brand-list">
-          {demo.brands.map(([brand, status]) => (
+          {demo.brands.map(([brand, status, tone]) => (
             <div className="di-brand-row" key={brand}>
               <span className={brand === "Your Brand" ? "di-your-brand" : ""}>{brand}</span>
-              <span className={`di-status di-status-${status.toLowerCase()}`}>{status}</span>
+              <span className={"di-status di-status-" + tone}>{status}</span>
             </div>
           ))}
         </div>
 
         <div className="di-demo-metrics">
-          <div><span>Recommendation rate</span><strong>{demo.recommendationRate}</strong></div>
-          <div><span>Citation rate</span><strong>{demo.citationRate}</strong></div>
-          <div><span>Top competitor</span><strong>{demo.topCompetitor}</strong></div>
-          <div><span>Signal</span><strong>{demo.signal}</strong></div>
+          <div><span>Protocol</span><strong>{demo.protocol}</strong></div>
+          <div><span>Evidence</span><strong>{demo.evidenceState}</strong></div>
+          <div><span>Observed competitor</span><strong>{demo.observedCompetitor}</strong></div>
+          <div><span>Retest</span><strong>{demo.retestState}</strong></div>
         </div>
 
         <div className="di-first-fix">
-          <span className="di-mono-label">FIRST FIX WORTH TESTING</span>
-          <strong>{demo.firstFix}</strong>
+          <span className="di-mono-label">REGISTERED INTERVENTION HYPOTHESIS</span>
+          <strong>{demo.intervention}</strong>
         </div>
       </div>
     </div>
@@ -265,14 +268,14 @@ export function HowItWorks() {
 
   return (
     <div className="di-workflow-layout">
-      <div className="di-step-selector" role="tablist" aria-label="How Zypact works">
+      <div className="di-step-selector" role="tablist" aria-label="How the Zypact V1 pilot works">
         {workflow.map((item, index) => (
           <button
             key={item.number}
             type="button"
             role="tab"
             aria-selected={active === index}
-            className={`di-step-button ${active === index ? "is-active" : ""}`}
+            className={"di-step-button " + (active === index ? "is-active" : "")}
             onClick={() => setActive(index)}
           >
             <span className="di-step-number">{item.number}</span>

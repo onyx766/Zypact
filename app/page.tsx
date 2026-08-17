@@ -106,7 +106,7 @@ export default function LandingPage() {
         <div className="di-shell di-hero-inner">
           <div className="di-hero-copy">
             <div className="di-pulse-badge"><span aria-hidden="true" /> Evidence-backed diagnostic · Registered retest</div>
-            <h1 id="hero-heading">See which competitors <em>one buyer question surfaces</em>—and what to test first.</h1>
+            <h1 id="hero-heading">See which competitors appear for one critical buyer question. <em>Choose what to test next.</em></h1>
             <p className="di-hero-subtitle">
               Bring one commercially important buyer question. Zypact records how Perplexity answers it, shows the competitors and sources observed, helps register one evidence-backed intervention, and checks the same question again after the observation window.
             </p>
@@ -212,9 +212,9 @@ export default function LandingPage() {
       <section className="di-final-cta">
         <div className="di-final-glow" aria-hidden="true" />
         <div className="di-shell di-final-inner">
-          <span className="di-kicker">— start with one question</span>
-          <h2>Bring one buyer question worth testing.</h2>
-          <p>Request a conversation about an evidence-backed diagnostic and registered retest. No AI scan starts from the form.</p>
+          <span className="di-kicker">— request a founder-led demo</span>
+          <h2>Request a Zypact V1 demo.</h2>
+          <p>We&apos;ll review your category and discuss one commercially important buyer question. No AI scan starts from the form.</p>
           <a href={demoRequestUrl} className="di-button di-button-primary di-button-large">Request Demo</a>
           <span className="di-final-note">FOUNDER-LED PILOT · NO AUTOMATIC SCAN</span>
         </div>

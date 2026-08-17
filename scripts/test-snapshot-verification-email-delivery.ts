@@ -61,7 +61,7 @@ async function main() {
   );
   assert.ok(
     rendered.text.includes(
-      "No AI scan starts automatically"
+      "V1 automation begins only after the buyer question and protocol are approved"
     )
   );
   assert.equal(

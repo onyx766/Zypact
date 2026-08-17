@@ -124,14 +124,15 @@ export function VerifyEmailClient() {
         </p>
 
         <h1 className="verification-title">
-          Your demo request is waiting for a fit review.
+          Your V1 request is verified.
         </h1>
 
         <p className="verification-copy">
-          Your email has been confirmed. No AI scan
-          has started. Zypact will review the request
-          and contact you before any pilot work or
-          provider call.
+          Your email has been confirmed and no AI
+          scan has started. Zypact will contact you
+          about access. In the V1 workflow,
+          automation begins only after the buyer
+          question and protocol are approved.
         </p>
 
         <div className="verification-actions">
@@ -198,9 +199,9 @@ export function VerifyEmailClient() {
       </h1>
 
       <p className="verification-copy">
-        Continue your Zypact demo request. After
-        verification, the request will wait for a
-        fit review. No AI scan starts automatically.
+        Continue your Zypact V1 request. Email
+        verification records the request; it does
+        not approve a protocol or start an AI scan.
       </p>
 
       {feedback ? (

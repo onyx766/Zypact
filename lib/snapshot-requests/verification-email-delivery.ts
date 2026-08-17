@@ -139,7 +139,7 @@ export function renderSnapshotVerificationEmail(input: {
     "",
     `This private link expires in ${input.expiresInMinutes} minutes and can be used only once.`,
     "",
-    "After verification, your request will wait for a fit review. No AI scan starts automatically.",
+    "Email verification records the request; it does not approve a protocol or start an AI scan. V1 automation begins only after the buyer question and protocol are approved.",
     "",
     "You can ignore this email if you did not request a Zypact demo.",
   ].join("\n");
@@ -178,7 +178,7 @@ export function renderSnapshotVerificationEmail(input: {
         </p>
 
         <p style="margin:0 0 14px;line-height:1.6;color:#52525b;">
-          After verification, your request will wait for a fit review. No AI scan starts automatically.
+          Email verification records the request; it does not approve a protocol or start an AI scan. V1 automation begins only after the buyer question and protocol are approved.
         </p>
 
         <p style="margin:0;line-height:1.6;color:#71717a;font-size:14px;">

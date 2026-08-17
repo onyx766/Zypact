@@ -1,5 +1,5 @@
 #!/usr/bin/env tsx
-/** Landing-only guard for the bounded V1 public journey. */
+/** Landing-only guard for the canonical automated V1 public journey. */
 import { readFileSync } from "node:fs";
 
 let failures = 0;
@@ -18,10 +18,10 @@ async function main(): Promise<void> {
 
   const pageSource = readFileSync("app/page.tsx", "utf8");
   const interactionSource = readFileSync("components/landing-interactions.tsx", "utf8");
-  const cssSource = readFileSync("app/globals.css", "utf8");
+  const cssSource = readFileSync("app/landing-v1.css", "utf8");
+  const layoutSource = readFileSync("app/layout.tsx", "utf8");
   const scanPageSource = readFileSync("app/scan/page.tsx", "utf8");
   const scanFormSource = readFileSync("app/scan/scan-form.tsx", "utf8");
-  const verifyPageSource = readFileSync("app/verify-email/page.tsx", "utf8");
   const verifyClientSource = readFileSync("app/verify-email/verify-email-client.tsx", "utf8");
   const verificationEmailSource = readFileSync("lib/snapshot-requests/verification-email-delivery.ts", "utf8");
   const publicFormSource = readFileSync("lib/snapshot-requests/public-form.ts", "utf8");
@@ -30,48 +30,65 @@ async function main(): Promise<void> {
     interactionSource,
     scanPageSource,
     scanFormSource,
-    verifyPageSource,
     verifyClientSource,
     verificationEmailSource,
     publicFormSource,
   ].join("\n");
 
-  check("dark intelligence root renders", html.includes('class="di-page"'));
-  check("bounded V1 positioning renders", flat.includes("See which competitors appear for one critical buyer question.") && flat.includes("Choose what to test next."));
-  check("V1 mechanism renders", flat.includes("one commercially important buyer question") && flat.includes("one evidence-backed intervention") && flat.includes("after the observation window"));
-  check("primary CTA uses the protected request route", flat.includes("Request Demo") && /href=["']\/scan["']/.test(html));
-  check("real section anchors exist", html.includes('id="what-you-get"') && html.includes('id="how-it-works"') && html.includes('id="faq"'));
-  check("nav placeholders removed", !/href=["']#["']/.test(html));
+  check("light Evidence Trail root renders", html.includes('class="ev-page"'));
+  check("approved headline renders", flat.includes("See which competitors appear for one critical buyer question.") && flat.includes("Choose what to test next."));
+  check("primary CTA keeps the protected request route", flat.includes("Request Demo") && /href=["']\/scan["']/.test(html));
+  check("five scroll chapters have real anchors", ["evidence", "method", "fit", "faq"].every((id) => html.includes(`id="${id}"`)));
+  check("nav placeholders are absent", !/href=["']#["']/.test(html));
 
-  check("synthetic protocol example is labeled", flat.includes("synthetic V1 example") && flat.includes("SIMULATION"));
-  check("synthetic example does not use a LIVE badge", !/>\s*LIVE\s*</i.test(html) && !/snapshot-live/i.test(html));
-  check("synthetic example has no real prospect", !/HockeyStack|hockeystack\.com/i.test(html));
-  check("canonical observation labels render", ["Not observed", "Listed", "Primary", "Ambiguous"].every((status) => html.includes(status)));
-  check("three synthetic buyer questions exist", (interactionSource.match(/question:\s*"/g) ?? []).length === 3);
-  check("demo switching is state-driven", interactionSource.includes("setSelected(index)") && interactionSource.includes('role="tablist"'));
-  check("synthetic demo auto-rotates safely", interactionSource.includes("V1 EXAMPLE") && interactionSource.includes("5200") && interactionSource.includes("setManual(true)"));
-  check("hero explains the bounded V1 flow", ["V1 PILOT FLOW", "Approved question", "Bounded protocol", "Exact baseline", "One hypothesis", "Outcome Card"].every((copy) => interactionSource.includes(copy)));
-  check("hero process animation respects reduced motion", interactionSource.includes("useReducedMotion()") && interactionSource.includes("if (reducedMotion) return"));
+  check("V1 automation is explicit", flat.includes("Automated after approval") && flat.includes("controlled baseline runs automatically"));
+  check("approval remains a hard precondition", flat.includes("Nothing runs until the question, limits, sampling plan and observation window are approved"));
+  check("integrity delivery branches render", ["integrity_passed", "needs_review", "blocked"].every((status) => flat.includes(status)));
+  check("human review is an exception path", flat.includes("Human review is an exception path for `needs_review`, not the normal V1 workflow."));
 
-  check("six V1 deliverables render", (html.match(/di-deliverable-card/g) ?? []).length === 6);
-  check("registered intervention and Outcome Card render", ["Registered intervention", "Auditable Outcome Card", "increase observed", "decrease observed", "no clear change", "inconclusive"].every((copy) => flat.includes(copy)));
-  const workflowBlock = interactionSource.match(/const workflow = \[([\s\S]*?)\] as const;/)?.[1] ?? "";
-  check("five workflow steps exist", (workflowBlock.match(/number: "0[1-5]"/g) ?? []).length === 5);
-  check("workflow accordion is state-driven", interactionSource.includes("setActive(index)") && interactionSource.includes("di-step-selector"));
+  check("hero orbit centers the Buyer question", interactionSource.includes("Buyer question") && interactionSource.includes("ev-orbit-center"));
+  check("hero orbit shows the V1 evidence loop", ["Approve", "Perplexity", "Evidence", "Observe", "Register", "Retest"].every((label) => interactionSource.includes(label)));
+  check("hero orbit explicitly excludes other surfaces", interactionSource.includes("Other AI surfaces are not represented because they are not part of V1"));
+  check("orbit animation respects reduced motion", interactionSource.includes("useReducedMotion()") && interactionSource.includes("if (reducedMotion) return"));
+  check("multi-model logos are not presented as orbit nodes", !/short:\s*"(ChatGPT|Gemini|Copilot|Claude)"/.test(interactionSource));
 
-  check("eight FAQ questions render", (html.match(/<details/g) ?? []).length === 8);
-  check("Perplexity-only V1 scope is explicit", /Perplexity Sonar is the initial live V1 surface/i.test(flat));
-  check("market-wide score refusal is explicit", /No market-wide score/i.test(flat));
-  check("fixed three-run default is refused", /does not silently treat three runs/i.test(flat));
-  check("guarantee refusal is explicit", flat.includes("Do you guarantee ranking, recommendation, or revenue improvement?") && flat.includes("Zypact guarantees the agreed process and evidence contract"));
-  check("no-subscription pilot scope renders", flat.includes("No self-serve subscription is required"));
-  check("demo form cannot imply automatic execution", flat.includes("No AI scan starts from the form"));
+  check("one synthetic Question Record is prominent", flat.includes("QUESTION RECORD · QR-EXAMPLE-001") && flat.includes("SYNTHETIC EXAMPLE — NOT CUSTOMER DATA"));
+  check("Question Record exposes exact evidence structure", ["Synthetic answer excerpt", "Source rows", "Prompt-scoped observation", "Registered intervention"].every((copy) => flat.includes(copy)));
+  check("canonical observation labels render", ["Primary", "Listed", "Not observed", "Ambiguous"].every((status) => flat.includes(status)));
+  check("registration stamp renders", pageSource.includes('aria-label="Registered before retest"'));
+  check("Question Record has a four-stage retest rail", ["Baseline", "Registered", "Window", "Retest"].every((stage) => flat.includes(stage)));
+  check("three-question carousel was removed", !interactionSource.includes("demoQuestions") && !interactionSource.includes('role="tablist" aria-label="Synthetic approved buyer question examples"'));
+
+  check("monitoring distinction is neutral", flat.includes("Category monitoring") && flat.includes("Gives one question a record, an owner and a later check"));
+  check("one question is framed as the evidence unit", flat.includes("One question is not a quota. It is the controlled unit of evidence."));
+  check("all four Outcome Card results render equally", ["Increase observed", "Decrease observed", "No clear change", "Inconclusive"].every((copy) => flat.includes(copy)));
+  check("limitations remain visible", flat.includes("Limitations remain on the primary card") && flat.includes("Observed movement is not proof of causality or revenue impact"));
+
+  check("six V1 deliverables render", (html.match(/<li><span>0[1-6]<\/span><div><strong>/g) ?? []).length === 6);
+  check("eight FAQ questions render", [
+    "What does Zypact V1 include?",
+    "Which AI platform does V1 test?",
+    "Why is there no fixed number of runs?",
+    "Is this an SEO audit?",
+    "Do you guarantee ranking, recommendation or revenue improvement?",
+    "What if nothing clearly changes?",
+    "What happens after I request a demo?",
+    "Do I need a subscription?",
+  ].every((question) => flat.includes(question)));
+  check("Perplexity-only scope is explicit", flat.includes("Perplexity Sonar is the only live V1 surface"));
+  check("no fixed three-run default is promised", flat.includes("does not silently treat three runs"));
+  check("no favorable outcome is guaranteed", flat.includes("not a favorable model response"));
+
+  check("request page explains controlled automation", scanPageSource.includes("Zypact V1 · Controlled automation") && scanPageSource.includes("controlled baseline then runs") && scanPageSource.includes("automatically"));
+  check("request form separates request from execution", scanFormSource.includes("Request only. Automation begins after") && scanFormSource.includes("does not approve a protocol or start an"));
+  check("request Turnstile uses the light design", scanFormSource.includes('theme: "light"'));
+  check("verification page no longer makes founder review the normal path", verifyClientSource.includes("automation begins only after the buyer") && !verifyClientSource.includes("waiting for a fit review"));
+  check("verification email explains the approval gate", verificationEmailSource.includes("V1 automation begins only after the buyer question and protocol are approved"));
 
   const bannedPublicCopy = [
     "Request free snapshot",
     "Free AI visibility snapshot",
     "five unbranded buyer questions",
-    "three times in Perplexity",
     "Buyer questions won or lost",
     "Recommendation rate",
     "Citation rate",
@@ -79,7 +96,8 @@ async function main(): Promise<void> {
     "shows where your brand loses",
     "tests real buyer questions",
     "one buyer question surfaces",
-    "what to test first",
+    "FOUNDER-LED PILOT · NO AUTOMATIC SCAN",
+    "Founder reviewed. No AI call starts",
   ];
   for (const banned of bannedPublicCopy) {
     check("legacy public copy removed: " + banned, !publicJourneySource.includes(banned));
@@ -89,31 +107,21 @@ async function main(): Promise<void> {
     check("no public pricing string: " + banned, !html.includes(banned));
   }
   check("no Stripe checkout string", !/stripe\.com|buy\.stripe|checkout\.stripe/i.test(html));
-  check("no fake multi-platform coverage", !/test(s|ed|ing)? (ChatGPT|Gemini|Claude).*(and|,)/i.test(flat));
-  check("no guarantee language as a positive claim", !/we guarantee|guaranteed (ranking|citation|recommendation|visibility)/i.test(flat));
+  check("public errors remain request-scoped", publicFormSource.includes("Demo requests are temporarily unavailable."));
 
-  check("mobile menu has accessible expanded state", interactionSource.includes('aria-expanded={open}') && interactionSource.includes('aria-controls="di-mobile-menu"'));
-  check("FAQ uses native accessible details", pageSource.includes("<details") && pageSource.includes("<summary"));
-  check("reduced-motion CSS exists", cssSource.includes("prefers-reduced-motion"));
-  check("modern startup typography uses Inter", cssSource.includes("family=Inter:wght@400;500;600;700;800") && cssSource.includes(".di-page") && cssSource.includes('font-family: "Inter", -apple-system, BlinkMacSystemFont'));
-  check("landing display scale remains compact", cssSource.includes("clamp(2.35rem, 3.55vw, 3.65rem)") && cssSource.includes("clamp(1.65rem, 2.4vw, 2.5rem)"));
-  check("mobile display scale remains compact", cssSource.includes("clamp(2rem, 8.4vw, 2.65rem)") && cssSource.includes("clamp(1.55rem, 6.6vw, 2rem)"));
-  check("section spacing remains tightened", cssSource.includes(".di-section { padding: 72px 0;") && cssSource.includes(".di-final-cta { position: relative; overflow: hidden; padding: 72px 0 68px;"));
-  check("professional motion UI remains present", cssSource.includes("di-process-scan") && cssSource.includes("di-demo-auto-bar") && cssSource.includes("di-process-step.is-active"));
-  check("request-page heading scale remains compact", cssSource.includes("clamp(2.05rem, 3.9vw, 3.05rem)") && cssSource.includes("clamp(1.65rem, 4vw, 2.3rem)"));
-  check("protected request journey keeps its dark palette", cssSource.includes("Dark intelligence snapshot journey") && cssSource.includes("--snapshot-teal: #00ddb4"));
-  check("request form Turnstile uses dark theme", scanFormSource.includes('theme: "dark"'));
-  check("email verification shares dark palette", cssSource.includes(".verification-page") && cssSource.includes(".verification-card"));
+  check("mobile menu exposes expanded state", interactionSource.includes('aria-expanded={open}') && interactionSource.includes('aria-controls="ev-mobile-menu"'));
+  check("FAQ and method use native details", pageSource.includes("<details") && pageSource.includes("<summary"));
+  check("new visual stylesheet is imported last", layoutSource.indexOf('"./landing-v1.css"') > layoutSource.indexOf('"./globals.css"'));
+  check("warm light evidence palette exists", cssSource.includes("--ev-canvas: #f6f5f1") && cssSource.includes("--ev-accent: #214f73"));
+  check("12-column-ready 1200px container exists", cssSource.includes("width: min(1200px, calc(100% - 48px))"));
+  check("status meaning is not color-only", pageSource.includes("ev-status-primary\">Primary") && pageSource.includes("ev-status-not-observed\">Not observed"));
+  check("mobile breakpoint preserves single-column records", cssSource.includes("@media (max-width: 600px)") && cssSource.includes(".ev-brand-rows,"));
+  check("reduced-motion CSS exists", cssSource.includes("prefers-reduced-motion: reduce"));
 
   const plans = readFileSync("lib/pricing/plans.ts", "utf8");
   check("Growth pricing source remains intact", plans.includes("priceMonthlyUsd: 99"));
   check("Pro pricing source remains intact", plans.includes("priceMonthlyUsd: 199"));
   check("saved-project entitlements remain 0/3/5", /free:[\s\S]*projects:\s*0/.test(plans) && /growth:[\s\S]*projects:\s*3/.test(plans) && /pro:[\s\S]*projects:\s*5/.test(plans));
-
-  check("protected request route is preserved", scanPageSource.includes("Request a Zypact V1 demo") && scanPageSource.includes("Zypact V1 · Founder-led pilot") && scanPageSource.includes("question, agreed together") && scanPageSource.includes("Perplexity Sonar"));
-  check("request form is reframed as a demo", scanFormSource.includes("Request Demo") && scanFormSource.includes("Founder reviewed. No AI call starts") && scanFormSource.includes("No AI scan has"));
-  check("verification journey is reframed as a demo", verifyPageSource.includes("Zypact V1 demo request") && verifyClientSource.includes("demo request") && verificationEmailSource.includes("Zypact V1 demo request"));
-  check("public errors refer to demo requests", publicFormSource.includes("Demo requests are temporarily unavailable."));
 
   console.log(failures === 0 ? "\nALL PASS" : "\n" + failures + " FAILURE(S)");
   process.exit(failures === 0 ? 0 : 1);

@@ -5,7 +5,7 @@ export const metadata: Metadata = {
   title:
     "Request a Zypact V1 demo",
   description:
-    "Request a conversation about Zypact's evidence-backed diagnostic and registered retest for one commercially important buyer question.",
+    "Request access to Zypact's controlled, automated buyer-question diagnostic and registered retest on Perplexity Sonar.",
   alternates: {
     canonical: "/scan",
   },
@@ -40,7 +40,7 @@ export default function ScanPage() {
       <section className="scan-shell">
         <div className="scan-intro">
           <p className="eyebrow">
-            Zypact V1 · Founder-led pilot
+            Zypact V1 · Controlled automation
           </p>
 
           <h1>
@@ -48,31 +48,33 @@ export default function ScanPage() {
           </h1>
 
           <p className="scan-intro-copy">
-            We&apos;ll review your category and discuss
+            Request access to the V1 workflow for
             one commercially important buyer
-            question. No AI call starts from this
-            form. If the pilot is a fit, we agree
-            on the question, protocol, limits, and
-            observation window before anything runs.
+            question. This form does not approve a
+            protocol or start an AI call. If you
+            proceed, the question, limits, sampling
+            plan, and observation window are approved
+            first. The controlled baseline then runs
+            automatically.
           </p>
 
           <ul className="scan-summary">
             <li>
               One commercially meaningful buyer
-              question, agreed together
+              question and an approved protocol
             </li>
             <li>
-              Exact Perplexity evidence, observed
-              competitors, and sources
+              Automated Perplexity baseline with
+              exact evidence and integrity checks
             </li>
             <li>
               One registered intervention and a
-              same-question retest
+              controlled, automatic same-question retest
             </li>
           </ul>
 
           <p className="scan-caveat">
-            Initial V1 surface: Perplexity Sonar.
+            V1 surface: Perplexity Sonar only.
             No market-wide score, causal promise,
             or revenue attribution.
           </p>

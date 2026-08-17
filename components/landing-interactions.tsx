@@ -3,57 +3,46 @@
 import { useEffect, useState } from "react";
 import { ZypactLogo } from "@/components/zypact-logo";
 
-const demoQuestions = [
-  {
-    question: "Which AI visibility platforms are suitable for a B2B SaaS team that needs auditable evidence?",
-    protocol: "Approved",
-    evidenceState: "Preserved",
-    observedCompetitor: "Competitor A",
-    retestState: "Scheduled",
-    intervention: "Strengthen one approved category-proof claim and record the implementation evidence.",
-    brands: [
-      ["Competitor A", "Primary", "recommended"],
-      ["Competitor B", "Listed", "cited"],
-      ["Your Brand", "Not observed", "absent"],
-      ["Competitor C", "Ambiguous", "mentioned"],
-    ],
-  },
-  {
-    question: "What should a product-marketing team use to inspect competitor evidence in AI answers?",
-    protocol: "Approved",
-    evidenceState: "Preserved",
-    observedCompetitor: "Competitor B",
-    retestState: "Window open",
-    intervention: "Publish the approved use-case evidence and wait through the recorded observation window.",
-    brands: [
-      ["Competitor B", "Primary", "recommended"],
-      ["Your Brand", "Listed", "cited"],
-      ["Competitor A", "Ambiguous", "mentioned"],
-      ["Competitor C", "Not observed", "absent"],
-    ],
-  },
-  {
-    question: "Which tools help B2B SaaS teams connect an AI-answer observation to one testable intervention?",
-    protocol: "Approved",
-    evidenceState: "Preserved",
-    observedCompetitor: "Competitor C",
-    retestState: "Not yet eligible",
-    intervention: "Register one comparison-page hypothesis before implementation and preserve the exact baseline.",
-    brands: [
-      ["Your Brand", "Primary", "recommended"],
-      ["Competitor C", "Listed", "cited"],
-      ["Competitor A", "Ambiguous", "mentioned"],
-      ["Competitor B", "Not observed", "absent"],
-    ],
-  },
+const orbitSteps = [
+  { short: "Approve", label: "Question + protocol" },
+  { short: "Perplexity", label: "Perplexity Sonar" },
+  { short: "Evidence", label: "Exact answer + sources" },
+  { short: "Observe", label: "Competitor frame" },
+  { short: "Register", label: "One intervention" },
+  { short: "Retest", label: "Same-question retest" },
 ] as const;
 
-const heroProcess = [
-  { number: "01", tag: "QUESTION", title: "Approved question", detail: "Commercial context recorded" },
-  { number: "02", tag: "PROTOCOL", title: "Bounded protocol", detail: "Sampling + limits approved" },
-  { number: "03", tag: "EVIDENCE", title: "Exact baseline", detail: "Attempts preserved immutably" },
-  { number: "04", tag: "INTERVENTION", title: "One hypothesis", detail: "Owner + implementation recorded" },
-  { number: "05", tag: "RETEST", title: "Outcome Card", detail: "Retest after the window" },
+const workflow = [
+  {
+    number: "01",
+    title: "Approve the question and protocol",
+    tag: "APPROVAL",
+    copy: "Zypact prepares one commercially important buyer question and a bounded Perplexity protocol. Nothing runs until the question, limits, sampling plan and observation window are approved.",
+  },
+  {
+    number: "02",
+    title: "Run the baseline automatically",
+    tag: "AUTOMATION",
+    copy: "After approval, V1 queues the controlled Perplexity calls automatically. Every attempt, response, source and failure remains attached to the approved protocol.",
+  },
+  {
+    number: "03",
+    title: "Preserve and check the evidence",
+    tag: "INTEGRITY",
+    copy: "Zypact stores the exact evidence, builds the prompt-scoped competitor frame and checks the record before any conclusion can be delivered.",
+  },
+  {
+    number: "04",
+    title: "Register one intervention",
+    tag: "INTERVENTION",
+    copy: "Your team approves one evidence-backed hypothesis, records its owner and implementation proof, and opens the explicit observation window.",
+  },
+  {
+    number: "05",
+    title: "Retest and deliver automatically",
+    tag: "OUTCOME",
+    copy: "When eligible, V1 checks the same question again. An integrity-passed record produces the Outcome Card automatically; exceptions are held for review and blocked evidence is not delivered.",
+  },
 ] as const;
 
 function useReducedMotion(): boolean {
@@ -70,105 +59,31 @@ function useReducedMotion(): boolean {
   return reduced;
 }
 
-export function HeroProcessViz() {
-  const [active, setActive] = useState(0);
-  const reducedMotion = useReducedMotion();
-
-  useEffect(() => {
-    if (reducedMotion) return;
-    const timer = window.setInterval(() => {
-      setActive((current) => (current + 1) % heroProcess.length);
-    }, 2200);
-    return () => window.clearInterval(timer);
-  }, [reducedMotion]);
-
-  return (
-    <div className="di-process-card" aria-label="Illustration of the bounded Zypact V1 pilot workflow">
-      <div className="di-process-head">
-        <span className="di-mono-label">V1 PILOT FLOW</span>
-        <span className="di-process-auto">BOUNDED · EXAMPLE</span>
-      </div>
-      <div className="di-process-track">
-        {heroProcess.map((step, index) => (
-          <div
-            key={step.number}
-            className={"di-process-step " + (index === active ? "is-active" : "") + " " + (index < active ? "is-done" : "")}
-          >
-            <span className="di-process-number">{step.number}</span>
-            <span className="di-process-copy">
-              <strong>{step.title}</strong>
-              <small>{step.detail}</small>
-            </span>
-            <span className="di-process-tag">{step.tag}</span>
-          </div>
-        ))}
-      </div>
-      <div className="di-process-foot">
-        <span>Auditable evidence</span>
-        <span aria-hidden="true">→</span>
-        <strong>honest next decision</strong>
-      </div>
-    </div>
-  );
-}
-
-const workflow = [
-  {
-    number: "01",
-    title: "Approve the buyer question",
-    tag: "QUESTION",
-    copy: "Record one commercially meaningful buyer question, its source, context, intent, and immutable approved version.",
-  },
-  {
-    number: "02",
-    title: "Approve the protocol",
-    tag: "PROTOCOL",
-    copy: "Agree on the Perplexity configuration, sampling plan, limits, decision threshold, estimated cost, and observation-window rule before paid calls.",
-  },
-  {
-    number: "03",
-    title: "Preserve baseline evidence",
-    tag: "EVIDENCE",
-    copy: "Run the bounded baseline asynchronously and preserve every exact request, raw response, source, failure, and canonical observation.",
-  },
-  {
-    number: "04",
-    title: "Register one intervention",
-    tag: "INTERVENTION",
-    copy: "Choose one evidence-backed hypothesis, record the owner and implementation proof, note confounders, and open the observation window.",
-  },
-  {
-    number: "05",
-    title: "Retest after eligibility",
-    tag: "RETEST",
-    copy: "Check the same question under the preserved or explicitly versioned protocol and issue an Outcome Card with limitations and uncertainty.",
-  },
-] as const;
-
 export function LandingNav({ demoRequestUrl }: { demoRequestUrl: string }) {
   const [open, setOpen] = useState(false);
 
   return (
-    <header className="di-nav-shell">
-      <div className="di-nav">
-        <ZypactLogo href="#top" priority className="di-wordmark" />
+    <header className="ev-nav-shell">
+      <div className="ev-shell ev-nav">
+        <ZypactLogo href="#top" priority className="ev-wordmark" />
 
-        <nav className="di-nav-links" aria-label="Primary navigation">
-          <a href="#what-you-get">What you get</a>
-          <a href="#how-it-works">How it works</a>
+        <nav className="ev-nav-links" aria-label="Primary navigation">
+          <a href="#evidence">Evidence</a>
+          <a href="#method">Method</a>
+          <a href="#fit">Who it&apos;s for</a>
           <a href="#faq">FAQ</a>
         </nav>
 
-        <a href={demoRequestUrl} className="di-button di-button-primary di-nav-cta">
+        <a href={demoRequestUrl} className="ev-button ev-button-primary ev-nav-cta">
           Request Demo
         </a>
 
         <button
           type="button"
-          className="di-menu-button"
+          className="ev-menu-button"
           aria-label="Toggle navigation menu"
           aria-expanded={open}
-          aria-controls="di-mobile-menu"
+          aria-controls="ev-mobile-menu"
           onClick={() => setOpen((value) => !value)}
         >
           <span />
@@ -176,127 +91,119 @@ export function LandingNav({ demoRequestUrl }: { demoRequestUrl: string }) {
         </button>
       </div>
 
-      <div id="di-mobile-menu" className={"di-mobile-menu " + (open ? "is-open" : "")} hidden={!open}>
-        <a href="#what-you-get" onClick={() => setOpen(false)}>What you get</a>
-        <a href="#how-it-works" onClick={() => setOpen(false)}>How it works</a>
+      <nav
+        id="ev-mobile-menu"
+        className={"ev-mobile-menu " + (open ? "is-open" : "")}
+        aria-label="Mobile navigation"
+        hidden={!open}
+      >
+        <a href="#evidence" onClick={() => setOpen(false)}>Evidence</a>
+        <a href="#method" onClick={() => setOpen(false)}>Method</a>
+        <a href="#fit" onClick={() => setOpen(false)}>Who it&apos;s for</a>
         <a href="#faq" onClick={() => setOpen(false)}>FAQ</a>
-        <a href={demoRequestUrl} className="di-button di-button-primary" onClick={() => setOpen(false)}>
+        <a href={demoRequestUrl} className="ev-button ev-button-primary" onClick={() => setOpen(false)}>
           Request Demo
         </a>
-      </div>
+      </nav>
     </header>
   );
 }
 
-export function ProtocolDemo() {
-  const [selected, setSelected] = useState(0);
-  const [manual, setManual] = useState(false);
+export function EvidenceOrbit() {
+  const [active, setActive] = useState(0);
   const reducedMotion = useReducedMotion();
-  const demo = demoQuestions[selected];
 
   useEffect(() => {
-    if (manual || reducedMotion) return;
+    if (reducedMotion) return;
     const timer = window.setInterval(() => {
-      setSelected((current) => (current + 1) % demoQuestions.length);
-    }, 5200);
+      setActive((current) => (current + 1) % orbitSteps.length);
+    }, 1700);
     return () => window.clearInterval(timer);
-  }, [manual, reducedMotion]);
+  }, [reducedMotion]);
 
   return (
-    <div className="di-demo-layout">
-      <div className="di-demo-auto-bar" aria-hidden="true">
-        <span>{manual ? "MANUAL" : "V1 EXAMPLE"}</span>
-        <div>{demoQuestions.map((query, index) => <i key={query.question} className={index === selected ? "is-active" : ""} />)}</div>
+    <figure className="ev-orbit-card" aria-labelledby="orbit-title orbit-caption">
+      <div className="ev-orbit-header">
+        <span className="ev-mono">CONTROLLED V1 WORKFLOW</span>
+        <span className="ev-live-status"><i aria-hidden="true" /> AUTOMATED AFTER APPROVAL</span>
       </div>
 
-      <div className="di-query-picker" role="tablist" aria-label="Synthetic approved buyer question examples">
-        {demoQuestions.map((query, index) => (
-          <button
-            key={query.question}
-            type="button"
-            role="tab"
-            aria-selected={selected === index}
-            className={"di-query-button " + (selected === index ? "is-active" : "")}
-            onClick={() => {
-              setManual(true);
-              setSelected(index);
-            }}
+      <div className="ev-orbit-stage">
+        <svg className="ev-orbit-lines" viewBox="0 0 520 430" aria-hidden="true">
+          <defs>
+            <marker id="orbit-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" />
+            </marker>
+          </defs>
+          <path d="M260 214 L260 70" />
+          <path d="M260 214 L425 139" />
+          <path d="M260 214 L425 311" />
+          <path d="M260 214 L260 372" />
+          <path d="M260 214 L95 311" />
+          <path d="M260 214 L95 139" />
+          <circle cx="260" cy="214" r="158" />
+        </svg>
+
+        <div className="ev-orbit-center">
+          <span className="ev-mono">UNIT OF EVIDENCE</span>
+          <strong id="orbit-title">Buyer question</strong>
+          <small>approved · versioned · preserved</small>
+        </div>
+
+        {orbitSteps.map((step, index) => (
+          <div
+            key={step.short}
+            className={"ev-orbit-node ev-orbit-node--" + (index + 1) + (index === active ? " is-active" : "")}
           >
-            <span className="di-query-index">0{index + 1}</span>
-            <span>{query.question}</span>
-          </button>
+            <span>{String(index + 1).padStart(2, "0")}</span>
+            <strong>{step.short}</strong>
+            <small>{step.label}</small>
+          </div>
         ))}
       </div>
 
-      <div className="di-signal-panel" role="tabpanel">
-        <div className="di-panel-topline">
-          <div>
-            <span className="di-mono-label">BOUNDED PROTOCOL EXAMPLE</span>
-            <p>{demo.question}</p>
-          </div>
-          <span className="di-simulation-badge">SIMULATION</span>
-        </div>
-
-        <div className="di-brand-list">
-          {demo.brands.map(([brand, status, tone]) => (
-            <div className="di-brand-row" key={brand}>
-              <span className={brand === "Your Brand" ? "di-your-brand" : ""}>{brand}</span>
-              <span className={"di-status di-status-" + tone}>{status}</span>
-            </div>
-          ))}
-        </div>
-
-        <div className="di-demo-metrics">
-          <div><span>Protocol</span><strong>{demo.protocol}</strong></div>
-          <div><span>Evidence</span><strong>{demo.evidenceState}</strong></div>
-          <div><span>Observed competitor</span><strong>{demo.observedCompetitor}</strong></div>
-          <div><span>Retest</span><strong>{demo.retestState}</strong></div>
-        </div>
-
-        <div className="di-first-fix">
-          <span className="di-mono-label">REGISTERED INTERVENTION HYPOTHESIS</span>
-          <strong>{demo.intervention}</strong>
-        </div>
-      </div>
-    </div>
+      <figcaption id="orbit-caption">
+        One approved question moves through one bounded Perplexity evidence loop. Other AI surfaces are not represented because they are not part of V1.
+      </figcaption>
+    </figure>
   );
 }
 
-export function HowItWorks() {
+export function AutomationFlow() {
   const [active, setActive] = useState(0);
   const step = workflow[active];
 
   return (
-    <div className="di-workflow-layout">
-      <div className="di-step-selector" role="tablist" aria-label="How the Zypact V1 pilot works">
+    <div className="ev-workflow">
+      <div className="ev-workflow-tabs" role="tablist" aria-label="Automated Zypact V1 workflow">
         {workflow.map((item, index) => (
           <button
             key={item.number}
             type="button"
             role="tab"
             aria-selected={active === index}
-            className={"di-step-button " + (active === index ? "is-active" : "")}
+            aria-controls="ev-workflow-panel"
+            className={active === index ? "is-active" : ""}
             onClick={() => setActive(index)}
           >
-            <span className="di-step-number">{item.number}</span>
-            <span>{item.title}</span>
-            <span className="di-step-dot" aria-hidden="true" />
+            <span>{item.number}</span>
+            <strong>{item.title}</strong>
           </button>
         ))}
       </div>
 
-      <div className="di-step-detail" role="tabpanel">
-        <div className="di-step-progress" aria-hidden="true">
+      <div id="ev-workflow-panel" className="ev-workflow-panel" role="tabpanel">
+        <div className="ev-workflow-progress" aria-hidden="true">
           {workflow.map((item, index) => (
-            <span key={item.number} className={index <= active ? "is-active" : ""} />
+            <i key={item.number} className={index <= active ? "is-active" : ""} />
           ))}
         </div>
-        <span className="di-mono-label">{step.tag} · STEP {step.number}</span>
+        <span className="ev-mono">{step.tag} · STEP {step.number}</span>
         <h3>{step.title}</h3>
         <p>{step.copy}</p>
-        <div className="di-step-terminal" aria-hidden="true">
-          <span>$ zypact / {step.tag.toLowerCase()}</span>
-          <span className="di-terminal-cursor" />
+        <div className="ev-workflow-state">
+          <span>Normal path</span>
+          <strong>{active < 4 ? "Controlled automation" : "integrity_passed → automatic delivery"}</strong>
         </div>
       </div>
     </div>

@@ -37,7 +37,7 @@ async function main(): Promise<void> {
   ].join("\n");
 
   check("dark intelligence root renders", html.includes('class="di-page"'));
-  check("bounded V1 positioning renders", flat.includes("See which buyer questions") && flat.includes("surface competitors") && flat.includes("what to test first"));
+  check("bounded V1 positioning renders", flat.includes("See which competitors") && flat.includes("one buyer question surfaces") && flat.includes("what to test first"));
   check("V1 mechanism renders", flat.includes("one commercially important buyer question") && flat.includes("one evidence-backed intervention") && flat.includes("after the observation window"));
   check("primary CTA uses the protected request route", flat.includes("Request Demo") && /href=["']\/scan["']/.test(html));
   check("real section anchors exist", html.includes('id="what-you-get"') && html.includes('id="how-it-works"') && html.includes('id="faq"'));

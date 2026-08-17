@@ -106,7 +106,7 @@ export default function LandingPage() {
         <div className="di-shell di-hero-inner">
           <div className="di-hero-copy">
             <div className="di-pulse-badge"><span aria-hidden="true" /> Evidence-backed diagnostic · Registered retest</div>
-            <h1 id="hero-heading">See which buyer questions <em>surface competitors</em>—and what to test first.</h1>
+            <h1 id="hero-heading">See which competitors <em>one buyer question surfaces</em>—and what to test first.</h1>
             <p className="di-hero-subtitle">
               Bring one commercially important buyer question. Zypact records how Perplexity answers it, shows the competitors and sources observed, helps register one evidence-backed intervention, and checks the same question again after the observation window.
             </p>

@@ -500,9 +500,8 @@ export function ScanForm({
         </button>
 
         <p className="scan-privacy-note">
-          No account or card required. Email
-          verification and a founder fit review
-          happen before any pilot work or AI call.
+          Founder reviewed. No AI call starts
+          automatically.
         </p>
       </form>
     </>

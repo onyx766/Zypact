@@ -270,10 +270,9 @@ Do not convert a repository capability into a production claim until M0 captures
 
 ## 10. Safe operating status
 
-- **Founder Institute demo:** use a non-confidential, founder-audited manual/terminal flow; disclose what is manual and what remains planned.
 - **New free company score:** do not offer a fixed three-run visibility score.
 - **Legacy short/full reports:** do not send as new sales assets without case-specific reconciliation and safe labeling.
-- **Paid pilot sales:** may continue as a transparent founder-operated offer, subject to lawful contracting/payment authority and no promise that unfinished automation already exists.
+- **Paid pilot sales:** may continue as a transparent founder-operated offer with no promise that unfinished automation already exists.
 - **Category benchmark:** planned acquisition experiment, not yet a shipped feature.
 - **Production code mutation:** requires an approved milestone, branch/PR, staging evidence, and explicit authorization.
 

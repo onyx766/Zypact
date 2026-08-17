@@ -13,8 +13,6 @@ The engineering outcome is:
 
 > An approved buyer question and bounded protocol can be executed from the web through a durable worker. Exact evidence is preserved immutably. Canonical observations drive every interface and report. One intervention can be registered and retested after a scheduled observation window. Safe reports deliver automatically; exceptions are reviewed or blocked.
 
-The Founder Institute demo is not an engineering dependency. It runs on the existing manual/terminal engine.
-
 ## 2. Required preconditions
 
 Before implementation begins:

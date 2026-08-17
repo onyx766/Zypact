@@ -2,21 +2,17 @@
 
 - **Status:** Canonical sequencing and kill-gate roadmap
 - **Roadmap date:** 2026-08-16
-- **Rule:** Dates describe founder planning, not contractor commitments unless included in an accepted milestone agreement
+- **Rule:** Dates describe product planning, not contractor commitments unless included in an accepted milestone agreement
 
 ## 1. Operating lanes
 
-Zypact must run five separate lanes without treating one lane's progress as proof that another is complete.
+Zypact must run three separate lanes without treating one lane's progress as proof that another is complete.
 
 | Lane | Objective | Current owner | Primary output |
 |---|---|---|---|
 | Methodology | Determine what can be measured and claimed | Founder with technical/statistical review | Protocol, feasibility evidence, limitations |
 | Product/engineering | Build the trustworthy V1 workflow | Selected engineer plus founder acceptance | Evidence, worker, workspace, retest, reports |
 | Sales/pilots | Validate buyer, urgency, payment, implementation, and retention | Founder; limited sales support | Qualified calls and paid registered-retest pilots |
-| Founder Institute | Present an honest real workflow by 2026-09-03 | Founder | Manual evidence demo and retest-in-progress state |
-| Legal/company | Resolve lawful incorporation, contracting, and founder-status questions | Founder with qualified counsel | Professional advice and compliant company path |
-
-The legal/company lane does not belong in product documentation beyond identifying it as a separate dependency for contracts and payments.
 
 ## 2. Phase 0 — Documentation reset
 
@@ -43,41 +39,10 @@ The legal/company lane does not belong in product documentation beyond identifyi
 - causal/revenue guarantees are removed;
 - Perplexity is labeled as a directional surface;
 - automatic delivery, review, and blocked states agree;
-- long-term vision is clearly non-binding;
+- future roadmap phases are clearly non-binding;
 - no code, migrations, secrets, images, or prospect outputs appear in the pull request.
 
-## 3. Phase 1 — Founder Institute demo
-
-### Window
-
-Preparation: after documentation approval through 2026-09-02. Demo: 2026-09-03.
-
-### Dependency decision
-
-The demo runs on the existing manual/terminal engine. It does not wait for engineer selection or completed web automation.
-
-### Demo flow
-
-1. State the business problem without claiming a lost sale.
-2. Show an approved buyer question and recorded Perplexity context.
-3. Show exact raw responses and run-level observed positions.
-4. Explain disagreement/variance rather than hiding it.
-5. Show prompt-scoped competitors, citations, and evidence.
-6. Register one intervention hypothesis.
-7. Show the retest lifecycle state and scheduled date.
-8. State what is currently manual and what V1 will automate.
-
-### Exit gate
-
-The founder can complete the demonstration without:
-
-- confidential prospect evidence;
-- a global visibility score;
-- legacy `won/partial/lost` verdicts;
-- a completed-lift claim;
-- dependency on unfinished customer automation.
-
-## 4. Phase 2 — Engineer re-estimation and selection
+## 3. Phase 1 — Engineer re-estimation and selection
 
 ### Start
 
@@ -94,7 +59,7 @@ Only after the canonical documentation package is merged.
 
 ### No false date
 
-No trust-layer completion date is scheduled until candidate selection and contract acceptance. Any work completed before the Founder Institute demo is a bonus, not a requirement.
+No trust-layer completion date is scheduled until candidate selection and contract acceptance.
 
 ### Exit gate
 
@@ -104,7 +69,7 @@ No trust-layer completion date is scheduled until candidate selection and contra
 - staging and access plan;
 - no ambiguity about sampling, uncertainty, delivery, worker, retest, or warranty.
 
-## 5. Phase 3 — Trust layer
+## 4. Phase 2 — Trust layer
 
 ### Sequence
 
@@ -125,7 +90,7 @@ For the same safe fixture:
 - safe/review/blocked reports route correctly;
 - no unsupported causal or broad-surface statement is deliverable.
 
-## 6. Phase 4 — Bounded automated V1
+## 5. Phase 3 — Bounded automated V1
 
 ### Sequence
 
@@ -142,7 +107,7 @@ For the same safe fixture:
 
 One external staging pilot completes the full workflow without a developer editing code or database rows, and all acceptance evidence in `ENGINEERING_PLAN.md` passes.
 
-## 7. Phase 5 — Method feasibility track
+## 6. Phase 4 — Method feasibility track
 
 ### Proposed operating window
 
@@ -172,7 +137,7 @@ If meaningful changes cannot be distinguished from noise at a commercially viabl
 - retain reliable directional observation and category benchmarks if customers value them;
 - do not hide failure by adding dashboards, providers, or generated assets.
 
-## 8. Phase 6 — Sales and paid-pilot validation
+## 7. Phase 5 — Sales and paid-pilot validation
 
 ### Starts now
 
@@ -184,7 +149,6 @@ Prospect research, personalized outreach, qualification calls, and pilot convers
 - do not sell a global company score;
 - do not promise causal lift or quick retest completion;
 - explain the founder-operated/manual elements;
-- ensure contract/payment authority follows professional legal guidance.
 
 ### Initial validation targets
 
@@ -199,7 +163,7 @@ Prospect research, personalized outreach, qualification calls, and pilot convers
 
 Reassess the offer if qualified customers will not pay, implement, wait, or make a next decision from the output.
 
-## 9. Phase 7 — Category benchmark acquisition
+## 8. Phase 6 — Category benchmark acquisition
 
 ### First benchmark
 
@@ -219,7 +183,7 @@ The benchmark:
 - creates qualified conversations at a cost lower than producing separate free company scans;
 - can be updated on a sustainable cadence.
 
-## 10. Phase 8 — Standardized hybrid product
+## 9. Phase 7 — Standardized hybrid product
 
 ### Trigger
 
@@ -239,7 +203,7 @@ Begin only after paid pilot and operational evidence show a repeatable workflow.
 
 Do not add broad model coverage, CRM integrations, autonomous publishing, predictive lift, 3D dashboards, or enterprise features merely to appear complete.
 
-## 11. Phase 9 — Conditional 12–36 month evolution
+## 10. Phase 8 — Conditional 12–36 month evolution
 
 If the method, customers, and economics validate:
 
@@ -252,9 +216,9 @@ If the method, customers, and economics validate:
 - verification API and benchmark products;
 - enterprise governance only when customer pull justifies it.
 
-Long-term vision documents describe this path but do not authorize it.
+These future phases do not authorize work.
 
-## 12. Roadmap metrics
+## 11. Roadmap metrics
 
 ### Method
 
@@ -285,7 +249,7 @@ Long-term vision documents describe this path but do not authorize it.
 - objection and non-purchase reasons;
 - benchmark-sourced opportunities.
 
-## 13. Company-level kill gates
+## 12. Company-level kill gates
 
 Do not progress to broader automation, fundraising, or team expansion merely because a calendar date arrives.
 

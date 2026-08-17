@@ -40,36 +40,9 @@ The first pilots are founder-operated. V1 does not require a mature self-serve o
 13. Zypact creates an auditable Outcome Card.
 14. The report delivers automatically if integrity passes; otherwise it enters `needs_review` or `blocked`.
 
-## 4. Founder Institute demo scope
+## 4. Functional scope
 
-The 2026-09-03 demo uses the existing manual/terminal engine. It is independent of full V1 engineering completion.
-
-The demo must show:
-
-- one approved buyer question;
-- recorded Perplexity test context;
-- exact raw evidence;
-- run-level observed brand positions;
-- observed competitors and citations tied to exact evidence;
-- one evidence-backed intervention hypothesis;
-- a registered retest lifecycle state.
-
-A valid retest demo state is:
-
-> Registered retest — baseline recorded, intervention implemented, observation window open, retest scheduled for [date].
-
-The demo must not show:
-
-- a fixed three-run sample as a reliable client score;
-- a global AI visibility percentage;
-- `won/partial/lost` commercial verdicts;
-- a partial retest as a completed Outcome Card;
-- prospect-confidential evidence without permission;
-- an implication that Perplexity represents all AI systems.
-
-## 5. Functional scope
-
-### 5.1 Marketing and pilot entry
+### 4.1 Marketing and pilot entry
 
 - a clear landing page for the Evidence-Backed Shortlist Diagnostic + Registered Retest;
 - **Request Demo** as the primary call to action;
@@ -78,7 +51,7 @@ The demo must not show:
 - pricing may describe a paid/custom pilot path without requiring public fixed packages;
 - self-serve checkout is not required for the core V1 trust workflow.
 
-### 5.2 Account and workspace
+### 4.2 Account and workspace
 
 - basic authentication;
 - one owner role;
@@ -87,7 +60,7 @@ The demo must not show:
 - tenant-safe access controls;
 - advanced teams/roles deferred.
 
-### 5.3 Company and question intake
+### 4.3 Company and question intake
 
 - company name, domain, category, audience, and approved competitor frame;
 - optional site reading/Mirror Profile as a diagnostic input;
@@ -96,7 +69,7 @@ The demo must not show:
 - human correction and explicit approval;
 - stable question identity and immutable versions.
 
-### 5.4 Protocol planning and approval
+### 4.4 Protocol planning and approval
 
 - provider/surface/model configuration;
 - planned baseline and retest sampling;
@@ -111,7 +84,7 @@ The demo must not show:
 
 There is no silent three-run default for an external measurement.
 
-### 5.5 Paid-call safety
+### 4.5 Paid-call safety
 
 - admission control before enqueue/execution;
 - reservation before every paid attempt;
@@ -122,7 +95,7 @@ There is no silent three-run default for an external measurement.
 - spend reconciliation after success or failure;
 - fail-closed behavior when required configuration or approval is missing.
 
-### 5.6 Asynchronous execution
+### 4.6 Asynchronous execution
 
 - durable worker or equivalent long-running execution path;
 - web-triggered scan without terminal work for the external V1 user;
@@ -133,7 +106,7 @@ There is no silent three-run default for an external measurement.
 
 The manual/terminal runner remains an operator and verification tool.
 
-### 5.7 Immutable evidence
+### 4.7 Immutable evidence
 
 For every provider attempt, preserve:
 
@@ -148,7 +121,7 @@ For every provider attempt, preserve:
 
 Evidence fields cannot be updated or deleted through ordinary application behavior.
 
-### 5.8 Canonical observations
+### 4.8 Canonical observations
 
 - run-level position: not observed, listed, primary, ambiguous, or analysis failed;
 - audited brand cited as a source;
@@ -159,7 +132,7 @@ Evidence fields cannot be updated or deleted through ordinary application behavi
 
 No model-generated summary may override deterministic evidence.
 
-### 5.9 Entity and competitor resolution
+### 4.9 Entity and competitor resolution
 
 - raw names retained;
 - deterministic and versioned aliases;
@@ -169,7 +142,7 @@ No model-generated summary may override deterministic evidence.
 - explicit labeling for portfolio-level aggregates;
 - reversible reprocessing from immutable evidence.
 
-### 5.10 Evidence map and intervention brief
+### 4.10 Evidence map and intervention brief
 
 - question → observation → competitor/product → criterion/claim → source;
 - customer-approved evidence and missing-evidence state;
@@ -179,7 +152,7 @@ No model-generated summary may override deterministic evidence.
 - alternative explanations and evidence still needed;
 - `needs_evidence` blocking state when the brief cannot support a safe action.
 
-### 5.11 Registered intervention
+### 4.11 Registered intervention
 
 - intervention ID, hypothesis, action type, owner, and target;
 - approval and timestamp;
@@ -188,7 +161,7 @@ No model-generated summary may override deterministic evidence.
 - protocol deviations and confounders;
 - observation-window start, end, and retest eligibility.
 
-### 5.12 Retest and outcome
+### 4.12 Retest and outcome
 
 - preserved question and baseline identity;
 - versioned retest protocol;
@@ -199,7 +172,7 @@ No model-generated summary may override deterministic evidence.
 - explicit configuration differences and confounders;
 - permanent non-causality footer.
 
-### 5.13 Dashboard and evidence access
+### 4.13 Dashboard and evidence access
 
 - project/protocol status;
 - approved buyer questions;
@@ -214,7 +187,7 @@ No model-generated summary may override deterministic evidence.
 
 No advanced trend chart appears without adequate history and a defined method.
 
-### 5.14 Reports and delivery
+### 4.14 Reports and delivery
 
 - one canonical data snapshot drives dashboard and reports;
 - client-facing diagnostic report;
@@ -227,7 +200,7 @@ No advanced trend chart appears without adequate history and a defined method.
 - basic share/export path;
 - PDF optional unless explicitly quoted or already stable.
 
-## 6. Category benchmark acquisition feature
+## 5. Category benchmark acquisition feature
 
 V1 may support a founder-operated one-question category benchmark as the free acquisition asset.
 
@@ -243,7 +216,7 @@ It must use:
 
 Full benchmark automation is not required for the first external paid-pilot-ready V1.
 
-## 7. Automation boundary
+## 6. Automation boundary
 
 ### Automated when integrity passes
 
@@ -263,7 +236,7 @@ Full benchmark automation is not required for the first external paid-pilot-read
 - handling `needs_review` artifacts;
 - customer interpretation and next decision during the first pilots.
 
-## 8. V1 acceptance definition
+## 7. V1 acceptance definition
 
 V1 is paid-pilot ready only when:
 
@@ -278,7 +251,7 @@ V1 is paid-pilot ready only when:
 9. automatic delivery occurs only after integrity passes;
 10. staging, monitoring, recovery, migration, rollback, test, and handoff procedures are documented.
 
-## 9. Explicitly deferred
+## 8. Explicitly deferred
 
 - broad multi-model/public-surface coverage;
 - full AI Buyer Journey Intelligence;
@@ -296,7 +269,7 @@ V1 is paid-pilot ready only when:
 - complex self-serve pricing entitlements;
 - causal or revenue attribution.
 
-## 10. V1 non-goals
+## 9. V1 non-goals
 
 V1 is not intended to:
 

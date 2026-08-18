@@ -173,7 +173,7 @@ async function post(
       ...(body === undefined ? {} : { body }),
     }
   );
-  const response = await POST(request, { params: { requestId } });
+  const response = await POST(request, { params: Promise.resolve({ requestId }) });
   let payload: Record<string, unknown> = {};
   try {
     payload = (await response.json()) as Record<string, unknown>;

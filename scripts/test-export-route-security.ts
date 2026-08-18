@@ -236,7 +236,7 @@ async function main(): Promise<void> {
 
   // ------------------------------ 1 · no session ------------------------------
   stubbedUser = null;
-  const r1 = await GET(req, { params: { projectId: aliceProjectId } });
+  const r1 = await GET(req, { params: Promise.resolve({ projectId: aliceProjectId }) });
   check("unauthenticated → 401", r1.status === 401);
   const body1 = await r1.clone().json();
   check(
@@ -247,7 +247,7 @@ async function main(): Promise<void> {
   // ------------------------------ 2 · missing project -------------------------
   stubbedUser = alice;
   const r2 = await GET(req, {
-    params: { projectId: "00000000-0000-0000-0000-000000000000" },
+    params: Promise.resolve({ projectId: "00000000-0000-0000-0000-000000000000" }),
   });
   check("missing project → 404", r2.status === 404);
   const body2 = await r2.clone().json();
@@ -255,7 +255,7 @@ async function main(): Promise<void> {
 
   // ------------------------------ 3 · non-owner -------------------------------
   stubbedUser = bob;
-  const r3 = await GET(req, { params: { projectId: aliceProjectId } });
+  const r3 = await GET(req, { params: Promise.resolve({ projectId: aliceProjectId }) });
   check("non-owner → 404", r3.status === 404);
   const body3 = await r3.clone().json();
   check(
@@ -265,7 +265,7 @@ async function main(): Promise<void> {
 
   // ------------------------------ 4 · legacy null-owner ------------------------
   stubbedUser = alice;
-  const r4 = await GET(req, { params: { projectId: legacyProjectId } });
+  const r4 = await GET(req, { params: Promise.resolve({ projectId: legacyProjectId }) });
   check("legacy null-owner → 404", r4.status === 404);
 
   // Snapshot BEFORE the owner export so we can prove read-only.
@@ -273,7 +273,7 @@ async function main(): Promise<void> {
 
   // ------------------------------ 5 · owner (success) --------------------------
   stubbedUser = alice;
-  const r5 = await GET(req, { params: { projectId: aliceProjectId } });
+  const r5 = await GET(req, { params: Promise.resolve({ projectId: aliceProjectId }) });
   check("owner → 200", r5.status === 200);
   check(
     "owner response is text/markdown",

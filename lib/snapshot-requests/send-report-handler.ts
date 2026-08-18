@@ -187,8 +187,9 @@ async function releaseClaimAfterProvenNonDelivery(
 export function createSendReportHandler(deps: SendReportDeps) {
   return async function POST(
     request: Request,
-    { params }: { params: { requestId: string } }
+    { params }: { params: Promise<{ requestId: string }> }
   ): Promise<Response> {
+    const resolvedParams = await params;
     let user: { email: string | null } | null;
     try {
       user = await deps.requireCurrentUser();
@@ -226,7 +227,7 @@ export function createSendReportHandler(deps: SendReportDeps) {
       );
     }
 
-    const context = await deps.loadRequestContext(params.requestId);
+    const context = await deps.loadRequestContext(resolvedParams.requestId);
     if (!context) {
       return NextResponse.json({ error: "not_found" }, { status: 404 });
     }
@@ -235,7 +236,7 @@ export function createSendReportHandler(deps: SendReportDeps) {
     let claimed: BegunSnapshotReportDelivery | null;
     try {
       claimed = await deps.beginSnapshotReportDelivery({
-        snapshotRequestId: params.requestId,
+        snapshotRequestId: resolvedParams.requestId,
         expectedArtifactId,
         expectedRevision,
       });
@@ -261,7 +262,7 @@ export function createSendReportHandler(deps: SendReportDeps) {
     ) {
       const released = await releaseClaimAfterProvenNonDelivery(
         deps,
-        params.requestId,
+        resolvedParams.requestId,
         claimed
       );
       return NextResponse.json(released ? DELIVERY_NOT_SENT : RELEASE_FAILED, {
@@ -277,7 +278,7 @@ export function createSendReportHandler(deps: SendReportDeps) {
     let delivery: { messageId: string };
     try {
       delivery = await deps.sendReportEmail({
-        requestId: params.requestId,
+        requestId: resolvedParams.requestId,
         to: context.workEmail,
         companyName: context.companyName,
         publicToken: context.publicToken,
@@ -291,7 +292,7 @@ export function createSendReportHandler(deps: SendReportDeps) {
         // can be handed back. No finalize, no second provider call.
         const released = await releaseClaimAfterProvenNonDelivery(
           deps,
-          params.requestId,
+          resolvedParams.requestId,
           claimed
         );
         if (!released) {
@@ -310,7 +311,7 @@ export function createSendReportHandler(deps: SendReportDeps) {
 
     try {
       const finalized = await deps.finalizeSnapshotReportDelivery({
-        snapshotRequestId: params.requestId,
+        snapshotRequestId: resolvedParams.requestId,
         artifactId: claimed.artifactId,
         deliveryClaimToken: claimed.deliveryClaimToken,
         deliveryMessageId: delivery.messageId,

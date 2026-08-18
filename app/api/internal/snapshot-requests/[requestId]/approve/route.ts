@@ -55,9 +55,9 @@ async function readCompetitorsField(
 export async function POST(
   request: Request,
   context: {
-    params: {
+    params: Promise<{
       requestId: string;
-    };
+    }>;
   }
 ) {
   if (
@@ -132,8 +132,8 @@ export async function POST(
     );
   }
 
-  const requestId =
-    context.params.requestId;
+  const { requestId } =
+    await context.params;
 
   if (!UUID_PATTERN.test(requestId)) {
     return NextResponse.json(

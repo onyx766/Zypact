@@ -85,7 +85,7 @@ function build(over: Partial<{
   });
   return { handler, spy };
 }
-const call = (h: any, body: unknown) => h(req(body), { params: { requestId: REQ } });
+const call = (h: any, body: unknown) => h(req(body), { params: Promise.resolve({ requestId: REQ }) });
 const pgErr = (code: string) => Object.assign(new Error("db"), { code });
 
 async function main(): Promise<void> {

@@ -6,14 +6,15 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 interface PageProps {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 export default async function ProbePage({ params }: PageProps) {
+  const { id } = await params;
   const db = getDb();
   const [project, prompts] = await Promise.all([
-    db.getProject(params.id),
-    db.getGeneratedPrompts(params.id),
+    db.getProject(id),
+    db.getGeneratedPrompts(id),
   ]);
 
   if (!project) {
@@ -29,23 +30,23 @@ export default async function ProbePage({ params }: PageProps) {
   }
 
   const selected = prompts.filter((p) => p.selected);
-  const probeResults = await db.getProbeResultsByProject(params.id);
+  const probeResults = await db.getProbeResultsByProject(id);
   const hasResults = probeResults.length > 0;
 
   return (
     <div>
       <h1>Manual Probe</h1>
       <p>
-        <Link href={`/projects/${params.id}/prompts`}>← Buyer prompts</Link>{" "}
+        <Link href={`/projects/${id}/prompts`}>← Buyer prompts</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/lost-prompts`}>
+        <Link href={`/projects/${id}/lost-prompts`}>
           Lost / partial results →
         </Link>
         {hasResults && (
           <>
             {" "}
             <span style={{ margin: "0 8px" }}>·</span>{" "}
-            <Link href={`/projects/${params.id}/competitors`}>Competitors →</Link>
+            <Link href={`/projects/${id}/competitors`}>Competitors →</Link>
           </>
         )}
       </p>
@@ -70,7 +71,7 @@ export default async function ProbePage({ params }: PageProps) {
           <p>No selected prompts for this project yet.</p>
           <p>
             Generate them from the{" "}
-            <Link href={`/projects/${params.id}/mirror`}>Mirror Profile</Link>{" "}
+            <Link href={`/projects/${id}/mirror`}>Mirror Profile</Link>{" "}
             page first.
           </p>
         </div>

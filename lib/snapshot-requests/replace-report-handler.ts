@@ -63,8 +63,9 @@ export interface ReplaceReportDeps {
 export function createReplaceReportHandler(deps: ReplaceReportDeps) {
   return async function POST(
     request: Request,
-    { params }: { params: { requestId: string } }
+    { params }: { params: Promise<{ requestId: string }> }
   ): Promise<Response> {
+    const resolvedParams = await params;
     let user: { email: string | null } | null;
     try {
       user = await deps.requireCurrentUser();
@@ -117,7 +118,7 @@ export function createReplaceReportHandler(deps: ReplaceReportDeps) {
       );
     }
 
-    const existing = await deps.getSnapshotReportArtifact(params.requestId);
+    const existing = await deps.getSnapshotReportArtifact(resolvedParams.requestId);
     if (!existing) {
       return NextResponse.json({ error: "not_found" }, { status: 404 });
     }
@@ -127,7 +128,7 @@ export function createReplaceReportHandler(deps: ReplaceReportDeps) {
     let replaced: { artifactId: string; revision: string } | null;
     try {
       replaced = await deps.replaceUndeliveredSnapshotReportArtifact({
-        snapshotRequestId: params.requestId,
+        snapshotRequestId: resolvedParams.requestId,
         expectedArtifactId,
         expectedRevision,
         fullReportMarkdown,
@@ -156,7 +157,7 @@ export function createReplaceReportHandler(deps: ReplaceReportDeps) {
     // second replacement is attempted.
     let current: SnapshotReportArtifact | null;
     try {
-      current = await deps.getSnapshotReportArtifact(params.requestId);
+      current = await deps.getSnapshotReportArtifact(resolvedParams.requestId);
     } catch {
       return NextResponse.json(
         {

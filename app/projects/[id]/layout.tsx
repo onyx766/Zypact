@@ -9,7 +9,7 @@ export const runtime = "nodejs";
  * Ownership gate for every `/projects/[id]/*` page.
  *
  * Server Components under this layout can freely call the DB adapter
- * for `params.id` — the layout has already verified ownership. On
+ * for the resolved project id — the layout has already verified ownership. On
  * missing session we bounce to `/login?next=…`; on any other deny we
  * render `not-found` (see `requireProjectOwnerForPage` for the exact
  * reason logging).
@@ -19,9 +19,10 @@ export default async function ProjectLayout({
   params,
 }: {
   children: ReactNode;
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }) {
-  await requireProjectOwnerForPage(params.id, `/projects/${params.id}`);
+  const { id } = await params;
+  await requireProjectOwnerForPage(id, `/projects/${id}`);
   return (
     <main className="product-page">
       <header className="product-topbar">
@@ -44,16 +45,16 @@ export default async function ProjectLayout({
         <aside className="product-sidebar" aria-label="Project navigation">
           <p className="product-nav-label">Workspace</p>
           <nav className="product-nav">
-            <Link href={`/projects/${params.id}/mirror`}>Mirror profile</Link>
-            <Link href={`/projects/${params.id}/prompts`}>Buyer prompts</Link>
-            <Link href={`/projects/${params.id}/probe`}>AI probes</Link>
-            <Link href={`/projects/${params.id}/lost-prompts`}>Lost / partial</Link>
-            <Link href={`/projects/${params.id}/competitors`}>Competitors</Link>
-            <Link href={`/projects/${params.id}/gap-map`}>Gap map</Link>
-            <Link href={`/projects/${params.id}/evidence-bank`}>Evidence bank</Link>
-            <Link href={`/projects/${params.id}/fix-briefs`}>Fix briefs</Link>
-            <Link href={`/projects/${params.id}/assets`}>Assets</Link>
-            <Link href={`/projects/${params.id}/qa`}>QA</Link>
+            <Link href={`/projects/${id}/mirror`}>Mirror profile</Link>
+            <Link href={`/projects/${id}/prompts`}>Buyer prompts</Link>
+            <Link href={`/projects/${id}/probe`}>AI probes</Link>
+            <Link href={`/projects/${id}/lost-prompts`}>Lost / partial</Link>
+            <Link href={`/projects/${id}/competitors`}>Competitors</Link>
+            <Link href={`/projects/${id}/gap-map`}>Gap map</Link>
+            <Link href={`/projects/${id}/evidence-bank`}>Evidence bank</Link>
+            <Link href={`/projects/${id}/fix-briefs`}>Fix briefs</Link>
+            <Link href={`/projects/${id}/assets`}>Assets</Link>
+            <Link href={`/projects/${id}/qa`}>QA</Link>
           </nav>
 
           <div className="product-nav-note">

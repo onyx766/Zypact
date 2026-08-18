@@ -184,7 +184,7 @@ async function main(): Promise<void> {
 
   const Page = require("@/app/report/[secureToken]/page").default;
   const html: string = renderToStaticMarkup(
-    await Page({ params: { secureToken: TOKEN } })
+    await Page({ params: Promise.resolve({ secureToken: TOKEN }) })
   );
   const flat = html.replace(/\s+/g, " ");
 

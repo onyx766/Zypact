@@ -10,16 +10,17 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 interface PageProps {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 export default async function MirrorPage({ params }: PageProps) {
+  const { id } = await params;
   const db = getDb();
   const [project, pages, mirrorRow, existingPrompts] = await Promise.all([
-    db.getProject(params.id),
-    db.getSitePages(params.id),
-    db.getMirrorProfile(params.id),
-    db.getGeneratedPrompts(params.id),
+    db.getProject(id),
+    db.getSitePages(id),
+    db.getMirrorProfile(id),
+    db.getGeneratedPrompts(id),
   ]);
 
   if (!project) {
@@ -49,7 +50,7 @@ export default async function MirrorPage({ params }: PageProps) {
       <p>
         <Link href="/projects/new">← New scan</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/evidence-bank`}>
+        <Link href={`/projects/${id}/evidence-bank`}>
           Evidence Bank →
         </Link>
       </p>

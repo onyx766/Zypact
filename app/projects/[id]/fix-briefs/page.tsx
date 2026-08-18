@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 interface PageProps {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 const cell: React.CSSProperties = {
@@ -19,15 +19,16 @@ const cell: React.CSSProperties = {
 };
 
 export default async function FixBriefsPage({ params }: PageProps) {
+  const { id } = await params;
   const db = getDb();
   const [project, gaps, bankRow, probeResults, fixBriefs, assets] =
     await Promise.all([
-      db.getProject(params.id),
-      db.getGapsByProject(params.id),
-      db.getEvidenceBankByProject(params.id),
-      db.getProbeResultsByProject(params.id),
-      db.getFixBriefsByProject(params.id),
-      db.getGeneratedAssetsByProject(params.id),
+      db.getProject(id),
+      db.getGapsByProject(id),
+      db.getEvidenceBankByProject(id),
+      db.getProbeResultsByProject(id),
+      db.getFixBriefsByProject(id),
+      db.getGeneratedAssetsByProject(id),
     ]);
 
   if (!project) {
@@ -62,24 +63,24 @@ export default async function FixBriefsPage({ params }: PageProps) {
     <div>
       <h1>Fix Briefs</h1>
       <p>
-        <Link href={`/projects/${params.id}/mirror`}>Mirror Profile</Link>{" "}
+        <Link href={`/projects/${id}/mirror`}>Mirror Profile</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/prompts`}>Buyer prompts</Link>{" "}
+        <Link href={`/projects/${id}/prompts`}>Buyer prompts</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/probe`}>Manual Probe</Link>{" "}
+        <Link href={`/projects/${id}/probe`}>Manual Probe</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/competitors`}>Competitors</Link>{" "}
+        <Link href={`/projects/${id}/competitors`}>Competitors</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/gap-map`}>Gap Matrix</Link>{" "}
+        <Link href={`/projects/${id}/gap-map`}>Gap Matrix</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/evidence-bank`}>Evidence Bank</Link>{" "}
+        <Link href={`/projects/${id}/evidence-bank`}>Evidence Bank</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/assets`}>Generated assets →</Link>
+        <Link href={`/projects/${id}/assets`}>Generated assets →</Link>
         {assets.length > 0 && (
           <>
             {" "}
             <span style={{ margin: "0 8px" }}>·</span>{" "}
-            <Link href={`/projects/${params.id}/qa`}>QA</Link>
+            <Link href={`/projects/${id}/qa`}>QA</Link>
           </>
         )}
       </p>
@@ -109,7 +110,7 @@ export default async function FixBriefsPage({ params }: PageProps) {
       {!bank && (
         <p className="error">
           Prepare the Evidence Bank before generating fix briefs.{" "}
-          <Link href={`/projects/${params.id}/evidence-bank`}>
+          <Link href={`/projects/${id}/evidence-bank`}>
             Open Evidence Bank →
           </Link>
         </p>
@@ -118,7 +119,7 @@ export default async function FixBriefsPage({ params }: PageProps) {
         <p className="error">
           The Evidence Bank exists but is missing a product description or
           features, or has fewer than three forbidden claims. Fix that first.{" "}
-          <Link href={`/projects/${params.id}/evidence-bank`}>
+          <Link href={`/projects/${id}/evidence-bank`}>
             Open Evidence Bank →
           </Link>
         </p>
@@ -126,14 +127,14 @@ export default async function FixBriefsPage({ params }: PageProps) {
       {gaps.length === 0 && (
         <p className="error">
           No prioritized gaps stored. Generate a Gap Matrix first.{" "}
-          <Link href={`/projects/${params.id}/gap-map`}>Open Gap Matrix →</Link>
+          <Link href={`/projects/${id}/gap-map`}>Open Gap Matrix →</Link>
         </p>
       )}
       {lostOrPartialCount === 0 && (
         <p className="error">
           Run at least one lost or partial probe analysis before generating fix
           briefs.{" "}
-          <Link href={`/projects/${params.id}/probe`}>Open Manual Probe →</Link>
+          <Link href={`/projects/${id}/probe`}>Open Manual Probe →</Link>
         </p>
       )}
 

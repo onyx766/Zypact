@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const supabase = getSupabaseServerClient();
+  const supabase = await getSupabaseServerClient();
 
   const { error } =
     await supabase.auth.exchangeCodeForSession(code);

@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 interface PageProps {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 function asCompetitors(x: unknown): CompetitorMention[] {
@@ -20,10 +20,11 @@ function asSources(x: unknown): SourceCitation[] {
 }
 
 export default async function LostPromptsPage({ params }: PageProps) {
+  const { id } = await params;
   const db = getDb();
   const [project, lost] = await Promise.all([
-    db.getProject(params.id),
-    db.getLostProbeResultsByProject(params.id),
+    db.getProject(id),
+    db.getLostProbeResultsByProject(id),
   ]);
 
   if (!project) {
@@ -39,15 +40,15 @@ export default async function LostPromptsPage({ params }: PageProps) {
     <div>
       <h1>Lost / partial results</h1>
       <p>
-        <Link href={`/projects/${params.id}/probe`}>← Manual probe</Link>{" "}
+        <Link href={`/projects/${id}/probe`}>← Manual probe</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/prompts`}>Buyer prompts</Link>{" "}
+        <Link href={`/projects/${id}/prompts`}>Buyer prompts</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/mirror`}>Mirror Profile</Link>{" "}
+        <Link href={`/projects/${id}/mirror`}>Mirror Profile</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/competitors`}>Competitors →</Link>{" "}
+        <Link href={`/projects/${id}/competitors`}>Competitors →</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/gap-map`}>Gap Matrix →</Link>
+        <Link href={`/projects/${id}/gap-map`}>Gap Matrix →</Link>
       </p>
 
       <div className="section">
@@ -62,7 +63,7 @@ export default async function LostPromptsPage({ params }: PageProps) {
       {lost.length === 0 ? (
         <p className="muted">
           No lost or partial results stored yet. Run manual probes on the{" "}
-          <Link href={`/projects/${params.id}/probe`}>Manual Probe page</Link>.
+          <Link href={`/projects/${id}/probe`}>Manual Probe page</Link>.
         </p>
       ) : (
         <div style={{ overflowX: "auto" }}>

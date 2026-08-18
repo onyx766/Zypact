@@ -38,10 +38,10 @@ function safeFilename(
 export async function GET(
   _request: Request,
   context: {
-    params: {
+    params: Promise<{
       requestId: string;
       kind: string;
-    };
+    }>;
   }
 ) {
   let user;
@@ -69,7 +69,7 @@ export async function GET(
   const {
     requestId,
     kind,
-  } = context.params;
+  } = await context.params;
 
   if (
     !UUID_PATTERN.test(requestId) ||

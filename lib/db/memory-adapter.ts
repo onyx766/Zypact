@@ -22,6 +22,7 @@ import type {
   GeneratedPrompt,
   GeneratedPromptInput,
   MirrorProfileRow,
+  ProbeFailure,
   ProbeMode,
   ProbeResult,
   ProbeRun,
@@ -29,6 +30,7 @@ import type {
   Project,
   QaReportRow,
   QaReportRowInput,
+  RecordProbeFailureInput,
   SaveProbeResultInput,
   SaveSnapshotReportArtifactInput,
   SnapshotReportArtifact,
@@ -65,6 +67,7 @@ interface MemoryStore {
   probeRuns: Map<string, ProbeRun>;
   probeResultsByProject: Map<string, ProbeResult[]>;
   analysisLlmCallsByProject: Map<string, AnalysisLlmCall[]>;
+  probeFailuresByProject: Map<string, ProbeFailure[]>;
   competitorsByProject: Map<string, Competitor[]>;
   gapMapsByProject: Map<string, GapMapRow[]>;
   gapsByProject: Map<string, Gap[]>;
@@ -90,6 +93,7 @@ function getStore(): MemoryStore {
       probeRuns: new Map(),
       probeResultsByProject: new Map(),
       analysisLlmCallsByProject: new Map(),
+      probeFailuresByProject: new Map(),
       competitorsByProject: new Map(),
       gapMapsByProject: new Map(),
       gapsByProject: new Map(),
@@ -1080,6 +1084,8 @@ export const memoryAdapter: DbAdapter = {
       verdict: input.verdict,
       whyClientLost: input.whyClientLost,
       rawResponseSha256: input.rawResponseSha256 ?? null,
+      rawResponseBody: input.rawResponseBody ?? null,
+      rawResponseBodySha256: input.rawResponseBodySha256 ?? null,
       rawProbeRequestSha256: input.rawProbeRequestSha256 ?? null,
       fullRequestBodySha256: input.fullRequestBodySha256 ?? null,
       providerHttpStatus: input.providerHttpStatus ?? null,
@@ -1136,6 +1142,41 @@ export const memoryAdapter: DbAdapter = {
     projectId: string
   ): Promise<AnalysisLlmCall[]> {
     return [...(getStore().analysisLlmCallsByProject.get(projectId) ?? [])].sort(
+      (a, b) => b.createdAt.localeCompare(a.createdAt)
+    );
+  },
+
+  async recordProbeFailure(
+    input: RecordProbeFailureInput
+  ): Promise<ProbeFailure> {
+    const row: ProbeFailure = {
+      id: randomUUID(),
+      probeRunId: input.probeRunId ?? null,
+      projectId: input.projectId,
+      platform: input.platform,
+      prompt: input.prompt,
+      failureReason: input.failureReason,
+      providerHttpStatus: input.providerHttpStatus ?? null,
+      providerErrorBody: input.providerErrorBody ?? null,
+      providerErrorBodySha256: input.providerErrorBodySha256 ?? null,
+      providerLatencyMs: input.providerLatencyMs ?? null,
+      providerRequestId: input.providerRequestId ?? null,
+      rawProbeRequestSha256: input.rawProbeRequestSha256 ?? null,
+      fullRequestBodySha256: input.fullRequestBodySha256 ?? null,
+      retryCount: input.retryCount ?? 0,
+      createdAt: new Date().toISOString(),
+    };
+    const store = getStore();
+    const list = store.probeFailuresByProject.get(input.projectId) ?? [];
+    list.push(row);
+    store.probeFailuresByProject.set(input.projectId, list);
+    return row;
+  },
+
+  async getProbeFailuresByProject(
+    projectId: string
+  ): Promise<ProbeFailure[]> {
+    return [...(getStore().probeFailuresByProject.get(projectId) ?? [])].sort(
       (a, b) => b.createdAt.localeCompare(a.createdAt)
     );
   },

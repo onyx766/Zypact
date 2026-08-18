@@ -94,8 +94,17 @@ export interface ProbeResult {
   answerSummary: string;
   verdict: string;
   whyClientLost: string;
-  /** M1 evidence contract — SHA-256 of `rawResponse`. Null for pre-M1 rows. */
+  /** M1 evidence contract — SHA-256 of `rawResponse` (the reconstructed transcript). Null for pre-M1 rows. */
   rawResponseSha256?: string | null;
+  /**
+   * M1 evidence contract, second tranche — the exact response body text as
+   * received from the probe provider (captured before JSON.parse). Null
+   * for pasted/manual answers and for rows saved before this field
+   * existed.
+   */
+  rawResponseBody?: string | null;
+  /** M1 evidence contract, second tranche — SHA-256 of `rawResponseBody`. */
+  rawResponseBodySha256?: string | null;
   /**
    * M1 evidence contract — SHA-256 of `rawProbeRequest` ONLY (the buyer
    * question text), NOT the complete outbound HTTP body. See
@@ -329,8 +338,16 @@ export interface SaveProbeResultInput {
   answerSummary: string;
   verdict: string;
   whyClientLost: string;
-  /** M1 evidence contract — SHA-256 of `rawResponse`. Omitted for pasted/manual answers. */
+  /** M1 evidence contract — SHA-256 of `rawResponse` (the reconstructed transcript). Omitted for pasted/manual answers. */
   rawResponseSha256?: string | null;
+  /**
+   * M1 evidence contract, second tranche — the exact response body text as
+   * received from the probe provider (captured before JSON.parse).
+   * Omitted for pasted/manual answers.
+   */
+  rawResponseBody?: string | null;
+  /** M1 evidence contract, second tranche — SHA-256 of `rawResponseBody`. */
+  rawResponseBodySha256?: string | null;
   /**
    * M1 evidence contract — SHA-256 of `rawProbeRequest` ONLY (the buyer
    * question text), NOT the complete outbound HTTP body. See
@@ -387,6 +404,36 @@ export interface AnalysisLlmCallInput {
 }
 
 export interface AnalysisLlmCall extends AnalysisLlmCallInput {
+  id: string;
+  createdAt: string;
+}
+
+/**
+ * M1 evidence contract, second tranche — one row per failed live provider
+ * probe attempt (network error, non-2xx status, or empty answer). Kept
+ * separate from `probe_results`, which represents only completed,
+ * analyzable answers. Not linked to a `probe_runs` row: a `probe_runs`
+ * row is only created once `analyzeProbeResponse` starts (after a
+ * successful `runPerplexityProbe`), so a provider-level failure has no
+ * run to attach to yet — `probeRunId` is left null for those.
+ */
+export interface RecordProbeFailureInput {
+  probeRunId?: string | null;
+  projectId: string;
+  platform: string;
+  prompt: string;
+  failureReason: "network_error" | "http_error" | "empty_answer";
+  providerHttpStatus?: number | null;
+  providerErrorBody?: string | null;
+  providerErrorBodySha256?: string | null;
+  providerLatencyMs?: number | null;
+  providerRequestId?: string | null;
+  rawProbeRequestSha256?: string | null;
+  fullRequestBodySha256?: string | null;
+  retryCount?: number;
+}
+
+export interface ProbeFailure extends RecordProbeFailureInput {
   id: string;
   createdAt: string;
 }
@@ -764,6 +811,10 @@ export interface DbAdapter {
   // M1 — internal-analysis LLM traceability (separate from probe evidence)
   recordAnalysisLlmCall(input: AnalysisLlmCallInput): Promise<AnalysisLlmCall>;
   getAnalysisLlmCallsByProject(projectId: string): Promise<AnalysisLlmCall[]>;
+
+  // M1 second tranche — persisted provider failures (separate from probe_results)
+  recordProbeFailure(input: RecordProbeFailureInput): Promise<ProbeFailure>;
+  getProbeFailuresByProject(projectId: string): Promise<ProbeFailure[]>;
 
   // Sprint 4 — Competitor Discovery
   replaceCompetitorsForProject(

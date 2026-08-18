@@ -1,10 +1,10 @@
 #!/usr/bin/env tsx
 /**
- * M1 evidence contract — first tranche.
+ * M1 evidence contract — first AND second tranche (migrations 0036, 0037).
  *
  * Two kinds of checks:
  *
- *   1. Static assertions over migration 0036's SQL text. These prove the
+ *   1. Static assertions over the migrations' SQL text. These prove the
  *      SQL *says* what the design requires — they do not execute
  *      PostgreSQL. No database, network, or migration execution occurs
  *      here.
@@ -13,7 +13,8 @@
  *      hashing, evidence pass-through, and append-only-shaped API
  *      actually work in code — still with zero network calls and no live
  *      Perplexity/OpenAI credentials required (`runPerplexityProbe` and
- *      `callModel` are exercised via their `mockResponse` paths only).
+ *      `callModel` are exercised via their `mockResponse`/injected-fetch
+ *      paths only).
  */
 
 process.env.ZYPACT_ALLOW_MEMORY_DB = "true";
@@ -27,7 +28,7 @@ import { randomUUID } from "node:crypto";
 
 import { getDb } from "@/lib/db";
 import { sha256Hex } from "@/lib/evidence/hash";
-import { runPerplexityProbe } from "@/lib/probes/perplexity";
+import { PerplexityProbeFailure, runPerplexityProbe } from "@/lib/probes/perplexity";
 import { analyzeProbeResponse } from "@/lib/pipeline/analyze-probe-response";
 import { stripGenericCompetitorPlaceholders } from "@/lib/agents/site-reader";
 
@@ -160,6 +161,81 @@ check(
 );
 
 /* -------------------------------------------------------------------------- */
+/*  1b. Static SQL contract — migration 0037 (second tranche)                 */
+/* -------------------------------------------------------------------------- */
+
+const MIGRATION_0037 = join(
+  process.cwd(),
+  "supabase/migrations/0037_m1_probe_failure_and_raw_body_contract.sql"
+);
+const sql0037 = readFileSync(MIGRATION_0037, "utf-8");
+const normalized0037 = sql0037.replace(/\s+/g, " ").toLowerCase();
+
+function has37(fragment: string): boolean {
+  return normalized0037.includes(fragment.replace(/\s+/g, " ").toLowerCase());
+}
+
+console.log("\nprobe_results — raw response body columns (0037)");
+check("column raw_response_body added", has37("add column if not exists raw_response_body text"));
+check("column raw_response_body_sha256 added", has37("add column if not exists raw_response_body_sha256"));
+check(
+  "raw_response_body_sha256 format constrained to lowercase hex-64",
+  has37("raw_response_body_sha256 ~ '^[0-9a-f]{64}$'")
+);
+
+console.log("\nprobe_failures — new table (0037)");
+check("table created", has37("create table if not exists public.probe_failures"));
+for (const column of [
+  "probe_run_id",
+  "project_id",
+  "platform",
+  "prompt",
+  "failure_reason",
+  "provider_http_status",
+  "provider_error_body",
+  "provider_error_body_sha256",
+  "provider_latency_ms",
+  "provider_request_id",
+  "raw_probe_request_sha256",
+  "full_request_body_sha256",
+  "retry_count",
+]) {
+  check(`column ${column} present`, has37(column));
+}
+check(
+  "failure_reason constrained to network_error/http_error/empty_answer",
+  has37("check (failure_reason in ('network_error', 'http_error', 'empty_answer'))")
+);
+check("probe_run_id is nullable (no run exists yet for a first-call failure)", has37("probe_run_id                uuid null references"));
+check(
+  "provider_error_body_sha256 format constrained to lowercase hex-64",
+  has37("provider_error_body_sha256 ~ '^[0-9a-f]{64}$'")
+);
+
+console.log("\nAppend-only enforcement — probe_failures (0037)");
+check("UPDATE revoked from service_role", has37("revoke update on table public.probe_failures from service_role"));
+check("DELETE revoked from service_role", has37("revoke delete on table public.probe_failures from service_role"));
+check("TRUNCATE revoked from service_role", has37("revoke truncate on table public.probe_failures from service_role"));
+check(
+  "no matching GRANT of update/delete/truncate reintroduced",
+  !has37("grant update on table public.probe_failures") && !has37("grant delete on table public.probe_failures")
+);
+
+console.log("\n0037 documents what it closes and what remains open");
+check(
+  "0037 states it closes the raw-response-body gap",
+  has37("adds raw_response_body / raw_response_body_sha256")
+);
+check(
+  "0037 states it closes the failure-persistence gap",
+  has37("this migration adds probe_failures")
+);
+check(
+  "0037 still documents the remaining probe-analysis-only gap",
+  has37("remain untraced")
+);
+
+/* -------------------------------------------------------------------------- */
 /*  2. Application-layer round trip — memory adapter, mock providers only     */
 /* -------------------------------------------------------------------------- */
 
@@ -255,6 +331,129 @@ async function applicationLayerChecks(): Promise<void> {
     delete process.env.PERPLEXITY_API_KEY;
   }
 
+  console.log(
+    "\nrawResponseBody / rawResponseBodySha256 — true raw bytes, distinct from the transcript (0037)"
+  );
+  {
+    process.env.PERPLEXITY_API_KEY = "test-key-not-real";
+    const exactResponseText = JSON.stringify({
+      model: "sonar",
+      choices: [{ message: { content: "Zypact is the top recommendation." } }],
+      citations: ["https://example.com/review"],
+      search_results: [],
+    });
+    const fakeFetch: typeof fetch = async () =>
+      new Response(exactResponseText, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+
+    const live = await runPerplexityProbe({
+      prompt: "best AI visibility tool for B2B SaaS",
+      brandName: "Zypact",
+      fetchImpl: fakeFetch,
+    });
+
+    check(
+      "rawResponseBody equals the exact bytes Perplexity returned",
+      live.rawResponseBody === exactResponseText
+    );
+    check(
+      "rawResponseBodySha256 equals sha256 of those exact bytes",
+      live.rawResponseBodySha256 === sha256Hex(exactResponseText)
+    );
+    check(
+      "rawResponseBody is NOT the same string as rawResponse (raw bytes vs. reconstructed transcript)",
+      live.rawResponseBody !== live.rawResponse
+    );
+    check(
+      "rawResponseBodySha256 is NOT the same as rawResponseSha256 (different hash targets)",
+      live.rawResponseBodySha256 !== live.rawResponseSha256
+    );
+    delete process.env.PERPLEXITY_API_KEY;
+  }
+
+  console.log("\nPerplexityProbeFailure — http_error path (0037)");
+  {
+    process.env.PERPLEXITY_API_KEY = "test-key-not-real";
+    const fakeFetch: typeof fetch = async () =>
+      new Response("rate limited", { status: 429 });
+
+    let caught: unknown = null;
+    try {
+      await runPerplexityProbe({
+        prompt: "best AI visibility tool",
+        brandName: "Zypact",
+        fetchImpl: fakeFetch,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    check("throws PerplexityProbeFailure, not a plain Error", caught instanceof PerplexityProbeFailure);
+    if (caught instanceof PerplexityProbeFailure) {
+      check("reason is http_error", caught.reason === "http_error");
+      check("httpStatus is 429", caught.httpStatus === 429);
+      check("errorBody captured", caught.errorBody === "rate limited");
+      check("errorBodySha256 matches errorBody", caught.errorBodySha256 === sha256Hex("rate limited"));
+      check("rawProbeRequestSha256 still captured on failure", /^[0-9a-f]{64}$/.test(caught.rawProbeRequestSha256));
+      check("fullRequestBodySha256 still captured on failure", /^[0-9a-f]{64}$/.test(caught.fullRequestBodySha256));
+    }
+    delete process.env.PERPLEXITY_API_KEY;
+  }
+
+  console.log("\nPerplexityProbeFailure — empty_answer path (0037)");
+  {
+    process.env.PERPLEXITY_API_KEY = "test-key-not-real";
+    const fakeFetch: typeof fetch = async () =>
+      new Response(JSON.stringify({ model: "sonar", choices: [{ message: { content: "" } }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+
+    let caught: unknown = null;
+    try {
+      await runPerplexityProbe({
+        prompt: "best AI visibility tool",
+        brandName: "Zypact",
+        fetchImpl: fakeFetch,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    check("throws PerplexityProbeFailure for an empty answer", caught instanceof PerplexityProbeFailure);
+    if (caught instanceof PerplexityProbeFailure) {
+      check("reason is empty_answer", caught.reason === "empty_answer");
+      check("httpStatus is 200 (the request succeeded, the content was empty)", caught.httpStatus === 200);
+    }
+    delete process.env.PERPLEXITY_API_KEY;
+  }
+
+  console.log("\nPerplexityProbeFailure — network_error path (0037)");
+  {
+    process.env.PERPLEXITY_API_KEY = "test-key-not-real";
+    const fakeFetch: typeof fetch = async () => {
+      throw new Error("getaddrinfo ENOTFOUND api.perplexity.ai");
+    };
+
+    let caught: unknown = null;
+    try {
+      await runPerplexityProbe({
+        prompt: "best AI visibility tool",
+        brandName: "Zypact",
+        fetchImpl: fakeFetch,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    check("throws PerplexityProbeFailure for a network error", caught instanceof PerplexityProbeFailure);
+    if (caught instanceof PerplexityProbeFailure) {
+      check("reason is network_error", caught.reason === "network_error");
+      check("httpStatus is null (no response was ever received)", caught.httpStatus === null);
+      check("message mentions the underlying network error", caught.message.includes("ENOTFOUND"));
+    }
+    delete process.env.PERPLEXITY_API_KEY;
+  }
+
   console.log("\nSite Reader — generic competitor placeholder guard");
   check(
     "strips exact 'Competitor A' / 'Competitor B' placeholders, keeps a real competitor",
@@ -285,9 +484,11 @@ async function applicationLayerChecks(): Promise<void> {
 
   const run = await db.createProbeRun(project.id, "perplexity", "live_perplexity", "pending");
   const rawResponse = "Zypact appears as the primary recommendation.";
+  const rawResponseBody = JSON.stringify({ model: "sonar", choices: [{ message: { content: "Zypact appears as the primary recommendation." } }] });
   const rawProbeRequest = "best AI visibility tool";
   const fullBody = JSON.stringify({ model: "sonar", messages: [{ role: "user", content: rawProbeRequest }], temperature: 0.2 });
   const expectedResponseHash = sha256Hex(rawResponse);
+  const expectedResponseBodyHash = sha256Hex(rawResponseBody);
   const expectedRequestHash = sha256Hex(rawProbeRequest);
   const expectedFullBodyHash = sha256Hex(fullBody);
 
@@ -307,6 +508,8 @@ async function applicationLayerChecks(): Promise<void> {
     verdict: "won",
     whyClientLost: "",
     rawResponseSha256: expectedResponseHash,
+    rawResponseBody,
+    rawResponseBodySha256: expectedResponseBodyHash,
     rawProbeRequestSha256: expectedRequestHash,
     fullRequestBodySha256: expectedFullBodyHash,
     providerHttpStatus: 200,
@@ -317,6 +520,8 @@ async function applicationLayerChecks(): Promise<void> {
   });
 
   check("saved probe result persists raw_response_sha256", saved.rawResponseSha256 === expectedResponseHash);
+  check("saved probe result persists raw_response_body verbatim", saved.rawResponseBody === rawResponseBody);
+  check("saved probe result persists raw_response_body_sha256, distinct from raw_response_sha256", saved.rawResponseBodySha256 === expectedResponseBodyHash && saved.rawResponseBodySha256 !== saved.rawResponseSha256);
   check("saved probe result persists raw_probe_request_sha256", saved.rawProbeRequestSha256 === expectedRequestHash);
   check("saved probe result persists full_request_body_sha256, distinct from raw_probe_request_sha256", saved.fullRequestBodySha256 === expectedFullBodyHash && saved.fullRequestBodySha256 !== saved.rawProbeRequestSha256);
   check("saved probe result persists provider_http_status", saved.providerHttpStatus === 200);
@@ -330,6 +535,78 @@ async function applicationLayerChecks(): Promise<void> {
     "evidence fields survive a read round trip, not just the insert response",
     reloaded[0]?.rawResponseSha256 === expectedResponseHash
   );
+  check(
+    "raw_response_body survives a read round trip",
+    reloaded[0]?.rawResponseBody === rawResponseBody
+  );
+
+  console.log("\nprobe_failures — DB round trip (0037)");
+  const failureBefore = await db.getProbeFailuresByProject(project.id);
+  check("no probe_failures rows exist yet for this project", failureBefore.length === 0);
+
+  const errorBody = "429 rate limited";
+  const recordedFailure = await db.recordProbeFailure({
+    projectId: project.id,
+    platform: "perplexity",
+    prompt: "best AI visibility tool",
+    failureReason: "http_error",
+    providerHttpStatus: 429,
+    providerErrorBody: errorBody,
+    providerErrorBodySha256: sha256Hex(errorBody),
+    providerLatencyMs: 120,
+    providerRequestId: "req_fail_1",
+    rawProbeRequestSha256: sha256Hex("best AI visibility tool"),
+    fullRequestBodySha256: sha256Hex("{\"model\":\"sonar\"}"),
+    retryCount: 0,
+  });
+  check("recordProbeFailure never touches probe_results (distinct id space)", recordedFailure.id !== saved.id);
+  check("recordProbeFailure returns failureReason", recordedFailure.failureReason === "http_error");
+  check("recordProbeFailure returns providerHttpStatus", recordedFailure.providerHttpStatus === 429);
+  check("recordProbeFailure has no probeRunId (no run existed at the point of failure)", recordedFailure.probeRunId === null);
+
+  const failureAfter = await db.getProbeFailuresByProject(project.id);
+  check("probe_failures round-trips through the project index", failureAfter.some((f) => f.id === recordedFailure.id));
+
+  console.log("\nWiring contract — same catch/persist pattern used in run-live-perplexity-probes.ts and mvp-scan.ts");
+  {
+    process.env.PERPLEXITY_API_KEY = "test-key-not-real";
+    const project3 = await db.createProject({
+      domain: `m1-failure-wiring-${randomUUID()}.example`,
+      companyName: "M1 Failure Wiring Test Co",
+    });
+    const fakeFetch: typeof fetch = async () => new Response("service unavailable", { status: 503 });
+
+    try {
+      const live = await runPerplexityProbe({
+        prompt: "who should we use",
+        brandName: "Zypact",
+        fetchImpl: fakeFetch,
+      });
+      void live;
+      check("wiring test setup error: expected a throw", false);
+    } catch (err) {
+      if (err instanceof PerplexityProbeFailure) {
+        await db.recordProbeFailure({
+          projectId: project3.id,
+          platform: "perplexity",
+          prompt: "who should we use",
+          failureReason: err.reason,
+          providerHttpStatus: err.httpStatus,
+          providerErrorBody: err.errorBody,
+          providerErrorBodySha256: err.errorBodySha256,
+          providerLatencyMs: err.latencyMs,
+          providerRequestId: err.providerRequestId,
+          rawProbeRequestSha256: err.rawProbeRequestSha256,
+          fullRequestBodySha256: err.fullRequestBodySha256,
+          retryCount: 0,
+        });
+      }
+    }
+    const wiredFailures = await db.getProbeFailuresByProject(project3.id);
+    check("the wiring pattern persists exactly one failure row", wiredFailures.length === 1);
+    check("the persisted failure has the right HTTP status", wiredFailures[0]?.providerHttpStatus === 503);
+    delete process.env.PERPLEXITY_API_KEY;
+  }
 
   console.log("\nPre-M1 rows — no fabricated hash");
   const legacySaved = await db.saveProbeResult({
@@ -427,45 +704,45 @@ async function applicationLayerChecks(): Promise<void> {
 }
 
 console.log("\n─────────────────────────────────────────────────────────");
-console.log("THIS IS THE FIRST M1 TRANCHE — NOT A FULL M1 CLOSE-OUT.");
+console.log("THIS IS THE SECOND M1 TRANCHE — NOT A FULL M1 CLOSE-OUT.");
+console.log("");
+console.log(
+  "CLOSED BY 0037: raw_response_body/raw_response_body_sha256 now capture"
+);
+console.log(
+  "Perplexity's exact response bytes (not just the reconstructed"
+);
+console.log(
+  "transcript), and probe_failures now persists network/HTTP/empty-answer"
+);
+console.log("failures instead of only throwing an in-memory Error.");
 console.log("");
 console.log(
   "LIMITATION 1: Static SQL assertions do not prove PostgreSQL grant/revoke"
 );
 console.log(
-  "or CHECK-constraint enforcement. Whether service_role is actually"
+  "or CHECK-constraint enforcement. 0036 is confirmed applied to staging;"
 );
 console.log(
-  "blocked from UPDATE/DELETE on probe_results and analysis_llm_calls"
+  "0037 is NOT yet applied anywhere — its revokes remain unproven until"
 );
-console.log(
-  "remains unproven until this migration is applied to a real Postgres"
-);
-console.log("instance (staging) and the revoke is exercised against it.");
+console.log("it is applied to a real Postgres instance (staging).");
 console.log("");
 console.log(
-  "LIMITATION 2: raw_response_sha256 hashes a reconstructed transcript,"
+  "LIMITATION 2 (STILL OPEN): analysis_llm_calls is wired for the"
 );
 console.log(
-  "not Perplexity's raw JSON response body. Byte-for-byte capture of the"
+  "probe-analysis stage only. Mirror Profile, Competitor Discovery, Gap"
 );
-console.log("true raw response is still open work.");
+console.log("Map, Fix Brief, and QA are not yet traced.");
 console.log("");
 console.log(
-  "LIMITATION 3: a failed Perplexity attempt is never persisted — no"
+  "LIMITATION 3 (STILL OPEN): probe_failures.probe_run_id is always null"
 );
 console.log(
-  "probe_results row, no failure metadata. Denominator reconciliation of"
+  "for a first-call failure — no probe_runs row exists yet at that point"
 );
-console.log("failed/excluded attempts is not yet met.");
-console.log("");
-console.log(
-  "LIMITATION 4: analysis_llm_calls is wired for the probe-analysis stage"
-);
-console.log(
-  "only. Mirror Profile, Competitor Discovery, Gap Map, Fix Brief, and QA"
-);
-console.log("are not yet traced.");
+console.log("in the pipeline. Linking failures to a run is future work.");
 console.log("─────────────────────────────────────────────────────────");
 
 applicationLayerChecks()

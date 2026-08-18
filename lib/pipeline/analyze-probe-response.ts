@@ -43,6 +43,8 @@ export interface AnalyzeProbeResponseInput {
   probeMode?: ProbeMode;
   /** M1 evidence contract — Perplexity evidence metadata, present only for live calls. */
   rawResponseSha256?: string;
+  rawResponseBody?: string;
+  rawResponseBodySha256?: string;
   rawProbeRequestSha256?: string;
   fullRequestBodySha256?: string;
   providerHttpStatus?: number;
@@ -206,6 +208,8 @@ export async function analyzeProbeResponse(
             ? "The brand was cited as a source or omitted, but was not recommended as a product/tool."
             : agent.output.whyClientLost,
       rawResponseSha256: input.rawResponseSha256,
+      rawResponseBody: input.rawResponseBody,
+      rawResponseBodySha256: input.rawResponseBodySha256,
       rawProbeRequestSha256: input.rawProbeRequestSha256,
       fullRequestBodySha256: input.fullRequestBodySha256,
       providerHttpStatus: input.providerHttpStatus,

@@ -14,14 +14,11 @@ export interface PerplexityProbeResult {
   prompt: string;
   answer: string;
   /**
-   * KNOWN M1 LIMITATION (first tranche, not yet closed): this is a
-   * reconstructed transcript — `answer` + citations + search results,
-   * formatted by `buildRawTranscript` — NOT the raw JSON response body
-   * Perplexity actually returned. `rawResponseSha256` hashes this
-   * transcript, so it proves the transcript hasn't been altered since it
-   * was built, but it does not prove byte-for-byte fidelity to
-   * Perplexity's original response. Capturing the true raw response body
-   * (e.g. the exact `res.text()`/`res.json()` bytes) is still open work.
+   * A reconstructed transcript — `answer` + citations + search results,
+   * formatted by `buildRawTranscript` — kept for backward-compatible
+   * display/report use. NOT Perplexity's raw JSON response body; use
+   * `rawResponseBody`/`rawResponseBodySha256` for that (M1 second
+   * tranche).
    */
   rawResponse: string;
   /** Sprint 13C — exact buyer prompt sent to Perplexity, persisted for audit. */
@@ -32,12 +29,19 @@ export interface PerplexityProbeResult {
   model: string;
   usedMock: boolean;
   /**
-   * M1 evidence contract — SHA-256 of `rawResponse`. Absent for mock
-   * calls. See the KNOWN M1 LIMITATION note on `rawResponse` above: this
-   * hashes the reconstructed transcript, not Perplexity's raw response
-   * bytes.
+   * M1 evidence contract — SHA-256 of `rawResponse` (the reconstructed
+   * transcript, not the raw response body). Absent for mock calls.
    */
   rawResponseSha256?: string;
+  /**
+   * M1 evidence contract, second tranche — the exact response body text
+   * as received from Perplexity (`res.text()`, captured before
+   * `JSON.parse`). This is the true raw response; `rawResponse` above is
+   * a derived transcript. Absent for mock calls.
+   */
+  rawResponseBody?: string;
+  /** M1 evidence contract, second tranche — SHA-256 of `rawResponseBody`. Absent for mock calls. */
+  rawResponseBodySha256?: string;
   /**
    * M1 evidence contract — SHA-256 of `rawProbeRequest` ONLY, i.e. the
    * trimmed buyer-question text sent as the user message. This is NOT a
@@ -69,6 +73,55 @@ export interface RunPerplexityProbeInput {
   /** Unit-test only. When supplied, no network call is made. */
   mockResponse?: PerplexityProbeResult;
   fetchImpl?: typeof fetch;
+}
+
+export type PerplexityProbeFailureReason =
+  | "network_error"
+  | "http_error"
+  | "empty_answer";
+
+/**
+ * M1 evidence contract, second tranche — thrown instead of a plain `Error`
+ * for every live-call failure path (network failure, non-2xx status,
+ * empty answer), carrying the structured evidence a caller needs to
+ * persist the failed attempt via `db.recordProbeFailure`. Callers that
+ * only `catch` and read `.message` see identical behavior to before;
+ * `instanceof PerplexityProbeFailure` opts in to the extra fields.
+ */
+export class PerplexityProbeFailure extends Error {
+  readonly reason: PerplexityProbeFailureReason;
+  readonly httpStatus: number | null;
+  readonly errorBody: string | null;
+  readonly errorBodySha256: string | null;
+  readonly latencyMs: number | null;
+  readonly providerRequestId: string | null;
+  readonly rawProbeRequestSha256: string;
+  readonly fullRequestBodySha256: string;
+
+  constructor(
+    message: string,
+    fields: {
+      reason: PerplexityProbeFailureReason;
+      httpStatus: number | null;
+      errorBody: string | null;
+      errorBodySha256: string | null;
+      latencyMs: number | null;
+      providerRequestId: string | null;
+      rawProbeRequestSha256: string;
+      fullRequestBodySha256: string;
+    }
+  ) {
+    super(message);
+    this.name = "PerplexityProbeFailure";
+    this.reason = fields.reason;
+    this.httpStatus = fields.httpStatus;
+    this.errorBody = fields.errorBody;
+    this.errorBodySha256 = fields.errorBodySha256;
+    this.latencyMs = fields.latencyMs;
+    this.providerRequestId = fields.providerRequestId;
+    this.rawProbeRequestSha256 = fields.rawProbeRequestSha256;
+    this.fullRequestBodySha256 = fields.fullRequestBodySha256;
+  }
 }
 
 function classifySource(source: string): SourceType {
@@ -191,35 +244,74 @@ export async function runPerplexityProbe(
   // Serialized once and reused for both the outbound call and the hash, so
   // the hash is guaranteed byte-identical to what actually went on the wire.
   const requestBodyJson = JSON.stringify(body);
+  const rawProbeRequestSha256 = sha256Hex(rawProbeRequest);
+  const fullRequestBodySha256 = sha256Hex(requestBodyJson);
 
   const startedAt = Date.now();
-  const res = await fetcher("https://api.perplexity.ai/v1/sonar", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${apiKey}`,
-    },
-    body: requestBodyJson,
-  });
+  let res: Response;
+  try {
+    res = await fetcher("https://api.perplexity.ai/v1/sonar", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiKey}`,
+      },
+      body: requestBodyJson,
+    });
+  } catch (networkErr) {
+    throw new PerplexityProbeFailure(
+      `Perplexity network error: ${
+        networkErr instanceof Error ? networkErr.message : String(networkErr)
+      }`,
+      {
+        reason: "network_error",
+        httpStatus: null,
+        errorBody: null,
+        errorBodySha256: null,
+        latencyMs: Date.now() - startedAt,
+        providerRequestId: null,
+        rawProbeRequestSha256,
+        fullRequestBodySha256,
+      }
+    );
+  }
   const latencyMs = Date.now() - startedAt;
   const providerRequestId =
     res.headers.get("x-request-id") ?? res.headers.get("x-amzn-requestid") ?? null;
 
   if (!res.ok) {
-    // KNOWN M1 LIMITATION (first tranche, not yet closed): a failed
-    // Perplexity attempt (non-2xx status, or the empty-answer case below)
-    // is thrown here and never reaches `saveProbeResult` — no
-    // `probe_results` row, no evidence row, no failure metadata is
-    // persisted for it. METHODOLOGY.md requires failed/excluded attempts
-    // to remain visible in denominator reconciliation; that requirement
-    // is not yet met. The caller only sees an in-memory Error.
     const err = await res.text();
-    throw new Error(`Perplexity ${res.status}: ${err.slice(0, 500)}`);
+    throw new PerplexityProbeFailure(`Perplexity ${res.status}: ${err.slice(0, 500)}`, {
+      reason: "http_error",
+      httpStatus: res.status,
+      errorBody: err,
+      errorBodySha256: sha256Hex(err),
+      latencyMs,
+      providerRequestId,
+      rawProbeRequestSha256,
+      fullRequestBodySha256,
+    });
   }
 
-  const json = (await res.json()) as PerplexityApiResponse;
+  // Captured once as exact text, then parsed from that same string — so
+  // `rawResponseBody`/`rawResponseBodySha256` are guaranteed byte-identical
+  // to what Perplexity actually sent, never a second independent read.
+  const rawResponseBody = await res.text();
+  const rawResponseBodySha256 = sha256Hex(rawResponseBody);
+  const json = JSON.parse(rawResponseBody) as PerplexityApiResponse;
   const answer = json.choices?.[0]?.message?.content?.trim() ?? "";
-  if (!answer) throw new Error("Perplexity returned an empty answer.");
+  if (!answer) {
+    throw new PerplexityProbeFailure("Perplexity returned an empty answer.", {
+      reason: "empty_answer",
+      httpStatus: res.status,
+      errorBody: rawResponseBody.slice(0, 500),
+      errorBodySha256: rawResponseBodySha256,
+      latencyMs,
+      providerRequestId,
+      rawProbeRequestSha256,
+      fullRequestBodySha256,
+    });
+  }
 
   const citations = uniqueStrings((json.citations ?? []).map(normalizeUrl));
   const searchResults = Array.isArray(json.search_results) ? json.search_results : [];
@@ -237,8 +329,10 @@ export async function runPerplexityProbe(
     model: json.model || model,
     usedMock: false,
     rawResponseSha256: sha256Hex(rawResponse),
-    rawProbeRequestSha256: sha256Hex(rawProbeRequest),
-    fullRequestBodySha256: sha256Hex(requestBodyJson),
+    rawResponseBody,
+    rawResponseBodySha256,
+    rawProbeRequestSha256,
+    fullRequestBodySha256,
     httpStatus: res.status,
     latencyMs,
     providerRequestId,

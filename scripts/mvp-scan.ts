@@ -24,7 +24,7 @@ import type {
 import { runMirrorScan } from "@/lib/pipeline/run-mirror-scan";
 import { generateBuyerPrompts } from "@/lib/pipeline/generate-buyer-prompts";
 import { getOrCreateEvidenceBank } from "@/lib/pipeline/get-or-create-evidence-bank";
-import { runPerplexityProbe } from "@/lib/probes/perplexity";
+import { PerplexityProbeFailure, runPerplexityProbe } from "@/lib/probes/perplexity";
 import { analyzeProbeResponse } from "@/lib/pipeline/analyze-probe-response";
 import { discoverCompetitors } from "@/lib/pipeline/discover-competitors";
 import {
@@ -580,7 +580,29 @@ async function runMissingProbes(args: Args, project: Project, promptTargets: Gen
       // to return; that is the bounded waste the policy accepts.
       assertLeaseOwnership();
 
-      const live = await runPerplexityProbe({ prompt: prompt.prompt, brandName, domain: project.domain });
+      let live;
+      try {
+        live = await runPerplexityProbe({ prompt: prompt.prompt, brandName, domain: project.domain });
+      } catch (err) {
+        if (err instanceof PerplexityProbeFailure) {
+          // M1 second tranche — persist the failed attempt before it propagates.
+          await db.recordProbeFailure({
+            projectId: project.id,
+            platform: "perplexity",
+            prompt: prompt.prompt,
+            failureReason: err.reason,
+            providerHttpStatus: err.httpStatus,
+            providerErrorBody: err.errorBody,
+            providerErrorBodySha256: err.errorBodySha256,
+            providerLatencyMs: err.latencyMs,
+            providerRequestId: err.providerRequestId,
+            rawProbeRequestSha256: err.rawProbeRequestSha256,
+            fullRequestBodySha256: err.fullRequestBodySha256,
+            retryCount: 0,
+          });
+        }
+        throw err;
+      }
       usedMock = usedMock || live.usedMock;
       if (probeRequestLeaksClientIdentity({
         rawRequest: live.rawProbeRequest ?? prompt.prompt,
@@ -601,6 +623,8 @@ async function runMissingProbes(args: Args, project: Project, promptTargets: Gen
         knownCompetitors,
         probeMode: "live_perplexity",
         rawResponseSha256: live.rawResponseSha256,
+        rawResponseBody: live.rawResponseBody,
+        rawResponseBodySha256: live.rawResponseBodySha256,
         rawProbeRequestSha256: live.rawProbeRequestSha256,
         fullRequestBodySha256: live.fullRequestBodySha256,
         providerHttpStatus: live.httpStatus,

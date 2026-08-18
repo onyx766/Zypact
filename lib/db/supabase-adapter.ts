@@ -27,6 +27,7 @@ import type {
   GeneratedPrompt,
   GeneratedPromptInput,
   MirrorProfileRow,
+  ProbeFailure,
   ProbeMode,
   ProbeResult,
   ProbeRun,
@@ -34,6 +35,7 @@ import type {
   Project,
   QaReportRow,
   QaReportRowInput,
+  RecordProbeFailureInput,
   SaveProbeResultInput,
   SaveSnapshotReportArtifactInput,
   SnapshotReportArtifact,
@@ -307,6 +309,8 @@ interface ProbeResultDbRow {
   verdict: string;
   why_client_lost: string;
   raw_response_sha256?: string | null;
+  raw_response_body?: string | null;
+  raw_response_body_sha256?: string | null;
   raw_probe_request_sha256?: string | null;
   full_request_body_sha256?: string | null;
   provider_http_status?: number | null;
@@ -315,6 +319,52 @@ interface ProbeResultDbRow {
   provider_model?: string | null;
   retry_count?: number | null;
   created_at: string;
+}
+
+interface ProbeFailureDbRow {
+  id: string;
+  probe_run_id: string | null;
+  project_id: string;
+  platform: string;
+  prompt: string;
+  failure_reason: string;
+  provider_http_status: number | null;
+  provider_error_body: string | null;
+  provider_error_body_sha256: string | null;
+  provider_latency_ms: number | null;
+  provider_request_id: string | null;
+  raw_probe_request_sha256: string | null;
+  full_request_body_sha256: string | null;
+  retry_count: number;
+  created_at: string;
+}
+
+function coerceProbeFailureReason(
+  value: string
+): ProbeFailure["failureReason"] {
+  return value === "network_error" || value === "http_error" || value === "empty_answer"
+    ? value
+    : "http_error";
+}
+
+function mapProbeFailure(r: ProbeFailureDbRow): ProbeFailure {
+  return {
+    id: r.id,
+    probeRunId: r.probe_run_id,
+    projectId: r.project_id,
+    platform: r.platform,
+    prompt: r.prompt,
+    failureReason: coerceProbeFailureReason(r.failure_reason),
+    providerHttpStatus: r.provider_http_status,
+    providerErrorBody: r.provider_error_body,
+    providerErrorBodySha256: r.provider_error_body_sha256,
+    providerLatencyMs: r.provider_latency_ms,
+    providerRequestId: r.provider_request_id,
+    rawProbeRequestSha256: r.raw_probe_request_sha256,
+    fullRequestBodySha256: r.full_request_body_sha256,
+    retryCount: r.retry_count,
+    createdAt: r.created_at,
+  };
 }
 
 interface AnalysisLlmCallDbRow {
@@ -723,6 +773,8 @@ function mapProbeResult(r: ProbeResultDbRow): ProbeResult {
     verdict: r.verdict,
     whyClientLost: r.why_client_lost,
     rawResponseSha256: r.raw_response_sha256 ?? null,
+    rawResponseBody: r.raw_response_body ?? null,
+    rawResponseBodySha256: r.raw_response_body_sha256 ?? null,
     rawProbeRequestSha256: r.raw_probe_request_sha256 ?? null,
     fullRequestBodySha256: r.full_request_body_sha256 ?? null,
     providerHttpStatus: r.provider_http_status ?? null,
@@ -1488,6 +1540,8 @@ export const supabaseAdapter: DbAdapter = {
         verdict: input.verdict,
         why_client_lost: input.whyClientLost,
         raw_response_sha256: input.rawResponseSha256 ?? null,
+        raw_response_body: input.rawResponseBody ?? null,
+        raw_response_body_sha256: input.rawResponseBodySha256 ?? null,
         raw_probe_request_sha256: input.rawProbeRequestSha256 ?? null,
         full_request_body_sha256: input.fullRequestBodySha256 ?? null,
         provider_http_status: input.providerHttpStatus ?? null,
@@ -1555,6 +1609,44 @@ export const supabaseAdapter: DbAdapter = {
       .order("created_at", { ascending: false });
     if (error) throw error;
     return (data ?? []).map((r) => mapAnalysisLlmCall(r as AnalysisLlmCallDbRow));
+  },
+
+  async recordProbeFailure(
+    input: RecordProbeFailureInput
+  ): Promise<ProbeFailure> {
+    const { data, error } = await getClient()
+      .from("probe_failures")
+      .insert({
+        probe_run_id: input.probeRunId ?? null,
+        project_id: input.projectId,
+        platform: input.platform,
+        prompt: input.prompt,
+        failure_reason: input.failureReason,
+        provider_http_status: input.providerHttpStatus ?? null,
+        provider_error_body: input.providerErrorBody ?? null,
+        provider_error_body_sha256: input.providerErrorBodySha256 ?? null,
+        provider_latency_ms: input.providerLatencyMs ?? null,
+        provider_request_id: input.providerRequestId ?? null,
+        raw_probe_request_sha256: input.rawProbeRequestSha256 ?? null,
+        full_request_body_sha256: input.fullRequestBodySha256 ?? null,
+        retry_count: input.retryCount ?? 0,
+      })
+      .select("*")
+      .single<ProbeFailureDbRow>();
+    if (error || !data) throw error ?? new Error("recordProbeFailure failed");
+    return mapProbeFailure(data);
+  },
+
+  async getProbeFailuresByProject(
+    projectId: string
+  ): Promise<ProbeFailure[]> {
+    const { data, error } = await getClient()
+      .from("probe_failures")
+      .select("*")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return (data ?? []).map((r) => mapProbeFailure(r as ProbeFailureDbRow));
   },
 
   async replaceCompetitorsForProject(

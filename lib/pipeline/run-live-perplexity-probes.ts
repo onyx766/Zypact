@@ -1,7 +1,7 @@
 import { getDb } from "@/lib/db";
 import type { GeneratedPrompt, ProbeResult } from "@/lib/db/types";
 import { chooseCommercialPromptRows } from "@/lib/prompts/commercial-selection";
-import { runPerplexityProbe } from "@/lib/probes/perplexity";
+import { PerplexityProbeFailure, runPerplexityProbe } from "@/lib/probes/perplexity";
 import { analyzeProbeResponse } from "@/lib/pipeline/analyze-probe-response";
 import { SiteReaderOutputSchema } from "@/lib/schemas/site-reader.schema";
 import { probeRequestLeaksClientIdentity } from "@/lib/probe-analysis/product-recommendation";
@@ -103,11 +103,37 @@ export async function runLivePerplexityProbes(
 
   for (const prompt of promptTargets) {
     for (let runIndex = 0; runIndex < runsPerPrompt; runIndex += 1) {
-      const live = await runPerplexityProbe({
-        prompt: prompt.prompt,
-        brandName,
-        domain: project.domain,
-      });
+      let live;
+      try {
+        live = await runPerplexityProbe({
+          prompt: prompt.prompt,
+          brandName,
+          domain: project.domain,
+        });
+      } catch (err) {
+        if (err instanceof PerplexityProbeFailure) {
+          // M1 second tranche — persist the failed attempt as evidence
+          // before it propagates. `probeRunId` is omitted: no
+          // `probe_runs` row exists yet at this point (it is only
+          // created once `analyzeProbeResponse` starts, which requires a
+          // successful probe answer).
+          await db.recordProbeFailure({
+            projectId: input.projectId,
+            platform: "perplexity",
+            prompt: prompt.prompt,
+            failureReason: err.reason,
+            providerHttpStatus: err.httpStatus,
+            providerErrorBody: err.errorBody,
+            providerErrorBodySha256: err.errorBodySha256,
+            providerLatencyMs: err.latencyMs,
+            providerRequestId: err.providerRequestId,
+            rawProbeRequestSha256: err.rawProbeRequestSha256,
+            fullRequestBodySha256: err.fullRequestBodySha256,
+            retryCount: 0,
+          });
+        }
+        throw err;
+      }
       usedMock = usedMock || live.usedMock;
       rawClientMentionedSomewhere = rawClientMentionedSomewhere || includesAnyTerm(live.rawResponse, terms);
 
@@ -135,6 +161,8 @@ export async function runLivePerplexityProbes(
         knownCompetitors,
         probeMode: "live_perplexity",
         rawResponseSha256: live.rawResponseSha256,
+        rawResponseBody: live.rawResponseBody,
+        rawResponseBodySha256: live.rawResponseBodySha256,
         rawProbeRequestSha256: live.rawProbeRequestSha256,
         fullRequestBodySha256: live.fullRequestBodySha256,
         providerHttpStatus: live.httpStatus,

@@ -46,12 +46,11 @@ function MetricCard({
 export default async function PublicReportPage({
   params,
 }: {
-  params: {
+  params: Promise<{
     secureToken: string;
-  };
+  }>;
 }) {
-  const secureToken =
-    params.secureToken;
+  const { secureToken } = await params;
 
   if (
     !isValidPublicReportToken(

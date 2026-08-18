@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 interface PageProps {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 const cell: React.CSSProperties = {
@@ -48,12 +48,13 @@ function qaStatusColor(s: string): string {
 }
 
 export default async function QaPage({ params }: PageProps) {
+  const { id } = await params;
   const db = getDb();
   const [project, assets, bankRow, allReports] = await Promise.all([
-    db.getProject(params.id),
-    db.getGeneratedAssetsByProject(params.id),
-    db.getEvidenceBankByProject(params.id),
-    db.getQaReportsByProject(params.id),
+    db.getProject(id),
+    db.getGeneratedAssetsByProject(id),
+    db.getEvidenceBankByProject(id),
+    db.getQaReportsByProject(id),
   ]);
 
   if (!project) {
@@ -89,21 +90,21 @@ export default async function QaPage({ params }: PageProps) {
     <div>
       <h1>QA</h1>
       <p>
-        <Link href={`/projects/${params.id}/mirror`}>Mirror Profile</Link>{" "}
+        <Link href={`/projects/${id}/mirror`}>Mirror Profile</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/prompts`}>Buyer prompts</Link>{" "}
+        <Link href={`/projects/${id}/prompts`}>Buyer prompts</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/probe`}>Manual Probe</Link>{" "}
+        <Link href={`/projects/${id}/probe`}>Manual Probe</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/competitors`}>Competitors</Link>{" "}
+        <Link href={`/projects/${id}/competitors`}>Competitors</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/gap-map`}>Gap Matrix</Link>{" "}
+        <Link href={`/projects/${id}/gap-map`}>Gap Matrix</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/evidence-bank`}>Evidence Bank</Link>{" "}
+        <Link href={`/projects/${id}/evidence-bank`}>Evidence Bank</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/fix-briefs`}>Fix Briefs</Link>{" "}
+        <Link href={`/projects/${id}/fix-briefs`}>Fix Briefs</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/assets`}>Generated assets</Link>
+        <Link href={`/projects/${id}/assets`}>Generated assets</Link>
       </p>
 
       <div className="section">
@@ -131,7 +132,7 @@ export default async function QaPage({ params }: PageProps) {
       {!bank && (
         <p className="error">
           Prepare the Evidence Bank before running QA.{" "}
-          <Link href={`/projects/${params.id}/evidence-bank`}>
+          <Link href={`/projects/${id}/evidence-bank`}>
             Open Evidence Bank →
           </Link>
         </p>
@@ -140,7 +141,7 @@ export default async function QaPage({ params }: PageProps) {
         <p className="error">
           The Evidence Bank exists but is missing a product description or
           features, or has fewer than three forbidden claims. Fix that first.{" "}
-          <Link href={`/projects/${params.id}/evidence-bank`}>
+          <Link href={`/projects/${id}/evidence-bank`}>
             Open Evidence Bank →
           </Link>
         </p>
@@ -148,7 +149,7 @@ export default async function QaPage({ params }: PageProps) {
       {assets.length === 0 && (
         <p className="error">
           Generate at least one asset before running QA.{" "}
-          <Link href={`/projects/${params.id}/assets`}>
+          <Link href={`/projects/${id}/assets`}>
             Open Generated assets →
           </Link>
         </p>

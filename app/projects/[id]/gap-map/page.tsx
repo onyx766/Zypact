@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 interface PageProps {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 function heatColor(score: number): string {
@@ -23,13 +23,14 @@ function heatColor(score: number): string {
 }
 
 export default async function GapMapPage({ params }: PageProps) {
+  const { id } = await params;
   const db = getDb();
   const [project, probeResults, competitors, gapMapRow, gaps] = await Promise.all([
-    db.getProject(params.id),
-    db.getProbeResultsByProject(params.id),
-    db.getCompetitorsByProject(params.id),
-    db.getLatestGapMap(params.id),
-    db.getGapsByProject(params.id),
+    db.getProject(id),
+    db.getProbeResultsByProject(id),
+    db.getCompetitorsByProject(id),
+    db.getLatestGapMap(id),
+    db.getGapsByProject(id),
   ]);
 
   if (!project) {
@@ -56,19 +57,19 @@ export default async function GapMapPage({ params }: PageProps) {
     <div>
       <h1>Gap Matrix</h1>
       <p>
-        <Link href={`/projects/${params.id}/mirror`}>Mirror Profile</Link>{" "}
+        <Link href={`/projects/${id}/mirror`}>Mirror Profile</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/prompts`}>Buyer prompts</Link>{" "}
+        <Link href={`/projects/${id}/prompts`}>Buyer prompts</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/probe`}>Manual Probe</Link>{" "}
+        <Link href={`/projects/${id}/probe`}>Manual Probe</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/lost-prompts`}>Lost / partial</Link>{" "}
+        <Link href={`/projects/${id}/lost-prompts`}>Lost / partial</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/competitors`}>Competitors</Link>{" "}
+        <Link href={`/projects/${id}/competitors`}>Competitors</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/evidence-bank`}>Evidence Bank</Link>{" "}
+        <Link href={`/projects/${id}/evidence-bank`}>Evidence Bank</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/fix-briefs`}>Fix Briefs →</Link>
+        <Link href={`/projects/${id}/fix-briefs`}>Fix Briefs →</Link>
       </p>
 
       <div className="section">

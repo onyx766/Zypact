@@ -6,7 +6,7 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
  * link is a CSRF footgun.
  */
 export async function POST(request: NextRequest) {
-  const supabase = getSupabaseServerClient();
+  const supabase = await getSupabaseServerClient();
   await supabase.auth.signOut();
   return NextResponse.redirect(new URL("/login", request.url), { status: 303 });
 }

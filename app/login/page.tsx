@@ -11,14 +11,15 @@ export const dynamic = "force-dynamic";
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: {
+  searchParams: Promise<{
     sent?: string;
     error?: string;
     next?: string;
-  };
+  }>;
 }) {
+  const resolvedSearchParams = await searchParams;
   const next = safeNextPath(
-    searchParams.next,
+    resolvedSearchParams.next,
     FOUNDER_ADMIN_PATH
   );
 
@@ -28,10 +29,10 @@ export default async function LoginPage({
     redirect(next);
   }
 
-  const sent = searchParams.sent === "1";
+  const sent = resolvedSearchParams.sent === "1";
   const errorMsg =
-    typeof searchParams.error === "string"
-      ? searchParams.error
+    typeof resolvedSearchParams.error === "string"
+      ? resolvedSearchParams.error
       : null;
 
   return (

@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 interface PageProps {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 function threatRank(t: string): number {
@@ -14,11 +14,12 @@ function threatRank(t: string): number {
 }
 
 export default async function CompetitorsPage({ params }: PageProps) {
+  const { id } = await params;
   const db = getDb();
   const [project, competitors, probeResults] = await Promise.all([
-    db.getProject(params.id),
-    db.getCompetitorsByProject(params.id),
-    db.getProbeResultsByProject(params.id),
+    db.getProject(id),
+    db.getCompetitorsByProject(id),
+    db.getProbeResultsByProject(id),
   ]);
 
   if (!project) {
@@ -44,15 +45,15 @@ export default async function CompetitorsPage({ params }: PageProps) {
     <div>
       <h1>Competitors</h1>
       <p>
-        <Link href={`/projects/${params.id}/mirror`}>Mirror Profile</Link>{" "}
+        <Link href={`/projects/${id}/mirror`}>Mirror Profile</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/prompts`}>Buyer prompts</Link>{" "}
+        <Link href={`/projects/${id}/prompts`}>Buyer prompts</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/probe`}>Manual Probe</Link>{" "}
+        <Link href={`/projects/${id}/probe`}>Manual Probe</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/lost-prompts`}>Lost / partial</Link>{" "}
+        <Link href={`/projects/${id}/lost-prompts`}>Lost / partial</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/gap-map`}>Gap Matrix →</Link>
+        <Link href={`/projects/${id}/gap-map`}>Gap Matrix →</Link>
       </p>
 
       <div className="section">
@@ -74,7 +75,7 @@ export default async function CompetitorsPage({ params }: PageProps) {
           {probeResults.length === 0 && (
             <>
               {" "}Analyze at least one probe response on the{" "}
-              <Link href={`/projects/${params.id}/probe`}>Manual Probe</Link> page
+              <Link href={`/projects/${id}/probe`}>Manual Probe</Link> page
               first.
             </>
           )}

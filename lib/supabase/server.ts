@@ -32,7 +32,7 @@ export function __setSupabaseServerClientForTests(
   __testOverride = client;
 }
 
-export function getSupabaseServerClient(): SupabaseClient {
+export async function getSupabaseServerClient(): Promise<SupabaseClient> {
   if (__testOverride) return __testOverride;
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -42,7 +42,7 @@ export function getSupabaseServerClient(): SupabaseClient {
     );
   }
 
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
 
   return createServerClient(url, anonKey, {
     cookies: {

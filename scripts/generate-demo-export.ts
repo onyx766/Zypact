@@ -89,7 +89,7 @@ async function main(): Promise<void> {
     "@/app/api/projects/[projectId]/export/route"
   );
   const req = new Request(`http://localhost/api/projects/${projectId}/export`);
-  const res = await GET(req, { params: { projectId } });
+  const res = await GET(req, { params: Promise.resolve({ projectId }) });
 
   const status = res.status;
   const contentType = res.headers.get("content-type") ?? "";

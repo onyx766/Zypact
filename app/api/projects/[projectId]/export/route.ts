@@ -36,7 +36,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 interface RouteContext {
-  params: { projectId: string };
+  params: Promise<{ projectId: string }>;
 }
 
 /**
@@ -64,7 +64,7 @@ function collectSensitiveEnvValues(): string[] {
 }
 
 export async function GET(_req: Request, { params }: RouteContext) {
-  const projectId = params.projectId;
+  const { projectId } = await params;
   if (typeof projectId !== "string" || projectId.trim().length === 0) {
     return NextResponse.json(
       { ok: false, error: "projectId is required" },

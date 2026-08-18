@@ -91,7 +91,7 @@ const call = (h: any, body: unknown) =>
   h(new Request("http://local/send", {
     method: "POST", body: JSON.stringify(body),
     headers: { "content-type": "application/json" },
-  }), { params: { requestId: REQ } });
+  }), { params: Promise.resolve({ requestId: REQ }) });
 const VALID = { expectedArtifactId: ART, expectedRevision: REV };
 
 async function main(): Promise<void> {

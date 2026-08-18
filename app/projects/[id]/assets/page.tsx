@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 interface PageProps {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 const cell: React.CSSProperties = {
@@ -19,12 +19,13 @@ const cell: React.CSSProperties = {
 };
 
 export default async function AssetsPage({ params }: PageProps) {
+  const { id } = await params;
   const db = getDb();
   const [project, fixBriefs, bankRow, assets] = await Promise.all([
-    db.getProject(params.id),
-    db.getFixBriefsByProject(params.id),
-    db.getEvidenceBankByProject(params.id),
-    db.getGeneratedAssetsByProject(params.id),
+    db.getProject(id),
+    db.getFixBriefsByProject(id),
+    db.getEvidenceBankByProject(id),
+    db.getGeneratedAssetsByProject(id),
   ]);
 
   if (!project) {
@@ -58,21 +59,21 @@ export default async function AssetsPage({ params }: PageProps) {
     <div>
       <h1>Generated assets</h1>
       <p>
-        <Link href={`/projects/${params.id}/mirror`}>Mirror Profile</Link>{" "}
+        <Link href={`/projects/${id}/mirror`}>Mirror Profile</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/prompts`}>Buyer prompts</Link>{" "}
+        <Link href={`/projects/${id}/prompts`}>Buyer prompts</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/probe`}>Manual Probe</Link>{" "}
+        <Link href={`/projects/${id}/probe`}>Manual Probe</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/competitors`}>Competitors</Link>{" "}
+        <Link href={`/projects/${id}/competitors`}>Competitors</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/gap-map`}>Gap Matrix</Link>{" "}
+        <Link href={`/projects/${id}/gap-map`}>Gap Matrix</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/evidence-bank`}>Evidence Bank</Link>{" "}
+        <Link href={`/projects/${id}/evidence-bank`}>Evidence Bank</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/fix-briefs`}>Fix Briefs</Link>{" "}
+        <Link href={`/projects/${id}/fix-briefs`}>Fix Briefs</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/qa`}>QA</Link>
+        <Link href={`/projects/${id}/qa`}>QA</Link>
       </p>
 
       <div className="section">
@@ -100,7 +101,7 @@ export default async function AssetsPage({ params }: PageProps) {
       {!bank && (
         <p className="error">
           Prepare the Evidence Bank before generating assets.{" "}
-          <Link href={`/projects/${params.id}/evidence-bank`}>
+          <Link href={`/projects/${id}/evidence-bank`}>
             Open Evidence Bank →
           </Link>
         </p>
@@ -109,7 +110,7 @@ export default async function AssetsPage({ params }: PageProps) {
         <p className="error">
           The Evidence Bank exists but is missing a product description or
           features, or has fewer than three forbidden claims. Fix that first.{" "}
-          <Link href={`/projects/${params.id}/evidence-bank`}>
+          <Link href={`/projects/${id}/evidence-bank`}>
             Open Evidence Bank →
           </Link>
         </p>
@@ -117,7 +118,7 @@ export default async function AssetsPage({ params }: PageProps) {
       {fixBriefs.length === 0 && (
         <p className="error">
           Generate a Fix Brief before generating assets.{" "}
-          <Link href={`/projects/${params.id}/fix-briefs`}>
+          <Link href={`/projects/${id}/fix-briefs`}>
             Open Fix Briefs →
           </Link>
         </p>

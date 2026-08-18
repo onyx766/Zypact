@@ -7,12 +7,13 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 interface PageProps {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 export default async function EvidenceBankPage({ params }: PageProps) {
+  const { id } = await params;
   const db = getDb();
-  const project = await db.getProject(params.id);
+  const project = await db.getProject(id);
   if (!project) {
     return (
       <div>
@@ -26,15 +27,15 @@ export default async function EvidenceBankPage({ params }: PageProps) {
   }
 
   const [result, fixBriefs] = await Promise.all([
-    getOrCreateEvidenceBank(params.id),
-    db.getFixBriefsByProject(params.id),
+    getOrCreateEvidenceBank(id),
+    db.getFixBriefsByProject(id),
   ]);
   if (!result.ok) {
     return (
       <div>
         <h1>Evidence Bank</h1>
         <p>
-          <Link href={`/projects/${params.id}/mirror`}>← Mirror Profile</Link>
+          <Link href={`/projects/${id}/mirror`}>← Mirror Profile</Link>
         </p>
         <p className="error">Could not load Evidence Bank: {result.error}</p>
       </div>
@@ -47,22 +48,22 @@ export default async function EvidenceBankPage({ params }: PageProps) {
     <div>
       <h1>Evidence Bank</h1>
       <p>
-        <Link href={`/projects/${params.id}/mirror`}>Mirror Profile</Link>{" "}
+        <Link href={`/projects/${id}/mirror`}>Mirror Profile</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/prompts`}>Buyer prompts</Link>{" "}
+        <Link href={`/projects/${id}/prompts`}>Buyer prompts</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/probe`}>Manual Probe</Link>{" "}
+        <Link href={`/projects/${id}/probe`}>Manual Probe</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/competitors`}>Competitors</Link>{" "}
+        <Link href={`/projects/${id}/competitors`}>Competitors</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/gap-map`}>Gap Matrix</Link>{" "}
+        <Link href={`/projects/${id}/gap-map`}>Gap Matrix</Link>{" "}
         <span style={{ margin: "0 8px" }}>·</span>{" "}
-        <Link href={`/projects/${params.id}/fix-briefs`}>Fix Briefs</Link>
+        <Link href={`/projects/${id}/fix-briefs`}>Fix Briefs</Link>
         {hasFixBriefs && (
           <>
             {" "}
             <span style={{ margin: "0 8px" }}>·</span>{" "}
-            <Link href={`/projects/${params.id}/assets`}>
+            <Link href={`/projects/${id}/assets`}>
               Generated assets →
             </Link>
           </>

@@ -181,12 +181,11 @@ function ReportPreview({
 export default async function SnapshotRequestDetailPage({
   params,
 }: {
-  params: {
+  params: Promise<{
     requestId: string;
-  };
+  }>;
 }) {
-  const requestId =
-    params.requestId;
+  const { requestId } = await params;
 
   if (!UUID_PATTERN.test(requestId)) {
     notFound();

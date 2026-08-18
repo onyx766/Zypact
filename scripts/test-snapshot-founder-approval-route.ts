@@ -85,9 +85,9 @@ async function main() {
         }
       ),
       {
-        params: {
+        params: Promise.resolve({
           requestId,
-        },
+        }),
       }
     );
   }
@@ -275,7 +275,7 @@ async function main() {
           }),
         }
       ),
-      { params: { requestId: request.id } }
+      { params: Promise.resolve({ requestId: request.id }) }
     );
 
     assert.equal(spoofed.status, 400);

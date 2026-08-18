@@ -31,9 +31,9 @@ function unavailableResponse() {
 export async function POST(
   _request: Request,
   context: {
-    params: {
+    params: Promise<{
       requestId: string;
-    };
+    }>;
   }
 ) {
   if (
@@ -76,8 +76,8 @@ export async function POST(
     );
   }
 
-  const requestId =
-    context.params.requestId;
+  const { requestId } =
+    await context.params;
 
   if (!UUID_PATTERN.test(requestId)) {
     return NextResponse.json(

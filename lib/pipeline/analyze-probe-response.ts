@@ -1,6 +1,7 @@
 import { runProbeAnalysisAgent } from "@/lib/agents/probe-analysis";
 import { getDb } from "@/lib/db";
 import type { ProbeMode, ProbeResult } from "@/lib/db/types";
+import { sha256Hex } from "@/lib/evidence/hash";
 import { mergeSourcesFromRawResponse } from "@/lib/probe-analysis/merge-sources";
 import { classifyProductRecommendation } from "@/lib/probe-analysis/product-recommendation";
 import {
@@ -40,6 +41,15 @@ export interface AnalyzeProbeResponseInput {
    * Sonar before being analyzed by Zypact.
    */
   probeMode?: ProbeMode;
+  /** M1 evidence contract — Perplexity evidence metadata, present only for live calls. */
+  rawResponseSha256?: string;
+  rawProbeRequestSha256?: string;
+  fullRequestBodySha256?: string;
+  providerHttpStatus?: number;
+  providerLatencyMs?: number;
+  providerRequestId?: string | null;
+  providerModel?: string;
+  retryCount?: number;
 }
 
 export type AnalyzeProbeResponseResult =
@@ -151,6 +161,23 @@ export async function analyzeProbeResponse(
       clientPosition: agent.output.clientPosition,
     });
 
+    // M1 evidence contract — internal-analysis traceability, kept in its
+    // own append-only table, separate from the Perplexity probe evidence
+    // saved below. Best-effort ordering: recorded after the agent call
+    // succeeds so a failed/thrown agent call never produces a dangling
+    // trace row with no corresponding probe result.
+    await db.recordAnalysisLlmCall({
+      projectId: input.projectId,
+      stage: "probe-analysis",
+      provider: agent.provider,
+      model: agent.model,
+      usedMock: agent.usedMock,
+      usedRetry: agent.usedRetry,
+      latencyMs: agent.latencyMs,
+      requestSha256: sha256Hex(agent.requestText),
+      responseSha256: sha256Hex(JSON.stringify(agent.output)),
+    });
+
     const result = await db.saveProbeResult({
       probeRunId: probeRun.id,
       projectId: input.projectId,
@@ -178,6 +205,14 @@ export async function analyzeProbeResponse(
           : productSignals.productVerdict === "lost" && !agent.output.whyClientLost.trim()
             ? "The brand was cited as a source or omitted, but was not recommended as a product/tool."
             : agent.output.whyClientLost,
+      rawResponseSha256: input.rawResponseSha256,
+      rawProbeRequestSha256: input.rawProbeRequestSha256,
+      fullRequestBodySha256: input.fullRequestBodySha256,
+      providerHttpStatus: input.providerHttpStatus,
+      providerLatencyMs: input.providerLatencyMs,
+      providerRequestId: input.providerRequestId,
+      providerModel: input.providerModel,
+      retryCount: input.retryCount,
     });
 
     await db.updateProbeRunStatus(probeRun.id, "succeeded");

@@ -72,6 +72,8 @@ export interface CallModelResult {
   provider: LlmProvider;
   model: string;
   usedMock: boolean;
+  /** M1 evidence contract — wall-clock milliseconds spent in the outbound call. 0 for mock. */
+  latencyMs: number;
 }
 
 function resolveMockMode(): "on" | "off" | "auto" {
@@ -170,6 +172,7 @@ export async function callModel(input: CallModelInput): Promise<CallModelResult>
       provider: "mock",
       model: "mock",
       usedMock: true,
+      latencyMs: 0,
     };
   }
 
@@ -209,6 +212,7 @@ async function callOpenAi(input: CallModelInput): Promise<CallModelResult> {
     }
   }
 
+  const startedAt = Date.now();
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -217,6 +221,7 @@ async function callOpenAi(input: CallModelInput): Promise<CallModelResult> {
     },
     body: JSON.stringify(body),
   });
+  const latencyMs = Date.now() - startedAt;
 
   if (!res.ok) {
     const err = await res.text();
@@ -226,7 +231,7 @@ async function callOpenAi(input: CallModelInput): Promise<CallModelResult> {
     choices?: Array<{ message?: { content?: string } }>;
   };
   const content = json.choices?.[0]?.message?.content ?? "";
-  return { content, provider: "openai", model, usedMock: false };
+  return { content, provider: "openai", model, usedMock: false, latencyMs };
 }
 
 async function callAnthropic(input: CallModelInput): Promise<CallModelResult> {
@@ -234,6 +239,7 @@ async function callAnthropic(input: CallModelInput): Promise<CallModelResult> {
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set");
   const model = resolveModel("anthropic", input.model);
 
+  const startedAt = Date.now();
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -249,6 +255,7 @@ async function callAnthropic(input: CallModelInput): Promise<CallModelResult> {
       messages: [{ role: "user", content: input.user }],
     }),
   });
+  const latencyMs = Date.now() - startedAt;
 
   if (!res.ok) {
     const err = await res.text();
@@ -259,5 +266,5 @@ async function callAnthropic(input: CallModelInput): Promise<CallModelResult> {
   };
   const content =
     json.content?.filter((c) => c.type === "text").map((c) => c.text ?? "").join("") ?? "";
-  return { content, provider: "anthropic", model, usedMock: false };
+  return { content, provider: "anthropic", model, usedMock: false, latencyMs };
 }

@@ -134,6 +134,14 @@ export async function runLivePerplexityProbes(
         rawProbeRequest: live.rawProbeRequest,
         knownCompetitors,
         probeMode: "live_perplexity",
+        rawResponseSha256: live.rawResponseSha256,
+        rawProbeRequestSha256: live.rawProbeRequestSha256,
+        fullRequestBodySha256: live.fullRequestBodySha256,
+        providerHttpStatus: live.httpStatus,
+        providerLatencyMs: live.latencyMs,
+        providerRequestId: live.providerRequestId,
+        providerModel: live.model,
+        retryCount: 0,
       });
       if (!analyzed.ok) {
         return {

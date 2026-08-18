@@ -94,6 +94,30 @@ export interface ProbeResult {
   answerSummary: string;
   verdict: string;
   whyClientLost: string;
+  /** M1 evidence contract — SHA-256 of `rawResponse`. Null for pre-M1 rows. */
+  rawResponseSha256?: string | null;
+  /**
+   * M1 evidence contract — SHA-256 of `rawProbeRequest` ONLY (the buyer
+   * question text), NOT the complete outbound HTTP body. See
+   * `fullRequestBodySha256` for that. Null for pre-M1 rows.
+   */
+  rawProbeRequestSha256?: string | null;
+  /**
+   * M1 evidence contract — SHA-256 of the exact JSON-serialized HTTP
+   * request body sent to the probe provider. Null for pasted/manual
+   * (non-live) answers and for rows saved before this field existed.
+   */
+  fullRequestBodySha256?: string | null;
+  /** M1 evidence contract — HTTP status returned by the probe provider. */
+  providerHttpStatus?: number | null;
+  /** M1 evidence contract — wall-clock milliseconds spent in the outbound probe call. */
+  providerLatencyMs?: number | null;
+  /** M1 evidence contract — provider-assigned request id, when available. */
+  providerRequestId?: string | null;
+  /** M1 evidence contract — exact model string echoed by the provider. */
+  providerModel?: string | null;
+  /** M1 evidence contract — number of provider retries for this attempt. */
+  retryCount?: number;
   createdAt: string;
 }
 
@@ -305,6 +329,66 @@ export interface SaveProbeResultInput {
   answerSummary: string;
   verdict: string;
   whyClientLost: string;
+  /** M1 evidence contract — SHA-256 of `rawResponse`. Omitted for pasted/manual answers. */
+  rawResponseSha256?: string | null;
+  /**
+   * M1 evidence contract — SHA-256 of `rawProbeRequest` ONLY (the buyer
+   * question text), NOT the complete outbound HTTP body. See
+   * `fullRequestBodySha256` for that.
+   */
+  rawProbeRequestSha256?: string | null;
+  /**
+   * M1 evidence contract — SHA-256 of the exact JSON-serialized HTTP
+   * request body sent to the probe provider. Omitted for pasted/manual
+   * (non-live) answers, which never had an outbound body.
+   */
+  fullRequestBodySha256?: string | null;
+  /** M1 evidence contract — HTTP status returned by the probe provider. */
+  providerHttpStatus?: number | null;
+  /** M1 evidence contract — wall-clock milliseconds spent in the outbound probe call. */
+  providerLatencyMs?: number | null;
+  /** M1 evidence contract — provider-assigned request id, when available. */
+  providerRequestId?: string | null;
+  /** M1 evidence contract — exact model string echoed by the provider. */
+  providerModel?: string | null;
+  /** M1 evidence contract — number of provider retries for this attempt. */
+  retryCount?: number;
+}
+
+/**
+ * M1 evidence contract — one row per internal-analysis model call (Mirror
+ * Profile, Probe Analysis, Competitor Discovery, Gap Map, Fix Brief, QA).
+ *
+ * Deliberately separate from `SaveProbeResultInput`/`ProbeResult`: this
+ * table traces OpenAI/Anthropic *analysis* calls, never a Perplexity probe
+ * answer. Perplexity Sonar remains the only external probe surface for V1
+ * (see docs/DECISIONS.md D-004); this contract does not add a second one.
+ *
+ * KNOWN M1 LIMITATION (first tranche, not yet closed): only the
+ * `probe-analysis` stage (`lib/pipeline/analyze-probe-response.ts`)
+ * actually calls `recordAnalysisLlmCall` today. Mirror Profile,
+ * Competitor Discovery, Gap Map, Fix Brief, and QA still call the model
+ * without writing a trace row here — their calls are invisible to this
+ * table until each is wired individually. `latencyMs` is available on
+ * every `callModel` result already (`lib/llm/call-model.ts`), so wiring a
+ * given stage is additive, not a redesign.
+ */
+export interface AnalysisLlmCallInput {
+  projectId: string;
+  /** Pipeline stage name, e.g. "probe-analysis", "mirror-profile". */
+  stage: string;
+  provider: "openai" | "anthropic" | "mock";
+  model: string;
+  usedMock: boolean;
+  usedRetry: boolean;
+  latencyMs: number;
+  requestSha256?: string | null;
+  responseSha256?: string | null;
+}
+
+export interface AnalysisLlmCall extends AnalysisLlmCallInput {
+  id: string;
+  createdAt: string;
 }
 
 export type SnapshotRequestStatus =
@@ -676,6 +760,10 @@ export interface DbAdapter {
   saveProbeResult(input: SaveProbeResultInput): Promise<ProbeResult>;
   getProbeResultsByProject(projectId: string): Promise<ProbeResult[]>;
   getLostProbeResultsByProject(projectId: string): Promise<ProbeResult[]>;
+
+  // M1 — internal-analysis LLM traceability (separate from probe evidence)
+  recordAnalysisLlmCall(input: AnalysisLlmCallInput): Promise<AnalysisLlmCall>;
+  getAnalysisLlmCallsByProject(projectId: string): Promise<AnalysisLlmCall[]>;
 
   // Sprint 4 — Competitor Discovery
   replaceCompetitorsForProject(

@@ -1,4 +1,5 @@
 import type { SourceCitation, SourceType } from "@/lib/schemas/probe-analysis.schema";
+import { sha256Hex } from "@/lib/evidence/hash";
 
 export interface PerplexitySearchResult {
   title?: string;
@@ -12,6 +13,16 @@ export interface PerplexitySearchResult {
 export interface PerplexityProbeResult {
   prompt: string;
   answer: string;
+  /**
+   * KNOWN M1 LIMITATION (first tranche, not yet closed): this is a
+   * reconstructed transcript — `answer` + citations + search results,
+   * formatted by `buildRawTranscript` — NOT the raw JSON response body
+   * Perplexity actually returned. `rawResponseSha256` hashes this
+   * transcript, so it proves the transcript hasn't been altered since it
+   * was built, but it does not prove byte-for-byte fidelity to
+   * Perplexity's original response. Capturing the true raw response body
+   * (e.g. the exact `res.text()`/`res.json()` bytes) is still open work.
+   */
   rawResponse: string;
   /** Sprint 13C — exact buyer prompt sent to Perplexity, persisted for audit. */
   rawProbeRequest?: string;
@@ -20,6 +31,34 @@ export interface PerplexityProbeResult {
   sourceCitations: SourceCitation[];
   model: string;
   usedMock: boolean;
+  /**
+   * M1 evidence contract — SHA-256 of `rawResponse`. Absent for mock
+   * calls. See the KNOWN M1 LIMITATION note on `rawResponse` above: this
+   * hashes the reconstructed transcript, not Perplexity's raw response
+   * bytes.
+   */
+  rawResponseSha256?: string;
+  /**
+   * M1 evidence contract — SHA-256 of `rawProbeRequest` ONLY, i.e. the
+   * trimmed buyer-question text sent as the user message. This is NOT a
+   * hash of the complete outbound HTTP body: it does not cover `model`,
+   * `temperature`, `max_tokens`, `stream`, or `web_search_options`. Use
+   * `fullRequestBodySha256` for a hash that covers the exact JSON body
+   * sent on the wire.
+   */
+  rawProbeRequestSha256?: string;
+  /**
+   * M1 evidence contract — SHA-256 of the exact JSON-serialized HTTP
+   * request body sent to Perplexity (`model` + `messages` + all other
+   * fields), as `JSON.stringify`'d before the call. Absent for mock calls.
+   */
+  fullRequestBodySha256?: string;
+  /** M1 evidence contract — HTTP status returned by Perplexity. Absent for mock calls. */
+  httpStatus?: number;
+  /** M1 evidence contract — wall-clock milliseconds spent in the outbound call. */
+  latencyMs?: number;
+  /** M1 evidence contract — provider-assigned request id, when Perplexity returns one. */
+  providerRequestId?: string | null;
 }
 
 export interface RunPerplexityProbeInput {
@@ -149,16 +188,31 @@ export async function runPerplexityProbe(
     },
   };
 
+  // Serialized once and reused for both the outbound call and the hash, so
+  // the hash is guaranteed byte-identical to what actually went on the wire.
+  const requestBodyJson = JSON.stringify(body);
+
+  const startedAt = Date.now();
   const res = await fetcher("https://api.perplexity.ai/v1/sonar", {
     method: "POST",
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify(body),
+    body: requestBodyJson,
   });
+  const latencyMs = Date.now() - startedAt;
+  const providerRequestId =
+    res.headers.get("x-request-id") ?? res.headers.get("x-amzn-requestid") ?? null;
 
   if (!res.ok) {
+    // KNOWN M1 LIMITATION (first tranche, not yet closed): a failed
+    // Perplexity attempt (non-2xx status, or the empty-answer case below)
+    // is thrown here and never reaches `saveProbeResult` — no
+    // `probe_results` row, no evidence row, no failure metadata is
+    // persisted for it. METHODOLOGY.md requires failed/excluded attempts
+    // to remain visible in denominator reconciliation; that requirement
+    // is not yet met. The caller only sees an in-memory Error.
     const err = await res.text();
     throw new Error(`Perplexity ${res.status}: ${err.slice(0, 500)}`);
   }
@@ -182,6 +236,12 @@ export async function runPerplexityProbe(
     sourceCitations,
     model: json.model || model,
     usedMock: false,
+    rawResponseSha256: sha256Hex(rawResponse),
+    rawProbeRequestSha256: sha256Hex(rawProbeRequest),
+    fullRequestBodySha256: sha256Hex(requestBodyJson),
+    httpStatus: res.status,
+    latencyMs,
+    providerRequestId,
   };
 }
 

@@ -33,6 +33,14 @@ export interface RunProbeAnalysisResult {
   output: ProbeAnalysisOutput;
   usedMock: boolean;
   usedRetry: boolean;
+  /** M1 evidence contract — provider that produced the final accepted output. */
+  provider: "openai" | "anthropic" | "mock";
+  /** M1 evidence contract — exact model string used for the final accepted output. */
+  model: string;
+  /** M1 evidence contract — wall-clock milliseconds across the call (plus repair retry, if any). */
+  latencyMs: number;
+  /** M1 evidence contract — exact request text sent to the model (system + user). */
+  requestText: string;
 }
 
 function escapeXml(s: string): string {
@@ -89,12 +97,14 @@ export async function runProbeAnalysisAgent(
     mockResponse,
   };
 
+  const startedAt = Date.now();
   const initial = await callModel(call);
   const parsed = await parseJsonOrRetry({
     schema: ProbeAnalysisOutputSchema,
     rawOutput: initial.content,
     originalCall: call,
   });
+  const latencyMs = Date.now() - startedAt;
 
   if (!parsed.ok) {
     throw new Error(
@@ -109,6 +119,10 @@ export async function runProbeAnalysisAgent(
     output: parsed.data as ProbeAnalysisOutput,
     usedMock: initial.usedMock,
     usedRetry: parsed.usedRetry,
+    provider: initial.provider,
+    model: initial.model,
+    latencyMs,
+    requestText: `${call.system}\n\n${call.user}`,
   };
 }
 

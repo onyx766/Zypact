@@ -98,10 +98,38 @@ export async function runSiteReaderAgent(
   }
 
   return {
-    output: parsed.data,
+    output: {
+      ...parsed.data,
+      competitorsMentioned: stripGenericCompetitorPlaceholders(
+        parsed.data.competitorsMentioned
+      ),
+    },
     usedMock: initial.usedMock,
     usedRetry: parsed.usedRetry,
   };
+}
+
+/**
+ * The model sometimes falls back to generic filler names ("Competitor A",
+ * "Competitor B") when it cannot find real competitors in the crawled
+ * pages, rather than returning an empty list. Those are not evidence of a
+ * real competitor and must never reach `competitorsMentioned` — downstream
+ * consumers (Gap Map, competitor discovery, reports) treat every entry as
+ * a named, real competitor.
+ *
+ * Deliberately narrow: matches only "Competitor" + exactly one letter
+ * ("Competitor A", "competitor b"), so a real company whose name happens
+ * to start with "Competitor" (unlikely, but not this function's call to
+ * make) is never dropped.
+ */
+const GENERIC_COMPETITOR_PLACEHOLDER = /^competitor\s+[a-z]$/i;
+
+export function stripGenericCompetitorPlaceholders(
+  competitors: string[]
+): string[] {
+  return competitors.filter(
+    (name) => !GENERIC_COMPETITOR_PLACEHOLDER.test(name.trim())
+  );
 }
 
 function buildMockMirrorProfile(input: RunSiteReaderInput): SiteReaderOutput {

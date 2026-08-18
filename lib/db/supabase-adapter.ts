@@ -5,6 +5,8 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 // adapter still generates its own, because it has no SQL layer.
 import { snapshotReportWriteMode } from "./snapshot-write-mode";
 import type {
+  AnalysisLlmCall,
+  AnalysisLlmCallInput,
   Competitor,
   CompetitorInput,
   CreateProjectInput,
@@ -304,7 +306,51 @@ interface ProbeResultDbRow {
   answer_summary: string;
   verdict: string;
   why_client_lost: string;
+  raw_response_sha256?: string | null;
+  raw_probe_request_sha256?: string | null;
+  full_request_body_sha256?: string | null;
+  provider_http_status?: number | null;
+  provider_latency_ms?: number | null;
+  provider_request_id?: string | null;
+  provider_model?: string | null;
+  retry_count?: number | null;
   created_at: string;
+}
+
+interface AnalysisLlmCallDbRow {
+  id: string;
+  project_id: string;
+  stage: string;
+  provider: string;
+  model: string;
+  used_mock: boolean;
+  used_retry: boolean;
+  latency_ms: number;
+  request_sha256: string | null;
+  response_sha256: string | null;
+  created_at: string;
+}
+
+function coerceLlmProvider(value: string): AnalysisLlmCall["provider"] {
+  return value === "openai" || value === "anthropic" || value === "mock"
+    ? value
+    : "mock";
+}
+
+function mapAnalysisLlmCall(r: AnalysisLlmCallDbRow): AnalysisLlmCall {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    stage: r.stage,
+    provider: coerceLlmProvider(r.provider),
+    model: r.model,
+    usedMock: r.used_mock,
+    usedRetry: r.used_retry,
+    latencyMs: r.latency_ms,
+    requestSha256: r.request_sha256,
+    responseSha256: r.response_sha256,
+    createdAt: r.created_at,
+  };
 }
 
 function snapshotLimitCodeFromError(
@@ -676,6 +722,14 @@ function mapProbeResult(r: ProbeResultDbRow): ProbeResult {
     answerSummary: r.answer_summary,
     verdict: r.verdict,
     whyClientLost: r.why_client_lost,
+    rawResponseSha256: r.raw_response_sha256 ?? null,
+    rawProbeRequestSha256: r.raw_probe_request_sha256 ?? null,
+    fullRequestBodySha256: r.full_request_body_sha256 ?? null,
+    providerHttpStatus: r.provider_http_status ?? null,
+    providerLatencyMs: r.provider_latency_ms ?? null,
+    providerRequestId: r.provider_request_id ?? null,
+    providerModel: r.provider_model ?? null,
+    retryCount: r.retry_count ?? 0,
     createdAt: r.created_at,
   };
 }
@@ -1433,6 +1487,14 @@ export const supabaseAdapter: DbAdapter = {
         answer_summary: input.answerSummary,
         verdict: input.verdict,
         why_client_lost: input.whyClientLost,
+        raw_response_sha256: input.rawResponseSha256 ?? null,
+        raw_probe_request_sha256: input.rawProbeRequestSha256 ?? null,
+        full_request_body_sha256: input.fullRequestBodySha256 ?? null,
+        provider_http_status: input.providerHttpStatus ?? null,
+        provider_latency_ms: input.providerLatencyMs ?? null,
+        provider_request_id: input.providerRequestId ?? null,
+        provider_model: input.providerModel ?? null,
+        retry_count: input.retryCount ?? 0,
       })
       .select("*")
       .single<ProbeResultDbRow>();
@@ -1459,6 +1521,40 @@ export const supabaseAdapter: DbAdapter = {
       .order("created_at", { ascending: false });
     if (error) throw error;
     return (data ?? []).map((r) => mapProbeResult(r as ProbeResultDbRow));
+  },
+
+  async recordAnalysisLlmCall(
+    input: AnalysisLlmCallInput
+  ): Promise<AnalysisLlmCall> {
+    const { data, error } = await getClient()
+      .from("analysis_llm_calls")
+      .insert({
+        project_id: input.projectId,
+        stage: input.stage,
+        provider: input.provider,
+        model: input.model,
+        used_mock: input.usedMock,
+        used_retry: input.usedRetry,
+        latency_ms: input.latencyMs,
+        request_sha256: input.requestSha256 ?? null,
+        response_sha256: input.responseSha256 ?? null,
+      })
+      .select("*")
+      .single<AnalysisLlmCallDbRow>();
+    if (error || !data) throw error ?? new Error("recordAnalysisLlmCall failed");
+    return mapAnalysisLlmCall(data);
+  },
+
+  async getAnalysisLlmCallsByProject(
+    projectId: string
+  ): Promise<AnalysisLlmCall[]> {
+    const { data, error } = await getClient()
+      .from("analysis_llm_calls")
+      .select("*")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return (data ?? []).map((r) => mapAnalysisLlmCall(r as AnalysisLlmCallDbRow));
   },
 
   async replaceCompetitorsForProject(

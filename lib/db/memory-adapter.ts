@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { createPublicReportToken } from "@/lib/snapshot-requests/public-report-token";
 import type {
+  AnalysisLlmCall,
+  AnalysisLlmCallInput,
   Competitor,
   CompetitorInput,
   CreateProjectInput,
@@ -62,6 +64,7 @@ interface MemoryStore {
   generatedPromptsByProject: Map<string, GeneratedPrompt[]>;
   probeRuns: Map<string, ProbeRun>;
   probeResultsByProject: Map<string, ProbeResult[]>;
+  analysisLlmCallsByProject: Map<string, AnalysisLlmCall[]>;
   competitorsByProject: Map<string, Competitor[]>;
   gapMapsByProject: Map<string, GapMapRow[]>;
   gapsByProject: Map<string, Gap[]>;
@@ -86,6 +89,7 @@ function getStore(): MemoryStore {
       generatedPromptsByProject: new Map(),
       probeRuns: new Map(),
       probeResultsByProject: new Map(),
+      analysisLlmCallsByProject: new Map(),
       competitorsByProject: new Map(),
       gapMapsByProject: new Map(),
       gapsByProject: new Map(),
@@ -1075,6 +1079,14 @@ export const memoryAdapter: DbAdapter = {
       answerSummary: input.answerSummary,
       verdict: input.verdict,
       whyClientLost: input.whyClientLost,
+      rawResponseSha256: input.rawResponseSha256 ?? null,
+      rawProbeRequestSha256: input.rawProbeRequestSha256 ?? null,
+      fullRequestBodySha256: input.fullRequestBodySha256 ?? null,
+      providerHttpStatus: input.providerHttpStatus ?? null,
+      providerLatencyMs: input.providerLatencyMs ?? null,
+      providerRequestId: input.providerRequestId ?? null,
+      providerModel: input.providerModel ?? null,
+      retryCount: input.retryCount ?? 0,
       createdAt: new Date().toISOString(),
     };
     const store = getStore();
@@ -1095,6 +1107,37 @@ export const memoryAdapter: DbAdapter = {
     return [...all]
       .filter((r) => r.verdict === "lost" || r.verdict === "partial")
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  },
+
+  async recordAnalysisLlmCall(
+    input: AnalysisLlmCallInput
+  ): Promise<AnalysisLlmCall> {
+    const row: AnalysisLlmCall = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      stage: input.stage,
+      provider: input.provider,
+      model: input.model,
+      usedMock: input.usedMock,
+      usedRetry: input.usedRetry,
+      latencyMs: input.latencyMs,
+      requestSha256: input.requestSha256 ?? null,
+      responseSha256: input.responseSha256 ?? null,
+      createdAt: new Date().toISOString(),
+    };
+    const store = getStore();
+    const list = store.analysisLlmCallsByProject.get(input.projectId) ?? [];
+    list.push(row);
+    store.analysisLlmCallsByProject.set(input.projectId, list);
+    return row;
+  },
+
+  async getAnalysisLlmCallsByProject(
+    projectId: string
+  ): Promise<AnalysisLlmCall[]> {
+    return [...(getStore().analysisLlmCallsByProject.get(projectId) ?? [])].sort(
+      (a, b) => b.createdAt.localeCompare(a.createdAt)
+    );
   },
 
   async replaceCompetitorsForProject(

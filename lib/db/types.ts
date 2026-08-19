@@ -804,6 +804,8 @@ export interface DbAdapter {
     status?: ProbeRunStatus
   ): Promise<ProbeRun>;
   updateProbeRunStatus(id: string, status: ProbeRunStatus): Promise<void>;
+  /** M1 evidence contract, fourth tranche — used to verify no duplicate run is created per attempt. */
+  getProbeRunsByProject(projectId: string): Promise<ProbeRun[]>;
   saveProbeResult(input: SaveProbeResultInput): Promise<ProbeResult>;
   getProbeResultsByProject(projectId: string): Promise<ProbeResult[]>;
   getLostProbeResultsByProject(projectId: string): Promise<ProbeResult[]>;

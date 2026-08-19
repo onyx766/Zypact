@@ -1514,6 +1514,16 @@ export const supabaseAdapter: DbAdapter = {
     if (error) throw error;
   },
 
+  async getProbeRunsByProject(projectId: string): Promise<ProbeRun[]> {
+    const { data, error } = await getClient()
+      .from("probe_runs")
+      .select("*")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return (data ?? []).map((r) => mapProbeRun(r as ProbeRunDbRow));
+  },
+
   async saveProbeResult(input: SaveProbeResultInput): Promise<ProbeResult> {
     const { data, error } = await getClient()
       .from("probe_results")

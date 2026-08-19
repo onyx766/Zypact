@@ -19,7 +19,9 @@ import { withPipelineStep } from "./save-pipeline-step";
  * Sprint 3 pipeline runner.
  *
  * 1. Load the project + latest Mirror Profile (for client identity + competitors).
- * 2. Create a ProbeRun (status="pending").
+ * 2. Create a ProbeRun (status="pending") — or reuse `input.probeRunId` if
+ *    the caller already created one (M1 fourth tranche; see that field's
+ *    doc comment). Exactly one run either way, never both.
  * 3. Run Probe Analysis Agent on the pasted response.
  * 4. Persist a ProbeResult with the raw response.
  * 5. Mark the ProbeRun succeeded/failed.
@@ -30,6 +32,15 @@ export interface AnalyzeProbeResponseInput {
   generatedPromptId?: string | null;
   prompt: string;
   platform: Platform;
+  /**
+   * M1 evidence contract, fourth tranche — an already-created `probe_runs`
+   * row to reuse (e.g. one created by the caller before a live Perplexity
+   * call, so a failure prior to this function has something to attach
+   * to). When omitted, behavior is unchanged from before this tranche:
+   * this function creates its own run. Never creates a second run when
+   * one is supplied.
+   */
+  probeRunId?: string;
   rawResponse: string;
   /** Sprint 13C — exact buyer prompt sent to the live platform, if available. */
   rawProbeRequest?: string;
@@ -116,12 +127,14 @@ export async function analyzeProbeResponse(
   );
 
   const probeMode = input.probeMode ?? "simulated";
-  const probeRun = await db.createProbeRun(
-    input.projectId,
-    input.platform,
-    probeMode,
-    "pending"
-  );
+  // M1 evidence contract, fourth tranche — reuse a run the caller already
+  // created (typically before the live provider call) rather than
+  // creating a second one for the same logical attempt. `getProbeRun`
+  // is intentionally not called here to re-validate `input.probeRunId`:
+  // the caller is trusted to pass an id it just created itself.
+  const probeRun = input.probeRunId
+    ? { id: input.probeRunId }
+    : await db.createProbeRun(input.projectId, input.platform, probeMode, "pending");
 
   try {
     const agent = await withPipelineStep(

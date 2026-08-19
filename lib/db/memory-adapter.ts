@@ -1059,6 +1059,12 @@ export const memoryAdapter: DbAdapter = {
     if (run) store.probeRuns.set(id, { ...run, status });
   },
 
+  async getProbeRunsByProject(projectId: string): Promise<ProbeRun[]> {
+    return [...getStore().probeRuns.values()]
+      .filter((r) => r.projectId === projectId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  },
+
   async saveProbeResult(input: SaveProbeResultInput): Promise<ProbeResult> {
     const row: ProbeResult = {
       id: randomUUID(),

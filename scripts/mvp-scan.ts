@@ -25,6 +25,7 @@ import { runMirrorScan } from "@/lib/pipeline/run-mirror-scan";
 import { generateBuyerPrompts } from "@/lib/pipeline/generate-buyer-prompts";
 import { getOrCreateEvidenceBank } from "@/lib/pipeline/get-or-create-evidence-bank";
 import { PerplexityProbeFailure, runPerplexityProbe } from "@/lib/probes/perplexity";
+import { failProbeRunOrThrow } from "@/lib/pipeline/mark-probe-run-failed";
 import { analyzeProbeResponse } from "@/lib/pipeline/analyze-probe-response";
 import { discoverCompetitors } from "@/lib/pipeline/discover-competitors";
 import {
@@ -580,13 +581,23 @@ async function runMissingProbes(args: Args, project: Project, promptTargets: Gen
       // to return; that is the bounded waste the policy accepts.
       assertLeaseOwnership();
 
+      // M1 evidence contract, fourth tranche — the run is created before
+      // the provider call so a failure at any point below (provider
+      // failure or the identity-leak check) has a real probe_runs row to
+      // attach to. `analyzeProbeResponse` reuses this id and never
+      // creates a second row for the same attempt.
+      const probeRun = await db.createProbeRun(project.id, "perplexity", "live_perplexity", "pending");
+
       let live;
       try {
         live = await runPerplexityProbe({ prompt: prompt.prompt, brandName, domain: project.domain });
       } catch (err) {
         if (err instanceof PerplexityProbeFailure) {
-          // M1 second tranche — persist the failed attempt before it propagates.
+          // M1 second tranche, extended in the fourth tranche — persist
+          // the failed attempt before it propagates, now attached to the
+          // run created above.
           await db.recordProbeFailure({
+            probeRunId: probeRun.id,
             projectId: project.id,
             platform: "perplexity",
             prompt: prompt.prompt,
@@ -601,6 +612,20 @@ async function runMissingProbes(args: Args, project: Project, promptTargets: Gen
             retryCount: 0,
           });
         }
+        // M1 evidence contract, fourth-tranche correction — no longer
+        // `.catch(() => undefined)`. If the status write itself fails,
+        // failProbeRunOrThrow throws a compound error instead of
+        // silently leaving this run stuck in "pending"; the original
+        // `err` is folded into that error's message so nothing is lost.
+        // If the status write succeeds, execution reaches `throw err`
+        // below exactly as before.
+        await failProbeRunOrThrow(
+          db,
+          probeRun.id,
+          `Perplexity probe failed for prompt "${prompt.prompt}": ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
         throw err;
       }
       usedMock = usedMock || live.usedMock;
@@ -610,7 +635,19 @@ async function runMissingProbes(args: Args, project: Project, promptTargets: Gen
         brandTerms: terms,
         domain: project.domain,
       })) {
-        throw new Error(`Probe request integrity failed for prompt: ${prompt.prompt}`);
+        // M1 evidence contract, fourth tranche — deliberately does NOT
+        // call db.recordProbeFailure here. `failure_reason` is
+        // constrained to network_error/http_error/empty_answer (0037);
+        // an identity leak is none of those, and inventing a value would
+        // misrepresent what actually happened. Only the run's status is
+        // recorded — that is honest and sufficient.
+        //
+        // Fourth-tranche correction — no longer `.catch(() => undefined)`:
+        // a status-write failure here now throws (with the integrity
+        // failure folded into its message) instead of being discarded.
+        const integrityError = `Probe request integrity failed for prompt: ${prompt.prompt}`;
+        await failProbeRunOrThrow(db, probeRun.id, integrityError);
+        throw new Error(integrityError);
       }
 
       const analyzed = await analyzeProbeResponse({
@@ -618,6 +655,7 @@ async function runMissingProbes(args: Args, project: Project, promptTargets: Gen
         generatedPromptId: prompt.id,
         prompt: prompt.prompt,
         platform: "perplexity",
+        probeRunId: probeRun.id,
         rawResponse: live.rawResponse,
         rawProbeRequest: live.rawProbeRequest,
         knownCompetitors,

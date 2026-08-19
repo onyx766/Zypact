@@ -1,9 +1,11 @@
 #!/usr/bin/env tsx
 /**
- * M1 evidence contract — first, second, AND third tranche. Migrations
- * 0036 and 0037 (both confirmed applied to staging); the third tranche
- * adds no migration — analysis_llm_calls.stage is free text with no CHECK
- * constraint, so wiring six more pipeline stages needed no schema change.
+ * M1 evidence contract — first, second, third, AND fourth tranche.
+ * Migrations 0036 and 0037 (both confirmed applied to staging); neither
+ * the third nor the fourth tranche adds a migration — the third traces
+ * six more pipeline stages via analysis_llm_calls.stage (free text, no
+ * CHECK constraint); the fourth reuses probe_failures.probe_run_id,
+ * already nullable since 0037.
  *
  * Two kinds of checks:
  *
@@ -37,6 +39,8 @@ import { runSiteReaderAgent, stripGenericCompetitorPlaceholders } from "@/lib/ag
 import { runGenerateAssetAgent } from "@/lib/agents/fix-agent";
 import { runPromptMirrorAgent } from "@/lib/agents/prompt-mirror";
 import { recordAnalysisTrace } from "@/lib/evidence/analysis-trace";
+import { probeRequestLeaksClientIdentity } from "@/lib/probe-analysis/product-recommendation";
+import { failProbeRunOrThrow } from "@/lib/pipeline/mark-probe-run-failed";
 import type { SiteReaderOutput } from "@/lib/schemas/site-reader.schema";
 import type { EvidenceBankOutput } from "@/lib/schemas/evidence-bank.schema";
 import type { FixBriefRow } from "@/lib/db/types";
@@ -1070,33 +1074,253 @@ async function applicationLayerChecks(): Promise<void> {
       after[0]?.provider === "mock"
     );
   }
+
+  console.log("\nFourth tranche — probe_run created before the provider call, reused, no duplicate");
+  {
+    console.log("\n  succès — un seul probe_run");
+    const project6 = await db.createProject({
+      domain: `m1-fourth-success-${randomUUID()}.example`,
+      companyName: "M1 Fourth Tranche Success Co",
+    });
+    const preCreatedRun = await db.createProbeRun(project6.id, "perplexity", "live_perplexity", "pending");
+    const successRawResponse = "Zypact is recommended for AI visibility diagnostics.";
+    const successResult = await analyzeProbeResponse({
+      projectId: project6.id,
+      prompt: "who should we use",
+      platform: "perplexity",
+      probeRunId: preCreatedRun.id,
+      rawResponse: successRawResponse,
+      rawProbeRequest: "who should we use",
+      probeMode: "live_perplexity",
+    });
+    check("analyzeProbeResponse succeeds when reusing a pre-created probeRunId", successResult.ok === true);
+    if (successResult.ok) {
+      check("the reused run's id is the one passed in, not a new one", successResult.probeRunId === preCreatedRun.id);
+    }
+    const runsAfterSuccess = await db.getProbeRunsByProject(project6.id);
+    check("exactly one probe_runs row exists for this project (no duplicate)", runsAfterSuccess.length === 1);
+    check("that run is marked succeeded", runsAfterSuccess[0]?.status === "succeeded");
+    const resultsAfterSuccess = await db.getProbeResultsByProject(project6.id);
+    check(
+      "the saved probe_results row references the pre-created run's id",
+      resultsAfterSuccess[0]?.probeRunId === preCreatedRun.id
+    );
+
+    console.log("\n  rétrocompatibilité — sans probeRunId");
+    const project7 = await db.createProject({
+      domain: `m1-fourth-backcompat-${randomUUID()}.example`,
+      companyName: "M1 Fourth Tranche Backcompat Co",
+    });
+    const backcompatResult = await analyzeProbeResponse({
+      projectId: project7.id,
+      prompt: "manual pasted answer",
+      platform: "perplexity",
+      // No probeRunId — exercises the exact pre-fourth-tranche call shape.
+      rawResponse: "A manually pasted answer with no probeRunId supplied.",
+      probeMode: "simulated",
+    });
+    check("analyzeProbeResponse still succeeds with no probeRunId supplied", backcompatResult.ok === true);
+    const runsAfterBackcompat = await db.getProbeRunsByProject(project7.id);
+    check(
+      "exactly one probe_runs row was created by analyzeProbeResponse itself (unchanged legacy behavior)",
+      runsAfterBackcompat.length === 1
+    );
+    check("that self-created run is marked succeeded", runsAfterBackcompat[0]?.status === "succeeded");
+
+    console.log("\n  échec Perplexity relié au run (reproduces the exact orchestrator pattern)");
+    const project8 = await db.createProject({
+      domain: `m1-fourth-provider-failure-${randomUUID()}.example`,
+      companyName: "M1 Fourth Tranche Provider Failure Co",
+    });
+    {
+      process.env.PERPLEXITY_API_KEY = "test-key-not-real";
+      const failingRun = await db.createProbeRun(project8.id, "perplexity", "live_perplexity", "pending");
+      const fakeFetch: typeof fetch = async () => new Response("service unavailable", { status: 503 });
+      let caught: unknown = null;
+      try {
+        await runPerplexityProbe({ prompt: "who should we use", brandName: "Zypact", fetchImpl: fakeFetch });
+      } catch (err) {
+        caught = err;
+      }
+      check("the provider call throws PerplexityProbeFailure", caught instanceof PerplexityProbeFailure);
+      if (caught instanceof PerplexityProbeFailure) {
+        // Exactly the two calls the real orchestrators (run-live-perplexity-probes.ts,
+        // mvp-scan.ts) make in their catch block, in the same order.
+        await db.recordProbeFailure({
+          probeRunId: failingRun.id,
+          projectId: project8.id,
+          platform: "perplexity",
+          prompt: "who should we use",
+          failureReason: caught.reason,
+          providerHttpStatus: caught.httpStatus,
+          providerErrorBody: caught.errorBody,
+          providerErrorBodySha256: caught.errorBodySha256,
+          providerLatencyMs: caught.latencyMs,
+          providerRequestId: caught.providerRequestId,
+          rawProbeRequestSha256: caught.rawProbeRequestSha256,
+          fullRequestBodySha256: caught.fullRequestBodySha256,
+          retryCount: 0,
+        });
+        await db.updateProbeRunStatus(failingRun.id, "failed");
+      }
+      const failuresForProject8 = await db.getProbeFailuresByProject(project8.id);
+      check("exactly one probe_failures row was recorded", failuresForProject8.length === 1);
+      check(
+        "the recorded failure's probeRunId matches the run created before the call",
+        failuresForProject8[0]?.probeRunId === failingRun.id
+      );
+      const runsForProject8 = await db.getProbeRunsByProject(project8.id);
+      check("exactly one probe_runs row exists (no duplicate on the failure path either)", runsForProject8.length === 1);
+      check("that run is marked failed", runsForProject8[0]?.status === "failed");
+      delete process.env.PERPLEXITY_API_KEY;
+    }
+
+    console.log("\n  fuite d'identité — run failed, aucun probe_failures fabriqué");
+    const project9 = await db.createProject({
+      domain: `m1-fourth-identity-leak-${randomUUID()}.example`,
+      companyName: "M1 Fourth Tranche Identity Leak Co",
+    });
+    {
+      const leakRun = await db.createProbeRun(project9.id, "perplexity", "live_perplexity", "pending");
+      // Rigged exactly like a live PerplexityProbeResult whose rawProbeRequest
+      // (normally == the original prompt) has been tampered with to include a
+      // brand term outside the original prompt text — the real condition
+      // probeRequestLeaksClientIdentity is designed to catch.
+      const leaked = probeRequestLeaksClientIdentity({
+        rawRequest: "who should we use for AI visibility. By the way, this is for Zypact.",
+        originalPrompt: "who should we use for AI visibility",
+        brandTerms: ["Zypact"],
+        domain: "zypact.example",
+      });
+      check("probeRequestLeaksClientIdentity detects the rigged leak", leaked === true);
+      if (leaked) {
+        // Mirrors the exact new orchestrator branch: only the run status is
+        // recorded. No db.recordProbeFailure call — there is no truthful
+        // failure_reason for an identity leak (0037's CHECK constraint only
+        // allows network_error/http_error/empty_answer).
+        await db.updateProbeRunStatus(leakRun.id, "failed");
+      }
+      const runsForProject9 = await db.getProbeRunsByProject(project9.id);
+      check("exactly one probe_runs row exists", runsForProject9.length === 1);
+      check("that run is marked failed", runsForProject9[0]?.status === "failed");
+      const failuresForProject9 = await db.getProbeFailuresByProject(project9.id);
+      check(
+        "no probe_failures row was fabricated for the identity-leak case (no truthful failure_reason exists)",
+        failuresForProject9.length === 0
+      );
+    }
+
+    console.log("\n  aucun mécanisme de retry ajouté (vérification statique)");
+    const retryKeywords = ["backoff", "maxRetries", "retryAttempt", "exponential", "setTimeout", "while ("];
+    for (const file of [
+      "lib/pipeline/run-live-perplexity-probes.ts",
+      "scripts/mvp-scan.ts",
+      "lib/pipeline/analyze-probe-response.ts",
+    ]) {
+      const src = readFileSync(join(process.cwd(), file), "utf-8");
+      for (const keyword of retryKeywords) {
+        check(`${file}: no "${keyword}" introduced (no retry/backoff mechanism added)`, !src.includes(keyword));
+      }
+    }
+    check(
+      "retryCount is still hardcoded to 0 at both live call sites, not computed by a new retry loop",
+      readFileSync(join(process.cwd(), "lib/pipeline/run-live-perplexity-probes.ts"), "utf-8").includes(
+        "retryCount: 0,"
+      ) && readFileSync(join(process.cwd(), "scripts/mvp-scan.ts"), "utf-8").includes("retryCount: 0,")
+    );
+
+    console.log(
+      "\n  correction — a probe_runs status-write failure must fail explicitly, never be swallowed"
+    );
+    {
+      // Static: the silent-swallow pattern must be gone from both call
+      // sites, and both must now go through the shared helper.
+      for (const file of ["lib/pipeline/run-live-perplexity-probes.ts", "scripts/mvp-scan.ts"]) {
+        const src = readFileSync(join(process.cwd(), file), "utf-8");
+        check(
+          `${file}: updateProbeRunStatus(..., "failed") is no longer directly swallowed with .catch(() => undefined)`,
+          !src.includes('updateProbeRunStatus(probeRun.id, "failed").catch(() => undefined)')
+        );
+        check(`${file}: imports failProbeRunOrThrow`, src.includes('from "@/lib/pipeline/mark-probe-run-failed"'));
+        check(
+          `${file}: both the catch block and the identity-leak branch call failProbeRunOrThrow`,
+          (src.match(/failProbeRunOrThrow\(/g) ?? []).length === 2
+        );
+      }
+
+      // Dynamic: failProbeRunOrThrow itself, both branches.
+      let statusWrites = 0;
+      const healthyDb = {
+        async updateProbeRunStatus() {
+          statusWrites += 1;
+        },
+      };
+      await failProbeRunOrThrow(healthyDb, "run-ok", "original failure message");
+      check("when the status write succeeds, failProbeRunOrThrow resolves without throwing", statusWrites === 1);
+
+      const brokenDb = {
+        async updateProbeRunStatus(): Promise<void> {
+          throw new Error("connection reset");
+        },
+      };
+      let caught: unknown = null;
+      try {
+        await failProbeRunOrThrow(brokenDb, "run-broken-123", "Perplexity probe failed: rate limited");
+      } catch (err) {
+        caught = err;
+      }
+      check("when the status write itself fails, failProbeRunOrThrow throws — it is never swallowed", caught instanceof Error);
+      if (caught instanceof Error) {
+        check(
+          "the compound error preserves the original failure message",
+          caught.message.includes("Perplexity probe failed: rate limited")
+        );
+        check(
+          "the compound error names the specific run id that may be stuck",
+          caught.message.includes("run-broken-123")
+        );
+        check(
+          'the compound error explicitly warns the run "may be stuck in \\"pending\\""',
+          caught.message.includes('may be stuck in "pending"')
+        );
+        check(
+          "the compound error preserves the underlying status-write error via cause",
+          (caught as Error & { cause?: unknown }).cause instanceof Error &&
+            ((caught as Error & { cause?: Error }).cause as Error).message === "connection reset"
+        );
+      }
+    }
+  }
 }
 
 console.log("\n─────────────────────────────────────────────────────────");
-console.log("THIS IS THE THIRD M1 TRANCHE — NOT A FULL M1 CLOSE-OUT.");
+console.log("THIS IS THE FOURTH M1 TRANCHE — NOT A FULL M1 CLOSE-OUT.");
 console.log("");
 console.log(
-  "CLOSED BY THIS TRANCHE (no new migration — analysis_llm_calls.stage is"
+  "CLOSED BY THIS TRANCHE (no new migration — probe_failures.probe_run_id"
 );
 console.log(
-  "free text, 0036's own schema already supports new stage names):"
+  "was already nullable, added by 0037 in anticipation of this exact fix):"
 );
 console.log(
-  "  Mirror Profile (site-reader), Competitor Discovery, Gap Map,"
+  "  probe_run is now created before runPerplexityProbe in both live call"
 );
 console.log(
-  "  Fix Brief, Generated Asset (except the deterministic json_ld_schema"
+  "  sites (run-live-perplexity-probes.ts, mvp-scan.ts) and reused by"
 );
 console.log(
-  "  path, which never calls a model — verified by a real agent call"
+  "  analyzeProbeResponse via an optional probeRunId — never a duplicate."
 );
 console.log(
-  "  proving zero analysis_llm_calls rows for that path), QA, and"
+  "  Perplexity provider failures now attach probe_failures.probe_run_id"
 );
 console.log(
-  "  prompt-mirror (Buyer Prompts — found by the audit, missed in the"
+  "  to that run. An identity leak (probeRequestLeaksClientIdentity)"
 );
-console.log("  first pass, corrected here) are now traced.");
+console.log(
+  "  marks the run failed WITHOUT fabricating a probe_failures row — no"
+);
+console.log("  failure_reason value truthfully describes that case.");
 console.log("");
 console.log(
   "LIMITATION 1: Static SQL assertions do not prove PostgreSQL grant/revoke"
@@ -1104,44 +1328,32 @@ console.log(
 console.log(
   "or CHECK-constraint enforcement. 0036 AND 0037 are both confirmed"
 );
-console.log("applied to staging. No new migration in this tranche.");
+console.log("applied to staging. No new migration in this tranche either.");
 console.log("");
 console.log(
-  "LIMITATION 2 (STILL OPEN): probe_failures.probe_run_id is always null"
+  "LIMITATION 2 (STILL OPEN): four of the seven M1-third-tranche stages"
 );
 console.log(
-  "for a first-call failure — no probe_runs row exists yet at that point"
+  "(competitor-discovery, gap-map, fix-brief, qa) remain verified by"
 );
-console.log("in the pipeline. Linking failures to a run is future work.");
+console.log(
+  "static source-text assertions plus a DB-level round trip using"
+);
+console.log("synthetic fixtures, not by invoking the real agent functions.");
 console.log("");
 console.log(
-  "LIMITATION 3 (STILL OPEN): four of the seven newly-wired stages"
+  "LIMITATION 3 (STILL OPEN, unchanged): there is still no retry"
 );
 console.log(
-  "(competitor-discovery, gap-map, fix-brief, qa) are verified by static"
+  "mechanism around a failed Perplexity attempt — retryCount remains"
 );
 console.log(
-  "source-text assertions plus a DB-level round trip using synthetic"
+  "hardcoded to 0. The probe_run-before-call design is retry-ready (a"
 );
 console.log(
-  "fixtures, not by invoking the real agent functions — they need"
+  "future retry loop could reuse the same run across attempts), but no"
 );
-console.log(
-  "complex domain fixtures (mirror profile, evidence bank, fix brief"
-);
-console.log(
-  "rows, etc.) not built here. site-reader (Mirror Profile),"
-);
-console.log(
-  "generate-asset (deterministic path), and prompt-mirror ARE exercised"
-);
-console.log(
-  "as real, live agent calls end to end. All seven share the identical"
-);
-console.log(
-  "callModel/parseJsonOrRetry code path already covered by the existing"
-);
-console.log("96-check pipeline-integrity suite, unmodified by this tranche.");
+console.log("retry logic was added — confirmed by this tranche's own tests.");
 console.log("─────────────────────────────────────────────────────────");
 
 applicationLayerChecks()

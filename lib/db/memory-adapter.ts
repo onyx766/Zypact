@@ -3,11 +3,17 @@ import { createPublicReportToken } from "@/lib/snapshot-requests/public-report-t
 import type {
   AnalysisLlmCall,
   AnalysisLlmCallInput,
+  CanonicalEntity,
+  CanonicalEntityInput,
   Competitor,
   CompetitorInput,
   CreateProjectInput,
   CreateSnapshotRequestInput,
+  DatasetBatch,
+  DatasetBatchInput,
   DbAdapter,
+  EntityAlias,
+  EntityAliasInput,
   EvidenceBankRow,
   EvidenceBankRowInput,
   FixBriefRow,
@@ -68,6 +74,9 @@ interface MemoryStore {
   probeResultsByProject: Map<string, ProbeResult[]>;
   analysisLlmCallsByProject: Map<string, AnalysisLlmCall[]>;
   probeFailuresByProject: Map<string, ProbeFailure[]>;
+  datasetBatches: Map<string, DatasetBatch>;
+  canonicalEntities: Map<string, CanonicalEntity>;
+  entityAliasesByProject: Map<string, EntityAlias[]>;
   competitorsByProject: Map<string, Competitor[]>;
   gapMapsByProject: Map<string, GapMapRow[]>;
   gapsByProject: Map<string, Gap[]>;
@@ -94,6 +103,9 @@ function getStore(): MemoryStore {
       probeResultsByProject: new Map(),
       analysisLlmCallsByProject: new Map(),
       probeFailuresByProject: new Map(),
+      datasetBatches: new Map(),
+      canonicalEntities: new Map(),
+      entityAliasesByProject: new Map(),
       competitorsByProject: new Map(),
       gapMapsByProject: new Map(),
       gapsByProject: new Map(),
@@ -1047,6 +1059,9 @@ export const memoryAdapter: DbAdapter = {
       platform,
       status,
       probeMode,
+      snapshotRequestId: null,
+      datasetId: null,
+      datasetSourceType: null,
       createdAt: new Date().toISOString(),
     };
     getStore().probeRuns.set(run.id, run);
@@ -1099,6 +1114,12 @@ export const memoryAdapter: DbAdapter = {
       providerRequestId: input.providerRequestId ?? null,
       providerModel: input.providerModel ?? null,
       retryCount: input.retryCount ?? 0,
+      snapshotRequestId: input.snapshotRequestId ?? null,
+      datasetId: input.datasetId ?? null,
+      datasetSourceType: input.datasetSourceType ?? null,
+      runPosition: input.runPosition ?? null,
+      negativeClaimDetected: input.negativeClaimDetected ?? null,
+      observationSchemaVersion: input.observationSchemaVersion ?? null,
       createdAt: new Date().toISOString(),
     };
     const store = getStore();
@@ -1183,6 +1204,124 @@ export const memoryAdapter: DbAdapter = {
     projectId: string
   ): Promise<ProbeFailure[]> {
     return [...(getStore().probeFailuresByProject.get(projectId) ?? [])].sort(
+      (a, b) => b.createdAt.localeCompare(a.createdAt)
+    );
+  },
+
+  // M2 canonical observations contract, first tranche (D-014) — dataset
+  // identity. Simulates the two database constraints so tests can rely
+  // on the same behavior a real Postgres migration will enforce.
+  async createDatasetBatch(input: DatasetBatchInput): Promise<DatasetBatch> {
+    const isSnapshotRequest = input.datasetSourceType === "snapshot_request";
+    const hasSnapshotRequestId = input.snapshotRequestId != null;
+    if (isSnapshotRequest !== hasSnapshotRequestId) {
+      throw new Error(
+        `dataset_batches_snapshot_request_id_check violated: datasetSourceType="${input.datasetSourceType}" requires snapshotRequestId to be ${isSnapshotRequest ? "non-null" : "null"}.`
+      );
+    }
+    const store = getStore();
+    if (input.backfillKey) {
+      const duplicate = [...store.datasetBatches.values()].find(
+        (b) => b.backfillKey === input.backfillKey
+      );
+      if (duplicate) {
+        throw new Error(
+          `dataset_batches_backfill_key_key violated: backfillKey "${input.backfillKey}" already exists on dataset_batches ${duplicate.id}.`
+        );
+      }
+    }
+    const row: DatasetBatch = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      datasetSourceType: input.datasetSourceType,
+      snapshotRequestId: input.snapshotRequestId ?? null,
+      backfillKey: input.backfillKey ?? null,
+      note: input.note ?? null,
+      createdAt: new Date().toISOString(),
+    };
+    store.datasetBatches.set(row.id, row);
+    return row;
+  },
+
+  async getDatasetBatchesByProject(projectId: string): Promise<DatasetBatch[]> {
+    return [...getStore().datasetBatches.values()]
+      .filter((b) => b.projectId === projectId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  },
+
+  // M2 canonical observations contract, first tranche (D-014) — entity
+  // resolution. No uniqueness constraint on canonical_entities itself
+  // beyond its primary key and the composite unique key that
+  // entity_aliases' foreign key depends on; nothing to simulate here
+  // beyond storing the row.
+  async createCanonicalEntity(
+    input: CanonicalEntityInput
+  ): Promise<CanonicalEntity> {
+    const row: CanonicalEntity = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      entityType: input.entityType,
+      resolverVersion: input.resolverVersion,
+      createdAt: new Date().toISOString(),
+    };
+    getStore().canonicalEntities.set(row.id, row);
+    return row;
+  },
+
+  async getCanonicalEntitiesByProject(
+    projectId: string
+  ): Promise<CanonicalEntity[]> {
+    return [...getStore().canonicalEntities.values()]
+      .filter((e) => e.projectId === projectId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  },
+
+  // Simulates both database constraints on entity_aliases: the
+  // composite foreign key to canonical_entities(id, project_id,
+  // entity_type), and UNIQUE(project_id, entity_type, normalized_text).
+  async createEntityAlias(input: EntityAliasInput): Promise<EntityAlias> {
+    const store = getStore();
+    const parent = store.canonicalEntities.get(input.canonicalEntityId);
+    if (
+      !parent ||
+      parent.projectId !== input.projectId ||
+      parent.entityType !== input.entityType
+    ) {
+      throw new Error(
+        `entity_aliases_canonical_entity_fk violated: no canonical_entities row matches (id="${input.canonicalEntityId}", projectId="${input.projectId}", entityType="${input.entityType}").`
+      );
+    }
+    const existingForProject =
+      store.entityAliasesByProject.get(input.projectId) ?? [];
+    const duplicate = existingForProject.find(
+      (a) =>
+        a.entityType === input.entityType &&
+        a.normalizedText === input.normalizedText
+    );
+    if (duplicate) {
+      throw new Error(
+        `entity_aliases_normalized_unique violated: (projectId="${input.projectId}", entityType="${input.entityType}", normalizedText="${input.normalizedText}") already resolves to entity_aliases ${duplicate.id}.`
+      );
+    }
+    const row: EntityAlias = {
+      id: randomUUID(),
+      canonicalEntityId: input.canonicalEntityId,
+      projectId: input.projectId,
+      entityType: input.entityType,
+      rawText: input.rawText,
+      normalizedText: input.normalizedText,
+      resolverVersion: input.resolverVersion,
+      createdAt: new Date().toISOString(),
+    };
+    store.entityAliasesByProject.set(input.projectId, [
+      ...existingForProject,
+      row,
+    ]);
+    return row;
+  },
+
+  async getEntityAliasesByProject(projectId: string): Promise<EntityAlias[]> {
+    return [...(getStore().entityAliasesByProject.get(projectId) ?? [])].sort(
       (a, b) => b.createdAt.localeCompare(a.createdAt)
     );
   },

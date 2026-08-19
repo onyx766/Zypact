@@ -59,12 +59,63 @@ export type ProbeRunStatus = "pending" | "succeeded" | "failed";
  */
 export type ProbeMode = "simulated" | "live_perplexity";
 
+/**
+ * M2 canonical observations contract, first tranche (D-014,
+ * METHODOLOGY.md v1.1) — how a dataset_batches row (and anything
+ * pointing to it) came to exist.
+ *
+ *   - "snapshot_request": the project has exactly one snapshot_requests
+ *     row; dataset_batches.snapshotRequestId is populated.
+ *   - "manual_scan": a dataset_batches row was created at the exact
+ *     moment of a manual scan invocation (scripts/mvp-scan.ts). No
+ *     historical row can be backfilled into this value — there is no
+ *     contemporaneous proof for anything created before this field
+ *     existed.
+ *   - "legacy_unresolved": every other historical case — zero or
+ *     multiple candidate snapshot_requests rows, or any origin that
+ *     cannot be proven. Never guessed.
+ */
+export type DatasetSourceType =
+  | "snapshot_request"
+  | "manual_scan"
+  | "legacy_unresolved";
+
+/**
+ * M2 canonical observations contract, first tranche (D-014,
+ * METHODOLOGY.md §9) — replaces the legacy `won`/`partial`/`lost`/
+ * `not_relevant` verdict at the run level. Sentiment
+ * (`negativeClaimDetected`) and relevance (formerly `not_relevant`)
+ * are tracked as separate fields, never folded into this position.
+ */
+export type RunPosition =
+  | "not_observed_in_run"
+  | "listed_in_run"
+  | "primary_in_run"
+  | "ambiguous_in_run"
+  | "analysis_failed";
+
 export interface ProbeRun {
   id: string;
   projectId: string;
   platform: string;
   status: ProbeRunStatus;
   probeMode: ProbeMode;
+  /**
+   * M2 canonical observations contract, first tranche — legacy,
+   * nullable compatibility field: a direct link to snapshot_requests,
+   * unrelated to dataset_id/dataset_batches. Not backfilled by this
+   * tranche.
+   */
+  snapshotRequestId?: string | null;
+  /**
+   * M2 canonical observations contract, first tranche — nullable in
+   * this tranche only because probe_runs is an existing, non-empty
+   * table. A follow-up migration adds NOT NULL once a backfill
+   * confirms zero remaining null rows (see D-014). Never populated by
+   * this tranche.
+   */
+  datasetId?: string | null;
+  datasetSourceType?: DatasetSourceType | null;
   createdAt: string;
 }
 
@@ -127,6 +178,23 @@ export interface ProbeResult {
   providerModel?: string | null;
   /** M1 evidence contract — number of provider retries for this attempt. */
   retryCount?: number;
+  /** M2 canonical observations contract, first tranche — see ProbeRun. */
+  snapshotRequestId?: string | null;
+  /** M2 canonical observations contract, first tranche — see ProbeRun. */
+  datasetId?: string | null;
+  datasetSourceType?: DatasetSourceType | null;
+  /**
+   * M2 canonical observations contract, first tranche — replaces
+   * `verdict` at the run level (§9). Nullable in this tranche; not
+   * backfilled or computed yet.
+   */
+  runPosition?: RunPosition | null;
+  /**
+   * M2 canonical observations contract, first tranche — sentiment,
+   * tracked separately from `runPosition` (D-014).
+   */
+  negativeClaimDetected?: boolean | null;
+  observationSchemaVersion?: number | null;
   createdAt: string;
 }
 
@@ -370,6 +438,15 @@ export interface SaveProbeResultInput {
   providerModel?: string | null;
   /** M1 evidence contract — number of provider retries for this attempt. */
   retryCount?: number;
+  /** M2 canonical observations contract, first tranche — see ProbeRun. */
+  snapshotRequestId?: string | null;
+  /** M2 canonical observations contract, first tranche — see ProbeRun. */
+  datasetId?: string | null;
+  datasetSourceType?: DatasetSourceType | null;
+  /** M2 canonical observations contract, first tranche — see ProbeResult. */
+  runPosition?: RunPosition | null;
+  negativeClaimDetected?: boolean | null;
+  observationSchemaVersion?: number | null;
 }
 
 /**
@@ -434,6 +511,77 @@ export interface RecordProbeFailureInput {
 }
 
 export interface ProbeFailure extends RecordProbeFailureInput {
+  id: string;
+  createdAt: string;
+}
+
+/**
+ * M2 canonical observations contract, first tranche (D-014) — synthetic
+ * dataset identity. Created before any dataset_id column can reference
+ * it, so a dataset_id can never be an orphaned reference: the foreign
+ * key is enforced by the database at write time, not by application
+ * discipline.
+ *
+ * `snapshotRequestId` is populated only when
+ * `datasetSourceType === "snapshot_request"`; the database CHECK
+ * constraint on `dataset_batches` enforces this in both directions.
+ *
+ * `backfillKey` is populated only by the (not-yet-existing) backfill
+ * script, to make rerunning it idempotent via a unique constraint. Live
+ * writes — one row per manual scan invocation, or one row per approved
+ * snapshot request — leave it null.
+ *
+ * No caller creates a row through this contract yet. Wiring is a later
+ * tranche; this first tranche is schema and types only.
+ */
+export interface DatasetBatchInput {
+  projectId: string;
+  datasetSourceType: DatasetSourceType;
+  snapshotRequestId?: string | null;
+  backfillKey?: string | null;
+  note?: string | null;
+}
+
+export interface DatasetBatch extends DatasetBatchInput {
+  id: string;
+  createdAt: string;
+}
+
+/**
+ * M2 canonical observations contract, first tranche (D-014) —
+ * deterministic, per-project entity identity. Never shared across
+ * tenants (METHODOLOGY.md §11). No caller populates this yet; entity
+ * resolution is a later tranche.
+ */
+export interface CanonicalEntityInput {
+  projectId: string;
+  entityType: "client" | "competitor" | "platform";
+  resolverVersion: number;
+}
+
+export interface CanonicalEntity extends CanonicalEntityInput {
+  id: string;
+  createdAt: string;
+}
+
+/**
+ * M2 canonical observations contract, first tranche (D-014) — a raw
+ * observed string resolved to a canonical entity. `projectId` and
+ * `entityType` are denormalized from the parent `CanonicalEntity` and
+ * enforced identical to it by a composite foreign key at the database
+ * layer, not by application discipline alone. No caller populates this
+ * yet; entity resolution is a later tranche.
+ */
+export interface EntityAliasInput {
+  canonicalEntityId: string;
+  projectId: string;
+  entityType: "client" | "competitor" | "platform";
+  rawText: string;
+  normalizedText: string;
+  resolverVersion: number;
+}
+
+export interface EntityAlias extends EntityAliasInput {
   id: string;
   createdAt: string;
 }
@@ -817,6 +965,22 @@ export interface DbAdapter {
   // M1 second tranche — persisted provider failures (separate from probe_results)
   recordProbeFailure(input: RecordProbeFailureInput): Promise<ProbeFailure>;
   getProbeFailuresByProject(projectId: string): Promise<ProbeFailure[]>;
+
+  // M2 canonical observations contract, first tranche (D-014) — dataset
+  // identity. No caller creates a row yet; wiring is a later tranche.
+  createDatasetBatch(input: DatasetBatchInput): Promise<DatasetBatch>;
+  getDatasetBatchesByProject(projectId: string): Promise<DatasetBatch[]>;
+
+  // M2 canonical observations contract, first tranche (D-014) — entity
+  // resolution. No caller populates these yet; wiring is a later tranche.
+  createCanonicalEntity(
+    input: CanonicalEntityInput
+  ): Promise<CanonicalEntity>;
+  getCanonicalEntitiesByProject(
+    projectId: string
+  ): Promise<CanonicalEntity[]>;
+  createEntityAlias(input: EntityAliasInput): Promise<EntityAlias>;
+  getEntityAliasesByProject(projectId: string): Promise<EntityAlias[]>;
 
   // Sprint 4 — Competitor Discovery
   replaceCompetitorsForProject(

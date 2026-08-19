@@ -7,11 +7,18 @@ import { snapshotReportWriteMode } from "./snapshot-write-mode";
 import type {
   AnalysisLlmCall,
   AnalysisLlmCallInput,
+  CanonicalEntity,
+  CanonicalEntityInput,
   Competitor,
   CompetitorInput,
   CreateProjectInput,
   CreateSnapshotRequestInput,
+  DatasetBatch,
+  DatasetBatchInput,
+  DatasetSourceType,
   DbAdapter,
+  EntityAlias,
+  EntityAliasInput,
   EvidenceBankProvenance,
   EvidenceBankRow,
   EvidenceBankRowInput,
@@ -33,6 +40,7 @@ import type {
   ProbeRun,
   ProbeRunStatus,
   Project,
+  RunPosition,
   QaReportRow,
   QaReportRowInput,
   RecordProbeFailureInput,
@@ -179,6 +187,10 @@ interface ProbeRunDbRow {
   status: string;
   /** Sprint 12 — added by migration 0012, defaults to 'simulated'. */
   probe_mode: string;
+  /** M2 canonical observations contract, first tranche — nullable. */
+  snapshot_request_id?: string | null;
+  dataset_id?: string | null;
+  dataset_source_type?: string | null;
   created_at: string;
 }
 
@@ -318,6 +330,13 @@ interface ProbeResultDbRow {
   provider_request_id?: string | null;
   provider_model?: string | null;
   retry_count?: number | null;
+  /** M2 canonical observations contract, first tranche — nullable. */
+  snapshot_request_id?: string | null;
+  dataset_id?: string | null;
+  dataset_source_type?: string | null;
+  run_position?: string | null;
+  negative_claim_detected?: boolean | null;
+  observation_schema_version?: number | null;
   created_at: string;
 }
 
@@ -363,6 +382,82 @@ function mapProbeFailure(r: ProbeFailureDbRow): ProbeFailure {
     rawProbeRequestSha256: r.raw_probe_request_sha256,
     fullRequestBodySha256: r.full_request_body_sha256,
     retryCount: r.retry_count,
+    createdAt: r.created_at,
+  };
+}
+
+interface DatasetBatchDbRow {
+  id: string;
+  project_id: string;
+  dataset_source_type: string;
+  snapshot_request_id: string | null;
+  backfill_key: string | null;
+  note: string | null;
+  created_at: string;
+}
+
+function coerceDatasetSourceType(value: string): DatasetSourceType {
+  return value === "snapshot_request" || value === "manual_scan" || value === "legacy_unresolved"
+    ? value
+    : "legacy_unresolved";
+}
+
+function mapDatasetBatch(r: DatasetBatchDbRow): DatasetBatch {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    datasetSourceType: coerceDatasetSourceType(r.dataset_source_type),
+    snapshotRequestId: r.snapshot_request_id,
+    backfillKey: r.backfill_key,
+    note: r.note,
+    createdAt: r.created_at,
+  };
+}
+
+interface CanonicalEntityDbRow {
+  id: string;
+  project_id: string;
+  entity_type: string;
+  resolver_version: number;
+  created_at: string;
+}
+
+function coerceEntityType(value: string): CanonicalEntity["entityType"] {
+  return value === "client" || value === "competitor" || value === "platform"
+    ? value
+    : "competitor";
+}
+
+function mapCanonicalEntity(r: CanonicalEntityDbRow): CanonicalEntity {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    entityType: coerceEntityType(r.entity_type),
+    resolverVersion: r.resolver_version,
+    createdAt: r.created_at,
+  };
+}
+
+interface EntityAliasDbRow {
+  id: string;
+  canonical_entity_id: string;
+  project_id: string;
+  entity_type: string;
+  raw_text: string;
+  normalized_text: string;
+  resolver_version: number;
+  created_at: string;
+}
+
+function mapEntityAlias(r: EntityAliasDbRow): EntityAlias {
+  return {
+    id: r.id,
+    canonicalEntityId: r.canonical_entity_id,
+    projectId: r.project_id,
+    entityType: coerceEntityType(r.entity_type),
+    rawText: r.raw_text,
+    normalizedText: r.normalized_text,
+    resolverVersion: r.resolver_version,
     createdAt: r.created_at,
   };
 }
@@ -550,6 +645,26 @@ function mapPrompt(r: GeneratedPromptDbRow): GeneratedPrompt {
   };
 }
 
+function coerceDatasetSourceTypeOrNull(
+  value: string | null | undefined
+): DatasetSourceType | null {
+  if (value == null) return null;
+  return coerceDatasetSourceType(value);
+}
+
+function coerceRunPositionOrNull(
+  value: string | null | undefined
+): RunPosition | null {
+  if (value == null) return null;
+  return value === "not_observed_in_run" ||
+    value === "listed_in_run" ||
+    value === "primary_in_run" ||
+    value === "ambiguous_in_run" ||
+    value === "analysis_failed"
+    ? value
+    : null;
+}
+
 function mapProbeRun(r: ProbeRunDbRow): ProbeRun {
   return {
     id: r.id,
@@ -557,6 +672,9 @@ function mapProbeRun(r: ProbeRunDbRow): ProbeRun {
     platform: r.platform,
     status: r.status as ProbeRunStatus,
     probeMode: coerceProbeMode(r.probe_mode),
+    snapshotRequestId: r.snapshot_request_id ?? null,
+    datasetId: r.dataset_id ?? null,
+    datasetSourceType: coerceDatasetSourceTypeOrNull(r.dataset_source_type),
     createdAt: r.created_at,
   };
 }
@@ -782,6 +900,12 @@ function mapProbeResult(r: ProbeResultDbRow): ProbeResult {
     providerRequestId: r.provider_request_id ?? null,
     providerModel: r.provider_model ?? null,
     retryCount: r.retry_count ?? 0,
+    snapshotRequestId: r.snapshot_request_id ?? null,
+    datasetId: r.dataset_id ?? null,
+    datasetSourceType: coerceDatasetSourceTypeOrNull(r.dataset_source_type),
+    runPosition: coerceRunPositionOrNull(r.run_position),
+    negativeClaimDetected: r.negative_claim_detected ?? null,
+    observationSchemaVersion: r.observation_schema_version ?? null,
     createdAt: r.created_at,
   };
 }
@@ -1494,6 +1618,9 @@ export const supabaseAdapter: DbAdapter = {
   ): Promise<ProbeRun> {
     const { data, error } = await getClient()
       .from("probe_runs")
+      // M2 canonical observations contract, first tranche — this call
+      // does not yet accept dataset_id/dataset_source_type parameters.
+      // No caller sets them; a later tranche extends this signature.
       .insert({
         project_id: projectId,
         platform,
@@ -1559,6 +1686,12 @@ export const supabaseAdapter: DbAdapter = {
         provider_request_id: input.providerRequestId ?? null,
         provider_model: input.providerModel ?? null,
         retry_count: input.retryCount ?? 0,
+        snapshot_request_id: input.snapshotRequestId ?? null,
+        dataset_id: input.datasetId ?? null,
+        dataset_source_type: input.datasetSourceType ?? null,
+        run_position: input.runPosition ?? null,
+        negative_claim_detected: input.negativeClaimDetected ?? null,
+        observation_schema_version: input.observationSchemaVersion ?? null,
       })
       .select("*")
       .single<ProbeResultDbRow>();
@@ -1657,6 +1790,95 @@ export const supabaseAdapter: DbAdapter = {
       .order("created_at", { ascending: false });
     if (error) throw error;
     return (data ?? []).map((r) => mapProbeFailure(r as ProbeFailureDbRow));
+  },
+
+  // M2 canonical observations contract, first tranche (D-014) — dataset
+  // identity. No caller creates a row yet; the composite CHECK and the
+  // backfill_key uniqueness are enforced by the database, not here.
+  async createDatasetBatch(input: DatasetBatchInput): Promise<DatasetBatch> {
+    const { data, error } = await getClient()
+      .from("dataset_batches")
+      .insert({
+        project_id: input.projectId,
+        dataset_source_type: input.datasetSourceType,
+        snapshot_request_id: input.snapshotRequestId ?? null,
+        backfill_key: input.backfillKey ?? null,
+        note: input.note ?? null,
+      })
+      .select("*")
+      .single<DatasetBatchDbRow>();
+    if (error || !data) throw error ?? new Error("createDatasetBatch failed");
+    return mapDatasetBatch(data);
+  },
+
+  async getDatasetBatchesByProject(projectId: string): Promise<DatasetBatch[]> {
+    const { data, error } = await getClient()
+      .from("dataset_batches")
+      .select("*")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return (data ?? []).map((r) => mapDatasetBatch(r as DatasetBatchDbRow));
+  },
+
+  // M2 canonical observations contract, first tranche (D-014) — entity
+  // resolution. No caller populates these yet.
+  async createCanonicalEntity(
+    input: CanonicalEntityInput
+  ): Promise<CanonicalEntity> {
+    const { data, error } = await getClient()
+      .from("canonical_entities")
+      .insert({
+        project_id: input.projectId,
+        entity_type: input.entityType,
+        resolver_version: input.resolverVersion,
+      })
+      .select("*")
+      .single<CanonicalEntityDbRow>();
+    if (error || !data) throw error ?? new Error("createCanonicalEntity failed");
+    return mapCanonicalEntity(data);
+  },
+
+  async getCanonicalEntitiesByProject(
+    projectId: string
+  ): Promise<CanonicalEntity[]> {
+    const { data, error } = await getClient()
+      .from("canonical_entities")
+      .select("*")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return (data ?? []).map((r) => mapCanonicalEntity(r as CanonicalEntityDbRow));
+  },
+
+  // The composite foreign key to canonical_entities(id, project_id,
+  // entity_type) and UNIQUE(project_id, entity_type, normalized_text)
+  // are enforced by the database; a violation surfaces as `error` here.
+  async createEntityAlias(input: EntityAliasInput): Promise<EntityAlias> {
+    const { data, error } = await getClient()
+      .from("entity_aliases")
+      .insert({
+        canonical_entity_id: input.canonicalEntityId,
+        project_id: input.projectId,
+        entity_type: input.entityType,
+        raw_text: input.rawText,
+        normalized_text: input.normalizedText,
+        resolver_version: input.resolverVersion,
+      })
+      .select("*")
+      .single<EntityAliasDbRow>();
+    if (error || !data) throw error ?? new Error("createEntityAlias failed");
+    return mapEntityAlias(data);
+  },
+
+  async getEntityAliasesByProject(projectId: string): Promise<EntityAlias[]> {
+    const { data, error } = await getClient()
+      .from("entity_aliases")
+      .select("*")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return (data ?? []).map((r) => mapEntityAlias(r as EntityAliasDbRow));
   },
 
   async replaceCompetitorsForProject(

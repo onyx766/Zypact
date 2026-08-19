@@ -40,6 +40,14 @@ export interface RunCompetitorDiscoveryResult {
   output: CompetitorDiscoveryOutput;
   usedMock: boolean;
   usedRetry: boolean;
+  /** M1 evidence contract — provider that produced the final accepted output. */
+  provider: "openai" | "anthropic" | "mock";
+  /** M1 evidence contract — exact model string used for the final accepted output. */
+  model: string;
+  /** M1 evidence contract — wall-clock milliseconds across the call (plus repair retry, if any). */
+  latencyMs: number;
+  /** M1 evidence contract — exact request text sent to the model (system + user). */
+  requestText: string;
 }
 
 const MAX_PROBE_CHARS = 20_000;
@@ -160,12 +168,14 @@ export async function runCompetitorDiscoveryAgent(
     jsonSchema: COMPETITOR_DISCOVERY_JSON_SCHEMA,
   };
 
+  const startedAt = Date.now();
   const initial = await callModel(call);
   const parsed = await parseJsonOrRetry({
     schema: CompetitorDiscoveryOutputSchema,
     rawOutput: initial.content,
     originalCall: call,
   });
+  const latencyMs = Date.now() - startedAt;
 
   if (!parsed.ok) {
     throw new Error(
@@ -180,6 +190,10 @@ export async function runCompetitorDiscoveryAgent(
     output: parsed.data,
     usedMock: initial.usedMock,
     usedRetry: parsed.usedRetry,
+    provider: initial.provider,
+    model: initial.model,
+    latencyMs,
+    requestText: `${call.system}\n\n${call.user}`,
   };
 }
 

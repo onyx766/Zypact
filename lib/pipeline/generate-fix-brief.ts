@@ -1,4 +1,5 @@
 import { runFixBriefAgent } from "@/lib/agents/fix-agent";
+import { recordAnalysisTrace } from "@/lib/evidence/analysis-trace";
 import { getDb } from "@/lib/db";
 import type { FixBriefRow, FixBriefRowInput, ProbeResult } from "@/lib/db/types";
 import { hasUsableEvidenceBank } from "@/lib/evidence-bank/has-usable-evidence-bank";
@@ -181,6 +182,21 @@ export async function generateFixBrief(
           evidenceBank,
         })
     );
+
+    // M1 evidence contract, third tranche. Traces the model's raw
+    // accepted output, before the grounding rewrite below — the trace
+    // records what the model actually said, not what we corrected it to.
+    await recordAnalysisTrace({
+      projectId: input.projectId,
+      stage: "fix-brief",
+      provider: agent.provider,
+      model: agent.model,
+      usedMock: agent.usedMock,
+      usedRetry: agent.usedRetry,
+      latencyMs: agent.latencyMs,
+      requestText: agent.requestText,
+      responseValue: agent.output,
+    });
 
     // The grounded values replace the model's on the returned output too:
     // a caller rendering `result.output` must not see causal prose or a

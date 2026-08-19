@@ -1,4 +1,5 @@
 import { runCompetitorDiscoveryAgent } from "@/lib/agents/competitor-discovery";
+import { recordAnalysisTrace } from "@/lib/evidence/analysis-trace";
 import { getDb } from "@/lib/db";
 import { buildProbeSetSummary } from "@/lib/probe-results/report-selection";
 import { isAiPlatformName } from "@/lib/ai-platforms/platform-registry";
@@ -107,6 +108,19 @@ export async function discoverCompetitors(
           priorityByPromptId,
         })
     );
+
+    // M1 evidence contract, third tranche.
+    await recordAnalysisTrace({
+      projectId: input.projectId,
+      stage: "competitor-discovery",
+      provider: agent.provider,
+      model: agent.model,
+      usedMock: agent.usedMock,
+      usedRetry: agent.usedRetry,
+      latencyMs: agent.latencyMs,
+      requestText: agent.requestText,
+      responseValue: agent.output,
+    });
 
     const phantomSet = new Set(
       agent.output.phantomCompetitors.map(normalizeKey)

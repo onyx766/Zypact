@@ -1,5 +1,6 @@
 import { crawlSite, type CrawledPage } from "@/lib/crawler/crawl-site";
 import { runSiteReaderAgent } from "@/lib/agents/site-reader";
+import { recordAnalysisTrace } from "@/lib/evidence/analysis-trace";
 import { getDb } from "@/lib/db";
 import type { DbAdapter, Project, MirrorProfileRow } from "@/lib/db/types";
 import { getPagesCrawlLimit, type PlanId, DEFAULT_PLAN } from "@/lib/pricing/pricing-config";
@@ -201,6 +202,20 @@ export async function runMirrorScan(
           companyNameHint: input.companyName,
         })
     );
+
+    // M1 evidence contract, third tranche — internal-analysis traceability
+    // for the Mirror Profile stage, separate from probe evidence.
+    await recordAnalysisTrace({
+      projectId: project.id,
+      stage: "site-reader",
+      provider: reader.provider,
+      model: reader.model,
+      usedMock: reader.usedMock,
+      usedRetry: reader.usedRetry,
+      latencyMs: reader.latencyMs,
+      requestText: reader.requestText,
+      responseValue: reader.output,
+    });
 
     const mirrorProfileRow = await db.saveMirrorProfile(project.id, reader.output);
 

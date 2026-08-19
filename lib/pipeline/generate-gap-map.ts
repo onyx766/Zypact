@@ -1,4 +1,5 @@
 import { runGapMapAgent } from "@/lib/agents/gap-map";
+import { recordAnalysisTrace } from "@/lib/evidence/analysis-trace";
 import {
   buildDiagnosticCompetitors,
   buildScorecardCompetitorEvidence,
@@ -120,6 +121,19 @@ export async function generateGapMap(
           competitorEvidence,
         })
     );
+
+    // M1 evidence contract, third tranche.
+    await recordAnalysisTrace({
+      projectId: input.projectId,
+      stage: "gap-map",
+      provider: agent.provider,
+      model: agent.model,
+      usedMock: agent.usedMock,
+      usedRetry: agent.usedRetry,
+      latencyMs: agent.latencyMs,
+      requestText: agent.requestText,
+      responseValue: agent.output,
+    });
 
     const gapMapRow = await db.saveGapMap(input.projectId, agent.output);
 

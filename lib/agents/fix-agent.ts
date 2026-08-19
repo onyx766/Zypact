@@ -83,6 +83,14 @@ export interface RunFixBriefResult {
   output: FixBriefOutput;
   usedMock: boolean;
   usedRetry: boolean;
+  /** M1 evidence contract — provider that produced the final accepted output. */
+  provider: "openai" | "anthropic" | "mock";
+  /** M1 evidence contract — exact model string used for the final accepted output. */
+  model: string;
+  /** M1 evidence contract — wall-clock milliseconds across the call (plus repair retry, if any). */
+  latencyMs: number;
+  /** M1 evidence contract — exact request text sent to the model (system + user). */
+  requestText: string;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -201,12 +209,14 @@ export async function runFixBriefAgent(
   // no path that persists an unvalidated claim.
   const schema = buildValidatedFixBriefSchema(input.grounding);
 
+  const startedAt = Date.now();
   const initial = await callModel(call);
   const parsed = await parseJsonOrRetry({
     schema,
     rawOutput: initial.content,
     originalCall: call,
   });
+  const latencyMs = Date.now() - startedAt;
 
   if (!parsed.ok) {
     throw new Error(
@@ -221,6 +231,10 @@ export async function runFixBriefAgent(
     output: parsed.data as FixBriefOutput,
     usedMock: initial.usedMock,
     usedRetry: parsed.usedRetry,
+    provider: initial.provider,
+    model: initial.model,
+    latencyMs,
+    requestText: `${call.system}\n\n${call.user}`,
   };
 }
 
@@ -467,6 +481,18 @@ export interface RunGenerateAssetResult {
   /** Sprint 13B.1 — persisted traceability for asset-generation benchmarks. */
   generationProvider: string;
   generationModel: string;
+  /**
+   * M1 evidence contract — wall-clock milliseconds across the call (plus
+   * repair retry, if any). 0 for the deterministic `json_ld_schema` path,
+   * which never calls the model.
+   */
+  latencyMs: number;
+  /**
+   * M1 evidence contract — exact request text sent to the model. Empty
+   * for the deterministic `json_ld_schema` path, which never calls the
+   * model — there is no request to record.
+   */
+  requestText: string;
 }
 
 function slimFixBriefForAgent(f: FixBriefRow): unknown {
@@ -520,6 +546,8 @@ export async function runGenerateAssetAgent(
       usedRetry: false,
       generationProvider: "deterministic",
       generationModel: "json_ld_template_v1",
+      latencyMs: 0,
+      requestText: "",
     };
   }
 
@@ -538,6 +566,7 @@ export async function runGenerateAssetAgent(
     model: assetGenerationModel,
   };
 
+  const startedAt = Date.now();
   const initial = await callModel(call);
   const parsed = await parseJsonOrRetry({
     schema: GeneratedAssetOutputSchema,
@@ -546,6 +575,7 @@ export async function runGenerateAssetAgent(
     preNormalize: (raw) =>
       preNormalizeGeneratedAssetContent(raw, input.assetType),
   });
+  const latencyMs = Date.now() - startedAt;
 
   if (!parsed.ok) {
     throw new Error(
@@ -562,6 +592,8 @@ export async function runGenerateAssetAgent(
     usedRetry: parsed.usedRetry,
     generationProvider: initial.provider,
     generationModel: initial.model,
+    latencyMs,
+    requestText: `${call.system}\n\n${call.user}`,
   };
 }
 

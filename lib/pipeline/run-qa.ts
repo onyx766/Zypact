@@ -1,4 +1,5 @@
 import { runQaAgent } from "@/lib/agents/qa-agent";
+import { recordAnalysisTrace } from "@/lib/evidence/analysis-trace";
 import { getDb } from "@/lib/db";
 import type { GeneratedAssetRow, QaReportRow } from "@/lib/db/types";
 import { hasUsableEvidenceBank } from "@/lib/evidence-bank/has-usable-evidence-bank";
@@ -144,6 +145,20 @@ export async function runQa(input: RunQaInput): Promise<RunQaResult> {
           mirrorProfile,
         }),
     );
+
+    // M1 evidence contract, third tranche. Traces the model's raw
+    // accepted output, before the deterministic QA layers below merge in.
+    await recordAnalysisTrace({
+      projectId: input.projectId,
+      stage: "qa",
+      provider: agent.provider,
+      model: agent.model,
+      usedMock: agent.usedMock,
+      usedRetry: agent.usedRetry,
+      latencyMs: agent.latencyMs,
+      requestText: agent.requestText,
+      responseValue: agent.output,
+    });
 
     // Sprint 12 — merge deterministic QA findings before we persist.
     //

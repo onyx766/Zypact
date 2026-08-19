@@ -1,4 +1,5 @@
 import { runPromptMirrorAgent } from "@/lib/agents/prompt-mirror";
+import { recordAnalysisTrace } from "@/lib/evidence/analysis-trace";
 import { getDb } from "@/lib/db";
 import type { GeneratedPrompt, GeneratedPromptInput } from "@/lib/db/types";
 import {
@@ -72,6 +73,21 @@ export async function generateBuyerPrompts(
           userInputs: input.userInputs,
         })
     );
+
+    // M1 evidence contract, third-tranche correction — prompt-mirror was
+    // discovered during the call-site audit but missed in the initial
+    // wiring pass. Now traced like the other five stages.
+    await recordAnalysisTrace({
+      projectId: input.projectId,
+      stage: "prompt-mirror",
+      provider: agent.provider,
+      model: agent.model,
+      usedMock: agent.usedMock,
+      usedRetry: agent.usedRetry,
+      latencyMs: agent.latencyMs,
+      requestText: agent.requestText,
+      responseValue: agent.output,
+    });
 
     // Sprint 13C: do not let the model optimize only for winnability.
     // Probe sets must include commercial shortlist intents and de-duplicate

@@ -3,6 +3,8 @@ import { createPublicReportToken } from "@/lib/snapshot-requests/public-report-t
 import type {
   AnalysisLlmCall,
   AnalysisLlmCallInput,
+  BackfillProbeResultDatasetIdentityInput,
+  BackfillProbeResultDatasetIdentityResult,
   CanonicalEntity,
   CanonicalEntityInput,
   Competitor,
@@ -11,6 +13,7 @@ import type {
   CreateSnapshotRequestInput,
   DatasetBatch,
   DatasetBatchInput,
+  DatasetSourceType,
   DbAdapter,
   EntityAlias,
   EntityAliasInput,
@@ -149,6 +152,14 @@ export const memoryAdapter: DbAdapter = {
     return request
       ? { ...request }
       : null;
+  },
+
+  async getSnapshotRequestsByProject(
+    projectId: string
+  ): Promise<SnapshotRequest[]> {
+    return [...getStore().snapshotRequests.values()].filter(
+      (r) => r.projectId === projectId
+    );
   },
 
   async getSnapshotReportArtifact(
@@ -1324,6 +1335,91 @@ export const memoryAdapter: DbAdapter = {
     return [...(getStore().entityAliasesByProject.get(projectId) ?? [])].sort(
       (a, b) => b.createdAt.localeCompare(a.createdAt)
     );
+  },
+
+  // M2 canonical observations contract, second tranche — probe_runs was
+  // never append-only restricted; a plain in-place update is correct.
+  async updateProbeRunDatasetIdentity(
+    id: string,
+    input: { datasetId: string; datasetSourceType: DatasetSourceType }
+  ): Promise<void> {
+    const store = getStore();
+    const run = store.probeRuns.get(id);
+    if (run) {
+      store.probeRuns.set(id, {
+        ...run,
+        datasetId: input.datasetId,
+        datasetSourceType: input.datasetSourceType,
+      });
+    }
+  },
+
+  // M2 canonical observations contract, second tranche (D-015) —
+  // simulates the backfill_probe_result_dataset_identity SECURITY
+  // DEFINER RPC's exact four-status contract, so tests can rely on the
+  // same behavior the real Postgres function will enforce.
+  async backfillProbeResultDatasetIdentity(
+    input: BackfillProbeResultDatasetIdentityInput
+  ): Promise<BackfillProbeResultDatasetIdentityResult> {
+    const store = getStore();
+    const list = store.probeResultsByProject.get(input.projectId) ?? [];
+    const index = list.findIndex(
+      (r) => r.id === input.probeResultId && r.projectId === input.projectId
+    );
+    if (index === -1) {
+      return { status: "NOT_FOUND", probeResult: null };
+    }
+    const row = list[index]!;
+
+    const batch = [...store.datasetBatches.values()].find(
+      (b) => b.id === input.datasetId
+    );
+    if (
+      !batch ||
+      batch.projectId !== input.projectId ||
+      batch.datasetSourceType !== input.datasetSourceType
+    ) {
+      throw new Error(
+        `invalid_backfill_dataset_batch: no dataset_batches row matches (id="${input.datasetId}", projectId="${input.projectId}", datasetSourceType="${input.datasetSourceType}").`
+      );
+    }
+
+    const sameOrBothNull = <T,>(a: T | null | undefined, b: T | null | undefined): boolean =>
+      (a ?? null) === (b ?? null);
+
+    const matches =
+      row.datasetId === input.datasetId &&
+      row.datasetSourceType === input.datasetSourceType &&
+      sameOrBothNull(row.runPosition, input.runPosition) &&
+      sameOrBothNull(row.negativeClaimDetected, input.negativeClaimDetected) &&
+      sameOrBothNull(row.observationSchemaVersion, input.observationSchemaVersion);
+
+    if (matches) {
+      return { status: "ALREADY_APPLIED", probeResult: row };
+    }
+
+    const allNull =
+      row.datasetId == null &&
+      row.datasetSourceType == null &&
+      row.runPosition == null &&
+      row.negativeClaimDetected == null &&
+      row.observationSchemaVersion == null;
+
+    if (!allNull) {
+      return { status: "CONFLICT", probeResult: row };
+    }
+
+    const updated: ProbeResult = {
+      ...row,
+      datasetId: input.datasetId,
+      datasetSourceType: input.datasetSourceType,
+      runPosition: input.runPosition ?? null,
+      negativeClaimDetected: input.negativeClaimDetected ?? null,
+      observationSchemaVersion: input.observationSchemaVersion ?? null,
+    };
+    list[index] = updated;
+    store.probeResultsByProject.set(input.projectId, list);
+    return { status: "APPLIED", probeResult: updated };
   },
 
   async replaceCompetitorsForProject(

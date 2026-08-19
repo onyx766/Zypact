@@ -586,6 +586,34 @@ export interface EntityAlias extends EntityAliasInput {
   createdAt: string;
 }
 
+/**
+ * M2 canonical observations contract, second tranche (D-015) — the
+ * exact four-status return contract of the `backfill_probe_result_
+ * dataset_identity` SECURITY DEFINER RPC. Always exactly one result,
+ * never an empty/absent outcome, so NOT_FOUND and CONFLICT stay
+ * distinguishable.
+ */
+export type BackfillProbeResultDatasetIdentityStatus =
+  | "APPLIED"
+  | "ALREADY_APPLIED"
+  | "NOT_FOUND"
+  | "CONFLICT";
+
+export interface BackfillProbeResultDatasetIdentityInput {
+  probeResultId: string;
+  projectId: string;
+  datasetId: string;
+  datasetSourceType: DatasetSourceType;
+  runPosition?: RunPosition | null;
+  negativeClaimDetected?: boolean | null;
+  observationSchemaVersion?: number | null;
+}
+
+export interface BackfillProbeResultDatasetIdentityResult {
+  status: BackfillProbeResultDatasetIdentityStatus;
+  probeResult: ProbeResult | null;
+}
+
 export type SnapshotRequestStatus =
   | "pending_verification"
   | "verified"
@@ -777,6 +805,14 @@ export interface DbAdapter {
     limit?: number
   ): Promise<SnapshotRequest[]>;
 
+  /**
+   * M2 canonical observations contract, second tranche — used by the
+   * historical backfill's classification rule (D-014): a project
+   * backfills as "snapshot_request" only when this returns exactly one
+   * row; zero or several means "legacy_unresolved", never guessed.
+   */
+  getSnapshotRequestsByProject(projectId: string): Promise<SnapshotRequest[]>;
+
   getSnapshotReportArtifact(
     requestId: string
   ): Promise<SnapshotReportArtifact | null>;
@@ -967,9 +1003,26 @@ export interface DbAdapter {
   getProbeFailuresByProject(projectId: string): Promise<ProbeFailure[]>;
 
   // M2 canonical observations contract, first tranche (D-014) — dataset
-  // identity. No caller creates a row yet; wiring is a later tranche.
+  // identity.
   createDatasetBatch(input: DatasetBatchInput): Promise<DatasetBatch>;
   getDatasetBatchesByProject(projectId: string): Promise<DatasetBatch[]>;
+  // M2 canonical observations contract, second tranche — probe_runs was
+  // never append-only restricted, so this is a plain UPDATE, not an RPC.
+  updateProbeRunDatasetIdentity(
+    id: string,
+    input: { datasetId: string; datasetSourceType: DatasetSourceType }
+  ): Promise<void>;
+  // M2 canonical observations contract, second tranche (D-015) — the
+  // only path capable of writing dataset_id/dataset_source_type/
+  // run_position/negative_claim_detected/observation_schema_version
+  // onto an EXISTING probe_results row. probe_results has had UPDATE
+  // revoked from service_role since migration 0036 (append-only); this
+  // calls the SECURITY DEFINER RPC added by D-015, never a direct
+  // UPDATE. New rows still set these columns at INSERT time via
+  // saveProbeResult, which is unaffected by the 0036 revoke.
+  backfillProbeResultDatasetIdentity(
+    input: BackfillProbeResultDatasetIdentityInput
+  ): Promise<BackfillProbeResultDatasetIdentityResult>;
 
   // M2 canonical observations contract, first tranche (D-014) — entity
   // resolution. No caller populates these yet; wiring is a later tranche.

@@ -1,6 +1,6 @@
 import { runProbeAnalysisAgent } from "@/lib/agents/probe-analysis";
 import { getDb } from "@/lib/db";
-import type { ProbeMode, ProbeResult } from "@/lib/db/types";
+import type { DatasetSourceType, ProbeMode, ProbeResult } from "@/lib/db/types";
 import { sha256Hex } from "@/lib/evidence/hash";
 import { mergeSourcesFromRawResponse } from "@/lib/probe-analysis/merge-sources";
 import { classifyProductRecommendation } from "@/lib/probe-analysis/product-recommendation";
@@ -63,6 +63,16 @@ export interface AnalyzeProbeResponseInput {
   providerRequestId?: string | null;
   providerModel?: string;
   retryCount?: number;
+  /**
+   * M2 canonical observations contract, second tranche (D-014) — the
+   * dataset_batches row the caller already resolved/created before
+   * calling this function. Optional so this function stays backward
+   * compatible with callers not yet wired to a dataset identity;
+   * omitted, `dataset_id`/`dataset_source_type` are left null on the
+   * saved row, exactly as tranche 1 left them.
+   */
+  datasetId?: string;
+  datasetSourceType?: DatasetSourceType;
 }
 
 export type AnalyzeProbeResponseResult =
@@ -230,6 +240,8 @@ export async function analyzeProbeResponse(
       providerRequestId: input.providerRequestId,
       providerModel: input.providerModel,
       retryCount: input.retryCount,
+      datasetId: input.datasetId,
+      datasetSourceType: input.datasetSourceType,
     });
 
     await db.updateProbeRunStatus(probeRun.id, "succeeded");

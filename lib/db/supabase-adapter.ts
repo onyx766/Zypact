@@ -7,6 +7,9 @@ import { snapshotReportWriteMode } from "./snapshot-write-mode";
 import type {
   AnalysisLlmCall,
   AnalysisLlmCallInput,
+  BackfillProbeResultDatasetIdentityInput,
+  BackfillProbeResultDatasetIdentityResult,
+  BackfillProbeResultDatasetIdentityStatus,
   CanonicalEntity,
   CanonicalEntityInput,
   Competitor,
@@ -927,6 +930,18 @@ export const supabaseAdapter: DbAdapter = {
     return data
       ? mapSnapshotRequest(data)
       : null;
+  },
+
+  async getSnapshotRequestsByProject(
+    projectId: string
+  ): Promise<SnapshotRequest[]> {
+    const { data, error } = await getClient()
+      .from("snapshot_requests")
+      .select("*")
+      .eq("project_id", projectId);
+
+    if (error) throw error;
+    return (data ?? []).map((r) => mapSnapshotRequest(r as SnapshotRequestDbRow));
   },
 
   async getSnapshotReportArtifact(
@@ -1879,6 +1894,55 @@ export const supabaseAdapter: DbAdapter = {
       .order("created_at", { ascending: false });
     if (error) throw error;
     return (data ?? []).map((r) => mapEntityAlias(r as EntityAliasDbRow));
+  },
+
+  // M2 canonical observations contract, second tranche — probe_runs was
+  // never append-only restricted; a plain UPDATE is correct here.
+  async updateProbeRunDatasetIdentity(
+    id: string,
+    input: { datasetId: string; datasetSourceType: DatasetSourceType }
+  ): Promise<void> {
+    const { error } = await getClient()
+      .from("probe_runs")
+      .update({
+        dataset_id: input.datasetId,
+        dataset_source_type: input.datasetSourceType,
+      })
+      .eq("id", id);
+    if (error) throw error;
+  },
+
+  // M2 canonical observations contract, second tranche (D-015) — calls
+  // the SECURITY DEFINER RPC. Never a direct UPDATE on probe_results,
+  // which has had UPDATE revoked from service_role since migration 0036.
+  async backfillProbeResultDatasetIdentity(
+    input: BackfillProbeResultDatasetIdentityInput
+  ): Promise<BackfillProbeResultDatasetIdentityResult> {
+    const { data, error } = await getClient().rpc(
+      "backfill_probe_result_dataset_identity",
+      {
+        p_probe_result_id: input.probeResultId,
+        p_project_id: input.projectId,
+        p_dataset_id: input.datasetId,
+        p_dataset_source_type: input.datasetSourceType,
+        p_run_position: input.runPosition ?? null,
+        p_negative_claim_detected: input.negativeClaimDetected ?? null,
+        p_observation_schema_version: input.observationSchemaVersion ?? null,
+      }
+    );
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "backfillProbeResultDatasetIdentity: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      status: row.status as BackfillProbeResultDatasetIdentityStatus,
+      probeResult: row.probe_result
+        ? mapProbeResult(row.probe_result as ProbeResultDbRow)
+        : null,
+    };
   },
 
   async replaceCompetitorsForProject(

@@ -1,5 +1,5 @@
 import { getDb } from "@/lib/db";
-import type { GeneratedPrompt, ProbeResult } from "@/lib/db/types";
+import type { DatasetSourceType, GeneratedPrompt, ProbeResult } from "@/lib/db/types";
 import { chooseCommercialPromptRows } from "@/lib/prompts/commercial-selection";
 import { PerplexityProbeFailure, runPerplexityProbe } from "@/lib/probes/perplexity";
 import { analyzeProbeResponse } from "@/lib/pipeline/analyze-probe-response";
@@ -13,6 +13,18 @@ export interface RunLivePerplexityProbesInput {
   runsPerPrompt?: number;
   promptIds?: string[];
   requireClientMentionedSomewhere?: boolean;
+  /**
+   * M2 canonical observations contract, second tranche (D-014) — the
+   * dataset_batches row the caller already resolved or created before
+   * calling this function. This function never creates or infers a
+   * dataset identity itself: it has no way to know whether it is
+   * running under an approved snapshot request or a bare manual
+   * invocation, so guessing here would risk misclassifying as
+   * manual_scan. Missing either field fails the call explicitly (see
+   * below) rather than silently writing a null dataset identity.
+   */
+  datasetId: string;
+  datasetSourceType: DatasetSourceType;
 }
 
 export type RunLivePerplexityProbesResult =
@@ -69,6 +81,18 @@ export async function runLivePerplexityProbes(
   input: RunLivePerplexityProbesInput,
 ): Promise<RunLivePerplexityProbesResult> {
   const db = getDb();
+  // M2 canonical observations contract, second tranche (D-014) — fail
+  // explicitly rather than writing a null dataset identity. This
+  // function is never the place that decides manual_scan vs.
+  // snapshot_request; the caller must have resolved it already.
+  if (!input.datasetId || !input.datasetSourceType) {
+    return {
+      ok: false,
+      error: "runLivePerplexityProbes requires a pre-resolved datasetId and datasetSourceType; this function does not create or infer a dataset_batches row.",
+      projectId: input.projectId,
+      probesRun: 0,
+    };
+  }
   const project = await db.getProject(input.projectId);
   if (!project) return { ok: false, error: "Project not found", projectId: input.projectId, probesRun: 0 };
 
@@ -115,6 +139,10 @@ export async function runLivePerplexityProbes(
         "live_perplexity",
         "pending"
       );
+      await db.updateProbeRunDatasetIdentity(probeRun.id, {
+        datasetId: input.datasetId,
+        datasetSourceType: input.datasetSourceType,
+      });
 
       let live;
       try {
@@ -212,6 +240,8 @@ export async function runLivePerplexityProbes(
         providerRequestId: live.providerRequestId,
         providerModel: live.model,
         retryCount: 0,
+        datasetId: input.datasetId,
+        datasetSourceType: input.datasetSourceType,
       });
       if (!analyzed.ok) {
         return {

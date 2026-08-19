@@ -14,6 +14,7 @@ import { createClient } from "@supabase/supabase-js";
 
 import { getDb } from "@/lib/db";
 import type {
+  DatasetBatch,
   GeneratedPrompt,
   ProbeMode,
   ProbeResult,
@@ -21,6 +22,7 @@ import type {
   QaReportRow,
   SnapshotProgressStage,
 } from "@/lib/db/types";
+import { resolveDatasetBatchForInvocation } from "@/lib/evidence/resolve-dataset-batch";
 import { runMirrorScan } from "@/lib/pipeline/run-mirror-scan";
 import { generateBuyerPrompts } from "@/lib/pipeline/generate-buyer-prompts";
 import { getOrCreateEvidenceBank } from "@/lib/pipeline/get-or-create-evidence-bank";
@@ -509,14 +511,20 @@ function makeSimulatedResponse(prompt: string, brand: string, competitors: strin
   ].join(" ");
 }
 
-async function saveSimulatedProbe(projectId: string, prompt: GeneratedPrompt, brand: string, competitors: string[]): Promise<ProbeResult> {
+async function saveSimulatedProbe(projectId: string, prompt: GeneratedPrompt, brand: string, competitors: string[], datasetBatch: DatasetBatch): Promise<ProbeResult> {
   const db = getDb();
   const run = await db.createProbeRun(projectId, "perplexity", "simulated", "succeeded");
+  await db.updateProbeRunDatasetIdentity(run.id, {
+    datasetId: datasetBatch.id,
+    datasetSourceType: datasetBatch.datasetSourceType,
+  });
   const names = simulatedCompetitorNames(competitors);
 
   return db.saveProbeResult({
     probeRunId: run.id,
     projectId,
+    datasetId: datasetBatch.id,
+    datasetSourceType: datasetBatch.datasetSourceType,
     generatedPromptId: prompt.id,
     prompt: prompt.prompt,
     platform: "perplexity",
@@ -554,6 +562,18 @@ async function runMissingProbes(args: Args, project: Project, promptTargets: Gen
   const mirrorCompetitors = mirrorParsed.success ? mirrorParsed.data.competitorsMentioned : [];
   const knownCompetitors = Array.from(new Set([...args.competitors, ...dbCompetitors.map((c) => c.name), ...mirrorCompetitors].filter(Boolean)));
 
+  // M2 canonical observations contract, second tranche (D-014) —
+  // resolved once, before the first probe_run of this invocation, never
+  // after. SNAPSHOT_REQUEST_ID is set by run-approved-snapshot.ts when
+  // this script runs as its spawned child; when absent (a bare manual
+  // invocation), this is a fresh manual_scan batch, never inferred
+  // retroactively.
+  const datasetBatch = await resolveDatasetBatchForInvocation(
+    db,
+    project.id,
+    process.env.SNAPSHOT_REQUEST_ID
+  );
+
   let attempted = 0;
   let saved = 0;
   let usedMock = false;
@@ -569,7 +589,7 @@ async function runMissingProbes(args: Args, project: Project, promptTargets: Gen
     for (let i = 0; i < missing; i += 1) {
       attempted += 1;
       if (args.probeMode === "simulated") {
-        await saveSimulatedProbe(project.id, prompt, brandName, args.competitors);
+        await saveSimulatedProbe(project.id, prompt, brandName, args.competitors, datasetBatch);
         saved += 1;
         savedForPrompt += 1;
         usedMock = true;
@@ -587,6 +607,10 @@ async function runMissingProbes(args: Args, project: Project, promptTargets: Gen
       // attach to. `analyzeProbeResponse` reuses this id and never
       // creates a second row for the same attempt.
       const probeRun = await db.createProbeRun(project.id, "perplexity", "live_perplexity", "pending");
+      await db.updateProbeRunDatasetIdentity(probeRun.id, {
+        datasetId: datasetBatch.id,
+        datasetSourceType: datasetBatch.datasetSourceType,
+      });
 
       let live;
       try {
@@ -670,6 +694,8 @@ async function runMissingProbes(args: Args, project: Project, promptTargets: Gen
         providerRequestId: live.providerRequestId,
         providerModel: live.model,
         retryCount: 0,
+        datasetId: datasetBatch.id,
+        datasetSourceType: datasetBatch.datasetSourceType,
       });
       if (!analyzed.ok) throw new Error(analyzed.error);
       saved += 1;

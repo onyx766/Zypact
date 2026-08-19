@@ -90,6 +90,8 @@ async function main() {
         platform: answer.platform,
         rawResponse: answer.text,
         knownCompetitors: ["Jira", "Asana", "Trello", "Notion", "Monday.com", "ClickUp"],
+        datasetId: "test-fixture-dataset-competitor-discovery",
+        datasetSourceType: "manual_scan",
       });
       if (!r.ok) throw new Error(`analyzeProbeResponse failed: ${r.error}`);
     }

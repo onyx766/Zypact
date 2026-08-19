@@ -64,15 +64,18 @@ export interface AnalyzeProbeResponseInput {
   providerModel?: string;
   retryCount?: number;
   /**
-   * M2 canonical observations contract, second tranche (D-014) — the
-   * dataset_batches row the caller already resolved/created before
-   * calling this function. Optional so this function stays backward
-   * compatible with callers not yet wired to a dataset identity;
-   * omitted, `dataset_id`/`dataset_source_type` are left null on the
-   * saved row, exactly as tranche 1 left them.
+   * M2 canonical observations contract, third tranche (runtime writer
+   * hardening) — the dataset_batches row the caller must resolve or
+   * create before calling this function. Mandatory: every production
+   * writer of probe_runs/probe_results funnels through this function,
+   * so this is the point where a missing dataset identity is closed
+   * off structurally, not left to each individual caller's discipline.
+   * Used both for saveProbeResult below and, when this function
+   * creates its own probe_run (no probeRunId supplied), passed
+   * directly into createProbeRun's INSERT — never via a later UPDATE.
    */
-  datasetId?: string;
-  datasetSourceType?: DatasetSourceType;
+  datasetId: string;
+  datasetSourceType: DatasetSourceType;
 }
 
 export type AnalyzeProbeResponseResult =
@@ -144,7 +147,13 @@ export async function analyzeProbeResponse(
   // the caller is trusted to pass an id it just created itself.
   const probeRun = input.probeRunId
     ? { id: input.probeRunId }
-    : await db.createProbeRun(input.projectId, input.platform, probeMode, "pending");
+    : await db.createProbeRun(
+        input.projectId,
+        input.platform,
+        probeMode,
+        "pending",
+        { datasetId: input.datasetId, datasetSourceType: input.datasetSourceType }
+      );
 
   try {
     const agent = await withPipelineStep(

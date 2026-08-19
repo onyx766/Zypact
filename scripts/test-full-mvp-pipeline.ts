@@ -293,6 +293,8 @@ async function main() {
       platform: answer.platform,
       rawResponse: answer.text,
       knownCompetitors: KNOWN_COMPETITORS,
+      datasetId: "test-fixture-dataset-full-mvp-pipeline",
+      datasetSourceType: "manual_scan",
     });
     if (!r.ok) {
       console.error(`✗ analyzeProbeResponse failed: ${r.error}`);

@@ -1062,7 +1062,8 @@ export const memoryAdapter: DbAdapter = {
     projectId: string,
     platform: string,
     probeMode: ProbeMode,
-    status: ProbeRunStatus = "pending"
+    status: ProbeRunStatus = "pending",
+    datasetIdentity?: { datasetId: string; datasetSourceType: DatasetSourceType }
   ): Promise<ProbeRun> {
     const run: ProbeRun = {
       id: randomUUID(),
@@ -1071,8 +1072,8 @@ export const memoryAdapter: DbAdapter = {
       status,
       probeMode,
       snapshotRequestId: null,
-      datasetId: null,
-      datasetSourceType: null,
+      datasetId: datasetIdentity?.datasetId ?? null,
+      datasetSourceType: datasetIdentity?.datasetSourceType ?? null,
       createdAt: new Date().toISOString(),
     };
     getStore().probeRuns.set(run.id, run);

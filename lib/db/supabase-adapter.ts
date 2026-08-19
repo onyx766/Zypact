@@ -1625,22 +1625,34 @@ export const supabaseAdapter: DbAdapter = {
     return data ? mapPrompt(data) : null;
   },
 
+  // M2 canonical observations contract, third tranche (runtime writer
+  // hardening) — this adapter is what actually reaches a real
+  // database, so it is the enforcement point: a missing
+  // datasetIdentity throws immediately, before any network call, so a
+  // production writer can never insert a probe_runs row with a NULL
+  // dataset_id/dataset_source_type. The in-memory adapter stays
+  // permissive for tests that do not exercise this dimension.
   async createProbeRun(
     projectId: string,
     platform: string,
     probeMode: ProbeMode,
-    status: ProbeRunStatus = "pending"
+    status: ProbeRunStatus = "pending",
+    datasetIdentity?: { datasetId: string; datasetSourceType: DatasetSourceType }
   ): Promise<ProbeRun> {
+    if (!datasetIdentity?.datasetId || !datasetIdentity?.datasetSourceType) {
+      throw new Error(
+        "createProbeRun (supabase adapter): datasetIdentity (datasetId and datasetSourceType) is required. This adapter never inserts a probe_runs row with a null dataset identity — resolve or create a dataset_batches row before calling createProbeRun."
+      );
+    }
     const { data, error } = await getClient()
       .from("probe_runs")
-      // M2 canonical observations contract, first tranche — this call
-      // does not yet accept dataset_id/dataset_source_type parameters.
-      // No caller sets them; a later tranche extends this signature.
       .insert({
         project_id: projectId,
         platform,
         status,
         probe_mode: probeMode,
+        dataset_id: datasetIdentity.datasetId,
+        dataset_source_type: datasetIdentity.datasetSourceType,
       })
       .select("*")
       .single<ProbeRunDbRow>();

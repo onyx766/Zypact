@@ -113,6 +113,8 @@ async function ensureFixBrief(): Promise<{
       prompt: target.prompt,
       platform: answer.platform,
       rawResponse: answer.text,
+      datasetId: "test-fixture-dataset-generated-assets",
+      datasetSourceType: "manual_scan",
       knownCompetitors: [
         "Jira",
         "Asana",

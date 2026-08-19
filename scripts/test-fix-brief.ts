@@ -91,6 +91,8 @@ async function ensureProject(): Promise<string> {
       prompt: target.prompt,
       platform: answer.platform,
       rawResponse: answer.text,
+      datasetId: "test-fixture-dataset-fix-brief",
+      datasetSourceType: "manual_scan",
       knownCompetitors: [
         "Jira",
         "Asana",

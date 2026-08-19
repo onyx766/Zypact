@@ -137,12 +137,9 @@ export async function runLivePerplexityProbes(
         input.projectId,
         "perplexity",
         "live_perplexity",
-        "pending"
+        "pending",
+        { datasetId: input.datasetId, datasetSourceType: input.datasetSourceType }
       );
-      await db.updateProbeRunDatasetIdentity(probeRun.id, {
-        datasetId: input.datasetId,
-        datasetSourceType: input.datasetSourceType,
-      });
 
       let live;
       try {

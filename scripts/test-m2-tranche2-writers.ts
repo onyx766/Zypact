@@ -36,6 +36,7 @@ import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { getDb } from "@/lib/db";
+import { supabaseAdapter } from "@/lib/db/supabase-adapter";
 import {
   createManualScanDatasetBatch,
   resolveDatasetBatchForInvocation,
@@ -72,6 +73,22 @@ const runLiveProbesSource = readFileSync(
 );
 const runApprovedSnapshotSource = readFileSync(
   path.join(libDir, "lib", "snapshot-engine", "run-approved-snapshot.ts"),
+  "utf8"
+);
+const analyzeProbeResponseSource = readFileSync(
+  path.join(libDir, "lib", "pipeline", "analyze-probe-response.ts"),
+  "utf8"
+);
+const analyzeProbeResponseRouteSource = readFileSync(
+  path.join(libDir, "app", "api", "projects", "analyze-probe-response", "route.ts"),
+  "utf8"
+);
+const supabaseAdapterSource = readFileSync(
+  path.join(libDir, "lib", "db", "supabase-adapter.ts"),
+  "utf8"
+);
+const backfillScriptSourceForOwnership = readFileSync(
+  path.join(libDir, "scripts", "backfill-probe-result-dataset-identity.ts"),
   "utf8"
 );
 const runLiveProbesCliSource = readFileSync(
@@ -161,9 +178,10 @@ function staticChecks(): void {
     mvpScanSource.includes("process.env.SNAPSHOT_REQUEST_ID")
   );
   check(
-    "mvp-scan.ts sets probe_runs dataset identity before the live provider call",
-    mvpScanSource.indexOf("updateProbeRunDatasetIdentity(probeRun.id") <
-      mvpScanSource.indexOf("runPerplexityProbe({")
+    "mvp-scan.ts inserts probe_runs with dataset identity directly at createProbeRun, before the live provider call — no later UPDATE",
+    mvpScanSource.indexOf('createProbeRun(project.id, "perplexity", "live_perplexity", "pending", {') <
+      mvpScanSource.indexOf("runPerplexityProbe({") &&
+      !mvpScanSource.includes("updateProbeRunDatasetIdentity")
   );
   check(
     "run-live-perplexity-probes.ts never creates or infers a manual_scan batch itself",
@@ -182,8 +200,12 @@ function staticChecks(): void {
         runLiveProbesSource.indexOf("db.getProject(input.projectId)")
   );
   check(
-    "run-live-perplexity-probes.ts propagates the caller-supplied dataset identity to both updateProbeRunDatasetIdentity and analyzeProbeResponse",
-    (runLiveProbesSource.match(/datasetId: input\.datasetId/g) ?? []).length >= 2 &&
+    "run-live-perplexity-probes.ts inserts probe_runs with dataset identity directly at createProbeRun (never a later UPDATE), and propagates the same identity to analyzeProbeResponse",
+    !runLiveProbesSource.includes("updateProbeRunDatasetIdentity") &&
+      runLiveProbesSource.includes(
+        "{ datasetId: input.datasetId, datasetSourceType: input.datasetSourceType }"
+      ) &&
+      (runLiveProbesSource.match(/datasetId: input\.datasetId/g) ?? []).length >= 2 &&
       (runLiveProbesSource.match(/datasetSourceType: input\.datasetSourceType/g) ?? []).length >= 2
   );
   check(
@@ -207,6 +229,48 @@ function staticChecks(): void {
     !/datasetId:\s*(input\.)?snapshotRequestId/.test(mvpScanSource) &&
       !/datasetId:\s*(input\.)?snapshotRequestId/.test(runLiveProbesSource) &&
       !/datasetId:\s*(input\.)?snapshotRequestId/.test(runLiveProbesCliSource)
+  );
+
+  console.log("\n  static — runtime writer hardening (third tranche)");
+
+  check(
+    "AnalyzeProbeResponseInput declares datasetId/datasetSourceType as mandatory (no `?`)",
+    /^\s*datasetId: string;/m.test(analyzeProbeResponseSource) &&
+      /^\s*datasetSourceType: DatasetSourceType;/m.test(analyzeProbeResponseSource)
+  );
+  check(
+    "analyze-probe-response.ts passes datasetIdentity directly into its fallback createProbeRun call, never a later UPDATE",
+    analyzeProbeResponseSource.includes(
+      "{ datasetId: input.datasetId, datasetSourceType: input.datasetSourceType }"
+    ) && !analyzeProbeResponseSource.includes("updateProbeRunDatasetIdentity")
+  );
+  check(
+    "the manual-paste API route resolves a manual_scan dataset_batches row after authorization, before calling analyzeProbeResponse",
+    analyzeProbeResponseRouteSource.indexOf("requireProjectOwner(") <
+      analyzeProbeResponseRouteSource.indexOf("createManualScanDatasetBatch(") &&
+      analyzeProbeResponseRouteSource.indexOf("createManualScanDatasetBatch(") <
+        analyzeProbeResponseRouteSource.indexOf("analyzeProbeResponse({") &&
+      analyzeProbeResponseRouteSource.includes("datasetId: datasetBatch.id") &&
+      analyzeProbeResponseRouteSource.includes("datasetSourceType: datasetBatch.datasetSourceType")
+  );
+  check(
+    "the Supabase adapter's createProbeRun throws when datasetIdentity is missing, before any network call",
+    /if \(!datasetIdentity\?\.datasetId \|\| !datasetIdentity\?\.datasetSourceType\)/.test(
+      supabaseAdapterSource
+    )
+  );
+  check(
+    "the Supabase adapter's createProbeRun INSERT includes dataset_id/dataset_source_type directly (no separate UPDATE)",
+    supabaseAdapterSource.includes("dataset_id: datasetIdentity.datasetId,") &&
+      supabaseAdapterSource.includes("dataset_source_type: datasetIdentity.datasetSourceType,")
+  );
+  check(
+    "updateProbeRunDatasetIdentity remains used only by the historical backfill script among production call sites",
+    backfillScriptSourceForOwnership.includes("updateProbeRunDatasetIdentity(") &&
+      !mvpScanSource.includes("updateProbeRunDatasetIdentity") &&
+      !runLiveProbesSource.includes("updateProbeRunDatasetIdentity") &&
+      !analyzeProbeResponseSource.includes("updateProbeRunDatasetIdentity") &&
+      !analyzeProbeResponseRouteSource.includes("updateProbeRunDatasetIdentity")
   );
 
   console.log("\n  static — backfill script never assigns manual_scan to historical data");
@@ -235,8 +299,64 @@ function staticChecks(): void {
 }
 
 async function dynamicChecks(): Promise<void> {
-  console.log("\n  dynamic — dataset_batches resolution helpers");
+  console.log("\n  dynamic — Supabase adapter fail-closed guard (no real credentials needed)");
+
+  // The guard in createProbeRun throws before getClient() is ever called,
+  // so this exercises the real production adapter's enforcement without
+  // any Supabase connection — proving a production writer that forgets
+  // datasetIdentity fails loudly instead of inserting a NULL row.
+  let missingIdentityThrew = false;
+  try {
+    await supabaseAdapter.createProbeRun(
+      randomUUID(),
+      "perplexity",
+      "live_perplexity",
+      "pending"
+      // datasetIdentity omitted on purpose
+    );
+  } catch {
+    missingIdentityThrew = true;
+  }
+  check(
+    "supabaseAdapter.createProbeRun throws immediately when datasetIdentity is omitted",
+    missingIdentityThrew
+  );
+
+  let emptyStringIdentityThrew = false;
+  try {
+    await supabaseAdapter.createProbeRun(
+      randomUUID(),
+      "perplexity",
+      "live_perplexity",
+      "pending",
+      { datasetId: "", datasetSourceType: "manual_scan" }
+    );
+  } catch {
+    emptyStringIdentityThrew = true;
+  }
+  check(
+    "supabaseAdapter.createProbeRun throws when datasetId is an empty string, not just when absent",
+    emptyStringIdentityThrew
+  );
+
+  console.log("\n  dynamic — createProbeRun writes dataset identity at INSERT time (memory adapter)");
   const db = getDb();
+  const insertTimeProjectId = randomUUID();
+  const insertTimeDatasetId = randomUUID();
+  const insertTimeRun = await db.createProbeRun(
+    insertTimeProjectId,
+    "perplexity",
+    "live_perplexity",
+    "pending",
+    { datasetId: insertTimeDatasetId, datasetSourceType: "manual_scan" }
+  );
+  check(
+    "createProbeRun with datasetIdentity supplied returns a run whose dataset fields are already set — no follow-up call needed",
+    insertTimeRun.datasetId === insertTimeDatasetId &&
+      insertTimeRun.datasetSourceType === "manual_scan"
+  );
+
+  console.log("\n  dynamic — dataset_batches resolution helpers");
   const projectId = randomUUID();
   const snapshotRequestId = randomUUID();
 

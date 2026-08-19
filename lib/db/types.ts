@@ -974,6 +974,22 @@ export interface DbAdapter {
   getGeneratedPrompt(id: string): Promise<GeneratedPrompt | null>;
 
   // Sprint 3 — Probe Analysis
+  /**
+   * M2 canonical observations contract, third tranche (runtime writer
+   * hardening) — `datasetIdentity` is the resolved `dataset_batches`
+   * row to write at INSERT time, never via a later UPDATE.
+   *
+   * Optional here only for backward compatibility with existing test
+   * call sites that do not exercise the dataset-identity dimension.
+   * The Supabase adapter's implementation enforces the real
+   * production invariant at runtime: it throws immediately if
+   * `datasetIdentity` is missing, rather than silently inserting a
+   * NULL `dataset_id`/`dataset_source_type`. The in-memory adapter
+   * stays permissive (NULL when omitted) so unrelated tests are not
+   * forced to supply it. `updateProbeRunDatasetIdentity` remains the
+   * only path for the historical backfill, which necessarily UPDATEs
+   * rows that already exist.
+   */
   createProbeRun(
     projectId: string,
     platform: string,
@@ -985,7 +1001,8 @@ export interface DbAdapter {
      * writes `"live_perplexity"` for Perplexity Sonar answers.
      */
     probeMode: ProbeMode,
-    status?: ProbeRunStatus
+    status?: ProbeRunStatus,
+    datasetIdentity?: { datasetId: string; datasetSourceType: DatasetSourceType }
   ): Promise<ProbeRun>;
   updateProbeRunStatus(id: string, status: ProbeRunStatus): Promise<void>;
   /** M1 evidence contract, fourth tranche — used to verify no duplicate run is created per attempt. */

@@ -1053,6 +1053,8 @@ async function applicationLayerChecks(): Promise<void> {
     providerRequestId: "req_e2e_1",
     providerModel: "sonar",
     retryCount: 0,
+    datasetId: "test-fixture-dataset-m1-e2e",
+    datasetSourceType: "manual_scan",
   });
   check("analyzeProbeResponse succeeds end to end", analyzed.ok === true);
   if (analyzed.ok) {
@@ -1092,6 +1094,8 @@ async function applicationLayerChecks(): Promise<void> {
       rawResponse: successRawResponse,
       rawProbeRequest: "who should we use",
       probeMode: "live_perplexity",
+      datasetId: "test-fixture-dataset-m1-fourth-success",
+      datasetSourceType: "manual_scan",
     });
     check("analyzeProbeResponse succeeds when reusing a pre-created probeRunId", successResult.ok === true);
     if (successResult.ok) {
@@ -1111,6 +1115,7 @@ async function applicationLayerChecks(): Promise<void> {
       domain: `m1-fourth-backcompat-${randomUUID()}.example`,
       companyName: "M1 Fourth Tranche Backcompat Co",
     });
+    const backcompatDatasetId = "test-fixture-dataset-m1-fourth-backcompat";
     const backcompatResult = await analyzeProbeResponse({
       projectId: project7.id,
       prompt: "manual pasted answer",
@@ -1118,6 +1123,8 @@ async function applicationLayerChecks(): Promise<void> {
       // No probeRunId — exercises the exact pre-fourth-tranche call shape.
       rawResponse: "A manually pasted answer with no probeRunId supplied.",
       probeMode: "simulated",
+      datasetId: backcompatDatasetId,
+      datasetSourceType: "manual_scan",
     });
     check("analyzeProbeResponse still succeeds with no probeRunId supplied", backcompatResult.ok === true);
     const runsAfterBackcompat = await db.getProbeRunsByProject(project7.id);
@@ -1126,6 +1133,15 @@ async function applicationLayerChecks(): Promise<void> {
       runsAfterBackcompat.length === 1
     );
     check("that self-created run is marked succeeded", runsAfterBackcompat[0]?.status === "succeeded");
+    // M2 canonical observations contract, third tranche (runtime writer
+    // hardening) — the fallback createProbeRun call now receives the
+    // dataset identity directly at INSERT time, never via a later
+    // UPDATE. Proves the exact gap closed by this tranche.
+    check(
+      "the self-created run's dataset identity was written at INSERT time, not left null",
+      runsAfterBackcompat[0]?.datasetId === backcompatDatasetId &&
+        runsAfterBackcompat[0]?.datasetSourceType === "manual_scan"
+    );
 
     console.log("\n  échec Perplexity relié au run (reproduces the exact orchestrator pattern)");
     const project8 = await db.createProject({

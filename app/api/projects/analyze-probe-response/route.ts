@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
+import { getDb } from "@/lib/db";
 import { analyzeProbeResponse } from "@/lib/pipeline/analyze-probe-response";
+import { createManualScanDatasetBatch } from "@/lib/evidence/resolve-dataset-batch";
 import { Platform } from "@/lib/schemas/probe-analysis.schema";
 import { requireProjectOwner } from "@/lib/auth/current-user";
 import { authErrorResponse } from "@/lib/auth/route-helpers";
@@ -74,6 +76,13 @@ export async function POST(req: Request) {
     ? body.knownCompetitors.filter((c): c is string => typeof c === "string")
     : undefined;
 
+  // M2 canonical observations contract, third tranche (runtime writer
+  // hardening) — this manual-paste route is a distinct invocation each
+  // time it is called, so it always resolves a fresh manual_scan
+  // dataset_batches row here, after authorization and before any probe
+  // write, never reused across separate submissions (D-014).
+  const datasetBatch = await createManualScanDatasetBatch(getDb(), body.projectId);
+
   const result = await analyzeProbeResponse({
     projectId: body.projectId,
     generatedPromptId,
@@ -81,6 +90,8 @@ export async function POST(req: Request) {
     platform: platformResult.data,
     rawResponse: body.rawResponse,
     knownCompetitors,
+    datasetId: datasetBatch.id,
+    datasetSourceType: datasetBatch.datasetSourceType,
   });
 
   if (!result.ok) {

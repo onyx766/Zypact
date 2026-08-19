@@ -513,8 +513,7 @@ function makeSimulatedResponse(prompt: string, brand: string, competitors: strin
 
 async function saveSimulatedProbe(projectId: string, prompt: GeneratedPrompt, brand: string, competitors: string[], datasetBatch: DatasetBatch): Promise<ProbeResult> {
   const db = getDb();
-  const run = await db.createProbeRun(projectId, "perplexity", "simulated", "succeeded");
-  await db.updateProbeRunDatasetIdentity(run.id, {
+  const run = await db.createProbeRun(projectId, "perplexity", "simulated", "succeeded", {
     datasetId: datasetBatch.id,
     datasetSourceType: datasetBatch.datasetSourceType,
   });
@@ -606,8 +605,7 @@ async function runMissingProbes(args: Args, project: Project, promptTargets: Gen
       // failure or the identity-leak check) has a real probe_runs row to
       // attach to. `analyzeProbeResponse` reuses this id and never
       // creates a second row for the same attempt.
-      const probeRun = await db.createProbeRun(project.id, "perplexity", "live_perplexity", "pending");
-      await db.updateProbeRunDatasetIdentity(probeRun.id, {
+      const probeRun = await db.createProbeRun(project.id, "perplexity", "live_perplexity", "pending", {
         datasetId: datasetBatch.id,
         datasetSourceType: datasetBatch.datasetSourceType,
       });

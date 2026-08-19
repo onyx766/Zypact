@@ -91,6 +91,8 @@ async function main() {
     platform: "perplexity",
     rawResponse,
     knownCompetitors: compArr.length > 0 ? undefined : ["Jira", "Asana", "Trello", "Notion"],
+    datasetId: "test-fixture-dataset-probe-analysis",
+    datasetSourceType: "manual_scan",
   });
 
   if (!result.ok) {

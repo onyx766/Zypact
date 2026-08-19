@@ -2,7 +2,7 @@
 
 - **Status:** Canonical decision register
 - **Owner:** Founder/CEO, with methodology and technical review where required
-- **Last updated:** 2026-08-16
+- **Last updated:** 2026-08-19
 
 This register records the decisions that govern the documentation reset. A later decision may supersede an earlier one only when it is added here with a date, rationale, and affected documents.
 
@@ -132,3 +132,12 @@ Each entry records:
 - **Reason:** Future direction must not create accidental contractor scope.
 - **Effect:** Only the active canonical package and an accepted milestone agreement authorize engineering work.
 - **Revisit trigger:** The authority index may be revised when company governance changes.
+
+## D-014 — Canonical observation vocabulary replaces won, partial, lost; mixed results are never collapsed
+
+- **Date:** 2026-08-19
+- **Status:** Provisional — pending founder approval
+- **Decision:** Run-level results use `not_observed_in_run`, `listed_in_run`, `primary_in_run`, `ambiguous_in_run`, and `analysis_failed` in place of `won`/`partial`/`lost`/`not_relevant`. The former `negative` position becomes `listed_in_run` combined with a separate `negative_claim_detected` flag. `not_relevant` becomes a separate context field, not a position. `analysis_failed` is a status distinct from `run_position`, excluded from the observed/not-observed denominator. Question-level results use `observed_consistently_in_sample`, `not_observed_consistently_in_sample`, `mixed_in_sample`, and `insufficient_evidence`; `mixed_in_sample` may never be converted to `won`, `partial`, or `lost`. `insufficient_evidence` is mandatory when completed runs equal zero, and any threshold above that floor is a versioned protocol parameter, not an engineering constant. `canonical_entities` and `entity_aliases` are scoped per project, never shared across tenants. Every canonical observation carries a mandatory, non-null `dataset_id` and `dataset_source_type` (`snapshot_request`, `manual_scan`, or `legacy_unresolved`); `snapshot_request_id` remains nullable on the existing `ProbeRun`/`ProbeResult` structures for compatibility. Legacy compatibility is provided by a strictly additive adapter that modifies exactly one existing report-generation file; no other existing consumer is changed. A golden fixture must confirm that the 15 already-stored HockeyStack runs remain bit-identical after backfill.
+- **Reason:** The current per-prompt aggregate verdict is computed by a majority-threshold heuristic that forces a single stable label from what may be an unstable, mixed sample — the same methodological failure D-001 already corrected for the fixed three-run default. `METHODOLOGY.md` §9 and §10 already prescribe the correct vocabulary; it was not yet implemented, and the client-facing aggregate report does not yet honor it.
+- **Effect:** `METHODOLOGY.md` (version 1.0 to 1.1). Future implementation work would affect `lib/schemas/probe-analysis.schema.ts`, `lib/db/types.ts`, `lib/db/memory-adapter.ts`, `lib/db/supabase-adapter.ts`, `lib/probe-results/report-selection.ts` (additive only), `lib/export/build-mvp-report.ts` (the only modified legacy consumer), and `scripts/mvp-scan.ts`, plus a future additive migration. No code, migration, or consumer file is changed by this decision entry itself.
+- **Revisit trigger:** Pilot data on the real frequency of `mixed_in_sample` and `insufficient_evidence`; completion of the M3 consumer migration, which retires the temporary legacy-column clause of this decision.

@@ -67,6 +67,43 @@ import { SiteReaderOutputSchema, type SiteReaderOutput } from "@/lib/schemas/sit
  */
 const DEFAULT_RESOLVER_VERSION = 1;
 
+/**
+ * Serializes an unknown thrown value into a human-readable message,
+ * without silently discarding structured diagnostic fields.
+ *
+ * A JS `Error`'s own `.message` is used directly. Anything else — most
+ * notably a Supabase/PostgREST error, which the supabase-js client
+ * throws as a plain object shaped like `{ message, code, details, hint }`
+ * and which is NOT `instanceof Error` — has those fields extracted
+ * explicitly. A bare `String(err)` on a plain object always collapses
+ * to the literal, useless string "[object Object]", which is exactly
+ * what happened here against real staging data: the Supabase adapter's
+ * RPC wrappers do `if (error) throw error;` with the raw PostgrestError
+ * object (lib/db/supabase-adapter.ts), so this catch site needs more
+ * than a bare `String(err)` fallback to ever surface the real cause.
+ */
+export function serializeUnknownError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+
+  if (err && typeof err === "object") {
+    const e = err as Record<string, unknown>;
+    const parts: string[] = [];
+    if (typeof e.message === "string" && e.message) parts.push(e.message);
+    if (typeof e.code === "string" && e.code) parts.push(`code=${e.code}`);
+    if (typeof e.details === "string" && e.details) parts.push(`details=${e.details}`);
+    if (typeof e.hint === "string" && e.hint) parts.push(`hint=${e.hint}`);
+    if (parts.length > 0) return parts.join(" | ");
+    try {
+      return JSON.stringify(err);
+    } catch {
+      // Falls through to the String(err) fallback below — e.g. a
+      // circular structure that JSON.stringify itself cannot handle.
+    }
+  }
+
+  return String(err);
+}
+
 interface CompetitorMentionLike {
   name?: string;
   position?: number;
@@ -247,7 +284,7 @@ async function applyProbeResult(
     return {
       probeResultId: probeResult.id,
       action: "error",
-      error: err instanceof Error ? err.message : String(err),
+      error: serializeUnknownError(err),
     };
   }
 }

@@ -21,7 +21,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { getDb } from "@/lib/db";
 import type { DbAdapter, ProbeResult } from "@/lib/db/types";
-import { runEntityObservationBackfill } from "@/scripts/backfill-entity-observations";
+import {
+  runEntityObservationBackfill,
+  serializeUnknownError,
+} from "@/scripts/backfill-entity-observations";
 
 let checks = 0;
 let failures = 0;
@@ -362,6 +365,64 @@ async function main(): Promise<void> {
     check(
       "6: the shared module exports exactly one buildClientIdentity function",
       (sharedModuleSource.match(/function\s+buildClientIdentity\s*\(/g) ?? []).length === 1
+    );
+  }
+
+  /* -------------------------------------------------------------- */
+  /* Scenario 7 — serializeUnknownError: a non-Error, PostgREST-      */
+  /* shaped plain object (exactly what supabase-js throws for an RPC  */
+  /* error — lib/db/supabase-adapter.ts's `if (error) throw error;`)  */
+  /* must have message/code/details/hint preserved, never collapse    */
+  /* to the useless literal "[object Object]" that masked the real   */
+  /* cause of the live staging backfill failure this fixes.           */
+  /* -------------------------------------------------------------- */
+  {
+    const postgrestError = {
+      message: "duplicate key value violates unique constraint",
+      code: "23505",
+      details: 'Key (project_id, normalized_text, alias_generation)=(...) already exists.',
+      hint: "Retry the operation.",
+    };
+    check(
+      "7: test setup sanity — the PostgREST-shaped fixture is NOT instanceof Error",
+      !(postgrestError instanceof Error)
+    );
+    const serialized = serializeUnknownError(postgrestError);
+    check("7: message is preserved", serialized.includes("duplicate key value violates unique constraint"));
+    check("7: code is preserved", serialized.includes("code=23505"));
+    check(
+      "7: details is preserved",
+      serialized.includes("details=Key (project_id, normalized_text, alias_generation)=(...) already exists.")
+    );
+    check("7: hint is preserved", serialized.includes("hint=Retry the operation."));
+    check(
+      "7: never collapses to the useless literal '[object Object]'",
+      !serialized.includes("[object Object]")
+    );
+
+    const messageOnly = { message: "pass_not_found", code: null, details: null, hint: null };
+    const messageOnlySerialized = serializeUnknownError(messageOnly);
+    check(
+      "7: a null code/details/hint is omitted, not printed as 'code=null' etc.",
+      messageOnlySerialized === "pass_not_found"
+    );
+
+    const realError = new Error("a genuine JS Error");
+    check(
+      "7: a real Error instance still returns err.message directly, unchanged behavior",
+      serializeUnknownError(realError) === "a genuine JS Error"
+    );
+
+    const noRecognizedFields = { foo: "bar", nested: { baz: 1 } };
+    const fallbackSerialized = serializeUnknownError(noRecognizedFields);
+    check(
+      "7: an object with none of message/code/details/hint falls back to valid JSON, not '[object Object]'",
+      fallbackSerialized === JSON.stringify(noRecognizedFields) && !fallbackSerialized.includes("[object Object]")
+    );
+
+    check(
+      "7: a raw thrown string still round-trips via String(err)",
+      serializeUnknownError("plain string throw") === "plain string throw"
     );
   }
 

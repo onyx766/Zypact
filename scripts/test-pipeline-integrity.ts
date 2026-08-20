@@ -39,6 +39,7 @@ import {
   downgradeSupportedLlmViolations,
   mergeQaViolations,
 } from "@/lib/qa/deterministic-checks";
+import type { ResolvedCompetitorMention } from "@/lib/evidence/get-resolved-competitor-mentions";
 import { mergeSourcesFromRawResponse } from "@/lib/probe-analysis/merge-sources";
 import { classifyProductRecommendation, probeRequestLeaksClientIdentity } from "@/lib/probe-analysis/product-recommendation";
 import { selectCommercialProbePromptIds } from "@/lib/prompts/commercial-selection";
@@ -216,6 +217,43 @@ function probeResult(overrides: Partial<ProbeResult> = {}): ProbeResult {
   };
 }
 
+/**
+ * M3 — simulates the M2 canonical layer's own output for a fixture
+ * probe_result's `competitorsMentioned`, the same way
+ * scripts/test-scorecard-competitors.ts does: the same (trimmed,
+ * lowercased) name always resolves to the same canonical_entity_id.
+ * Used only to build `resolvedCompetitorMentions` for
+ * `detectUnsupportedCompetitorClaims`, which no longer reads
+ * `probeResults`/`competitorsMentioned` directly.
+ */
+function toResolvedMentions(...probes: ProbeResult[]): ResolvedCompetitorMention[] {
+  const out: ResolvedCompetitorMention[] = [];
+  for (const pr of probes) {
+    const mentions = Array.isArray(pr.competitorsMentioned)
+      ? (pr.competitorsMentioned as Array<{ name?: unknown; position?: unknown; context?: unknown }>)
+      : [];
+    for (const m of mentions) {
+      if (typeof m.name !== "string") continue;
+      out.push({
+        canonicalEntityId: `canonical:${m.name.trim().toLowerCase()}`,
+        rawText: m.name,
+        normalizedText: m.name.trim().toLowerCase(),
+        mentionOrdinal: typeof m.position === "number" ? m.position : 1,
+        context: typeof m.context === "string" ? m.context : null,
+        generatedPromptId: pr.generatedPromptId ?? null,
+      });
+    }
+  }
+  return out;
+}
+
+/** Same simulation as toResolvedMentions, keyed per probe_result.id for buildMvpReport's resolvedMentionsByProbeResult. */
+function toResolvedMentionsByProbeResult(
+  probes: readonly ProbeResult[]
+): ReadonlyMap<string, ResolvedCompetitorMention[]> {
+  return new Map(probes.map((pr) => [pr.id, toResolvedMentions(pr)]));
+}
+
 function competitor(): Competitor {
   return {
     id: "comp-1",
@@ -229,6 +267,11 @@ function competitor(): Competitor {
     confidence: "verified",
     isPhantom: false,
     isBlindSpot: false,
+    // Matches toResolvedMentions()'s canonical:${name.toLowerCase()}
+    // simulation below for a mention named "Jira" — so tests exercising
+    // computeGapScores' canonical-identity matching see this fixture as
+    // genuinely linked, the same way a real ai_answer discovery row would be.
+    canonicalEntityId: "canonical:jira",
     createdAt: now,
     updatedAt: now,
   };
@@ -388,6 +431,17 @@ async function testPerplexityProbeResponseShape(): Promise<void> {
 }
 
 function testLivePerplexityExportLabels(): void {
+  const probeResultsFixture = [
+    probeResult({
+      platform: "perplexity",
+      probeMode: "live_perplexity",
+      clientMentioned: true,
+      clientPosition: "listed",
+      verdict: "partial",
+      whyClientLost: "Linear appeared but was not primary.",
+      rawResponse: "Linear and Jira appeared. https://linear.app/",
+    }),
+  ];
   const report = buildMvpReport({
     project: {
       id: projectId,
@@ -399,17 +453,8 @@ function testLivePerplexityExportLabels(): void {
     },
     mirrorProfile: mirrorProfile(),
     prompts: [],
-    probeResults: [
-      probeResult({
-        platform: "perplexity",
-        probeMode: "live_perplexity",
-        clientMentioned: true,
-        clientPosition: "listed",
-        verdict: "partial",
-        whyClientLost: "Linear appeared but was not primary.",
-        rawResponse: "Linear and Jira appeared. https://linear.app/",
-      }),
-    ],
+    probeResults: probeResultsFixture,
+    resolvedMentionsByProbeResult: toResolvedMentionsByProbeResult(probeResultsFixture),
     competitors: [competitor()],
     gapMap: null,
     gaps: [],
@@ -597,7 +642,7 @@ function testCompetitorClaimIntegrity(): void {
     evidenceBank: eb,
     competitors: [jira, notion],
     fixBriefs: [fixBrief()],
-    probeResults: [probeResult()],
+    resolvedCompetitorMentions: toResolvedMentions(probeResult()),
   });
   check(
     "unsupported Jira/Notion table cells fail competitor guard",
@@ -628,7 +673,7 @@ function testCompetitorClaimIntegrity(): void {
       evidenceBank: eb,
       competitors: [jira, notion],
       fixBriefs: [fixBrief()],
-      probeResults: [probeResult()],
+      resolvedCompetitorMentions: toResolvedMentions(probeResult()),
     }).length === 0,
   );
 
@@ -643,7 +688,7 @@ function testCompetitorClaimIntegrity(): void {
       evidenceBank: eb,
       competitors: [jira],
       fixBriefs: [fixBrief()],
-      probeResults: [probeResult()],
+      resolvedCompetitorMentions: toResolvedMentions(probeResult()),
     }).length === 0,
   );
 
@@ -658,7 +703,7 @@ function testCompetitorClaimIntegrity(): void {
       evidenceBank: eb,
       competitors: [jira, notion],
       fixBriefs: [fixBrief()],
-      probeResults: [probeResult()],
+      resolvedCompetitorMentions: toResolvedMentions(probeResult()),
     }).length === 0,
   );
 
@@ -673,7 +718,7 @@ function testCompetitorClaimIntegrity(): void {
       evidenceBank: eb,
       competitors: [jira, notion],
       fixBriefs: [fixBrief()],
-      probeResults: [probeResult()],
+      resolvedCompetitorMentions: toResolvedMentions(probeResult()),
     }).length === 0,
   );
 
@@ -686,7 +731,7 @@ function testCompetitorClaimIntegrity(): void {
     evidenceBank: eb,
     competitors: [jira, notion],
     fixBriefs: [fixBrief()],
-    probeResults: [probeResult()],
+    resolvedCompetitorMentions: toResolvedMentions(probeResult()),
   });
   check(
     "competitor capability prose is flagged",
@@ -726,7 +771,7 @@ function testCompetitorClaimIntegrity(): void {
       evidenceBank: supportedBank,
       competitors: [jira],
       fixBriefs: [fixBrief()],
-      probeResults: [probeResult()],
+      resolvedCompetitorMentions: toResolvedMentions(probeResult()),
     }).length === 0,
   );
 
@@ -874,6 +919,7 @@ function testSourcesCitedWiring(): void {
     mirrorProfile: mirrorProfile().json as SiteReaderOutput,
     probeResults: [probeResult({ sourcesCited: merged })],
     competitors: [competitor()],
+    resolvedMentionsByProbeResult: new Map(),
   };
   const payload = buildGapMapUserMessageForTest(input);
   check(
@@ -907,6 +953,7 @@ function testEvidenceBankProvenanceExport(): void {
     mirrorProfile: mirrorProfile(),
     prompts: [],
     probeResults: [probeResult()],
+    resolvedMentionsByProbeResult: toResolvedMentionsByProbeResult([probeResult()]),
     competitors: [competitor()],
     gapMap: null,
     gaps: [],
@@ -1033,6 +1080,7 @@ function testLiveProbeReportSelection(): void {
     mirrorProfile: mirrorProfile(),
     prompts: [],
     probeResults: [simulatedLost, liveWon],
+    resolvedMentionsByProbeResult: toResolvedMentionsByProbeResult([simulatedLost, liveWon]),
     competitors: [competitor()],
     gapMap: staleGapMap,
     gaps: [
@@ -1122,6 +1170,7 @@ function testSprint13A2ProbeAggregationAndDeterministicScores(): void {
     mirrorProfile: mirrorProfile().json as SiteReaderOutput,
     probeResults: [unbrandedWon, brandedWon],
     competitors: [competitor()],
+    resolvedMentionsByProbeResult: toResolvedMentionsByProbeResult([unbrandedWon, brandedWon]),
   });
   check("deterministic prompt_loss stays zero when client wins", scores.Jira.prompt_loss === 0);
   check("deterministic review score stays zero without review_site sources", scores.Jira.review === 0);
@@ -1131,6 +1180,7 @@ function testSprint13A2ProbeAggregationAndDeterministicScores(): void {
     mirrorProfile: mirrorProfile().json as SiteReaderOutput,
     probeResults: [unbrandedWon, unbrandedLost],
     competitors: [competitor()],
+    resolvedMentionsByProbeResult: toResolvedMentionsByProbeResult([unbrandedWon, unbrandedLost]),
   });
   check(
     "prompt_loss is computed from aggregate prompt verdict, not a single volatile run",
@@ -1258,7 +1308,7 @@ function testSprint13B2LifecycleReportTruth(): void {
   const qaReports = new Map<string, QaReportRow>();
   for (const a of [activeProof, activeFaq, activeJson]) qaReports.set(a.id, { id: `qa-${a.id}`, projectId, generatedAssetId: a.id, verdict: "safe_to_publish", violations: [], placeholdersRemaining: [], overallNotes: "OK", createdAt: now });
   qaReports.set(oldBad.id, { id: "qa-old-bad", projectId, generatedAssetId: oldBad.id, verdict: "unsupported_claims", violations: [{ type: "unsupported_number", quote: "4.5", reason: "fake rating", suggestedFix: "remove" }], placeholdersRemaining: [], overallNotes: "Blocked", createdAt: now });
-  const report = buildMvpReport({ project: { id: projectId, userId: "user-1", companyName: "Linear", domain: "linear.app", category: null, createdAt: now }, mirrorProfile: mirrorProfile(), prompts: [], probeResults: [], competitors: [], gapMap: null, gaps: [], evidenceBank: { ...evidenceBank(), provenance: "user_reviewed" }, fixBriefs: [fb], assets: [activeProof, activeFaq, activeJson, oldBad], latestQaByAsset: qaReports, llmProvider: "openai", llmModel: "gpt-4o-mini", mockMode: false, now: new Date(now) });
+  const report = buildMvpReport({ project: { id: projectId, userId: "user-1", companyName: "Linear", domain: "linear.app", category: null, createdAt: now }, mirrorProfile: mirrorProfile(), prompts: [], probeResults: [], resolvedMentionsByProbeResult: new Map(), competitors: [], gapMap: null, gaps: [], evidenceBank: { ...evidenceBank(), provenance: "user_reviewed" }, fixBriefs: [fb], assets: [activeProof, activeFaq, activeJson, oldBad], latestQaByAsset: qaReports, llmProvider: "openai", llmModel: "gpt-4o-mini", mockMode: false, now: new Date(now) });
   check("13B.2 current publishability ignores superseded bad assets", report.publishability.total === 3 && report.publishability.publishReady === 3);
   check("13B.2 superseded assets remain auditable", report.markdown.includes("### Superseded assets (1)") && report.markdown.includes("asset-superseded-json"));
   check("13B.2 Fix Brief derives assets_ready from requested safe types", report.markdown.includes("status: **assets_ready**"));
@@ -1282,6 +1332,7 @@ function testQaFailedExportState(): void {
     mirrorProfile: mirrorProfile(),
     prompts: [],
     probeResults: [probeResult()],
+    resolvedMentionsByProbeResult: toResolvedMentionsByProbeResult([probeResult()]),
     competitors: [competitor()],
     gapMap: null,
     gaps: [],
@@ -1378,18 +1429,7 @@ function testSprint13CCommercialScorecardIntegrity(): void {
   });
   check("14A.1 listed mention remains product recommendation", listedBrand.productMentioned && listedBrand.productPosition === "listed" && listedBrand.productVerdict === "partial");
 
-  const vugioReport = buildMvpReport({
-    project: {
-      id: projectId,
-      userId: "user-1",
-      companyName: "Vugio",
-      domain: "vugio.com",
-      category: "B2C e-commerce",
-      createdAt: now,
-    },
-    mirrorProfile: null,
-    prompts: [],
-    probeResults: [
+  const vugioProbeResultsFixture = [
       probeResult({
         id: "vugio-branded-1",
         platform: "perplexity",
@@ -1435,7 +1475,20 @@ function testSprint13CCommercialScorecardIntegrity(): void {
         whyClientLost: "Vugio was absent.",
         createdAt: "2026-07-10T17:12:00.000Z",
       }),
-    ],
+  ];
+  const vugioReport = buildMvpReport({
+    project: {
+      id: projectId,
+      userId: "user-1",
+      companyName: "Vugio",
+      domain: "vugio.com",
+      category: "B2C e-commerce",
+      createdAt: now,
+    },
+    mirrorProfile: null,
+    prompts: [],
+    probeResults: vugioProbeResultsFixture,
+    resolvedMentionsByProbeResult: toResolvedMentionsByProbeResult(vugioProbeResultsFixture),
     competitors: [competitor()],
     gapMap: null,
     gaps: [],

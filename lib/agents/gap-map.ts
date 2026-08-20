@@ -25,6 +25,7 @@ import {
   sumGapScores,
   type BaselineScores,
 } from "@/lib/gap-map/compute-gap-scores";
+import type { ResolvedCompetitorMention } from "@/lib/evidence/get-resolved-competitor-mentions";
 
 /**
  * Gap Map Agent.
@@ -57,6 +58,18 @@ export interface RunGapMapInput {
    * another. Optional: callers that omit it keep the prior behaviour.
    */
   competitorEvidence?: PromptCompetitorEvidence[];
+  /**
+   * M3 — source unique, Option A: resolved competitor mentions per
+   * `probe_result.id`, from the M2 canonical entity-resolution layer,
+   * pre-fetched by the DB-aware orchestrator (generate-gap-map.ts).
+   * Forwarded verbatim to computeGapScores() so its mention-identity
+   * matching can use `canonicalEntityId` equality instead of a
+   * name-normalization heuristic. Mandatory, not optional — every
+   * caller must explicitly decide what this map contains, even if that
+   * decision is "empty array, nothing resolved yet" for a given
+   * probe_result.
+   */
+  resolvedMentionsByProbeResult: ReadonlyMap<string, ResolvedCompetitorMention[]>;
 }
 
 export interface RunGapMapResult {

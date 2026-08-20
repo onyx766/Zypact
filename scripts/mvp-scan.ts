@@ -36,7 +36,7 @@ import {
 } from "@/lib/snapshot-worker/lease-renewal";
 import { generateGapMap } from "@/lib/pipeline/generate-gap-map";
 import { generateFixBrief } from "@/lib/pipeline/generate-fix-brief";
-import { buildMvpReport } from "@/lib/export/build-mvp-report";
+import { buildMvpReport, loadReportInputs } from "@/lib/export/build-mvp-report";
 import { resolveModel, resolveProvider } from "@/lib/llm/call-model";
 import {
   applyPromptShortfallPolicy,
@@ -889,24 +889,12 @@ async function regenerateRecommendations(projectId: string): Promise<void> {
 
 async function exportReport(args: Args, project: Project, outPath: string): Promise<string> {
   const db = getDb();
-  const [mirrorProfile, prompts, probeResults, competitors, gapMap, gaps, evidenceBank, fixBriefs, assets, qaReports] = await Promise.all([
-    db.getMirrorProfile(project.id),
-    db.getGeneratedPrompts(project.id),
-    db.getProbeResultsByProject(project.id),
-    db.getCompetitorsByProject(project.id),
-    db.getLatestGapMap(project.id),
-    db.getGapsByProject(project.id),
-    db.getEvidenceBankByProject(project.id),
-    db.getFixBriefsByProject(project.id),
-    db.getGeneratedAssetsByProject(project.id),
-    db.getQaReportsByProject(project.id),
-  ]);
-
-  const latestQaByAsset = new Map<string, QaReportRow>();
-  for (const qa of qaReports) {
-    const prev = latestQaByAsset.get(qa.generatedAssetId);
-    if (!prev || Date.parse(qa.createdAt) > Date.parse(prev.createdAt)) latestQaByAsset.set(qa.generatedAssetId, qa);
-  }
+  // M3 — source unique: loadReportInputs is the one canonical,
+  // DB-aware path that assembles BuildMvpReportInput, including
+  // resolvedMentionsByProbeResult — replacing this function's own,
+  // previously-duplicated Promise.all fetch of the same rows.
+  const inputs = await loadReportInputs(db, project.id);
+  if (!inputs) throw new Error(`loadReportInputs returned null for project ${project.id}`);
 
   const sensitiveValues = [
     process.env.SUPABASE_SERVICE_ROLE_KEY,
@@ -922,17 +910,7 @@ async function exportReport(args: Args, project: Project, outPath: string): Prom
   const reportedProvider = resolveProvider();
 
   const report = buildMvpReport({
-    project,
-    mirrorProfile,
-    prompts,
-    probeResults,
-    competitors,
-    gapMap,
-    gaps,
-    evidenceBank,
-    fixBriefs,
-    assets,
-    latestQaByAsset,
+    ...inputs,
     // Traceability metadata must describe the execution that actually
     // happened, so it comes from the same resolvers the agents call rather
     // than a second, independent reading of the environment. The previous

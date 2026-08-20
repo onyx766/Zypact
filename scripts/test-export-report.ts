@@ -61,6 +61,7 @@ import type {
   GeneratedAssetRow,
   QaReportRow,
 } from "@/lib/db/types";
+import type { ResolvedCompetitorMention } from "@/lib/evidence/get-resolved-competitor-mentions";
 
 let checks = 0;
 let failures = 0;
@@ -73,6 +74,39 @@ function check(name: string, cond: boolean, detail = ""): void {
     failures += 1;
     console.log(`✗ ${name}${detail ? ` — ${detail}` : ""}`);
   }
+}
+
+/**
+ * M3 — simulates the M2 canonical layer's own output for a fixture
+ * probe_result's `competitorsMentioned`, the same way
+ * scripts/test-scorecard-competitors.ts does: the same (trimmed,
+ * lowercased) name always resolves to the same canonical_entity_id.
+ * Used only to build `resolvedMentionsByProbeResult` for `buildMvpReport`,
+ * which no longer reads `probeResults[].competitorsMentioned` directly.
+ */
+function toResolvedMentionsByProbeResult(
+  probes: readonly ProbeResult[]
+): ReadonlyMap<string, ResolvedCompetitorMention[]> {
+  return new Map(
+    probes.map((pr) => {
+      const mentions = Array.isArray(pr.competitorsMentioned)
+        ? (pr.competitorsMentioned as Array<{ name?: unknown; position?: unknown; context?: unknown }>)
+        : [];
+      const resolved: ResolvedCompetitorMention[] = [];
+      for (const m of mentions) {
+        if (typeof m.name !== "string") continue;
+        resolved.push({
+          canonicalEntityId: `canonical:${m.name.trim().toLowerCase()}`,
+          rawText: m.name,
+          normalizedText: m.name.trim().toLowerCase(),
+          mentionOrdinal: typeof m.position === "number" ? m.position : 1,
+          context: typeof m.context === "string" ? m.context : null,
+          generatedPromptId: pr.generatedPromptId ?? null,
+        });
+      }
+      return [pr.id, resolved] as const;
+    })
+  );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -354,6 +388,7 @@ function makeFixtures(opts: {
       confidence: "verified",
       isPhantom: false,
       isBlindSpot: false,
+      canonicalEntityId: null,
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
     },
@@ -369,6 +404,7 @@ function makeFixtures(opts: {
       confidence: "unverified",
       isPhantom: true,
       isBlindSpot: false,
+      canonicalEntityId: null,
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
     },
@@ -577,6 +613,7 @@ function makeFixtures(opts: {
     mirrorProfile,
     prompts,
     probeResults,
+    resolvedMentionsByProbeResult: toResolvedMentionsByProbeResult(probeResults),
     competitors,
     gapMap,
     gaps,
@@ -1002,6 +1039,7 @@ function testPromptCountIntegrity(): void {
     mirrorProfile: null,
     prompts,
     probeResults,
+    resolvedMentionsByProbeResult: toResolvedMentionsByProbeResult(probeResults),
     competitors: [],
     gapMap: null,
     gaps: [],
@@ -1082,6 +1120,236 @@ function testPromptCountIntegrity(): void {
 }
 
 /* -------------------------------------------------------------------------- */
+/*  M3 — canonicalEntityId tally sites (top competitors, ranked table,       */
+/*  per-run transcript) and Mirror Profile / platformsReferenced non-        */
+/*  regression                                                               */
+/* -------------------------------------------------------------------------- */
+
+function testM3CanonicalTallySites(): void {
+  const now = new Date("2026-07-10T01:30:00.000Z");
+  const projectId = "33333333-3333-3333-3333-333333333333";
+  const project: Project = {
+    id: projectId,
+    userId: "owner-m3",
+    companyName: "Acme Corp",
+    domain: "https://acme.example.com",
+    category: "AI product development platform for teams",
+    createdAt: now.toISOString(),
+  };
+  const mirrorProfile: MirrorProfileRow = {
+    id: "mp-m3",
+    projectId,
+    json: {
+      companyName: "Acme Corp",
+      website: "https://acme.example.com",
+      detectedCategory: "AI product development platform for teams",
+      categoryConfidence: "high",
+      targetAudience: [],
+      useCases: [],
+      features: [],
+      painPointsAddressed: [],
+      claims: [],
+      proofSignals: [],
+      // Site-reader source, never AI-probe evidence. Must render exactly
+      // as-is regardless of resolvedMentionsByProbeResult below.
+      competitorsMentioned: ["SiteOnlyRival"],
+      missingSignals: [],
+      buyerIntentAngles: [],
+      aiReadabilityNotes: "",
+    },
+    createdAt: now.toISOString(),
+  };
+  const prompts: GeneratedPrompt[] = ["a", "b", "c", "d"].map((k, i) => ({
+    id: `prompt-${k}`,
+    projectId,
+    prompt: `Best tools, question ${k}`,
+    intentType: "best_tools",
+    commercialValue: 5,
+    winnability: 4,
+    priority: 20,
+    rationale: "test",
+    selected: i === 0,
+    createdAt: now.toISOString(),
+  }));
+  function probe(id: string, promptIdx: number, platform: string): ProbeResult {
+    return {
+      id,
+      probeRunId: "run-m3",
+      projectId,
+      generatedPromptId: prompts[promptIdx].id,
+      prompt: prompts[promptIdx].prompt,
+      platform,
+      probeMode: "simulated",
+      rawResponse: "raw",
+      clientMentioned: false,
+      clientPosition: "absent",
+      competitorsMentioned: [],
+      sourcesCited: [],
+      answerSummary: "AI recommended other products, not Acme.",
+      verdict: "lost",
+      whyClientLost: "Acme absent from AI answer.",
+      createdAt: now.toISOString(),
+    };
+  }
+  const probeA = probe("probe-m3-a", 0, "chatgpt");
+  const probeB = probe("probe-m3-b", 1, "perplexity");
+  const probeC = probe("probe-m3-c", 2, "perplexity");
+  const probeD = probe("probe-m3-d", 3, "perplexity");
+  const probeResults = [probeA, probeB, probeC, probeD];
+
+  const resolvedMentionsByProbeResult = new Map<string, ResolvedCompetitorMention[]>([
+    [
+      probeA.id,
+      [
+        {
+          canonicalEntityId: "canonical:widgetco",
+          rawText: "Widgetco",
+          normalizedText: "widgetco",
+          mentionOrdinal: 1,
+          context: null,
+          generatedPromptId: probeA.generatedPromptId,
+        },
+      ],
+    ],
+    [
+      probeB.id,
+      [
+        // Different surface form, SAME canonicalEntityId as probeA's
+        // mention — must merge into ONE tallied competitor, not two.
+        {
+          canonicalEntityId: "canonical:widgetco",
+          rawText: "Widgetco Inc.",
+          normalizedText: "widgetco",
+          mentionOrdinal: 1,
+          context: null,
+          generatedPromptId: probeB.generatedPromptId,
+        },
+      ],
+    ],
+    [
+      // A resolved mention whose rawText happens to be a platform name.
+      // Real entity resolution never produces this (platforms are
+      // diverted upstream), but tallyResolvedCompetitors defends against
+      // it anyway — prove that defense fires.
+      probeC.id,
+      [
+        {
+          canonicalEntityId: "canonical:chatgpt",
+          rawText: "ChatGPT",
+          normalizedText: "chatgpt",
+          mentionOrdinal: 1,
+          context: null,
+          generatedPromptId: probeC.generatedPromptId,
+        },
+      ],
+    ],
+    [
+      // Same competitor named twice within one run — the per-run
+      // transcript (site 2) must preserve both ordinals, not collapse
+      // them, even though the tally sites (1 and 3) count both.
+      probeD.id,
+      [
+        {
+          canonicalEntityId: "canonical:gadgetco",
+          rawText: "Gadgetco",
+          normalizedText: "gadgetco",
+          mentionOrdinal: 1,
+          context: "first mention",
+          generatedPromptId: probeD.generatedPromptId,
+        },
+        {
+          canonicalEntityId: "canonical:gadgetco",
+          rawText: "Gadgetco",
+          normalizedText: "gadgetco",
+          mentionOrdinal: 2,
+          context: "second mention",
+          generatedPromptId: probeD.generatedPromptId,
+        },
+      ],
+    ],
+  ]);
+
+  const input: BuildMvpReportInput = {
+    project,
+    mirrorProfile,
+    prompts,
+    probeResults,
+    resolvedMentionsByProbeResult,
+    competitors: [],
+    gapMap: null,
+    gaps: [],
+    evidenceBank: null,
+    fixBriefs: [],
+    assets: [],
+    latestQaByAsset: new Map(),
+    now,
+  };
+  const { markdown } = buildMvpReport(input);
+
+  console.log("\n[M3 build-mvp-report.ts: canonicalEntityId tally sites]");
+
+  check(
+    "exec summary: two surface forms of one canonicalEntityId collapse into ONE top competitor",
+    markdown.includes("Top competitors AI recommended instead") &&
+      /Top competitors AI recommended instead\*\*: [^\n]*Widgetco Inc\.[^\n]*/.test(markdown) &&
+      !/Top competitors AI recommended instead\*\*: [^\n]*Widgetco Inc\.[^\n]*Widgetco Inc\./.test(
+        markdown
+      )
+  );
+  check(
+    "exec summary: the richer surface form ('Widgetco Inc.') is the displayed name, not the shorter 'Widgetco'",
+    (() => {
+      const line = markdown
+        .split("\n")
+        .find((l) => l.includes("Top competitors AI recommended instead"));
+      return Boolean(line) && line!.includes("Widgetco Inc.") && !/\bWidgetco\b(?!\sInc\.)/.test(line!);
+    })()
+  );
+  check(
+    "exec summary: a resolved mention that is actually a platform name (ChatGPT) never appears as a top competitor",
+    (() => {
+      const line = markdown
+        .split("\n")
+        .find((l) => l.includes("Top competitors AI recommended instead"));
+      return Boolean(line) && !line!.includes("ChatGPT");
+    })()
+  );
+  check(
+    "ranked table: Widgetco/Widgetco Inc. merge into one row with count 2, not two rows of count 1",
+    markdown.includes("| Widgetco Inc. | 2 |") && !markdown.includes("| Widgetco | 1 |")
+  );
+  check(
+    "ranked table: ChatGPT is never listed as a competitor row",
+    (() => {
+      const start = markdown.indexOf("### Which competitors appeared instead");
+      if (start === -1) return false;
+      const end = markdown.indexOf("\n### ", start + 1);
+      const section = markdown.slice(start, end === -1 ? undefined : end);
+      return !section.includes("ChatGPT");
+    })()
+  );
+  check(
+    "per-run transcript (probe-m3-d): both ordinals of the duplicate 'Gadgetco' mention are preserved, not deduplicated",
+    markdown.includes("| 1 | Gadgetco | first mention |") &&
+      markdown.includes("| 2 | Gadgetco | second mention |")
+  );
+  check(
+    "Mirror Profile's own site-competitor list (SiteOnlyRival) still renders, untouched by resolvedMentionsByProbeResult",
+    markdown.includes("SiteOnlyRival")
+  );
+  check(
+    "Mirror Profile section does not leak AI-probe-evidence competitors (Widgetco) into its own list",
+    (() => {
+      const start = markdown.indexOf("### Competitors mentioned on the site");
+      if (start === -1) return false;
+      const end = markdown.indexOf("\n### ", start + 1);
+      const section = markdown.slice(start, end === -1 ? undefined : end);
+      return section.includes("SiteOnlyRival") && !section.includes("Widgetco");
+    })()
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Entry                                                                     */
 /* -------------------------------------------------------------------------- */
 
@@ -1096,6 +1364,7 @@ testCompanyNameInReport();
 testCategoryCaveat();
 testSecretLeakThroughReport();
 testPromptCountIntegrity();
+testM3CanonicalTallySites();
 
 console.log(
   `\n${checks - failures}/${checks} checks passed. ` +

@@ -3,6 +3,7 @@ import { recordAnalysisTrace } from "@/lib/evidence/analysis-trace";
 import { getDb } from "@/lib/db";
 import type { GeneratedAssetRow, QaReportRow } from "@/lib/db/types";
 import { hasUsableEvidenceBank } from "@/lib/evidence-bank/has-usable-evidence-bank";
+import { getResolvedCompetitorMentions } from "@/lib/evidence/get-resolved-competitor-mentions";
 import {
   buildAllowedUrlSet,
   detectAssetTypeConformity,
@@ -170,6 +171,14 @@ export async function runQa(input: RunQaInput): Promise<RunQaResult> {
     const fixBriefs = await db.getFixBriefsByProject(input.projectId);
     const competitors = await db.getCompetitorsByProject(input.projectId);
     const probeResults = await db.getProbeResultsByProject(input.projectId);
+    // M3 — source unique: resolved competitor mentions from the M2
+    // canonical layer, pre-fetched here (the DB-aware orchestrator) and
+    // passed as a plain array into the pure deterministic-checks module.
+    const resolvedCompetitorMentions = (
+      await Promise.all(
+        probeResults.map((pr) => getResolvedCompetitorMentions(db, input.projectId, pr.id))
+      )
+    ).flat();
     const allowedUrls = buildAllowedUrlSet({
       evidenceBank: bankRow,
       mirrorProfile: mirrorRow,
@@ -186,7 +195,7 @@ export async function runQa(input: RunQaInput): Promise<RunQaResult> {
       evidenceBank: bankRow,
       competitors,
       fixBriefs,
-      probeResults,
+      resolvedCompetitorMentions,
     });
     const provenanceViolations = detectEvidenceBankProvenanceCeiling(bankRow);
     const deterministic = [

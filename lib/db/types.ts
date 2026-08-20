@@ -210,6 +210,19 @@ export interface Competitor {
   confidence: string; // "verified" | "unverified"
   isPhantom: boolean;
   isBlindSpot: boolean;
+  /**
+   * M3 — source unique: links this row to the M2 canonical
+   * entity-resolution layer (canonical_entities.id, same project,
+   * entity_type='competitor'). Set only by an exact match between this
+   * row's name and a rawText actually observed for that canonical entity
+   * (lib/pipeline/discover-competitors.ts) — never by normalizeKey() or
+   * any other fuzzy match. NULL is an explicit, expected state: rows from
+   * discoverySource 'user'/'client_site'/'model_knowledge', and any
+   * 'ai_answer' row whose returned name did not exactly match an observed
+   * mention (e.g. an LLM paraphrase), have no canonical identity to link.
+   * Mandatory field, not optional — every constructor must decide it.
+   */
+  canonicalEntityId: string | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -1943,6 +1943,7 @@ export const memoryAdapter: DbAdapter = {
       confidence: c.confidence,
       isPhantom: c.isPhantom,
       isBlindSpot: c.isBlindSpot,
+      canonicalEntityId: c.canonicalEntityId,
       createdAt: now,
       updatedAt: now,
     }));

@@ -7,9 +7,9 @@ import {
   type CompetitorItem,
 } from "@/lib/schemas/competitor-discovery.schema";
 import type { SiteReaderOutput } from "@/lib/schemas/site-reader.schema";
-import type { CompetitorMention } from "@/lib/schemas/probe-analysis.schema";
 import type { ProbeResult } from "@/lib/db/types";
 import { isAiPlatformName } from "@/lib/ai-platforms/platform-registry";
+import type { ResolvedCompetitorMention } from "@/lib/evidence/get-resolved-competitor-mentions";
 
 /**
  * Competitor Discovery Agent.
@@ -34,6 +34,25 @@ export interface RunCompetitorDiscoveryInput {
    * is the top recommendation in a high-priority prompt.
    */
   priorityByPromptId?: Record<string, number>;
+  /**
+   * M3 — source unique: resolved competitor mentions per `probe_result.id`,
+   * from the M2 canonical entity-resolution layer
+   * (lib/evidence/get-resolved-competitor-mentions.ts), pre-fetched by the
+   * DB-aware orchestrator (lib/pipeline/discover-competitors.ts). Used only
+   * by the AI-answer ingestion step of `buildMockCompetitorDiscovery` —
+   * never by the real-LLM prompt building below, which still serializes
+   * `probeResults` verbatim as evidence text for the model to read.
+   *
+   * Mandatory, not optional: every caller must explicitly decide what
+   * this map contains for every probe_result, even if that decision is
+   * "empty array, nothing resolved yet" — there is no silent absence
+   * path, and no fallback to `probeResults[].competitorsMentioned` is
+   * ever performed. A probe_result missing from this map (or present
+   * with an empty array) contributes zero ai_answer competitors, which
+   * is the same safe, explicit "nothing reliable to report" outcome
+   * either way — never a guess drawn from unresolved legacy data.
+   */
+  resolvedMentionsByProbeResult: ReadonlyMap<string, ResolvedCompetitorMention[]>;
 }
 
 export interface RunCompetitorDiscoveryResult {
@@ -211,7 +230,6 @@ function normalizeKey(name: string): string {
 
 interface Aggregate {
   displayName: string;
-  key: string;
   sources: Set<DiscSource>;
   mentionCount: number;
   promptIds: Set<string>;
@@ -227,23 +245,33 @@ function pickDisplayName(candidates: string[]): string {
     ?.trim() ?? candidates[0]?.trim() ?? "";
 }
 
-function ensure(agg: Map<string, Aggregate>, name: string): Aggregate {
-  const key = normalizeKey(name);
-  const existing = agg.get(key);
-  if (existing) {
-    // Track alternative display names; take the "richer" one.
-    existing.displayName = pickDisplayName([existing.displayName, name]);
-    return existing;
-  }
-  const created: Aggregate = {
+function newAggregate(name: string): Aggregate {
+  return {
     displayName: name.trim(),
-    key,
     sources: new Set(),
     mentionCount: 0,
     promptIds: new Set(),
     wasTopRecInHighPriorityPrompt: false,
     website: null,
   };
+}
+
+/**
+ * Ensures an entry in a normalizeKey()-keyed aggregate map. Used only
+ * for the client-site (Mirror Profile) and user-declared sources,
+ * neither of which carries a canonical identity of its own — this
+ * remains the best available merge key for those two. Never used for
+ * ai_answer entries, which are grouped by `canonicalEntityId` instead
+ * (see `buildMockCompetitorDiscovery` below).
+ */
+function ensureByNameKey(agg: Map<string, Aggregate>, name: string): Aggregate {
+  const key = normalizeKey(name);
+  const existing = agg.get(key);
+  if (existing) {
+    existing.displayName = pickDisplayName([existing.displayName, name]);
+    return existing;
+  }
+  const created = newAggregate(name);
   agg.set(key, created);
   return created;
 }
@@ -263,47 +291,81 @@ const HIGH_PRIORITY_THRESHOLD = 15;
 export function buildMockCompetitorDiscovery(
   input: RunCompetitorDiscoveryInput
 ): CompetitorDiscoveryOutput {
-  const agg = new Map<string, Aggregate>();
   const priorityByPrompt = input.priorityByPromptId ?? {};
 
-  // 1. Ingest AI-answer competitors from probe results.
+  // 1. Ingest AI-answer competitors from resolved (canonical) probe
+  // mentions, grouped by canonicalEntityId — never by name string, so
+  // two surface forms of the same competitor (e.g. "Widgetco" and
+  // "Widgetco Inc.", already resolved to one canonical identity by the
+  // M2 RPC) are one entry here too, not two. `resolvedMentionsByProbeResult`
+  // is mandatory (see its own doc comment): a probe_result absent from
+  // it, or present with an empty array, contributes zero ai_answer
+  // competitors — never a fallback to `pr.competitorsMentioned`.
+  const aiAgg = new Map<string, Aggregate>();
   for (const pr of input.probeResults) {
-    const list = Array.isArray(pr.competitorsMentioned)
-      ? (pr.competitorsMentioned as CompetitorMention[])
-      : [];
-    for (const c of list) {
-      if (!c || typeof c.name !== "string" || c.name.trim().length === 0) continue;
-      if (isAiPlatformName(c.name)) continue;
-      const a = ensure(agg, c.name);
+    const resolvedMentions = input.resolvedMentionsByProbeResult.get(pr.id) ?? [];
+    for (const mention of resolvedMentions) {
+      if (isAiPlatformName(mention.rawText)) continue;
+      let a = aiAgg.get(mention.canonicalEntityId);
+      if (a) {
+        a.displayName = pickDisplayName([a.displayName, mention.rawText]);
+      } else {
+        a = newAggregate(mention.rawText);
+        aiAgg.set(mention.canonicalEntityId, a);
+      }
       a.sources.add("ai_answer");
       a.mentionCount += 1;
       if (pr.generatedPromptId) a.promptIds.add(pr.generatedPromptId);
-      if (c.position === 1 && pr.generatedPromptId) {
+      if (mention.mentionOrdinal === 1 && pr.generatedPromptId) {
         const pri = priorityByPrompt[pr.generatedPromptId] ?? 0;
         if (pri >= HIGH_PRIORITY_THRESHOLD) a.wasTopRecInHighPriorityPrompt = true;
       }
     }
   }
 
-  // 2. Merge client-site competitors from the Mirror Profile.
+  // 2. Client-site competitors from the Mirror Profile — unchanged,
+  // still read exactly as before. This is site-reader/mirror-scan
+  // evidence, never AI-probe evidence, and carries no canonical
+  // identity of its own — normalizeKey() remains its merge key.
+  const otherAgg = new Map<string, Aggregate>();
   for (const c of input.mirrorProfile.competitorsMentioned ?? []) {
     if (typeof c !== "string" || c.trim().length === 0) continue;
     if (isAiPlatformName(c)) continue;
-    const a = ensure(agg, c);
-    a.sources.add("client_site");
+    ensureByNameKey(otherAgg, c).sources.add("client_site");
   }
 
-  // 3. Merge user-declared competitors.
+  // 3. User-declared competitors — same non-canonical merge key.
   for (const c of input.userCompetitors ?? []) {
     if (typeof c !== "string" || c.trim().length === 0) continue;
     if (isAiPlatformName(c)) continue;
-    const a = ensure(agg, c);
-    a.sources.add("user");
+    ensureByNameKey(otherAgg, c).sources.add("user");
+  }
+
+  // Merge: an ai_answer entry absorbs a matching client-site/user entry
+  // by normalizeKey() of its own display name — the one place a
+  // name-string heuristic bridges canonical and non-canonical data,
+  // unavoidable since client-site/user sources carry no canonical
+  // identity to match on. This is never how ai_answer entries are
+  // deduplicated against EACH OTHER — that used canonicalEntityId
+  // above, and only that.
+  const merged: Array<Aggregate & { identityKey: string }> = [];
+  for (const [canonicalEntityId, a] of aiAgg) {
+    const bridgeKey = normalizeKey(a.displayName);
+    const other = otherAgg.get(bridgeKey);
+    if (other) {
+      for (const s of other.sources) a.sources.add(s);
+      if (other.website) a.website = other.website;
+      otherAgg.delete(bridgeKey);
+    }
+    merged.push({ ...a, identityKey: canonicalEntityId });
+  }
+  for (const [key, a] of otherAgg) {
+    merged.push({ ...a, identityKey: key });
   }
 
   const total = input.probeResults.length;
 
-  const competitors: CompetitorItem[] = Array.from(agg.values()).map((a) => {
+  const competitors: CompetitorItem[] = merged.map((a) => {
     const src = primarySource(a.sources);
     const rate = total > 0 ? a.mentionCount / total : 0;
     let threat: CompetitorItem["threatLevel"] = "low";
@@ -329,32 +391,33 @@ export function buildMockCompetitorDiscovery(
       a.name.localeCompare(b.name)
   );
 
-  // Phantoms: user-declared names never seen in AI answers.
-  const aiSet = new Set(
-    Array.from(agg.values())
-      .filter((a) => a.sources.has("ai_answer"))
-      .map((a) => a.key)
+  // Phantoms: user-declared names never seen in AI answers. Matching
+  // against ai_answer entries is by normalizeKey(displayName) — the
+  // same unavoidable bridge as above, since a user-typed name has no
+  // canonical identity to compare against directly.
+  const aiKeySet = new Set(
+    merged.filter((a) => a.sources.has("ai_answer")).map((a) => normalizeKey(a.displayName))
   );
   const userNormalized = new Map<string, string>();
   for (const c of input.userCompetitors ?? []) {
     if (!c.trim()) continue;
-    userNormalized.set(normalizeKey(c), agg.get(normalizeKey(c))?.displayName ?? c.trim());
+    const key = normalizeKey(c);
+    const match = merged.find((a) => normalizeKey(a.displayName) === key);
+    userNormalized.set(key, match?.displayName ?? c.trim());
   }
   const phantomCompetitors = Array.from(userNormalized.entries())
-    .filter(([k]) => !aiSet.has(k))
+    .filter(([k]) => !aiKeySet.has(k))
     .map(([, v]) => v);
 
   // Blind spots: AI-answer names not in user list AND not in mirror.competitorsMentioned.
   const mirrorSet = new Set(
     (input.mirrorProfile.competitorsMentioned ?? []).map((c) => normalizeKey(c))
   );
-  const blindSpots = Array.from(agg.values())
-    .filter(
-      (a) =>
-        a.sources.has("ai_answer") &&
-        !userNormalized.has(a.key) &&
-        !mirrorSet.has(a.key)
-    )
+  const blindSpots = merged
+    .filter((a) => {
+      const key = normalizeKey(a.displayName);
+      return a.sources.has("ai_answer") && !userNormalized.has(key) && !mirrorSet.has(key);
+    })
     .map((a) => a.displayName);
 
   const highCount = competitors.filter((c) => c.threatLevel === "high").length;

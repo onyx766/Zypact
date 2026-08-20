@@ -17,12 +17,35 @@ import {
 } from "@/lib/pipeline/scorecard-competitors";
 import type { PromptProbeAggregate } from "@/lib/probe-results/report-selection";
 import type { Competitor } from "@/lib/db/types";
+import type { ResolvedCompetitorMention } from "@/lib/evidence/get-resolved-competitor-mentions";
 
 let failures = 0;
 function check(label: string, condition: boolean): void {
   if (condition) console.log(`  ok   ${label}`);
   else { failures += 1; console.error(`  FAIL ${label}`); }
 }
+
+// M3 — these fixtures now simulate the M2 canonical layer's own output
+// (resolvedMentionsByProbeResult) instead of the legacy
+// `competitorsMentioned` JSON the migrated functions no longer read.
+// `canonicalIdFor` mirrors real entity resolution's own case-insensitive
+// normalization closely enough for this file's purposes: the same
+// (trimmed, lowercased) name always resolves to the same identity,
+// exactly like two mentions of "Clari"/"clari" would resolve to the
+// same canonical_entity_id in the real pipeline.
+const canonicalIdByNormalizedName = new Map<string, string>();
+function canonicalIdFor(name: string): string {
+  const key = name.trim().toLowerCase();
+  let id = canonicalIdByNormalizedName.get(key);
+  if (!id) {
+    id = `canonical:${key}`;
+    canonicalIdByNormalizedName.set(key, id);
+  }
+  return id;
+}
+
+const resolvedMentionsByProbeResult = new Map<string, ResolvedCompetitorMention[]>();
+let nextRowId = 0;
 
 /** Minimal group; only the fields the helper reads are meaningful. */
 function group(opts: {
@@ -34,14 +57,19 @@ function group(opts: {
     prompt: opts.prompt,
     verdict: opts.verdict,
     runs: opts.runs.length,
-    rows: opts.runs.map((r) => ({
-      prompt: opts.prompt,
-      competitorsMentioned: (r.recommended ?? []).map((c) => ({
-        name: c.name,
-        position: c.position ?? null,
-      })),
-      sourcesCited: (r.cited ?? []).map((d) => ({ name: d, url: `https://${d}/x` })),
-    })) as PromptProbeAggregate["rows"],
+    rows: opts.runs.map((r) => {
+      const id = `row-${nextRowId++}`;
+      const mentions: ResolvedCompetitorMention[] = (r.recommended ?? []).map((c) => ({
+        canonicalEntityId: canonicalIdFor(c.name),
+        rawText: c.name,
+        normalizedText: c.name.trim().toLowerCase(),
+        mentionOrdinal: c.position ?? 1,
+        context: null,
+        generatedPromptId: null,
+      }));
+      resolvedMentionsByProbeResult.set(id, mentions);
+      return { id, prompt: opts.prompt };
+    }) as PromptProbeAggregate["rows"],
   } as PromptProbeAggregate;
 }
 
@@ -80,7 +108,7 @@ console.log("test-scorecard-competitors");
 
 // 1 / 3 — recommended products become evidence and aggregate deterministically
 {
-  const e = buildPromptCompetitorEvidence(lostGroup);
+  const e = buildPromptCompetitorEvidence(lostGroup, resolvedMentionsByProbeResult);
   const clari = e.competitors.find((c) => c.nameKey === "clari");
   check("1 recommended product becomes diagnostic evidence", clari !== undefined);
   check("3 repeated recommendations aggregate across runs", clari?.recommendationCount === 3);
@@ -94,7 +122,7 @@ console.log("test-scorecard-competitors");
 
 // 2 / 11 — cited source domains never become diagnostic competitors
 {
-  const e = buildPromptCompetitorEvidence(lostGroup);
+  const e = buildPromptCompetitorEvidence(lostGroup, resolvedMentionsByProbeResult);
   const names = e.competitors.map((c) => c.nameKey);
   for (const cited of ["improvado.io", "whatagraph.com", "supermetrics.com"]) {
     check(`2 cited source "${cited}" is not a diagnostic competitor`, !names.includes(cited));
@@ -105,8 +133,8 @@ console.log("test-scorecard-competitors");
 
 // 4 / 5 / 6 — provenance retained, per prompt
 {
-  const lost = buildPromptCompetitorEvidence(lostGroup);
-  const partial = buildPromptCompetitorEvidence(partialGroup);
+  const lost = buildPromptCompetitorEvidence(lostGroup, resolvedMentionsByProbeResult);
+  const partial = buildPromptCompetitorEvidence(partialGroup, resolvedMentionsByProbeResult);
   check("4 every record carries its prompt", lost.competitors.every((c) => c.prompt === LOST));
   check("4b every record carries the group outcome",
     lost.competitors.every((c) => c.promptOutcome === "lost"));
@@ -120,7 +148,7 @@ console.log("test-scorecard-competitors");
 
 // 7 — Prompt B's competitors cannot describe Prompt A
 {
-  const all = buildScorecardCompetitorEvidence([lostGroup, partialGroup, wonGroup]);
+  const all = buildScorecardCompetitorEvidence([lostGroup, partialGroup, wonGroup], resolvedMentionsByProbeResult);
   const lost = all.find((g) => g.outcome === "lost");
   const partial = all.find((g) => g.outcome === "partial");
   check("7 no attribution competitor appears under the revenue-intelligence prompt",
@@ -136,7 +164,7 @@ console.log("test-scorecard-competitors");
   check("8b lost prompt is recovery-eligible", isRecoveryEligible("lost") === true);
   check("8c partial prompt is recovery-eligible", isRecoveryEligible("partial") === true);
   check("8d not_relevant is not recovery-eligible", isRecoveryEligible("not_relevant") === false);
-  const won = buildPromptCompetitorEvidence(wonGroup);
+  const won = buildPromptCompetitorEvidence(wonGroup, resolvedMentionsByProbeResult);
   check("8e won prompt still records context competitors", won.competitors.length === 3);
   check("8f but is marked won so no recovery gap can be built from it",
     won.competitors.every((c) => c.promptOutcome === "won"));
@@ -145,7 +173,7 @@ console.log("test-scorecard-competitors");
 // 9 — a project name with no scored recommendation is not evidenced
 {
   const keys = evidencedCompetitorKeys(
-    buildScorecardCompetitorEvidence([lostGroup, partialGroup, wonGroup])
+    buildScorecardCompetitorEvidence([lostGroup, partialGroup, wonGroup], resolvedMentionsByProbeResult)
   );
   for (const projectOnly of ["whatagraph", "supermetrics", "improvado", "dashthis", "cometly"]) {
     check(`9 project-only name "${projectOnly}" is not evidenced by any scored run`,
@@ -161,7 +189,7 @@ console.log("test-scorecard-competitors");
     prompt: LOST, verdict: "lost",
     runs: [{ recommended: [{ name: "Clari", position: 1 }, { name: "clari", position: 5 }] }],
   });
-  const e = buildPromptCompetitorEvidence(dup);
+  const e = buildPromptCompetitorEvidence(dup, resolvedMentionsByProbeResult);
   check("10 duplicate mention within a run counts once",
     e.competitors[0]?.recommendationCount === 1);
   check("10b but the better position is still kept", e.competitors[0]?.bestPosition === 1);
@@ -174,7 +202,7 @@ console.log("test-scorecard-competitors");
     rows: [{ prompt: LOST, competitorsMentioned: [{ position: 2 }, "Clari", null], sourcesCited: null }],
   } as unknown as PromptProbeAggregate;
   check("malformed mentions are skipped without throwing",
-    buildPromptCompetitorEvidence(bad).competitors.length === 0);
+    buildPromptCompetitorEvidence(bad, resolvedMentionsByProbeResult).competitors.length === 0);
 }
 
 // ---------- production handoff: project rows may enrich, never introduce ----
@@ -185,13 +213,14 @@ console.log("test-scorecard-competitors");
 console.log("\n [production handoff: buildDiagnosticCompetitors]");
 {
   const evidence = [
-    buildPromptCompetitorEvidence(lostGroup),     // Clari, Gong, SRI, People.ai
-    buildPromptCompetitorEvidence(partialGroup),  // Dreamdata, Ruler Analytics
+    buildPromptCompetitorEvidence(lostGroup, resolvedMentionsByProbeResult),     // Clari, Gong, SRI, People.ai
+    buildPromptCompetitorEvidence(partialGroup, resolvedMentionsByProbeResult),  // Dreamdata, Ruler Analytics
   ];
   const projectRow = (name: string, extra: Partial<Competitor> = {}): Competitor => ({
     id: `proj-${name}`, projectId: "proj", name, website: `https://${name}.com`,
     discoverySource: "client_site", mentionCount: 99, promptIds: ["x"],
     threatLevel: "high", confidence: "verified", isPhantom: false, isBlindSpot: false,
+    canonicalEntityId: null,
     createdAt: "2020-01-01T00:00:00.000Z", updatedAt: "2020-01-01T00:00:00.000Z",
     ...extra,
   });

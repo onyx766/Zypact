@@ -256,6 +256,7 @@ interface CompetitorDbRow {
   confidence: string;
   is_phantom: boolean;
   is_blind_spot: boolean;
+  canonical_entity_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -843,6 +844,7 @@ function mapCompetitor(r: CompetitorDbRow): Competitor {
     confidence: r.confidence,
     isPhantom: r.is_phantom,
     isBlindSpot: r.is_blind_spot,
+    canonicalEntityId: r.canonical_entity_id,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -2121,6 +2123,7 @@ export const supabaseAdapter: DbAdapter = {
       confidence: c.confidence,
       is_phantom: c.isPhantom,
       is_blind_spot: c.isBlindSpot,
+      canonical_entity_id: c.canonicalEntityId,
     }));
     const { data, error } = await client
       .from("competitors")

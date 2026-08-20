@@ -91,6 +91,7 @@ function inputs(fixBriefs: any[], gaps: any[] = []): BuildMvpReportInput {
     mirrorProfile: null,
     prompts: [],
     probeResults: [],
+    resolvedMentionsByProbeResult: new Map(),
     competitors: [],
     gapMap: gaps.length > 0 ? ({ id: "gm1", projectId: "p1", gapMap: {}, createdAt: CURRENT_CREATED } as any) : null,
     gaps,

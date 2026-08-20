@@ -23,10 +23,23 @@
  * This module rebuilds that evidence from the scorecard prompt groups and
  * keeps both properties: recommendation-only, and prompt-scoped. It is
  * pure — no database, no network, no provider.
+ *
+ * M3 — source unique: competitor identity now comes from the M2
+ * canonical entity-resolution layer (`canonicalEntityId`, resolved via
+ * lib/evidence/get-resolved-competitor-mentions.ts) rather than a raw,
+ * un-deduplicated name string. This module stays pure and synchronous:
+ * the caller (lib/pipeline/generate-gap-map.ts) is the DB-aware
+ * orchestrator responsible for pre-fetching resolved mentions per
+ * `probe_result` and passing them in as a plain map — never a database
+ * call from here. Prompt-scoping is untouched: `resolvedMentionsByProbeResult`
+ * is looked up only for the `probe_result` rows already inside each
+ * `group.rows`, so evidence from one prompt still can never explain
+ * another's loss.
  */
 
 import type { PromptProbeAggregate } from "@/lib/probe-results/report-selection";
 import type { Competitor, ProbeResult } from "@/lib/db/types";
+import type { ResolvedCompetitorMention } from "@/lib/evidence/get-resolved-competitor-mentions";
 
 /** Where a piece of competitor evidence came from. */
 export type CompetitorEvidenceSource = "probe_recommended_product";
@@ -40,6 +53,8 @@ export type CompetitorEvidenceSource = "probe_recommended_product";
 export interface DiagnosticCompetitorEvidence {
   name: string;
   nameKey: string;
+  /** M3 — the canonical identity this evidence groups by; see module doc comment. */
+  canonicalEntityId: string;
   prompt: string;
   promptKey: string;
   promptOutcome: PromptProbeAggregate["verdict"];
@@ -70,40 +85,17 @@ export function normalizePromptKey(value: string): string {
 }
 
 /**
- * `ProbeResult.competitorsMentioned` is typed `unknown` in the row type and
- * narrowed by callers, so it is validated here rather than trusted. Rows
- * that do not carry a usable name are skipped rather than guessed at.
- */
-function readMentions(
-  value: unknown
-): Array<{ name: string; position: number | null }> {
-  if (!Array.isArray(value)) return [];
-
-  const out: Array<{ name: string; position: number | null }> = [];
-  for (const entry of value) {
-    if (typeof entry !== "object" || entry === null) continue;
-    const record = entry as { name?: unknown; position?: unknown };
-    if (typeof record.name !== "string") continue;
-    const name = record.name.trim();
-    if (name === "") continue;
-    const position =
-      typeof record.position === "number" && Number.isFinite(record.position)
-        ? record.position
-        : null;
-    out.push({ name, position });
-  }
-  return out;
-}
-
-/**
  * Aggregates one prompt group's runs into competitor evidence.
  *
- * Only `competitorsMentioned` is read. `sourcesCited` is deliberately never
- * consulted: that is the defect this module exists to close, and reading it
- * here would silently reintroduce vendor domains as strategic competitors.
+ * Only resolved competitor observations are read (via
+ * `resolvedMentionsByProbeResult`, pre-fetched by the caller from the M2
+ * canonical layer). `sourcesCited` is deliberately never consulted: that
+ * is the defect this module exists to close, and reading it here would
+ * silently reintroduce vendor domains as strategic competitors.
  */
 export function buildPromptCompetitorEvidence(
-  group: PromptProbeAggregate
+  group: PromptProbeAggregate,
+  resolvedMentionsByProbeResult: ReadonlyMap<string, ResolvedCompetitorMention[]>
 ): PromptCompetitorEvidence {
   const rows: ProbeResult[] = group.rows ?? [];
   const byKey = new Map<string, DiagnosticCompetitorEvidence>();
@@ -112,36 +104,38 @@ export function buildPromptCompetitorEvidence(
     // A single run may name the same product twice; count it once per run
     // so frequency means "runs that recommended it", not "times printed".
     const seenThisRun = new Set<string>();
+    // Looked up only for probe_results already inside this prompt
+    // group's own rows — evidence from another prompt group can never
+    // leak in through this map, however many other probe_results it
+    // happens to also carry entries for.
+    const resolvedMentions = resolvedMentionsByProbeResult.get(row.id) ?? [];
 
-    for (const mention of readMentions(row.competitorsMentioned)) {
-      const nameKey = normalizeCompetitorKey(mention.name);
-      if (nameKey === "") continue;
+    for (const mention of resolvedMentions) {
+      const key = mention.canonicalEntityId;
 
-      const existing = byKey.get(nameKey);
-      const countsThisRun = !seenThisRun.has(nameKey);
-      seenThisRun.add(nameKey);
+      const existing = byKey.get(key);
+      const countsThisRun = !seenThisRun.has(key);
+      seenThisRun.add(key);
 
       if (!existing) {
-        byKey.set(nameKey, {
-          name: mention.name,
-          nameKey,
+        byKey.set(key, {
+          name: mention.rawText,
+          nameKey: normalizeCompetitorKey(mention.rawText),
+          canonicalEntityId: key,
           prompt: group.prompt,
           promptKey: normalizePromptKey(group.prompt),
           promptOutcome: group.verdict,
           recommendationCount: countsThisRun ? 1 : 0,
           runs: group.runs,
-          bestPosition: mention.position,
+          bestPosition: mention.mentionOrdinal,
           source: "probe_recommended_product",
         });
         continue;
       }
 
       if (countsThisRun) existing.recommendationCount += 1;
-      if (
-        mention.position !== null &&
-        (existing.bestPosition === null || mention.position < existing.bestPosition)
-      ) {
-        existing.bestPosition = mention.position;
+      if (mention.mentionOrdinal < (existing.bestPosition ?? Number.MAX_SAFE_INTEGER)) {
+        existing.bestPosition = mention.mentionOrdinal;
       }
     }
   }
@@ -183,10 +177,11 @@ export function isRecoveryEligible(
  * prompt, never before.
  */
 export function buildScorecardCompetitorEvidence(
-  scorecardPromptGroups: PromptProbeAggregate[]
+  scorecardPromptGroups: PromptProbeAggregate[],
+  resolvedMentionsByProbeResult: ReadonlyMap<string, ResolvedCompetitorMention[]>
 ): PromptCompetitorEvidence[] {
   return scorecardPromptGroups
-    .map((group) => buildPromptCompetitorEvidence(group))
+    .map((group) => buildPromptCompetitorEvidence(group, resolvedMentionsByProbeResult))
     .filter((entry) => entry.competitors.length > 0);
 }
 
@@ -249,6 +244,11 @@ export function buildDiagnosticCompetitors(params: {
       confidence: enrichment?.confidence ?? "unverified",
       isPhantom: enrichment?.isPhantom ?? false,
       isBlindSpot: enrichment?.isBlindSpot ?? false,
+      // M3 — source unique: this row IS grounded in AI-probe evidence (its
+      // discoverySource is hardcoded "ai_answer" above), so its canonical
+      // identity is simply the one `strongest` was already grouped under —
+      // not a re-derived guess, the same id used to build `evidenced`.
+      canonicalEntityId: strongest.canonicalEntityId,
       createdAt: enrichment?.createdAt ?? new Date(0).toISOString(),
       updatedAt: enrichment?.updatedAt ?? new Date(0).toISOString(),
     };

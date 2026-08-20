@@ -257,6 +257,15 @@ interface CompetitorDbRow {
   is_phantom: boolean;
   is_blind_spot: boolean;
   canonical_entity_id: string | null;
+  /**
+   * M3 — incident fix. Constant discriminator required by the
+   * project-scoped FK added in migration 0045 (`'competitor'` iff
+   * `canonical_entity_id` is non-null, `NULL` otherwise). The RPC
+   * (migration 0046) derives this server-side from
+   * `canonical_entity_id` alone and does not trust a client-supplied
+   * value — this field only needs to round-trip correctly on read.
+   */
+  canonical_entity_type: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -848,6 +857,36 @@ function mapCompetitor(r: CompetitorDbRow): Competitor {
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
+}
+
+/**
+ * M3 — incident fix. Pure payload builder for
+ * `replace_competitors_for_project` (migration 0046), extracted so it
+ * is directly unit-testable without a live Supabase connection — this
+ * is the exact class of bug (canonical_entity_type silently omitted)
+ * that caused the 2026-08-20 staging incident, so the payload shape
+ * itself now has dedicated test coverage.
+ *
+ * `canonicalEntityType` is included for symmetry/observability only —
+ * the RPC derives its own `canonical_entity_type` from
+ * `canonicalEntityId` server-side and does not trust this field.
+ */
+export function buildCompetitorsRpcPayload(
+  competitors: readonly CompetitorInput[]
+): unknown[] {
+  return competitors.map((c) => ({
+    name: c.name,
+    website: c.website,
+    discoverySource: c.discoverySource,
+    mentionCount: c.mentionCount,
+    promptIds: c.promptIds,
+    threatLevel: c.threatLevel,
+    confidence: c.confidence,
+    isPhantom: c.isPhantom,
+    isBlindSpot: c.isBlindSpot,
+    canonicalEntityId: c.canonicalEntityId,
+    canonicalEntityType: c.canonicalEntityId ? "competitor" : null,
+  }));
 }
 
 function mapFixBrief(r: FixBriefDbRow): FixBriefRow {
@@ -2105,33 +2144,27 @@ export const supabaseAdapter: DbAdapter = {
     projectId: string,
     competitors: CompetitorInput[]
   ): Promise<Competitor[]> {
-    const client = getClient();
-    const del = await client
-      .from("competitors")
-      .delete()
-      .eq("project_id", projectId);
-    if (del.error) throw del.error;
-    if (competitors.length === 0) return [];
-    const rows = competitors.map((c) => ({
-      project_id: projectId,
-      name: c.name,
-      website: c.website,
-      discovery_source: c.discoverySource,
-      mention_count: c.mentionCount,
-      prompt_ids: c.promptIds,
-      threat_level: c.threatLevel,
-      confidence: c.confidence,
-      is_phantom: c.isPhantom,
-      is_blind_spot: c.isBlindSpot,
-      canonical_entity_id: c.canonicalEntityId,
-    }));
-    const { data, error } = await client
-      .from("competitors")
-      .insert(rows)
-      .select("*");
-    if (error || !data)
-      throw error ?? new Error("replaceCompetitorsForProject failed");
-    return (data as CompetitorDbRow[]).map(mapCompetitor);
+    // M3 — incident fix (2026-08-20): this used to be a DELETE call
+    // followed by a separate INSERT call — two independent Supabase
+    // requests, not one transaction. The DELETE committed, the INSERT
+    // then failed a CHECK constraint (canonical_entity_type had not
+    // been sent), and the project's existing competitors rows were
+    // left deleted with nothing to replace them.
+    //
+    // replace_competitors_for_project (migration 0046) does the
+    // delete, the insert, and the read-back inside one PL/pgSQL
+    // function body — one implicit transaction. A single .rpc() call,
+    // never two separate table operations.
+    const payload = buildCompetitorsRpcPayload(competitors);
+    const { data, error } = await getClient().rpc(
+      "replace_competitors_for_project",
+      {
+        p_project_id: projectId,
+        p_competitors: payload,
+      }
+    );
+    if (error) throw error;
+    return ((data ?? []) as CompetitorDbRow[]).map(mapCompetitor);
   },
 
   async getCompetitorsByProject(projectId: string): Promise<Competitor[]> {

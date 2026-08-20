@@ -583,7 +583,173 @@ export interface EntityAliasInput {
 
 export interface EntityAlias extends EntityAliasInput {
   id: string;
+  /**
+   * M2 canonical observations contract, third tranche (D-017 §6) —
+   * added by migration 0041. Together with `(projectId, normalizedText)`
+   * this is the table's only uniqueness key; `entityType` is
+   * deliberately not part of it, which is what makes client/competitor
+   * exclusivity structural. The "active" mapping for a given
+   * `(projectId, normalizedText)` is always the row with the highest
+   * `aliasGeneration` — see `getEntityAliasesActiveByProject`.
+   */
+  aliasGeneration: number;
   createdAt: string;
+}
+
+/**
+ * M2 canonical observations contract, third tranche (D-017, D-018,
+ * D-019). Types for the two SECURITY DEFINER RPCs added by migration
+ * 0042 and the active-head read views added by migration 0041.
+ */
+export type EntityType = "client" | "competitor" | "platform";
+
+/** The entity_resolution_passes table's own status column — three values. */
+export type EntityResolutionPassRowStatus = "in_progress" | "completed" | "abandoned";
+
+/**
+ * What either RPC's own `pass_status` return field can contain — two
+ * values only. `'abandoned'` never appears here: a call against an
+ * abandoned pass raises rather than returning a status, and
+ * `start_or_resume_entity_resolution_pass`'s own lookup only ever
+ * matches rows with `status in ('completed','in_progress')`.
+ */
+export type EntityResolutionPassStatus = "in_progress" | "completed";
+
+export type EntityResolutionPassOutcome = "STARTED" | "RESUMED" | "ALREADY_COMPLETED";
+
+export type EntityObservationStatus =
+  | "resolved"
+  | "ambiguous"
+  | "unresolved"
+  | "excluded_brand_self";
+
+/**
+ * `SUPERSEDED_PRIOR` never fires for observations (D-017 §2, revision
+ * 6 correction) — a correction is always a new pass at a higher
+ * `resolverVersion`, producing a fresh generation-1 `APPLIED` row, not
+ * a same-pass supersession.
+ */
+export type EntityObservationOutcome = "APPLIED" | "ALREADY_APPLIED" | "CONFLICT";
+
+export type EntityAliasOutcome =
+  | "APPLIED"
+  | "ALREADY_APPLIED"
+  | "SUPERSEDED_PRIOR"
+  | "CONFLICT"
+  | "NOT_APPLICABLE";
+
+/**
+ * M2 canonical observations contract, third tranche (D-017) — freezes
+ * the exact brand-term inputs used for one
+ * `(projectId, datasetId, resolverVersion)`, created once by
+ * `startOrResumeEntityResolutionPass` and never recomputed.
+ */
+export interface EntityBrandSnapshot {
+  id: string;
+  projectId: string;
+  datasetId: string;
+  resolverVersion: number;
+  companyName: string;
+  domain: string;
+  mirrorAliases: string[];
+  normalizedBrandTerms: string[];
+  createdAt: string;
+}
+
+/**
+ * M2 canonical observations contract, third tranche (D-017) — tracks
+ * one resolution attempt per `(probeResultId, resolverVersion)`. Note:
+ * this table has no `createdAt` column — `startedAt` is its creation
+ * timestamp instead (verified mechanically against migration 0041).
+ */
+export interface EntityResolutionPass {
+  id: string;
+  projectId: string;
+  probeResultId: string;
+  resolverVersion: number;
+  datasetId: string;
+  datasetSourceType: DatasetSourceType;
+  brandSnapshotId: string;
+  expectedMentionCount: number;
+  status: EntityResolutionPassRowStatus;
+  startedAt: string;
+  lastActivityAt: string;
+  completedAt: string | null;
+}
+
+type EntityObservationBase = {
+  id: string;
+  probeResultId: string;
+  probeRunId: string;
+  generatedPromptId: string | null;
+  projectId: string;
+  datasetId: string;
+  datasetSourceType: DatasetSourceType;
+  resolutionPassId: string;
+  rawText: string;
+  normalizedText: string;
+  resolverVersion: number;
+  mentionOrdinal: number;
+  context: string | null;
+  observationGeneration: number;
+  createdAt: string;
+};
+
+/**
+ * M2 canonical observations contract, third tranche (D-017 §4) — a
+ * discriminated union, not loose nullable fields, because migration
+ * 0041's `entity_observations_status_entity_check` correlates
+ * `status`, `entityType`, and `canonicalEntityId`: they are never
+ * independently nullable. This makes an illegal combination (e.g.
+ * `status: "resolved"` with `entityType: "client"`, or with a null
+ * `canonicalEntityId`) a compile error, matching the database's own
+ * constraint exactly rather than merely documenting it.
+ */
+export type EntityObservation = EntityObservationBase &
+  (
+    | { status: "resolved"; entityType: "competitor" | "platform"; canonicalEntityId: string }
+    | { status: "excluded_brand_self"; entityType: "client"; canonicalEntityId: string }
+    | { status: "ambiguous" | "unresolved"; entityType: null; canonicalEntityId: null }
+  );
+
+export interface StartOrResumeEntityResolutionPassInput {
+  projectId: string;
+  probeResultId: string;
+  resolverVersion: number;
+  datasetId: string;
+  expectedMentionCount: number;
+  companyName: string;
+  domain: string;
+  normalizedBrandTerms: string[];
+  mirrorAliases?: string[];
+  /** Maps to the RPC's `p_stale_after` interval. Omit to use the function's own default (15 minutes). */
+  staleAfterSeconds?: number;
+}
+
+export interface StartOrResumeEntityResolutionPassResult {
+  resolutionPassId: string;
+  passStatus: EntityResolutionPassStatus;
+  passOutcome: EntityResolutionPassOutcome;
+}
+
+export interface ResolveAndRecordEntityObservationInput {
+  resolutionPassId: string;
+  mentionOrdinal: number;
+  rawText: string;
+  normalizedText: string;
+  status: EntityObservationStatus;
+  proposedEntityType?: EntityType | null;
+  context?: string | null;
+}
+
+export interface ResolveAndRecordEntityObservationResult {
+  observationId: string;
+  observationGeneration: number;
+  observationOutcome: EntityObservationOutcome;
+  aliasId: string | null;
+  aliasGeneration: number | null;
+  aliasOutcome: EntityAliasOutcome;
+  passStatus: EntityResolutionPassStatus;
 }
 
 /**
@@ -1051,6 +1217,25 @@ export interface DbAdapter {
   ): Promise<CanonicalEntity[]>;
   createEntityAlias(input: EntityAliasInput): Promise<EntityAlias>;
   getEntityAliasesByProject(projectId: string): Promise<EntityAlias[]>;
+
+  // M2 canonical observations contract, third tranche (D-017, D-018,
+  // D-019) — entity resolution RPC wrappers. createEntityAlias above
+  // remains temporarily as the first tranche's direct-write path;
+  // retiring it is a separate, later step (its only caller today is
+  // scripts/test-m2-schema-contract.ts).
+  startOrResumeEntityResolutionPass(
+    input: StartOrResumeEntityResolutionPassInput
+  ): Promise<StartOrResumeEntityResolutionPassResult>;
+  resolveAndRecordEntityObservation(
+    input: ResolveAndRecordEntityObservationInput
+  ): Promise<ResolveAndRecordEntityObservationResult>;
+  // Active-head readers — the only sanctioned read path for "what does
+  // this currently mean" (D-017). No other method reads the base
+  // entity_aliases/entity_observations tables for that purpose.
+  getEntityAliasesActiveByProject(projectId: string): Promise<EntityAlias[]>;
+  getEntityObservationsActiveByProbeResult(
+    probeResultId: string
+  ): Promise<EntityObservation[]>;
 
   // Sprint 4 — Competitor Discovery
   replaceCompetitorsForProject(

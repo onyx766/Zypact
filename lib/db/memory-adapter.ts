@@ -17,6 +17,16 @@ import type {
   DbAdapter,
   EntityAlias,
   EntityAliasInput,
+  EntityAliasOutcome,
+  EntityBrandSnapshot,
+  EntityObservation,
+  EntityObservationOutcome,
+  EntityObservationStatus,
+  EntityResolutionPass,
+  EntityResolutionPassRowStatus,
+  EntityResolutionPassOutcome,
+  EntityResolutionPassStatus,
+  EntityType,
   EvidenceBankRow,
   EvidenceBankRowInput,
   FixBriefRow,
@@ -40,11 +50,15 @@ import type {
   QaReportRow,
   QaReportRowInput,
   RecordProbeFailureInput,
+  ResolveAndRecordEntityObservationInput,
+  ResolveAndRecordEntityObservationResult,
   SaveProbeResultInput,
   SaveSnapshotReportArtifactInput,
   SnapshotReportArtifact,
   SnapshotRequest,
   SitePage,
+  StartOrResumeEntityResolutionPassInput,
+  StartOrResumeEntityResolutionPassResult,
 } from "./types";
 import { SnapshotRequestLimitError } from "./types";
 import { evaluateSnapshotRequestLimits } from "@/lib/snapshot-requests/limits";
@@ -80,6 +94,9 @@ interface MemoryStore {
   datasetBatches: Map<string, DatasetBatch>;
   canonicalEntities: Map<string, CanonicalEntity>;
   entityAliasesByProject: Map<string, EntityAlias[]>;
+  entityBrandSnapshots: Map<string, EntityBrandSnapshot>;
+  entityResolutionPasses: Map<string, EntityResolutionPass>;
+  entityObservations: Map<string, EntityObservation>;
   competitorsByProject: Map<string, Competitor[]>;
   gapMapsByProject: Map<string, GapMapRow[]>;
   gapsByProject: Map<string, Gap[]>;
@@ -109,6 +126,9 @@ function getStore(): MemoryStore {
       datasetBatches: new Map(),
       canonicalEntities: new Map(),
       entityAliasesByProject: new Map(),
+      entityBrandSnapshots: new Map(),
+      entityResolutionPasses: new Map(),
+      entityObservations: new Map(),
       competitorsByProject: new Map(),
       gapMapsByProject: new Map(),
       gapsByProject: new Map(),
@@ -1323,6 +1343,11 @@ export const memoryAdapter: DbAdapter = {
       rawText: input.rawText,
       normalizedText: input.normalizedText,
       resolverVersion: input.resolverVersion,
+      // This legacy, first-tranche-only direct-write path predates the
+      // generation model (D-017 §6) and, per its own uniqueness check
+      // above, only ever creates one alias per (project, entityType,
+      // normalizedText) — always generation 1.
+      aliasGeneration: 1,
       createdAt: new Date().toISOString(),
     };
     store.entityAliasesByProject.set(input.projectId, [
@@ -1335,6 +1360,534 @@ export const memoryAdapter: DbAdapter = {
   async getEntityAliasesByProject(projectId: string): Promise<EntityAlias[]> {
     return [...(getStore().entityAliasesByProject.get(projectId) ?? [])].sort(
       (a, b) => b.createdAt.localeCompare(a.createdAt)
+    );
+  },
+
+  // M2 canonical observations contract, third tranche (D-017, D-018,
+  // D-019) — full reimplementation of migration 0042's business logic
+  // against the in-memory store, mirroring how
+  // backfillProbeResultDatasetIdentity above reimplements D-015's RPC
+  // rather than merely stubbing it. Genuine concurrency (the SQL
+  // function's retry loop, real row locks) cannot be simulated here —
+  // this is single-threaded JS with no concurrent callers; that
+  // remains a real-Postgres-only concern, same documented limitation
+  // already carried by scripts/test-m2-tranche3-writers.ts.
+  async startOrResumeEntityResolutionPass(
+    input: StartOrResumeEntityResolutionPassInput
+  ): Promise<StartOrResumeEntityResolutionPassResult> {
+    const store = getStore();
+
+    if (input.resolverVersion < 1) throw new Error("invalid_resolver_version");
+    if (input.expectedMentionCount < 0) {
+      throw new Error("invalid_expected_mention_count");
+    }
+    const staleAfterMs = (input.staleAfterSeconds ?? 900) * 1000;
+    if (!(staleAfterMs > 0)) throw new Error("invalid_stale_after");
+    if (!input.companyName.trim()) throw new Error("empty_company_name");
+    if (!input.domain.trim()) throw new Error("empty_domain");
+    if (input.normalizedBrandTerms.length === 0) {
+      throw new Error("empty_normalized_brand_terms");
+    }
+    if (input.normalizedBrandTerms.some((t) => !t || !t.trim())) {
+      throw new Error("blank_normalized_brand_term");
+    }
+    const mirrorAliases = input.mirrorAliases ?? [];
+    if (mirrorAliases.some((a) => !a || !a.trim())) {
+      throw new Error("blank_mirror_alias");
+    }
+
+    const probeResult = (
+      store.probeResultsByProject.get(input.projectId) ?? []
+    ).find((r) => r.id === input.probeResultId);
+    if (!probeResult) throw new Error("probe_result_project_mismatch");
+
+    const datasetBatch = [...store.datasetBatches.values()].find(
+      (b) => b.id === input.datasetId && b.projectId === input.projectId
+    );
+    if (!datasetBatch) throw new Error("dataset_project_mismatch");
+    const datasetSourceType = datasetBatch.datasetSourceType;
+
+    const now = new Date();
+
+    const existing = [...store.entityResolutionPasses.values()].find(
+      (p) =>
+        p.probeResultId === input.probeResultId &&
+        p.resolverVersion === input.resolverVersion &&
+        (p.status === "completed" || p.status === "in_progress")
+    );
+
+    if (existing) {
+      if (
+        existing.projectId !== input.projectId ||
+        existing.probeResultId !== input.probeResultId ||
+        existing.datasetId !== input.datasetId ||
+        existing.datasetSourceType !== datasetSourceType ||
+        existing.resolverVersion !== input.resolverVersion ||
+        existing.expectedMentionCount !== input.expectedMentionCount
+      ) {
+        throw new Error("pass_parameter_mismatch");
+      }
+
+      if (existing.status === "completed") {
+        return {
+          resolutionPassId: existing.id,
+          passStatus: "completed",
+          passOutcome: "ALREADY_COMPLETED",
+        };
+      }
+
+      const lastActivityMs = new Date(existing.lastActivityAt).getTime();
+      if (now.getTime() - lastActivityMs <= staleAfterMs) {
+        const resumed: EntityResolutionPass = {
+          ...existing,
+          lastActivityAt: now.toISOString(),
+        };
+        store.entityResolutionPasses.set(resumed.id, resumed);
+        return {
+          resolutionPassId: resumed.id,
+          passStatus: "in_progress",
+          passOutcome: "RESUMED",
+        };
+      }
+
+      const abandoned: EntityResolutionPass = {
+        ...existing,
+        status: "abandoned",
+      };
+      store.entityResolutionPasses.set(abandoned.id, abandoned);
+    }
+
+    // find-or-create the brand snapshot; reuse requires an exact match,
+    // array order included, never a silent divergence
+    let brandSnapshot = [...store.entityBrandSnapshots.values()].find(
+      (s) =>
+        s.projectId === input.projectId &&
+        s.datasetId === input.datasetId &&
+        s.resolverVersion === input.resolverVersion
+    );
+
+    if (brandSnapshot) {
+      const sameAliases =
+        brandSnapshot.mirrorAliases.length === mirrorAliases.length &&
+        brandSnapshot.mirrorAliases.every((a, i) => a === mirrorAliases[i]);
+      const sameTerms =
+        brandSnapshot.normalizedBrandTerms.length ===
+          input.normalizedBrandTerms.length &&
+        brandSnapshot.normalizedBrandTerms.every(
+          (t, i) => t === input.normalizedBrandTerms[i]
+        );
+      if (
+        brandSnapshot.companyName !== input.companyName ||
+        brandSnapshot.domain !== input.domain ||
+        !sameAliases ||
+        !sameTerms
+      ) {
+        throw new Error("brand_snapshot_parameter_mismatch");
+      }
+    } else {
+      brandSnapshot = {
+        id: randomUUID(),
+        projectId: input.projectId,
+        datasetId: input.datasetId,
+        resolverVersion: input.resolverVersion,
+        companyName: input.companyName,
+        domain: input.domain,
+        mirrorAliases,
+        normalizedBrandTerms: input.normalizedBrandTerms,
+        createdAt: now.toISOString(),
+      };
+      store.entityBrandSnapshots.set(brandSnapshot.id, brandSnapshot);
+    }
+
+    const status: EntityResolutionPassRowStatus =
+      input.expectedMentionCount === 0 ? "completed" : "in_progress";
+
+    const pass: EntityResolutionPass = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      probeResultId: input.probeResultId,
+      resolverVersion: input.resolverVersion,
+      datasetId: input.datasetId,
+      datasetSourceType,
+      brandSnapshotId: brandSnapshot.id,
+      expectedMentionCount: input.expectedMentionCount,
+      status,
+      startedAt: now.toISOString(),
+      lastActivityAt: now.toISOString(),
+      completedAt: status === "completed" ? now.toISOString() : null,
+    };
+    store.entityResolutionPasses.set(pass.id, pass);
+
+    return {
+      resolutionPassId: pass.id,
+      passStatus: status,
+      passOutcome: "STARTED",
+    };
+  },
+
+  async resolveAndRecordEntityObservation(
+    input: ResolveAndRecordEntityObservationInput
+  ): Promise<ResolveAndRecordEntityObservationResult> {
+    const store = getStore();
+
+    const pass = store.entityResolutionPasses.get(input.resolutionPassId);
+    if (!pass) throw new Error("pass_not_found");
+    if (pass.status !== "in_progress") throw new Error("pass_not_in_progress");
+
+    const probeResult = (
+      store.probeResultsByProject.get(pass.projectId) ?? []
+    ).find((r) => r.id === pass.probeResultId);
+    const probeRunId = probeResult?.probeRunId ?? "";
+    const generatedPromptId = probeResult?.generatedPromptId ?? null;
+
+    const brandSnapshot = store.entityBrandSnapshots.get(pass.brandSnapshotId);
+    // normalizedBrandTerms is already-normalized data produced once by
+    // lib/evidence/normalize-entity-text.ts at snapshot-creation time
+    // (D-019) — never recomputed here, only compared by exact string
+    // membership.
+    const normalizedBrandTerms = brandSnapshot?.normalizedBrandTerms ?? [];
+
+    if (input.mentionOrdinal < 0) throw new Error("invalid_mention_ordinal");
+    if (!input.rawText || !input.rawText.trim()) {
+      throw new Error("empty_raw_text");
+    }
+    // input.normalizedText is trusted as-is (D-019 trust hypothesis) —
+    // this adapter never calls normalizeEntityTextV1 to re-derive or
+    // sanity-check it against input.rawText.
+    if (!input.normalizedText || !input.normalizedText.trim()) {
+      throw new Error("empty_normalized_text");
+    }
+    const validStatuses: EntityObservationStatus[] = [
+      "resolved",
+      "ambiguous",
+      "unresolved",
+      "excluded_brand_self",
+    ];
+    if (!validStatuses.includes(input.status)) throw new Error("invalid_status");
+
+    if (
+      (input.status === "resolved" || input.status === "excluded_brand_self") &&
+      input.proposedEntityType == null
+    ) {
+      throw new Error("missing_proposed_entity_type");
+    }
+    if (
+      (input.status === "ambiguous" || input.status === "unresolved") &&
+      input.proposedEntityType != null
+    ) {
+      throw new Error("unexpected_proposed_entity_type");
+    }
+    if (input.status === "resolved" && input.proposedEntityType === "client") {
+      throw new Error("resolved_forbids_client");
+    }
+    if (
+      input.status === "excluded_brand_self" &&
+      input.proposedEntityType !== "client"
+    ) {
+      throw new Error("excluded_brand_self_requires_client");
+    }
+    if (
+      input.status === "excluded_brand_self" &&
+      !normalizedBrandTerms.includes(input.normalizedText)
+    ) {
+      throw new Error("excluded_brand_self_no_match");
+    }
+
+    let effectiveStatus: EntityObservationStatus = input.status;
+    let effectiveEntityType: EntityType | null = input.proposedEntityType ?? null;
+
+    // D-018 unconditional override — any competitor/platform proposal
+    // matching the brand snapshot is reclassified, regardless of
+    // whether an alias head already exists for it.
+    if (
+      input.status === "resolved" &&
+      (input.proposedEntityType === "competitor" ||
+        input.proposedEntityType === "platform") &&
+      normalizedBrandTerms.includes(input.normalizedText)
+    ) {
+      effectiveStatus = "excluded_brand_self";
+      effectiveEntityType = "client";
+    }
+
+    let canonicalEntityId: string | null = null;
+    let aliasId: string | null = null;
+    let aliasGeneration: number | null = null;
+    let aliasOutcome: EntityAliasOutcome;
+
+    if (effectiveStatus === "resolved" || effectiveStatus === "excluded_brand_self") {
+      if (effectiveEntityType === "client") {
+        let clientEntity = [...store.canonicalEntities.values()].find(
+          (e) => e.projectId === pass.projectId && e.entityType === "client"
+        );
+        if (!clientEntity) {
+          clientEntity = {
+            id: randomUUID(),
+            projectId: pass.projectId,
+            entityType: "client",
+            resolverVersion: pass.resolverVersion,
+            createdAt: new Date().toISOString(),
+          };
+          store.canonicalEntities.set(clientEntity.id, clientEntity);
+        }
+        canonicalEntityId = clientEntity.id;
+      }
+
+      const aliasesForProject =
+        store.entityAliasesByProject.get(pass.projectId) ?? [];
+      const matchingAliases = aliasesForProject.filter(
+        (a) => a.normalizedText === input.normalizedText
+      );
+      const aliasHead =
+        matchingAliases.length > 0
+          ? matchingAliases.reduce((best, a) =>
+              a.aliasGeneration > best.aliasGeneration ? a : best
+            )
+          : null;
+
+      // unconditional demote-block: a client identity can never be
+      // demoted through this ordinary path, at any resolverVersion
+      if (
+        aliasHead &&
+        aliasHead.entityType === "client" &&
+        effectiveEntityType !== "client"
+      ) {
+        throw new Error("client_alias_demote_blocked");
+      }
+
+      if (effectiveEntityType === "competitor" || effectiveEntityType === "platform") {
+        if (aliasHead) {
+          canonicalEntityId = aliasHead.canonicalEntityId;
+        } else {
+          const created: CanonicalEntity = {
+            id: randomUUID(),
+            projectId: pass.projectId,
+            entityType: effectiveEntityType,
+            resolverVersion: pass.resolverVersion,
+            createdAt: new Date().toISOString(),
+          };
+          store.canonicalEntities.set(created.id, created);
+          canonicalEntityId = created.id;
+        }
+      }
+
+      if (!aliasHead) {
+        const newAlias: EntityAlias = {
+          id: randomUUID(),
+          canonicalEntityId: canonicalEntityId as string,
+          projectId: pass.projectId,
+          entityType: effectiveEntityType as EntityType,
+          rawText: input.rawText,
+          normalizedText: input.normalizedText,
+          resolverVersion: pass.resolverVersion,
+          aliasGeneration: 1,
+          createdAt: new Date().toISOString(),
+        };
+        store.entityAliasesByProject.set(pass.projectId, [
+          ...aliasesForProject,
+          newAlias,
+        ]);
+        aliasId = newAlias.id;
+        aliasGeneration = 1;
+        aliasOutcome = "APPLIED";
+      } else if (
+        aliasHead.canonicalEntityId === canonicalEntityId &&
+        aliasHead.entityType === effectiveEntityType
+      ) {
+        aliasId = aliasHead.id;
+        aliasGeneration = aliasHead.aliasGeneration;
+        aliasOutcome = "ALREADY_APPLIED";
+      } else if (pass.resolverVersion > aliasHead.resolverVersion) {
+        const newAlias: EntityAlias = {
+          id: randomUUID(),
+          canonicalEntityId: canonicalEntityId as string,
+          projectId: pass.projectId,
+          entityType: effectiveEntityType as EntityType,
+          rawText: input.rawText,
+          normalizedText: input.normalizedText,
+          resolverVersion: pass.resolverVersion,
+          aliasGeneration: aliasHead.aliasGeneration + 1,
+          createdAt: new Date().toISOString(),
+        };
+        store.entityAliasesByProject.set(pass.projectId, [
+          ...aliasesForProject,
+          newAlias,
+        ]);
+        aliasId = newAlias.id;
+        aliasGeneration = newAlias.aliasGeneration;
+        aliasOutcome = "SUPERSEDED_PRIOR";
+      } else {
+        aliasId = aliasHead.id;
+        aliasGeneration = aliasHead.aliasGeneration;
+        aliasOutcome = "CONFLICT";
+      }
+    } else {
+      // ambiguous / unresolved: alias resolution is skipped entirely
+      canonicalEntityId = null;
+      effectiveEntityType = null;
+      aliasOutcome = "NOT_APPLICABLE";
+    }
+
+    const effective:
+      | { status: "resolved"; entityType: "competitor" | "platform"; canonicalEntityId: string }
+      | { status: "excluded_brand_self"; entityType: "client"; canonicalEntityId: string }
+      | { status: "ambiguous" | "unresolved"; entityType: null; canonicalEntityId: null } =
+      effectiveStatus === "excluded_brand_self"
+        ? {
+            status: "excluded_brand_self",
+            entityType: "client",
+            canonicalEntityId: canonicalEntityId as string,
+          }
+        : effectiveStatus === "resolved"
+        ? {
+            status: "resolved",
+            entityType: effectiveEntityType as "competitor" | "platform",
+            canonicalEntityId: canonicalEntityId as string,
+          }
+        : {
+            status: effectiveStatus as "ambiguous" | "unresolved",
+            entityType: null,
+            canonicalEntityId: null,
+          };
+
+    const existingObservations = [...store.entityObservations.values()].filter(
+      (o) =>
+        o.resolutionPassId === input.resolutionPassId &&
+        o.mentionOrdinal === input.mentionOrdinal
+    );
+    const observationHead =
+      existingObservations.length > 0
+        ? existingObservations.reduce((best, o) =>
+            o.observationGeneration > best.observationGeneration ? o : best
+          )
+        : null;
+
+    let observationId: string;
+    let observationGeneration: number;
+    let observationOutcome: EntityObservationOutcome;
+
+    if (!observationHead) {
+      const newObservation: EntityObservation = {
+        id: randomUUID(),
+        probeResultId: pass.probeResultId,
+        probeRunId,
+        generatedPromptId,
+        projectId: pass.projectId,
+        datasetId: pass.datasetId,
+        datasetSourceType: pass.datasetSourceType,
+        resolutionPassId: pass.id,
+        rawText: input.rawText,
+        normalizedText: input.normalizedText,
+        resolverVersion: pass.resolverVersion,
+        mentionOrdinal: input.mentionOrdinal,
+        context: input.context ?? null,
+        observationGeneration: 1,
+        createdAt: new Date().toISOString(),
+        ...effective,
+      };
+      store.entityObservations.set(newObservation.id, newObservation);
+      observationId = newObservation.id;
+      observationGeneration = 1;
+      observationOutcome = "APPLIED";
+    } else if (
+      observationHead.rawText === input.rawText &&
+      observationHead.normalizedText === input.normalizedText &&
+      observationHead.canonicalEntityId === canonicalEntityId &&
+      observationHead.entityType === effectiveEntityType &&
+      observationHead.status === effectiveStatus &&
+      (observationHead.context ?? null) === (input.context ?? null)
+    ) {
+      observationId = observationHead.id;
+      observationGeneration = observationHead.observationGeneration;
+      observationOutcome = "ALREADY_APPLIED";
+    } else {
+      observationId = observationHead.id;
+      observationGeneration = observationHead.observationGeneration;
+      observationOutcome = "CONFLICT";
+    }
+
+    const now = new Date();
+    const observationCount = [...store.entityObservations.values()].filter(
+      (o) => o.resolutionPassId === input.resolutionPassId
+    ).length;
+
+    let passStatus: EntityResolutionPassStatus;
+    if (observationCount === pass.expectedMentionCount) {
+      store.entityResolutionPasses.set(pass.id, {
+        ...pass,
+        status: "completed",
+        completedAt: now.toISOString(),
+        lastActivityAt: now.toISOString(),
+      });
+      passStatus = "completed";
+    } else {
+      store.entityResolutionPasses.set(pass.id, {
+        ...pass,
+        lastActivityAt: now.toISOString(),
+      });
+      passStatus = "in_progress";
+    }
+
+    return {
+      observationId,
+      observationGeneration,
+      observationOutcome,
+      aliasId,
+      aliasGeneration,
+      aliasOutcome,
+      passStatus,
+    };
+  },
+
+  async getEntityAliasesActiveByProject(projectId: string): Promise<EntityAlias[]> {
+    const all = getStore().entityAliasesByProject.get(projectId) ?? [];
+    const headsByNormalizedText = new Map<string, EntityAlias>();
+    for (const alias of all) {
+      const current = headsByNormalizedText.get(alias.normalizedText);
+      if (!current || alias.aliasGeneration > current.aliasGeneration) {
+        headsByNormalizedText.set(alias.normalizedText, alias);
+      }
+    }
+    return [...headsByNormalizedText.values()].sort((a, b) =>
+      b.createdAt.localeCompare(a.createdAt)
+    );
+  },
+
+  async getEntityObservationsActiveByProbeResult(
+    probeResultId: string
+  ): Promise<EntityObservation[]> {
+    const store = getStore();
+    const allForResult = [...store.entityObservations.values()].filter(
+      (o) => o.probeResultId === probeResultId
+    );
+
+    const completedPasses = [...store.entityResolutionPasses.values()].filter(
+      (p) => p.probeResultId === probeResultId && p.status === "completed"
+    );
+    if (completedPasses.length === 0) return [];
+
+    const maxCompletedVersion = Math.max(
+      ...completedPasses.map((p) => p.resolverVersion)
+    );
+    const completedPassIds = new Set(
+      completedPasses
+        .filter((p) => p.resolverVersion === maxCompletedVersion)
+        .map((p) => p.id)
+    );
+
+    const eligible = allForResult.filter((o) =>
+      completedPassIds.has(o.resolutionPassId)
+    );
+
+    const headsByOrdinal = new Map<number, EntityObservation>();
+    for (const obs of eligible) {
+      const current = headsByOrdinal.get(obs.mentionOrdinal);
+      if (!current || obs.observationGeneration > current.observationGeneration) {
+        headsByOrdinal.set(obs.mentionOrdinal, obs);
+      }
+    }
+
+    return [...headsByOrdinal.values()].sort(
+      (a, b) => a.mentionOrdinal - b.mentionOrdinal
     );
   },
 

@@ -22,6 +22,12 @@ import type {
   DbAdapter,
   EntityAlias,
   EntityAliasInput,
+  EntityAliasOutcome,
+  EntityObservation,
+  EntityObservationOutcome,
+  EntityResolutionPassOutcome,
+  EntityResolutionPassStatus,
+  EntityType,
   EvidenceBankProvenance,
   EvidenceBankRow,
   EvidenceBankRowInput,
@@ -47,12 +53,16 @@ import type {
   QaReportRow,
   QaReportRowInput,
   RecordProbeFailureInput,
+  ResolveAndRecordEntityObservationInput,
+  ResolveAndRecordEntityObservationResult,
   SaveProbeResultInput,
   SaveSnapshotReportArtifactInput,
   SnapshotReportArtifact,
   SnapshotRequest,
   SnapshotRequestLimitCode,
   SitePage,
+  StartOrResumeEntityResolutionPassInput,
+  StartOrResumeEntityResolutionPassResult,
 
   ReplaceUndeliveredSnapshotReportArtifactInput,
   SnapshotReportArtifactRevision,
@@ -449,6 +459,7 @@ interface EntityAliasDbRow {
   raw_text: string;
   normalized_text: string;
   resolver_version: number;
+  alias_generation: number;
   created_at: string;
 }
 
@@ -461,8 +472,59 @@ function mapEntityAlias(r: EntityAliasDbRow): EntityAlias {
     rawText: r.raw_text,
     normalizedText: r.normalized_text,
     resolverVersion: r.resolver_version,
+    aliasGeneration: r.alias_generation,
     createdAt: r.created_at,
   };
+}
+
+interface EntityObservationDbRow {
+  id: string;
+  probe_result_id: string;
+  probe_run_id: string;
+  generated_prompt_id: string | null;
+  project_id: string;
+  dataset_id: string;
+  dataset_source_type: string;
+  resolution_pass_id: string;
+  canonical_entity_id: string | null;
+  entity_type: string | null;
+  raw_text: string;
+  normalized_text: string;
+  resolver_version: number;
+  mention_ordinal: number;
+  context: string | null;
+  status: string;
+  observation_generation: number;
+  created_at: string;
+}
+
+// The discriminated union in EntityObservation (D-017 §4) is not
+// something a raw DB row can prove at the type level — the row itself
+// only satisfies it because migration 0041's
+// entity_observations_status_entity_check already guarantees the
+// correlation at the database layer. This cast reflects that: the
+// invariant is enforced by the CHECK constraint, not re-derived here.
+function mapEntityObservation(r: EntityObservationDbRow): EntityObservation {
+  return {
+    id: r.id,
+    probeResultId: r.probe_result_id,
+    probeRunId: r.probe_run_id,
+    generatedPromptId: r.generated_prompt_id,
+    projectId: r.project_id,
+    datasetId: r.dataset_id,
+    datasetSourceType: r.dataset_source_type as DatasetSourceType,
+    resolutionPassId: r.resolution_pass_id,
+    canonicalEntityId: r.canonical_entity_id,
+    entityType: r.entity_type,
+    rawText: r.raw_text,
+    normalizedText: r.normalized_text,
+    resolverVersion: r.resolver_version,
+    mentionOrdinal: r.mention_ordinal,
+    context: r.context,
+    status: r.status,
+    observationGeneration: r.observation_generation,
+    createdAt: r.created_at,
+  } as EntityObservation;
 }
 
 interface AnalysisLlmCallDbRow {
@@ -1906,6 +1968,107 @@ export const supabaseAdapter: DbAdapter = {
       .order("created_at", { ascending: false });
     if (error) throw error;
     return (data ?? []).map((r) => mapEntityAlias(r as EntityAliasDbRow));
+  },
+
+  // M2 canonical observations contract, third tranche (D-017, D-018,
+  // D-019). Thin wrappers only — all business logic (preconditions,
+  // locking, generation comparison, brand-self exclusion) lives in the
+  // SECURITY DEFINER RPCs themselves (migration 0042), never
+  // reimplemented here.
+  async startOrResumeEntityResolutionPass(
+    input: StartOrResumeEntityResolutionPassInput
+  ): Promise<StartOrResumeEntityResolutionPassResult> {
+    const { data, error } = await getClient().rpc(
+      "start_or_resume_entity_resolution_pass",
+      {
+        p_project_id: input.projectId,
+        p_probe_result_id: input.probeResultId,
+        p_resolver_version: input.resolverVersion,
+        p_dataset_id: input.datasetId,
+        p_expected_mention_count: input.expectedMentionCount,
+        p_company_name: input.companyName,
+        p_domain: input.domain,
+        p_normalized_brand_terms: input.normalizedBrandTerms,
+        p_mirror_aliases: input.mirrorAliases ?? [],
+        // Omitted entirely when unset, so Postgres applies the
+        // function's own default ('15 minutes') rather than this
+        // adapter reimplementing that default.
+        ...(input.staleAfterSeconds != null
+          ? { p_stale_after: `${input.staleAfterSeconds} seconds` }
+          : {}),
+      }
+    );
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "startOrResumeEntityResolutionPass: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      resolutionPassId: row.resolution_pass_id as string,
+      passStatus: row.pass_status as EntityResolutionPassStatus,
+      passOutcome: row.pass_outcome as EntityResolutionPassOutcome,
+    };
+  },
+
+  async resolveAndRecordEntityObservation(
+    input: ResolveAndRecordEntityObservationInput
+  ): Promise<ResolveAndRecordEntityObservationResult> {
+    const { data, error } = await getClient().rpc(
+      "resolve_and_record_entity_observation",
+      {
+        p_resolution_pass_id: input.resolutionPassId,
+        p_mention_ordinal: input.mentionOrdinal,
+        p_raw_text: input.rawText,
+        p_normalized_text: input.normalizedText,
+        p_status: input.status,
+        p_proposed_entity_type: input.proposedEntityType ?? null,
+        p_context: input.context ?? null,
+      }
+    );
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "resolveAndRecordEntityObservation: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      observationId: row.observation_id as string,
+      observationGeneration: row.observation_generation as number,
+      observationOutcome: row.observation_outcome as EntityObservationOutcome,
+      aliasId: (row.alias_id as string | null) ?? null,
+      aliasGeneration: (row.alias_generation as number | null) ?? null,
+      aliasOutcome: row.alias_outcome as EntityAliasOutcome,
+      passStatus: row.pass_status as EntityResolutionPassStatus,
+    };
+  },
+
+  // Active-head readers — query the views, never the base tables, for
+  // "what does this currently mean" (D-017).
+  async getEntityAliasesActiveByProject(projectId: string): Promise<EntityAlias[]> {
+    const { data, error } = await getClient()
+      .from("entity_aliases_active")
+      .select("*")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return (data ?? []).map((r) => mapEntityAlias(r as EntityAliasDbRow));
+  },
+
+  async getEntityObservationsActiveByProbeResult(
+    probeResultId: string
+  ): Promise<EntityObservation[]> {
+    const { data, error } = await getClient()
+      .from("entity_observations_active")
+      .select("*")
+      .eq("probe_result_id", probeResultId)
+      .order("mention_ordinal", { ascending: true });
+    if (error) throw error;
+    return (data ?? []).map((r) =>
+      mapEntityObservation(r as EntityObservationDbRow)
+    );
   },
 
   // M2 canonical observations contract, second tranche — probe_runs was

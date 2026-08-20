@@ -1,6 +1,7 @@
 import { runProbeAnalysisAgent } from "@/lib/agents/probe-analysis";
 import { getDb } from "@/lib/db";
 import type { DatasetSourceType, ProbeMode, ProbeResult } from "@/lib/db/types";
+import { buildClientIdentity } from "@/lib/evidence/build-client-identity";
 import { sha256Hex } from "@/lib/evidence/hash";
 import { locateClientMention } from "@/lib/evidence/locate-client-mention";
 import { normalizeEntityTextV1 } from "@/lib/evidence/normalize-entity-text";
@@ -10,11 +11,7 @@ import {
   SiteReaderOutputSchema,
   type SiteReaderOutput,
 } from "@/lib/schemas/site-reader.schema";
-import type {
-  ClientIdentity,
-  Platform,
-  ProbeAnalysisOutput,
-} from "@/lib/schemas/probe-analysis.schema";
+import type { Platform, ProbeAnalysisOutput } from "@/lib/schemas/probe-analysis.schema";
 import { withPipelineStep } from "./save-pipeline-step";
 
 /**
@@ -116,25 +113,6 @@ export type AnalyzeProbeResponseResult =
       entityResolutionError?: string;
     }
   | { ok: false; error: string; probeRunId?: string };
-
-function buildClientIdentity(
-  project: { companyName: string | null; domain: string },
-  mp: SiteReaderOutput | null
-): ClientIdentity {
-  const name =
-    (project.companyName && project.companyName.trim()) ||
-    (mp?.companyName && mp.companyName.trim()) ||
-    project.domain.split(".")[0];
-  const aliases = new Set<string>();
-  if (mp?.companyName && mp.companyName !== name) aliases.add(mp.companyName);
-  const stem = project.domain.split(".")[0];
-  if (stem && stem !== name) aliases.add(stem);
-  return {
-    name,
-    domain: project.domain,
-    aliases: Array.from(aliases),
-  };
-}
 
 function mergeCompetitors(
   fromRequest: string[] | undefined,

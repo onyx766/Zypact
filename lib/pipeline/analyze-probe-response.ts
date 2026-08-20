@@ -2,6 +2,8 @@ import { runProbeAnalysisAgent } from "@/lib/agents/probe-analysis";
 import { getDb } from "@/lib/db";
 import type { DatasetSourceType, ProbeMode, ProbeResult } from "@/lib/db/types";
 import { sha256Hex } from "@/lib/evidence/hash";
+import { locateClientMention } from "@/lib/evidence/locate-client-mention";
+import { normalizeEntityTextV1 } from "@/lib/evidence/normalize-entity-text";
 import { mergeSourcesFromRawResponse } from "@/lib/probe-analysis/merge-sources";
 import { classifyProductRecommendation } from "@/lib/probe-analysis/product-recommendation";
 import {
@@ -25,7 +27,22 @@ import { withPipelineStep } from "./save-pipeline-step";
  * 3. Run Probe Analysis Agent on the pasted response.
  * 4. Persist a ProbeResult with the raw response.
  * 5. Mark the ProbeRun succeeded/failed.
+ * 6. M2 canonical observations contract, third tranche (D-017, D-018,
+ *    D-019) — resolve entity mentions (the client's own mention, if
+ *    located, plus each competitor mention), only after steps 4-5 have
+ *    already succeeded. Never blocks, delays, or rolls back the
+ *    evidence write; any failure here is surfaced only as
+ *    entityResolutionError on an otherwise-successful result.
  */
+
+/**
+ * M2 canonical observations contract, third tranche (D-017 §5) — the
+ * deterministic v1 normalizer's version, pinned as the resolver
+ * version every entity-resolution call in this file uses. Changing the
+ * normalization algorithm (lib/evidence/normalize-entity-text.ts) is a
+ * new resolver_version, never a silent edit of this constant's meaning.
+ */
+const ENTITY_RESOLVER_VERSION = 1;
 
 export interface AnalyzeProbeResponseInput {
   projectId: string;
@@ -86,6 +103,17 @@ export type AnalyzeProbeResponseResult =
       output: ProbeAnalysisOutput;
       usedMock: boolean;
       usedRetry: boolean;
+      /**
+       * M2 canonical observations contract, third tranche (D-017/D-018
+       * correction turn) — present (a non-null string) only when entity
+       * resolution failed, or an explicit final check found the pass had
+       * not reached a verified `completed` status. Its absence reflects
+       * that explicit verification, never an inference from "nothing
+       * threw." `ok: true` and `result` above are entirely unaffected by
+       * this field either way — the evidence write already succeeded
+       * before entity resolution ever begins.
+       */
+      entityResolutionError?: string;
     }
   | { ok: false; error: string; probeRunId?: string };
 
@@ -255,6 +283,121 @@ export async function analyzeProbeResponse(
 
     await db.updateProbeRunStatus(probeRun.id, "succeeded");
 
+    // M2 canonical observations contract, third tranche (D-017, D-018,
+    // D-019). Isolated in its own try/catch, deliberately separate from
+    // the outer one below: the evidence write (saveProbeResult,
+    // updateProbeRunStatus) has already fully succeeded above, and must
+    // never be reinterpreted as a failure by anything that follows. Any
+    // problem here is captured locally as entityResolutionError, never
+    // by falling through to the outer catch (which would incorrectly
+    // flip this already-succeeded run's status and return ok:false).
+    let entityResolutionError: string | undefined;
+    try {
+      // Runs unconditionally, independent of agent.output.clientMentioned
+      // — the LLM's own boolean judgment is not trusted as the gate for
+      // whether to look; the raw text itself is the only source of
+      // truth, exactly like the RPC's own unconditional brand-self
+      // check for competitor mentions (D-018).
+      const clientRawText = locateClientMention(input.rawResponse, brandTerms);
+      const normalizedBrandTerms = brandTerms
+        .map((term) => normalizeEntityTextV1(term))
+        .filter((normalized) => normalized.length > 0);
+
+      // directCompetitorsMentioned's own type leaves every field
+      // optional; a mention with no usable name has nothing to resolve
+      // as an entity, so it is excluded here — before
+      // expectedMentionCount is computed — rather than counted and then
+      // failing to produce a row.
+      const competitorMentions = productSignals.directCompetitorsMentioned.filter(
+        (c): c is { name: string; position?: number; context?: string } =>
+          typeof c.name === "string" && c.name.trim().length > 0
+      );
+      const expectedMentionCount =
+        (clientRawText !== null ? 1 : 0) + competitorMentions.length;
+
+      if (normalizedBrandTerms.length === 0) {
+        entityResolutionError =
+          "no usable normalized brand terms were available; entity resolution was not attempted";
+      } else {
+        const pass = await db.startOrResumeEntityResolutionPass({
+          projectId: input.projectId,
+          probeResultId: result.id,
+          resolverVersion: ENTITY_RESOLVER_VERSION,
+          datasetId: input.datasetId,
+          expectedMentionCount,
+          companyName: clientName.name,
+          domain: clientName.domain ?? project.domain,
+          normalizedBrandTerms,
+          mirrorAliases: clientName.aliases ?? [],
+        });
+
+        if (expectedMentionCount === 0) {
+          // Nothing above needed to write anything; the pass completed
+          // immediately at creation. Its own return value is a reliable
+          // signal here, since no further mutation is possible for a
+          // zero-mention pass.
+          if (pass.passStatus !== "completed") {
+            entityResolutionError = `entity resolution pass ${pass.resolutionPassId} did not reach completed status for a zero-mention probe_result`;
+          }
+        } else {
+          let mentionOrdinal = 0;
+
+          // mention_ordinal 0 is reserved for the client's own mention,
+          // consumed only when locateClientMention actually found a
+          // match — never a placeholder for a mention that was not found.
+          if (clientRawText !== null) {
+            // normalizeEntityTextV1 lowercases as one of its own steps,
+            // and locateClientMention only ever matches a substring that
+            // is case-insensitively identical to one of brandTerms — so
+            // this normalized value is guaranteed, by construction, to
+            // already be a member of normalizedBrandTerms.
+            await db.resolveAndRecordEntityObservation({
+              resolutionPassId: pass.resolutionPassId,
+              mentionOrdinal: 0,
+              rawText: clientRawText,
+              normalizedText: normalizeEntityTextV1(clientRawText),
+              status: "excluded_brand_self",
+              proposedEntityType: "client",
+            });
+            mentionOrdinal = 1;
+          } else {
+            mentionOrdinal = 1;
+          }
+
+          // competitorsMentioned keeps its array order and is never
+          // deduplicated — two distinct mentions of the same competitor
+          // get two distinct ordinals, each its own observation row.
+          for (const competitor of competitorMentions) {
+            await db.resolveAndRecordEntityObservation({
+              resolutionPassId: pass.resolutionPassId,
+              mentionOrdinal,
+              rawText: competitor.name,
+              normalizedText: normalizeEntityTextV1(competitor.name),
+              status: "resolved",
+              proposedEntityType: "competitor",
+              context: competitor.context ?? null,
+            });
+            mentionOrdinal += 1;
+          }
+
+          // Explicit final verification — never inferred from the mere
+          // absence of a thrown exception. A miscounted
+          // expectedMentionCount or a silently-skipped mention could
+          // otherwise leave the pass incomplete with nothing above ever
+          // throwing.
+          const activeObservations = await db.getEntityObservationsActiveByProbeResult(
+            result.id
+          );
+          if (activeObservations.length !== expectedMentionCount) {
+            entityResolutionError = `entity resolution pass ${pass.resolutionPassId} produced ${activeObservations.length} active observation(s), expected ${expectedMentionCount}`;
+          }
+        }
+      }
+    } catch (entityErr) {
+      entityResolutionError =
+        entityErr instanceof Error ? entityErr.message : String(entityErr);
+    }
+
     return {
       ok: true,
       probeRunId: probeRun.id,
@@ -262,6 +405,7 @@ export async function analyzeProbeResponse(
       output: agent.output,
       usedMock: agent.usedMock,
       usedRetry: agent.usedRetry,
+      ...(entityResolutionError ? { entityResolutionError } : {}),
     };
   } catch (err) {
     await db.updateProbeRunStatus(probeRun.id, "failed").catch(() => undefined);

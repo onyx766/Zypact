@@ -1208,21 +1208,23 @@ export interface DbAdapter {
   ): Promise<BackfillProbeResultDatasetIdentityResult>;
 
   // M2 canonical observations contract, first tranche (D-014) — entity
-  // resolution. No caller populates these yet; wiring is a later tranche.
+  // resolution. createCanonicalEntity's direct-write path is
+  // deliberately kept (D-017 §3: a bare identity row cannot attach a
+  // mention, resolve an alias, or bypass brand-self exclusion or the
+  // one-client-per-project constraint). createEntityAlias was retired
+  // in the third tranche — entity_aliases is now written exclusively
+  // through resolveAndRecordEntityObservation below.
   createCanonicalEntity(
     input: CanonicalEntityInput
   ): Promise<CanonicalEntity>;
   getCanonicalEntitiesByProject(
     projectId: string
   ): Promise<CanonicalEntity[]>;
-  createEntityAlias(input: EntityAliasInput): Promise<EntityAlias>;
   getEntityAliasesByProject(projectId: string): Promise<EntityAlias[]>;
 
   // M2 canonical observations contract, third tranche (D-017, D-018,
-  // D-019) — entity resolution RPC wrappers. createEntityAlias above
-  // remains temporarily as the first tranche's direct-write path;
-  // retiring it is a separate, later step (its only caller today is
-  // scripts/test-m2-schema-contract.ts).
+  // D-019) — entity resolution RPC wrappers; the only sanctioned way
+  // to write entity_aliases/entity_observations.
   startOrResumeEntityResolutionPass(
     input: StartOrResumeEntityResolutionPassInput
   ): Promise<StartOrResumeEntityResolutionPassResult>;

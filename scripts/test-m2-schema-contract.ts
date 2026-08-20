@@ -19,6 +19,21 @@
  * a real CHECK/FK/UNIQUE constraint rejects) is not possible in this
  * environment and is a documented limitation, matching how migrations
  * 0036/0037 were verified before any staging apply.
+ *
+ * `createEntityAlias` was retired in the M2 third tranche (D-017,
+ * D-018, D-019) — entity_aliases is now written exclusively through
+ * `resolveAndRecordEntityObservation`. The dynamic checks below were
+ * rewritten accordingly: composite-consistency and tenant-isolation,
+ * which the old direct-write method tested by attempting a rejected
+ * insert, are now verified positively (the RPC-mediated path makes
+ * those specific violations structurally unreachable, by
+ * construction, rather than merely rejected). The old "same
+ * normalizedText allowed across different entityTypes in one project"
+ * assertion was actively FALSE once migration 0041 dropped entity_type
+ * from entity_aliases' uniqueness key — that assertion is corrected
+ * here, not merely reframed, to demonstrate the real invariant:
+ * exactly one entityType is ever active for a given normalizedText in
+ * a project, enforced via generation-based supersession.
  */
 
 delete process.env.VERCEL_ENV;
@@ -32,6 +47,7 @@ import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { getDb } from "@/lib/db";
+import { normalizeEntityTextV1 } from "@/lib/evidence/normalize-entity-text";
 
 let checks = 0;
 let failures = 0;
@@ -307,6 +323,11 @@ function staticChecks(): void {
       "snapshot_request_id: input.snapshotRequestId ?? null,"
     )
   );
+  check(
+    "createEntityAlias no longer exists — no direct .from(\"entity_aliases\").insert( call site remains in the Supabase adapter",
+    !supabaseAdapterSource.includes('.from("entity_aliases")\n      .insert(') &&
+      !/createEntityAlias/.test(supabaseAdapterSource)
+  );
 
   // -----------------------------------------------------------------
   // DatasetBatch — exposes every persisted field
@@ -449,7 +470,10 @@ async function dynamicChecks(): Promise<void> {
     `expected 4 (snapshot_request, manual_scan, backfill-keyed legacy_unresolved, second manual_scan), got ${batches.length}`
   );
 
-  // canonical_entities / entity_aliases — composite FK + UNIQUE simulation
+  // canonical_entities / entity_aliases — composite consistency,
+  // tenant isolation, idempotency, and generation-based exclusivity,
+  // exercised through the sanctioned RPC-backed path (createEntityAlias
+  // was retired; direct createCanonicalEntity remains, D-017 §3).
   const clientEntity = await db.createCanonicalEntity({
     projectId,
     entityType: "client",
@@ -461,91 +485,228 @@ async function dynamicChecks(): Promise<void> {
     resolverVersion: 1,
   });
 
-  const alias = await db.createEntityAlias({
-    canonicalEntityId: competitorEntity.id,
+  const widgetcoNormalized = normalizeEntityTextV1("Widgetco Inc.");
+
+  const aliasFlowDatasetBatch = await db.createDatasetBatch({
     projectId,
-    entityType: "competitor",
-    rawText: "Acme, Inc.",
-    normalizedText: "acme inc",
+    datasetSourceType: "manual_scan",
+  });
+  const aliasFlowProbeRunA = await db.createProbeRun(
+    projectId,
+    "perplexity",
+    "simulated",
+    "pending",
+    { datasetId: aliasFlowDatasetBatch.id, datasetSourceType: "manual_scan" }
+  );
+  const aliasFlowProbeResultA = await db.saveProbeResult({
+    probeRunId: aliasFlowProbeRunA.id,
+    projectId,
+    prompt: "who should we use",
+    platform: "perplexity",
+    probeMode: "simulated",
+    rawResponse: "Widgetco was mentioned as an alternative.",
+    clientMentioned: false,
+    clientPosition: "absent",
+    competitorsMentioned: [],
+    sourcesCited: [],
+    answerSummary: "",
+    verdict: "lost",
+    whyClientLost: "",
+  });
+
+  // expectedMentionCount is deliberately higher than the single ordinal
+  // used below — this pass must stay in_progress across both the
+  // original submission and its resubmission (idempotency check).
+  const passA = await db.startOrResumeEntityResolutionPass({
+    projectId,
+    probeResultId: aliasFlowProbeResultA.id,
     resolverVersion: 1,
+    datasetId: aliasFlowDatasetBatch.id,
+    expectedMentionCount: 5,
+    companyName: "Acme Inc.",
+    domain: "acme.example",
+    normalizedBrandTerms: [normalizeEntityTextV1("Acme Inc.")],
+  });
+
+  const firstResolve = await db.resolveAndRecordEntityObservation({
+    resolutionPassId: passA.resolutionPassId,
+    mentionOrdinal: 0,
+    rawText: "Widgetco Inc.",
+    normalizedText: widgetcoNormalized,
+    status: "resolved",
+    proposedEntityType: "competitor",
   });
   check(
-    "a valid entity_alias resolves to its canonical_entity",
-    alias.canonicalEntityId === competitorEntity.id
+    "a first-ever competitor mention creates a fresh canonical_entity and a generation-1 alias that references it (composite consistency, by construction, replacing the old composite-FK rejection test)",
+    firstResolve.observationOutcome === "APPLIED" &&
+      firstResolve.aliasOutcome === "APPLIED" &&
+      firstResolve.aliasGeneration === 1
   );
 
-  let rejectedMismatchedEntityType = false;
-  try {
-    await db.createEntityAlias({
-      canonicalEntityId: competitorEntity.id,
-      projectId,
-      entityType: "client",
-      rawText: "Acme",
-      normalizedText: "acme",
-      resolverVersion: 1,
-    });
-  } catch {
-    rejectedMismatchedEntityType = true;
-  }
+  const entitiesAfterFirst = await db.getCanonicalEntitiesByProject(projectId);
   check(
-    "an alias whose entityType does not match its parent canonical_entity is rejected (composite FK simulation)",
-    rejectedMismatchedEntityType
+    "both directly-created canonical_entities (client, competitor) are still present alongside the one the alias flow created",
+    entitiesAfterFirst.some((e) => e.id === clientEntity.id) &&
+      entitiesAfterFirst.some((e) => e.id === competitorEntity.id)
+  );
+  const aliasesAfterFirst = await db.getEntityAliasesByProject(projectId);
+  const firstAliasRow = aliasesAfterFirst.find((a) => a.id === firstResolve.aliasId);
+  check(
+    "the alias's canonicalEntityId references an existing canonical_entities row of the SAME entityType and project",
+    firstAliasRow !== undefined &&
+      entitiesAfterFirst.some(
+        (e) =>
+          e.id === firstAliasRow.canonicalEntityId &&
+          e.entityType === "competitor" &&
+          e.projectId === projectId
+      )
   );
 
+  const resubmitted = await db.resolveAndRecordEntityObservation({
+    resolutionPassId: passA.resolutionPassId,
+    mentionOrdinal: 0,
+    rawText: "Widgetco Inc.",
+    normalizedText: widgetcoNormalized,
+    status: "resolved",
+    proposedEntityType: "competitor",
+  });
+  check(
+    "resubmitting the identical mention is idempotent — ALREADY_APPLIED, same aliasId/generation, never a duplicate row (replaces the old UNIQUE-rejection test, corrected for migration 0041's actual key)",
+    resubmitted.observationOutcome === "ALREADY_APPLIED" &&
+      resubmitted.aliasOutcome === "ALREADY_APPLIED" &&
+      resubmitted.aliasId === firstResolve.aliasId &&
+      resubmitted.aliasGeneration === firstResolve.aliasGeneration
+  );
+  const aliasesAfterResubmit = await db.getEntityAliasesByProject(projectId);
+  check(
+    "no duplicate alias row was created by the resubmission",
+    aliasesAfterResubmit.filter((a) => a.normalizedText === widgetcoNormalized).length === 1
+  );
+
+  // Tenant isolation — the identical rawText/normalizedText resolved in
+  // a DIFFERENT project must never reuse this project's canonical
+  // entity or alias (replaces the old mismatched-projectId rejection
+  // test, positively verified instead of attempted-and-rejected, since
+  // the RPC never accepts an externally-supplied canonicalEntityId or
+  // projectId in the first place — the violation is structurally
+  // unreachable, not merely rejected).
   const otherProjectId = randomUUID();
-  let rejectedMismatchedProject = false;
-  try {
-    await db.createEntityAlias({
-      canonicalEntityId: competitorEntity.id,
-      projectId: otherProjectId,
-      entityType: "competitor",
-      rawText: "Acme",
-      normalizedText: "acme",
-      resolverVersion: 1,
-    });
-  } catch {
-    rejectedMismatchedProject = true;
-  }
-  check(
-    "an alias whose projectId does not match its parent canonical_entity's project is rejected (composite FK simulation, tenant isolation)",
-    rejectedMismatchedProject
+  const otherDatasetBatch = await db.createDatasetBatch({
+    projectId: otherProjectId,
+    datasetSourceType: "manual_scan",
+  });
+  const otherProbeRun = await db.createProbeRun(
+    otherProjectId,
+    "perplexity",
+    "simulated",
+    "pending",
+    { datasetId: otherDatasetBatch.id, datasetSourceType: "manual_scan" }
   );
-
-  let rejectedDuplicateNormalized = false;
-  try {
-    await db.createEntityAlias({
-      canonicalEntityId: competitorEntity.id,
-      projectId,
-      entityType: "competitor",
-      rawText: "ACME INC.",
-      normalizedText: "acme inc",
-      resolverVersion: 1,
-    });
-  } catch {
-    rejectedDuplicateNormalized = true;
-  }
-  check(
-    "a duplicate normalizedText for the same project/entityType is rejected (UNIQUE simulation)",
-    rejectedDuplicateNormalized
-  );
-
-  const differentEntityAlias = await db.createEntityAlias({
-    canonicalEntityId: clientEntity.id,
-    projectId,
-    entityType: "client",
-    rawText: "Acme Inc",
-    normalizedText: "acme inc",
+  const otherProbeResult = await db.saveProbeResult({
+    probeRunId: otherProbeRun.id,
+    projectId: otherProjectId,
+    prompt: "who should we use",
+    platform: "perplexity",
+    probeMode: "simulated",
+    rawResponse: "Widgetco was mentioned here too.",
+    clientMentioned: false,
+    clientPosition: "absent",
+    competitorsMentioned: [],
+    sourcesCited: [],
+    answerSummary: "",
+    verdict: "lost",
+    whyClientLost: "",
+  });
+  const otherPass = await db.startOrResumeEntityResolutionPass({
+    projectId: otherProjectId,
+    probeResultId: otherProbeResult.id,
     resolverVersion: 1,
+    datasetId: otherDatasetBatch.id,
+    expectedMentionCount: 1,
+    companyName: "Zephyr Corp",
+    domain: "zephyr.example",
+    normalizedBrandTerms: [normalizeEntityTextV1("Zephyr Corp")],
+  });
+  const otherResolve = await db.resolveAndRecordEntityObservation({
+    resolutionPassId: otherPass.resolutionPassId,
+    mentionOrdinal: 0,
+    rawText: "Widgetco Inc.",
+    normalizedText: widgetcoNormalized,
+    status: "resolved",
+    proposedEntityType: "competitor",
   });
   check(
-    "the same normalizedText is allowed across different entityTypes in the same project",
-    differentEntityAlias.entityType === "client"
+    "the identical normalizedText resolved in a different project creates its OWN alias and canonical_entity — no cross-project reuse (tenant isolation)",
+    otherResolve.aliasOutcome === "APPLIED" &&
+      otherResolve.aliasId !== firstResolve.aliasId
+  );
+  const entitiesOtherProject = await db.getCanonicalEntitiesByProject(otherProjectId);
+  check(
+    "the two projects' canonical_entities lists are fully disjoint",
+    entitiesOtherProject.every(
+      (e) => !entitiesAfterFirst.some((mine) => mine.id === e.id)
+    )
+  );
+
+  // Exclusivity across entityTypes, corrected — migration 0041 dropped
+  // entity_type from entity_aliases' uniqueness key specifically so
+  // that only ONE entityType is ever active for a given normalizedText
+  // in a project. The old test asserted the opposite (coexistence),
+  // which is no longer true; this demonstrates the real mechanism —
+  // generation-based supersession at a higher resolverVersion, here
+  // simulating a brand snapshot updated to recognize "Widgetco" as the
+  // client's own brand (e.g. an acquisition).
+  const passC = await db.startOrResumeEntityResolutionPass({
+    projectId,
+    probeResultId: aliasFlowProbeResultA.id,
+    resolverVersion: 2,
+    datasetId: aliasFlowDatasetBatch.id,
+    expectedMentionCount: 1,
+    companyName: "Acme Inc.",
+    domain: "acme.example",
+    normalizedBrandTerms: [normalizeEntityTextV1("Acme Inc."), widgetcoNormalized],
+  });
+  const supersedingResolve = await db.resolveAndRecordEntityObservation({
+    resolutionPassId: passC.resolutionPassId,
+    mentionOrdinal: 0,
+    rawText: "Widgetco Inc.",
+    normalizedText: widgetcoNormalized,
+    status: "excluded_brand_self",
+    proposedEntityType: "client",
+  });
+  check(
+    "a higher resolverVersion recognizing the same normalizedText as the client supersedes the prior competitor mapping — SUPERSEDED_PRIOR, generation 2 (this is the allowed promotion direction, never the blocked demotion)",
+    supersedingResolve.aliasOutcome === "SUPERSEDED_PRIOR" &&
+      supersedingResolve.aliasGeneration === (firstResolve.aliasGeneration ?? 0) + 1
+  );
+
+  const activeAliasesAfterSupersede = await db.getEntityAliasesActiveByProject(projectId);
+  const activeWidgetco = activeAliasesAfterSupersede.find(
+    (a) => a.normalizedText === widgetcoNormalized
+  );
+  check(
+    "the active-head view now shows exactly one entry for this normalizedText, entityType='client' — the superseded competitor generation is no longer active",
+    activeWidgetco !== undefined && activeWidgetco.entityType === "client"
+  );
+  const rawAliasesAfterSupersede = await db.getEntityAliasesByProject(projectId);
+  check(
+    "the historical competitor generation still exists in the raw listing — supersession never deletes a prior row",
+    rawAliasesAfterSupersede.some(
+      (a) => a.normalizedText === widgetcoNormalized && a.entityType === "competitor"
+    ) &&
+      rawAliasesAfterSupersede.filter((a) => a.normalizedText === widgetcoNormalized).length === 2
   );
 
   const entities = await db.getCanonicalEntitiesByProject(projectId);
-  check("getCanonicalEntitiesByProject returns both entities", entities.length === 2);
+  check(
+    "getCanonicalEntitiesByProject returns exactly the two directly-created entities plus the one fresh competitor entity created by the alias flow",
+    entities.length === 3
+  );
   const aliases = await db.getEntityAliasesByProject(projectId);
-  check("getEntityAliasesByProject returns both aliases", aliases.length === 2);
+  check(
+    "getEntityAliasesByProject returns exactly two raw rows for this project — the competitor generation and the superseding client generation",
+    aliases.length === 2
+  );
 
   // probe_runs / probe_results — new columns default to null, not backfilled
   const probeRun = await db.createProbeRun(projectId, "perplexity", "live_perplexity");
@@ -597,7 +758,11 @@ async function main(): Promise<void> {
       "policies; dataset_id uses ON DELETE RESTRICT, never SET NULL;\n" +
       "probe_runs/probe_results additive nullable columns.\n" +
       "NOT closed by this tranche: no backfill; no dataset_batches row for\n" +
-      "any real project; no entity resolution logic; no sampleLabel; no\n" +
+      "any real project; entity resolution's actual RPC-backed business\n" +
+      "logic (brand-self exclusion, the demote-block, D-018's override) is\n" +
+      "a later tranche's scope, exercised here only enough to preserve this\n" +
+      "file's own composite/tenant-isolation/generation coverage now that\n" +
+      "createEntityAlias is retired; no sampleLabel; no\n" +
       "report adapter changes; probe_runs/probe_results dataset_id remains\n" +
       "nullable until a follow-up tightening migration runs after backfill\n" +
       "is verified at zero remaining NULLs; the probe_results append-only\n" +

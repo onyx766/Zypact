@@ -21,7 +21,6 @@ import type {
   DatasetSourceType,
   DbAdapter,
   EntityAlias,
-  EntityAliasInput,
   EntityAliasOutcome,
   EntityObservation,
   EntityObservationOutcome,
@@ -1938,26 +1937,6 @@ export const supabaseAdapter: DbAdapter = {
       .order("created_at", { ascending: false });
     if (error) throw error;
     return (data ?? []).map((r) => mapCanonicalEntity(r as CanonicalEntityDbRow));
-  },
-
-  // The composite foreign key to canonical_entities(id, project_id,
-  // entity_type) and UNIQUE(project_id, entity_type, normalized_text)
-  // are enforced by the database; a violation surfaces as `error` here.
-  async createEntityAlias(input: EntityAliasInput): Promise<EntityAlias> {
-    const { data, error } = await getClient()
-      .from("entity_aliases")
-      .insert({
-        canonical_entity_id: input.canonicalEntityId,
-        project_id: input.projectId,
-        entity_type: input.entityType,
-        raw_text: input.rawText,
-        normalized_text: input.normalizedText,
-        resolver_version: input.resolverVersion,
-      })
-      .select("*")
-      .single<EntityAliasDbRow>();
-    if (error || !data) throw error ?? new Error("createEntityAlias failed");
-    return mapEntityAlias(data);
   },
 
   async getEntityAliasesByProject(projectId: string): Promise<EntityAlias[]> {

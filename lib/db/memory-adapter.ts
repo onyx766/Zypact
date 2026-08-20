@@ -16,7 +16,6 @@ import type {
   DatasetSourceType,
   DbAdapter,
   EntityAlias,
-  EntityAliasInput,
   EntityAliasOutcome,
   EntityBrandSnapshot,
   EntityObservation,
@@ -1306,55 +1305,6 @@ export const memoryAdapter: DbAdapter = {
     return [...getStore().canonicalEntities.values()]
       .filter((e) => e.projectId === projectId)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  },
-
-  // Simulates both database constraints on entity_aliases: the
-  // composite foreign key to canonical_entities(id, project_id,
-  // entity_type), and UNIQUE(project_id, entity_type, normalized_text).
-  async createEntityAlias(input: EntityAliasInput): Promise<EntityAlias> {
-    const store = getStore();
-    const parent = store.canonicalEntities.get(input.canonicalEntityId);
-    if (
-      !parent ||
-      parent.projectId !== input.projectId ||
-      parent.entityType !== input.entityType
-    ) {
-      throw new Error(
-        `entity_aliases_canonical_entity_fk violated: no canonical_entities row matches (id="${input.canonicalEntityId}", projectId="${input.projectId}", entityType="${input.entityType}").`
-      );
-    }
-    const existingForProject =
-      store.entityAliasesByProject.get(input.projectId) ?? [];
-    const duplicate = existingForProject.find(
-      (a) =>
-        a.entityType === input.entityType &&
-        a.normalizedText === input.normalizedText
-    );
-    if (duplicate) {
-      throw new Error(
-        `entity_aliases_normalized_unique violated: (projectId="${input.projectId}", entityType="${input.entityType}", normalizedText="${input.normalizedText}") already resolves to entity_aliases ${duplicate.id}.`
-      );
-    }
-    const row: EntityAlias = {
-      id: randomUUID(),
-      canonicalEntityId: input.canonicalEntityId,
-      projectId: input.projectId,
-      entityType: input.entityType,
-      rawText: input.rawText,
-      normalizedText: input.normalizedText,
-      resolverVersion: input.resolverVersion,
-      // This legacy, first-tranche-only direct-write path predates the
-      // generation model (D-017 §6) and, per its own uniqueness check
-      // above, only ever creates one alias per (project, entityType,
-      // normalizedText) — always generation 1.
-      aliasGeneration: 1,
-      createdAt: new Date().toISOString(),
-    };
-    store.entityAliasesByProject.set(input.projectId, [
-      ...existingForProject,
-      row,
-    ]);
-    return row;
   },
 
   async getEntityAliasesByProject(projectId: string): Promise<EntityAlias[]> {

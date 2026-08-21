@@ -15,7 +15,12 @@
  *                                                    body to case 2 —
  *                                                    enumeration guard)
  *   4. Legacy `user_id IS NULL`                    → 404
- *   5. Owner                                       → 200 + text/markdown
+ *   5. Owner                                       → 200; body is JSON
+ *      `{ integrityStatus: "blocked", reasons }` (M3 reliquat — this
+ *      fixture's report exposes legacy won/partial/lost, so the
+ *      integrity gate refuses automatic delivery; see
+ *      scripts/test-m3-export-route-integrity-gate.ts for the full
+ *      blocked/needs_review/integrity_passed matrix through this route).
  *   6. Read-only invariant: before/after row counts across every DB
  *      accessor for the exported project are identical AND no
  *      `updateGeneratedAssetQaStatus` / `save*` was called.
@@ -271,62 +276,50 @@ async function main(): Promise<void> {
   // Snapshot BEFORE the owner export so we can prove read-only.
   const before = await snapshotProject(aliceProjectId);
 
-  // ------------------------------ 5 · owner (success) --------------------------
+  // ------------------------------ 5 · owner (M3 integrity gate) ---------------
+  // M3 reliquat — build-mvp-report.ts unconditionally renders the legacy
+  // won/partial/lost aggregate (D-014's exact methodological defect), so
+  // the real report-integrity gate (lib/export/report-integrity.ts, wired
+  // into this route via lib/export/export-gate-response.ts) now blocks
+  // automatic delivery of this fixture's export. This is correct, not a
+  // regression: see scripts/test-m3-export-route-integrity-gate.ts for the
+  // full blocked/needs_review/integrity_passed matrix through this same
+  // route. This scenario now asserts the (still 200, no-write) blocked
+  // JSON response, and that no markdown/report content ever left the
+  // route once blocked.
   stubbedUser = alice;
   const r5 = await GET(req, { params: Promise.resolve({ projectId: aliceProjectId }) });
   check("owner → 200", r5.status === 200);
-  check(
-    "owner response is text/markdown",
-    (r5.headers.get("content-type") ?? "").startsWith("text/markdown")
-  );
-  const cd = r5.headers.get("content-disposition") ?? "";
-  check(
-    "content-disposition is attachment with a .md filename",
-    /attachment; filename="zypact-report-[a-f0-9-]{36}-\d{8}\.md"/.test(cd),
-    cd
-  );
   const text = await r5.clone().text();
+  let ownerBody: unknown;
+  try {
+    ownerBody = JSON.parse(text);
+  } catch {
+    ownerBody = undefined;
+  }
   check(
-    "owner response body contains client-report heading",
-    text.startsWith("# Zypact MVP — Client Report")
-  );
-  // Sprint 11.5 client-facing sections
-  check(
-    "owner response body has Executive Summary near the top",
-    text.includes("## 1. Executive Summary")
-  );
-  check(
-    "owner response body contains all 19 client-facing section headings",
-    [
-      "## 1. Executive Summary",
-      "## 2. Publishability Status",
-      "## 3. Evidence Needed to Unlock Publish-Ready Assets",
-      "## 4. Project Summary",
-      "## 5. Mirror Profile",
-      "## 6. Prompt Mirror summary",
-      "## 7. Probe Results",
-      "## 8. What this means",
-      "## 9. Competitors",
-      "## 10. Recommendation Gap Map",
-      "## 11. Recommended Next Actions",
-      "## 12. Evidence Bank",
-      "## 13. Fix Brief",
-      "## 14. Generated Assets",
-      "## 15. QA Review",
-      "## 16. Unsafe / needs-evidence warnings",
-      "## 17. Known limitations",
-      "## 18. Blocked fixes",
-      "## 19. Appendix — Technical metadata",
-    ].every((s) => text.includes(s))
+    "owner response is JSON (blocked), not text/markdown — this fixture's report exposes legacy verdicts",
+    (r5.headers.get("content-type") ?? "").includes("application/json")
   );
   check(
-    "probe section carries the simulated-probe honesty label",
-    text.includes("came from a simulated, manually-entered probe") &&
-      text.includes("No live call was made")
+    "owner response body reports integrityStatus: blocked",
+    typeof ownerBody === "object" &&
+      ownerBody !== null &&
+      (ownerBody as { integrityStatus?: unknown }).integrityStatus === "blocked"
   );
   check(
-    "appendix explicitly records probe origin as simulated",
-    text.includes("**probe origin**: simulated (no live platform API integration)")
+    "owner response carries a non-empty, explicit reasons array",
+    Array.isArray((ownerBody as { reasons?: unknown })?.reasons) &&
+      ((ownerBody as { reasons: unknown[] }).reasons.length > 0)
+  );
+  check(
+    "owner response explicitly asserts deliverable:false — ok:true alone can never be mistaken for a delivered artifact",
+    (ownerBody as { deliverable?: unknown }).deliverable === false
+  );
+  check(
+    "no markdown report content (client-report heading, section headings) leaked into the blocked response",
+    !text.includes("# Zypact MVP — Client Report") &&
+      !text.includes("## 1. Executive Summary")
   );
 
   // ------------------------------ 6 · read-only proof -------------------------
@@ -335,25 +328,25 @@ async function main(): Promise<void> {
     "export made no DB writes (before/after snapshot equal)",
     JSON.stringify(before) === JSON.stringify(after)
   );
-  const xRed = r5.headers.get("x-zypact-redactions") ?? "";
   check(
-    "X-Zypact-Redactions header is set to an integer",
-    /^\d+$/.test(xRed),
-    `header=${xRed}`
-  );
-  check(
-    "sweep fired at least once (fake key embedded in evidenceBank.notes)",
-    parseInt(xRed, 10) >= 1,
-    `header=${xRed}`
+    "no 'mark as exported'/delivery side effect occurred merely by evaluating the gate — blocked and needs_review both stay read-only",
+    JSON.stringify(before) === JSON.stringify(after)
   );
 
   // ------------------------------ 7 · secret leak sweep -----------------------
+  // The fake secret is embedded in evidenceBank.notes specifically to
+  // prove the redaction sweep works when a report IS delivered — see
+  // scripts/test-export-report.ts's own "no secret leak through report"
+  // coverage for that unit-level proof (buildMvpReport's sweep itself is
+  // unchanged by this milestone). Here, blocked delivery is a strictly
+  // stronger guarantee: the secret cannot leak because no report content
+  // is returned at all.
   check(
-    "FAKE_SERVICE_ROLE_KEY does not appear anywhere in the export body",
+    "FAKE_SERVICE_ROLE_KEY does not appear anywhere in the (blocked) export response",
     !text.includes(FAKE_SERVICE_ROLE_KEY)
   );
   check(
-    "sb_secret_-prefixed secret is fully redacted in the export body",
+    "sb_secret_-prefixed secret is fully absent from the (blocked) export response",
     !/sb_secret_[A-Za-z0-9_-]{10,}/.test(text)
   );
 

@@ -6,7 +6,10 @@ import { sha256Hex } from "@/lib/evidence/hash";
 import { locateClientMention } from "@/lib/evidence/locate-client-mention";
 import { normalizeEntityTextV1 } from "@/lib/evidence/normalize-entity-text";
 import { mergeSourcesFromRawResponse } from "@/lib/probe-analysis/merge-sources";
-import { classifyProductRecommendation } from "@/lib/probe-analysis/product-recommendation";
+import {
+  classifyProductRecommendation,
+  mapProductPositionToRunPosition,
+} from "@/lib/probe-analysis/product-recommendation";
 import {
   SiteReaderOutputSchema,
   type SiteReaderOutput,
@@ -257,6 +260,15 @@ export async function analyzeProbeResponse(
       retryCount: input.retryCount,
       datasetId: input.datasetId,
       datasetSourceType: input.datasetSourceType,
+      // M3 reliquat (D-014 §9) — the canonical run-level position,
+      // deterministically derived from the same productPosition signal
+      // already used above. Only the three values a deterministic source
+      // actually produces are ever written here; `ambiguous_in_run` and
+      // `analysis_failed` are never fabricated (see
+      // mapProductPositionToRunPosition's doc comment).
+      runPosition: mapProductPositionToRunPosition(productSignals.productPosition),
+      // D-014 v1.1 — sentiment tracked separately from position.
+      negativeClaimDetected: productSignals.productPosition === "negative",
     });
 
     await db.updateProbeRunStatus(probeRun.id, "succeeded");
@@ -386,6 +398,18 @@ export async function analyzeProbeResponse(
       ...(entityResolutionError ? { entityResolutionError } : {}),
     };
   } catch (err) {
+    // M3 reliquat — deliberately NOT changed by the runPosition fix above.
+    // No `probe_results` row exists yet at this point (it is only created
+    // by the successful `db.saveProbeResult` call inside the `try` block),
+    // so there is nothing to attach an `analysis_failed` runPosition to.
+    // Synthesizing a probe_results row here — with no real raw-response
+    // evidence path distinct from the ordinary success path — would
+    // fabricate a canonical observation the pipeline never actually
+    // produced. This existing failure path (probe_runs.status="failed",
+    // no probe_results row, ok:false) is preserved as-is. Distinguishing a
+    // genuine analyzer-level failure (`analysis_failed`, still evidenced)
+    // from a provider-level failure is left to M4/M5, which already own
+    // the surrounding retry/error-handling redesign this would require.
     await db.updateProbeRunStatus(probeRun.id, "failed").catch(() => undefined);
     return {
       ok: false,

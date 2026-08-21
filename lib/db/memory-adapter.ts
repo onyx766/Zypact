@@ -78,6 +78,8 @@ import type {
 } from "./types";
 import { SnapshotRequestLimitError } from "./types";
 import { evaluateSnapshotRequestLimits } from "@/lib/snapshot-requests/limits";
+import { validateBuyerQuestionVersionNumericFields } from "@/lib/db/validate-buyer-question-version-fields";
+import { validateApprovedByUuid } from "@/lib/db/validate-approved-by-uuid";
 
 /**
  * In-memory adapter. Used when Supabase is not configured so Sprint 1 is
@@ -2375,6 +2377,11 @@ export const memoryAdapter: DbAdapter = {
   async createBuyerQuestionVersion(
     input: CreateBuyerQuestionVersionInput
   ): Promise<BuyerQuestionVersion> {
+    // Shared contract, enforced identically by the Supabase adapter —
+    // checked first, before any state mutation, so an invalid input
+    // never leaves a partial row anywhere.
+    validateBuyerQuestionVersionNumericFields(input);
+
     const store = getStore();
     const question = store.buyerQuestions.get(input.buyerQuestionId);
     if (!question || question.projectId !== input.projectId) {
@@ -2439,6 +2446,10 @@ export const memoryAdapter: DbAdapter = {
   async approveBuyerQuestionVersion(
     input: ApproveBuyerQuestionVersionInput
   ): Promise<ApproveBuyerQuestionVersionResult> {
+    // Shared contract, enforced identically by the Supabase adapter —
+    // checked first, before any state mutation.
+    validateApprovedByUuid(input.approvedBy);
+
     const store = getStore();
     const version = store.buyerQuestionVersions.get(input.versionId);
     if (!version || version.projectId !== input.projectId) {
@@ -2521,6 +2532,10 @@ export const memoryAdapter: DbAdapter = {
   async approveProtocol(
     input: ApproveProtocolInput
   ): Promise<ApproveProtocolResult> {
+    // Shared contract, enforced identically by the Supabase adapter —
+    // checked first, before any state mutation.
+    validateApprovedByUuid(input.approvedBy);
+
     const store = getStore();
     const protocol = store.protocols.get(input.protocolId);
     if (!protocol || protocol.projectId !== input.projectId) {

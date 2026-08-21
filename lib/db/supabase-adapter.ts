@@ -93,6 +93,8 @@ import type {
   ReleaseSnapshotReportDeliveryClaimInput,
 } from "./types";
 import { SnapshotRequestLimitError } from "./types";
+import { validateBuyerQuestionVersionNumericFields } from "@/lib/db/validate-buyer-question-version-fields";
+import { validateApprovedByUuid } from "@/lib/db/validate-approved-by-uuid";
 
 /**
  * Supabase adapter (service role). Only instantiated when
@@ -2703,6 +2705,12 @@ export const supabaseAdapter: DbAdapter = {
   async createBuyerQuestionVersion(
     input: CreateBuyerQuestionVersionInput
   ): Promise<BuyerQuestionVersion> {
+    // Shared contract, enforced identically by the memory adapter —
+    // checked first, before any network call, so an invalid input
+    // never reaches Postgres (and never leaves an earlier, unrelated
+    // write — e.g. dataset_batches/buyer_questions — as an orphan).
+    validateBuyerQuestionVersionNumericFields(input);
+
     const { data, error } = await getClient()
       .from("buyer_question_versions")
       .insert({
@@ -2758,6 +2766,10 @@ export const supabaseAdapter: DbAdapter = {
   async approveBuyerQuestionVersion(
     input: ApproveBuyerQuestionVersionInput
   ): Promise<ApproveBuyerQuestionVersionResult> {
+    // Shared contract, enforced identically by the memory adapter —
+    // checked first, before any network call.
+    validateApprovedByUuid(input.approvedBy);
+
     const { data, error } = await getClient().rpc(
       "approve_buyer_question_version",
       {
@@ -2828,6 +2840,10 @@ export const supabaseAdapter: DbAdapter = {
   async approveProtocol(
     input: ApproveProtocolInput
   ): Promise<ApproveProtocolResult> {
+    // Shared contract, enforced identically by the memory adapter —
+    // checked first, before any network call.
+    validateApprovedByUuid(input.approvedBy);
+
     const { data, error } = await getClient().rpc("approve_protocol", {
       p_protocol_id: input.protocolId,
       p_project_id: input.projectId,

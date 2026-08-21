@@ -113,8 +113,8 @@ async function makeApprovedProtocol(
     promptText: "best invoicing software for a 20-person agency",
     promptHash: `hash-${randomUUID()}`,
     intentType: "shortlist",
-    commercialValue: 0.8,
-    winnability: 0.6,
+    commercialValue: 4,
+    winnability: 3,
     priority: 1,
     rationale: "Stage B final-review fixture",
     provenance: "crm_evidence",
@@ -122,7 +122,7 @@ async function makeApprovedProtocol(
   await db.approveBuyerQuestionVersion({
     versionId: version.id,
     projectId,
-    approvedBy: "founder@zypact.test",
+    approvedBy: "11111111-1111-4111-8111-111111111111",
   });
   const draft = await db.createProtocol({
     projectId,
@@ -145,7 +145,7 @@ async function makeApprovedProtocol(
   const { outcome, protocol } = await db.approveProtocol({
     protocolId: draft.id,
     projectId,
-    approvedBy: "founder@zypact.test",
+    approvedBy: "11111111-1111-4111-8111-111111111111",
   });
   if (outcome !== "APPROVED" || !protocol) {
     throw new Error(`fixture setup failed: approveProtocol returned ${outcome}`);
@@ -216,8 +216,8 @@ async function main(): Promise<void> {
       promptText: "irrelevant",
       promptHash: `hash-${randomUUID()}`,
       intentType: "shortlist",
-      commercialValue: 0.5,
-      winnability: 0.5,
+      commercialValue: 3,
+      winnability: 3,
       priority: 1,
       rationale: "cross-project mismatch fixture",
       provenance: "founder_supplied",

@@ -1,15 +1,26 @@
 import { randomUUID } from "node:crypto";
 import { createPublicReportToken } from "@/lib/snapshot-requests/public-report-token";
 import type {
+  AdmitAndReserveAttemptInput,
+  AdmitAndReserveAttemptResult,
   AnalysisLlmCall,
   AnalysisLlmCallInput,
+  ApproveBuyerQuestionVersionInput,
+  ApproveBuyerQuestionVersionResult,
+  ApproveProtocolInput,
+  ApproveProtocolResult,
   BackfillProbeResultDatasetIdentityInput,
   BackfillProbeResultDatasetIdentityResult,
+  BuyerQuestion,
+  BuyerQuestionVersion,
   CanonicalEntity,
   CanonicalEntityInput,
   Competitor,
   CompetitorInput,
+  CreateBuyerQuestionInput,
+  CreateBuyerQuestionVersionInput,
   CreateProjectInput,
+  CreateProtocolInput,
   CreateSnapshotRequestInput,
   DatasetBatch,
   DatasetBatchInput,
@@ -46,8 +57,12 @@ import type {
   ProbeRun,
   ProbeRunStatus,
   Project,
+  Protocol,
+  ProtocolAttempt,
   QaReportRow,
   QaReportRowInput,
+  ReconcileAttemptInput,
+  ReconcileAttemptResult,
   RecordProbeFailureInput,
   ResolveAndRecordEntityObservationInput,
   ResolveAndRecordEntityObservationResult,
@@ -56,6 +71,8 @@ import type {
   SnapshotReportArtifact,
   SnapshotRequest,
   SitePage,
+  StartAttemptInput,
+  StartAttemptResult,
   StartOrResumeEntityResolutionPassInput,
   StartOrResumeEntityResolutionPassResult,
 } from "./types";
@@ -103,6 +120,10 @@ interface MemoryStore {
   fixBriefsByProject: Map<string, FixBriefRow[]>;
   generatedAssetsByProject: Map<string, GeneratedAssetRow[]>;
   qaReportsByProject: Map<string, QaReportRow[]>;
+  buyerQuestions: Map<string, BuyerQuestion>;
+  buyerQuestionVersions: Map<string, BuyerQuestionVersion>;
+  protocols: Map<string, Protocol>;
+  protocolAttempts: Map<string, ProtocolAttempt>;
 }
 
 const globalKey = "__zypact_memory_store__";
@@ -135,6 +156,10 @@ function getStore(): MemoryStore {
       fixBriefsByProject: new Map(),
       generatedAssetsByProject: new Map(),
       qaReportsByProject: new Map(),
+      buyerQuestions: new Map(),
+      buyerQuestionVersions: new Map(),
+      protocols: new Map(),
+      protocolAttempts: new Map(),
     };
   }
   return g[globalKey]!;
@@ -2317,5 +2342,396 @@ export const memoryAdapter: DbAdapter = {
       generatedAssetId
     );
     return all[0] ?? null;
+  },
+
+  // M4 — buyer question identity, protocol, and paid-attempt ledger.
+  // Every method below is synchronous business logic with no `await`
+  // between reading current state and writing it — in this
+  // single-threaded in-memory adapter that is what makes each method
+  // atomic, mirroring what `FOR UPDATE` + one PL/pgSQL function call
+  // gives the real RPC (migration 0047, draft).
+
+  async createBuyerQuestion(
+    input: CreateBuyerQuestionInput
+  ): Promise<BuyerQuestion> {
+    const question: BuyerQuestion = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      createdAt: new Date().toISOString(),
+    };
+    getStore().buyerQuestions.set(question.id, question);
+    return { ...question };
+  },
+
+  async getBuyerQuestion(
+    id: string,
+    projectId: string
+  ): Promise<BuyerQuestion | null> {
+    const q = getStore().buyerQuestions.get(id);
+    if (!q || q.projectId !== projectId) return null;
+    return { ...q };
+  },
+
+  async createBuyerQuestionVersion(
+    input: CreateBuyerQuestionVersionInput
+  ): Promise<BuyerQuestionVersion> {
+    const store = getStore();
+    const question = store.buyerQuestions.get(input.buyerQuestionId);
+    if (!question || question.projectId !== input.projectId) {
+      throw new Error("buyer_question_project_mismatch");
+    }
+    if (!input.promptText.trim()) throw new Error("empty_prompt_text");
+    if (!input.promptHash.trim()) throw new Error("empty_prompt_hash");
+    if (input.versionNumber < 1) throw new Error("invalid_version_number");
+
+    // Rule 1: a text change is always a new row. This only guards
+    // against a caller re-using a version number by mistake — it never
+    // rewrites or reuses an existing version's text.
+    const existingForQuestion = [...store.buyerQuestionVersions.values()].filter(
+      (v) => v.buyerQuestionId === input.buyerQuestionId
+    );
+    if (existingForQuestion.some((v) => v.versionNumber === input.versionNumber)) {
+      throw new Error("version_number_conflict");
+    }
+
+    const version: BuyerQuestionVersion = {
+      id: randomUUID(),
+      buyerQuestionId: input.buyerQuestionId,
+      projectId: input.projectId,
+      versionNumber: input.versionNumber,
+      promptText: input.promptText,
+      promptHash: input.promptHash,
+      intentType: input.intentType,
+      commercialValue: input.commercialValue,
+      winnability: input.winnability,
+      priority: input.priority,
+      rationale: input.rationale,
+      provenance: input.provenance,
+      approvedBy: null,
+      approvedAt: null,
+      createdAt: new Date().toISOString(),
+    };
+    store.buyerQuestionVersions.set(version.id, version);
+    return { ...version };
+  },
+
+  async getBuyerQuestionVersionsByQuestion(
+    buyerQuestionId: string,
+    projectId: string
+  ): Promise<BuyerQuestionVersion[]> {
+    return [...getStore().buyerQuestionVersions.values()]
+      .filter(
+        (v) => v.buyerQuestionId === buyerQuestionId && v.projectId === projectId
+      )
+      .map((v) => ({ ...v }))
+      .sort((a, b) => a.versionNumber - b.versionNumber);
+  },
+
+  async getBuyerQuestionVersion(
+    id: string,
+    projectId: string
+  ): Promise<BuyerQuestionVersion | null> {
+    const v = getStore().buyerQuestionVersions.get(id);
+    if (!v || v.projectId !== projectId) return null;
+    return { ...v };
+  },
+
+  async approveBuyerQuestionVersion(
+    input: ApproveBuyerQuestionVersionInput
+  ): Promise<ApproveBuyerQuestionVersionResult> {
+    const store = getStore();
+    const version = store.buyerQuestionVersions.get(input.versionId);
+    if (!version || version.projectId !== input.projectId) {
+      return { outcome: "NOT_FOUND", version: null };
+    }
+    if (version.approvedAt !== null) {
+      return { outcome: "ALREADY_APPROVED", version: { ...version } };
+    }
+    const approved: BuyerQuestionVersion = {
+      ...version,
+      approvedBy: input.approvedBy,
+      approvedAt: new Date().toISOString(),
+    };
+    store.buyerQuestionVersions.set(approved.id, approved);
+    return { outcome: "APPROVED", version: { ...approved } };
+  },
+
+  async createProtocol(input: CreateProtocolInput): Promise<Protocol> {
+    const store = getStore();
+    const version = store.buyerQuestionVersions.get(
+      input.buyerQuestionVersionId
+    );
+    if (!version || version.projectId !== input.projectId) {
+      throw new Error("buyer_question_version_project_mismatch");
+    }
+    if (input.baselineProtocolId) {
+      const baseline = store.protocols.get(input.baselineProtocolId);
+      if (!baseline || baseline.projectId !== input.projectId) {
+        throw new Error("baseline_protocol_project_mismatch");
+      }
+    }
+    // Rule 4: run_cap can never be smaller than the plan it bounds.
+    if (input.runCap < input.plannedBaselineRuns + input.plannedRetestRuns) {
+      throw new Error("run_cap_below_planned_runs");
+    }
+
+    const now = new Date().toISOString();
+    const protocol: Protocol = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      buyerQuestionVersionId: input.buyerQuestionVersionId,
+      baselineProtocolId: input.baselineProtocolId ?? null,
+      provider: input.provider,
+      surface: input.surface,
+      modelConfig: input.modelConfig ?? {},
+      plannedBaselineRuns: input.plannedBaselineRuns,
+      plannedRetestRuns: input.plannedRetestRuns,
+      paraphrasePlan: input.paraphrasePlan ?? [],
+      unitOfAnalysis: input.unitOfAnalysis,
+      primaryMetric: input.primaryMetric,
+      minimumUsefulChange: input.minimumUsefulChange ?? null,
+      samplePlanningMethod: input.samplePlanningMethod,
+      samplePlanningAssumptions: input.samplePlanningAssumptions ?? {},
+      runCap: input.runCap,
+      spendCapUsd: input.spendCapUsd,
+      timeWindowSeconds: input.timeWindowSeconds,
+      rateLimitPerHour: input.rateLimitPerHour,
+      concurrencyLimit: input.concurrencyLimit,
+      retryCap: input.retryCap,
+      observationWindowRule: input.observationWindowRule ?? {},
+      analyzerVersion: input.analyzerVersion ?? 1,
+      entityResolutionVersion: input.entityResolutionVersion ?? 2,
+      methodologyVersion: input.methodologyVersion ?? "1.1",
+      status: "draft",
+      approvedBy: null,
+      approvedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    store.protocols.set(protocol.id, protocol);
+    return { ...protocol };
+  },
+
+  async getProtocol(id: string, projectId: string): Promise<Protocol | null> {
+    const p = getStore().protocols.get(id);
+    if (!p || p.projectId !== projectId) return null;
+    return { ...p };
+  },
+
+  async approveProtocol(
+    input: ApproveProtocolInput
+  ): Promise<ApproveProtocolResult> {
+    const store = getStore();
+    const protocol = store.protocols.get(input.protocolId);
+    if (!protocol || protocol.projectId !== input.projectId) {
+      return { outcome: "NOT_FOUND", protocol: null };
+    }
+    if (
+      protocol.status === "approved" ||
+      protocol.status === "active" ||
+      protocol.status === "completed"
+    ) {
+      return { outcome: "ALREADY_APPROVED", protocol: { ...protocol } };
+    }
+    if (protocol.status === "abandoned") {
+      return { outcome: "CONFLICT", protocol: { ...protocol } };
+    }
+    const version = store.buyerQuestionVersions.get(
+      protocol.buyerQuestionVersionId
+    );
+    if (!version || version.approvedAt === null) {
+      return { outcome: "VERSION_NOT_APPROVED", protocol: { ...protocol } };
+    }
+    const now = new Date().toISOString();
+    const approved: Protocol = {
+      ...protocol,
+      status: "approved",
+      approvedBy: input.approvedBy,
+      approvedAt: now,
+      updatedAt: now,
+    };
+    store.protocols.set(approved.id, approved);
+    return { outcome: "APPROVED", protocol: { ...approved } };
+  },
+
+  async admitAndReserveAttempt(
+    input: AdmitAndReserveAttemptInput
+  ): Promise<AdmitAndReserveAttemptResult> {
+    const store = getStore();
+
+    if (!input.idempotencyKey.trim()) throw new Error("empty_idempotency_key");
+    if (input.estimatedCostUsd < 0) throw new Error("invalid_estimated_cost");
+
+    const protocol = store.protocols.get(input.protocolId);
+    if (!protocol || protocol.projectId !== input.projectId) {
+      return { outcome: "NOT_FOUND", attempt: null };
+    }
+
+    // Rule 8: no attempt without an approved protocol.
+    if (protocol.status !== "approved" && protocol.status !== "active") {
+      return { outcome: "PROTOCOL_NOT_APPROVED", attempt: null };
+    }
+
+    const attemptsForProtocol = [...store.protocolAttempts.values()].filter(
+      (a) => a.protocolId === input.protocolId
+    );
+
+    // Rule 11: a duplicate idempotency key — any status — returns the
+    // existing attempt, never a new reservation.
+    const existing = attemptsForProtocol.find(
+      (a) => a.idempotencyKey === input.idempotencyKey
+    );
+    if (existing) {
+      return { outcome: "ALREADY_RESERVED", attempt: { ...existing } };
+    }
+
+    if (input.retryOfAttemptId) {
+      const retryTarget = attemptsForProtocol.find(
+        (a) => a.id === input.retryOfAttemptId
+      );
+      if (!retryTarget) {
+        return { outcome: "INVALID_RETRY_REFERENCE", attempt: null };
+      }
+      // Rule 12: retry_cap bounds the TOTAL length of the retry chain
+      // from its original (non-retry) attempt, not merely how many
+      // times the immediate target has been retried directly. Walk
+      // from the target up to the chain's root via retryOfAttemptId,
+      // counting hops: the root is retry number 0, each hop is one
+      // more retry already consumed, and the attempt about to be
+      // admitted would be retry number (depth + 1).
+      const byId = new Map(attemptsForProtocol.map((a) => [a.id, a]));
+      let depth = 0;
+      let cursor = retryTarget;
+      while (cursor.retryOfAttemptId) {
+        const parent = byId.get(cursor.retryOfAttemptId);
+        if (!parent) break;
+        depth += 1;
+        cursor = parent;
+      }
+      if (depth + 1 > protocol.retryCap) {
+        return { outcome: "RETRY_CAP_EXCEEDED", attempt: null };
+      }
+    }
+
+    const consumed = attemptsForProtocol.filter(
+      (a) => a.status !== "cancelled"
+    ).length;
+    if (consumed >= protocol.runCap) {
+      return { outcome: "RUN_CAP_EXCEEDED", attempt: null };
+    }
+
+    // Rule 13: an already-exceeded spend cap blocks the next admission.
+    const spent = attemptsForProtocol
+      .filter((a) => a.status !== "cancelled")
+      .reduce((sum, a) => sum + (a.actualCostUsd ?? a.reservedCostUsd), 0);
+    if (spent + input.estimatedCostUsd > protocol.spendCapUsd) {
+      return { outcome: "SPEND_CAP_EXCEEDED", attempt: null };
+    }
+
+    const oneHourAgoMs = Date.now() - 60 * 60 * 1000;
+    const recent = attemptsForProtocol.filter(
+      (a) => new Date(a.reservedAt).getTime() >= oneHourAgoMs
+    ).length;
+    if (recent >= protocol.rateLimitPerHour) {
+      return { outcome: "RATE_LIMIT_EXCEEDED", attempt: null };
+    }
+
+    const concurrent = attemptsForProtocol.filter(
+      (a) => a.status === "reserved" || a.status === "in_progress"
+    ).length;
+    if (concurrent >= protocol.concurrencyLimit) {
+      return { outcome: "CONCURRENCY_LIMIT_EXCEEDED", attempt: null };
+    }
+
+    // Rule 10: this is a 'reserved' row with no probe_run_id yet — the
+    // reservation exists before any probe_runs row or provider call.
+    const now = new Date().toISOString();
+    const attempt: ProtocolAttempt = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      protocolId: input.protocolId,
+      buyerQuestionVersionId: protocol.buyerQuestionVersionId,
+      attemptKind: input.attemptKind,
+      status: "reserved",
+      idempotencyKey: input.idempotencyKey,
+      reservedCostUsd: input.estimatedCostUsd,
+      actualCostUsd: null,
+      probeRunId: null,
+      retryOfAttemptId: input.retryOfAttemptId ?? null,
+      terminationReason: null,
+      reservedAt: now,
+      lastActivityAt: now,
+      terminalizedAt: null,
+      createdAt: now,
+    };
+    store.protocolAttempts.set(attempt.id, attempt);
+    return { outcome: "RESERVED", attempt: { ...attempt } };
+  },
+
+  async startAttempt(input: StartAttemptInput): Promise<StartAttemptResult> {
+    const store = getStore();
+    const attempt = store.protocolAttempts.get(input.attemptId);
+    if (!attempt || attempt.projectId !== input.projectId) {
+      return { outcome: "NOT_FOUND", attempt: null };
+    }
+    if (
+      attempt.status === "in_progress" &&
+      attempt.probeRunId === input.probeRunId
+    ) {
+      return { outcome: "ALREADY_STARTED", attempt: { ...attempt } };
+    }
+    if (attempt.status !== "reserved") {
+      return { outcome: "CONFLICT", attempt: { ...attempt } };
+    }
+    const started: ProtocolAttempt = {
+      ...attempt,
+      status: "in_progress",
+      probeRunId: input.probeRunId,
+      lastActivityAt: new Date().toISOString(),
+    };
+    store.protocolAttempts.set(started.id, started);
+    return { outcome: "STARTED", attempt: { ...started } };
+  },
+
+  async reconcileAttempt(
+    input: ReconcileAttemptInput
+  ): Promise<ReconcileAttemptResult> {
+    const store = getStore();
+    if (input.actualCostUsd < 0) throw new Error("invalid_actual_cost");
+
+    const attempt = store.protocolAttempts.get(input.attemptId);
+    if (!attempt || attempt.projectId !== input.projectId) {
+      return { outcome: "NOT_FOUND", attempt: null };
+    }
+    if (attempt.terminalizedAt !== null) {
+      if (attempt.status === input.status) {
+        return { outcome: "ALREADY_RECONCILED", attempt: { ...attempt } };
+      }
+      return { outcome: "CONFLICT", attempt: { ...attempt } };
+    }
+    const now = new Date().toISOString();
+    const reconciled: ProtocolAttempt = {
+      ...attempt,
+      status: input.status,
+      actualCostUsd: input.actualCostUsd,
+      probeRunId: input.probeRunId ?? attempt.probeRunId,
+      terminationReason: input.terminationReason ?? null,
+      terminalizedAt: now,
+      lastActivityAt: now,
+    };
+    store.protocolAttempts.set(reconciled.id, reconciled);
+    return { outcome: "RECONCILED", attempt: { ...reconciled } };
+  },
+
+  async getProtocolAttempts(
+    protocolId: string,
+    projectId: string
+  ): Promise<ProtocolAttempt[]> {
+    return [...getStore().protocolAttempts.values()]
+      .filter((a) => a.protocolId === protocolId && a.projectId === projectId)
+      .map((a) => ({ ...a }))
+      .sort(
+        (a, b) => new Date(a.reservedAt).getTime() - new Date(b.reservedAt).getTime()
+      );
   },
 };

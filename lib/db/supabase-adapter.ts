@@ -5,16 +5,29 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 // adapter still generates its own, because it has no SQL layer.
 import { snapshotReportWriteMode } from "./snapshot-write-mode";
 import type {
+  AdmitAndReserveAttemptInput,
+  AdmitAndReserveAttemptResult,
   AnalysisLlmCall,
   AnalysisLlmCallInput,
+  ApproveBuyerQuestionVersionInput,
+  ApproveBuyerQuestionVersionResult,
+  ApproveProtocolInput,
+  ApproveProtocolResult,
+  AttemptKind,
   BackfillProbeResultDatasetIdentityInput,
   BackfillProbeResultDatasetIdentityResult,
   BackfillProbeResultDatasetIdentityStatus,
+  BuyerQuestion,
+  BuyerQuestionProvenance,
+  BuyerQuestionVersion,
   CanonicalEntity,
   CanonicalEntityInput,
   Competitor,
   CompetitorInput,
+  CreateBuyerQuestionInput,
+  CreateBuyerQuestionVersionInput,
   CreateProjectInput,
+  CreateProtocolInput,
   CreateSnapshotRequestInput,
   DatasetBatch,
   DatasetBatchInput,
@@ -48,9 +61,15 @@ import type {
   ProbeRun,
   ProbeRunStatus,
   Project,
+  Protocol,
+  ProtocolAttempt,
+  ProtocolAttemptStatus,
+  ProtocolStatus,
   RunPosition,
   QaReportRow,
   QaReportRowInput,
+  ReconcileAttemptInput,
+  ReconcileAttemptResult,
   RecordProbeFailureInput,
   ResolveAndRecordEntityObservationInput,
   ResolveAndRecordEntityObservationResult,
@@ -60,6 +79,8 @@ import type {
   SnapshotRequest,
   SnapshotRequestLimitCode,
   SitePage,
+  StartAttemptInput,
+  StartAttemptResult,
   StartOrResumeEntityResolutionPassInput,
   StartOrResumeEntityResolutionPassResult,
 
@@ -1011,6 +1032,169 @@ function mapProbeResult(r: ProbeResultDbRow): ProbeResult {
     runPosition: coerceRunPositionOrNull(r.run_position),
     negativeClaimDetected: r.negative_claim_detected ?? null,
     observationSchemaVersion: r.observation_schema_version ?? null,
+    createdAt: r.created_at,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  M4 — buyer question identity, protocol, and paid-attempt ledger          */
+/*  (migration 0047, draft — not yet applied to any database)                */
+/* -------------------------------------------------------------------------- */
+
+interface BuyerQuestionDbRow {
+  id: string;
+  project_id: string;
+  created_at: string;
+}
+
+function mapBuyerQuestion(r: BuyerQuestionDbRow): BuyerQuestion {
+  return { id: r.id, projectId: r.project_id, createdAt: r.created_at };
+}
+
+interface BuyerQuestionVersionDbRow {
+  id: string;
+  buyer_question_id: string;
+  project_id: string;
+  version_number: number;
+  prompt_text: string;
+  prompt_hash: string;
+  intent_type: string;
+  commercial_value: number;
+  winnability: number;
+  priority: number;
+  rationale: string;
+  provenance: string;
+  approved_by: string | null;
+  approved_at: string | null;
+  created_at: string;
+}
+
+function mapBuyerQuestionVersion(
+  r: BuyerQuestionVersionDbRow
+): BuyerQuestionVersion {
+  return {
+    id: r.id,
+    buyerQuestionId: r.buyer_question_id,
+    projectId: r.project_id,
+    versionNumber: r.version_number,
+    promptText: r.prompt_text,
+    promptHash: r.prompt_hash,
+    intentType: r.intent_type,
+    commercialValue: r.commercial_value,
+    winnability: r.winnability,
+    priority: r.priority,
+    rationale: r.rationale,
+    provenance: r.provenance as BuyerQuestionProvenance,
+    approvedBy: r.approved_by,
+    approvedAt: r.approved_at,
+    createdAt: r.created_at,
+  };
+}
+
+interface ProtocolDbRow {
+  id: string;
+  project_id: string;
+  buyer_question_version_id: string;
+  baseline_protocol_id: string | null;
+  provider: string;
+  surface: string;
+  model_config: Record<string, unknown>;
+  planned_baseline_runs: number;
+  planned_retest_runs: number;
+  paraphrase_plan: Array<{ text: string; hash: string }>;
+  unit_of_analysis: string;
+  primary_metric: string;
+  minimum_useful_change: unknown;
+  sample_planning_method: string;
+  sample_planning_assumptions: Record<string, unknown>;
+  run_cap: number;
+  spend_cap_usd: number;
+  time_window_seconds: number;
+  rate_limit_per_hour: number;
+  concurrency_limit: number;
+  retry_cap: number;
+  observation_window_rule: Record<string, unknown>;
+  analyzer_version: number;
+  entity_resolution_version: number;
+  methodology_version: string;
+  status: string;
+  approved_by: string | null;
+  approved_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function mapProtocol(r: ProtocolDbRow): Protocol {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    buyerQuestionVersionId: r.buyer_question_version_id,
+    baselineProtocolId: r.baseline_protocol_id,
+    provider: r.provider,
+    surface: r.surface,
+    modelConfig: r.model_config ?? {},
+    plannedBaselineRuns: r.planned_baseline_runs,
+    plannedRetestRuns: r.planned_retest_runs,
+    paraphrasePlan: r.paraphrase_plan ?? [],
+    unitOfAnalysis: r.unit_of_analysis,
+    primaryMetric: r.primary_metric,
+    minimumUsefulChange: r.minimum_useful_change ?? null,
+    samplePlanningMethod: r.sample_planning_method,
+    samplePlanningAssumptions: r.sample_planning_assumptions ?? {},
+    runCap: r.run_cap,
+    spendCapUsd: r.spend_cap_usd,
+    timeWindowSeconds: r.time_window_seconds,
+    rateLimitPerHour: r.rate_limit_per_hour,
+    concurrencyLimit: r.concurrency_limit,
+    retryCap: r.retry_cap,
+    observationWindowRule: r.observation_window_rule ?? {},
+    analyzerVersion: r.analyzer_version,
+    entityResolutionVersion: r.entity_resolution_version,
+    methodologyVersion: r.methodology_version,
+    status: r.status as ProtocolStatus,
+    approvedBy: r.approved_by,
+    approvedAt: r.approved_at,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+interface ProtocolAttemptDbRow {
+  id: string;
+  project_id: string;
+  protocol_id: string;
+  buyer_question_version_id: string;
+  attempt_kind: string;
+  status: string;
+  idempotency_key: string;
+  reserved_cost_usd: number;
+  actual_cost_usd: number | null;
+  probe_run_id: string | null;
+  retry_of_attempt_id: string | null;
+  termination_reason: string | null;
+  reserved_at: string;
+  last_activity_at: string;
+  terminalized_at: string | null;
+  created_at: string;
+}
+
+function mapProtocolAttempt(r: ProtocolAttemptDbRow): ProtocolAttempt {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    protocolId: r.protocol_id,
+    buyerQuestionVersionId: r.buyer_question_version_id,
+    attemptKind: r.attempt_kind as AttemptKind,
+    status: r.status as ProtocolAttemptStatus,
+    idempotencyKey: r.idempotency_key,
+    reservedCostUsd: r.reserved_cost_usd,
+    actualCostUsd: r.actual_cost_usd,
+    probeRunId: r.probe_run_id,
+    retryOfAttemptId: r.retry_of_attempt_id,
+    terminationReason: r.termination_reason,
+    reservedAt: r.reserved_at,
+    lastActivityAt: r.last_activity_at,
+    terminalizedAt: r.terminalized_at,
     createdAt: r.created_at,
   };
 }
@@ -2482,5 +2666,267 @@ export const supabaseAdapter: DbAdapter = {
     if (error) throw error;
     const row = data?.[0];
     return row ? mapQaReport(row as QaReportDbRow) : null;
+  },
+
+  // M4 — buyer question identity, protocol, and paid-attempt ledger
+  // (migration 0047, draft — not yet applied to any database; these
+  // methods are written for interface completeness and are exercised
+  // only against the in-memory adapter until the migration is applied
+  // and staging-verified).
+
+  async createBuyerQuestion(
+    input: CreateBuyerQuestionInput
+  ): Promise<BuyerQuestion> {
+    const { data, error } = await getClient()
+      .from("buyer_questions")
+      .insert({ project_id: input.projectId })
+      .select("*")
+      .single<BuyerQuestionDbRow>();
+    if (error || !data) throw error ?? new Error("createBuyerQuestion failed");
+    return mapBuyerQuestion(data);
+  },
+
+  async getBuyerQuestion(
+    id: string,
+    projectId: string
+  ): Promise<BuyerQuestion | null> {
+    const { data, error } = await getClient()
+      .from("buyer_questions")
+      .select("*")
+      .eq("id", id)
+      .eq("project_id", projectId)
+      .maybeSingle<BuyerQuestionDbRow>();
+    if (error) throw error;
+    return data ? mapBuyerQuestion(data) : null;
+  },
+
+  async createBuyerQuestionVersion(
+    input: CreateBuyerQuestionVersionInput
+  ): Promise<BuyerQuestionVersion> {
+    const { data, error } = await getClient()
+      .from("buyer_question_versions")
+      .insert({
+        buyer_question_id: input.buyerQuestionId,
+        project_id: input.projectId,
+        version_number: input.versionNumber,
+        prompt_text: input.promptText,
+        prompt_hash: input.promptHash,
+        intent_type: input.intentType,
+        commercial_value: input.commercialValue,
+        winnability: input.winnability,
+        priority: input.priority,
+        rationale: input.rationale,
+        provenance: input.provenance,
+      })
+      .select("*")
+      .single<BuyerQuestionVersionDbRow>();
+    if (error || !data)
+      throw error ?? new Error("createBuyerQuestionVersion failed");
+    return mapBuyerQuestionVersion(data);
+  },
+
+  async getBuyerQuestionVersionsByQuestion(
+    buyerQuestionId: string,
+    projectId: string
+  ): Promise<BuyerQuestionVersion[]> {
+    const { data, error } = await getClient()
+      .from("buyer_question_versions")
+      .select("*")
+      .eq("buyer_question_id", buyerQuestionId)
+      .eq("project_id", projectId)
+      .order("version_number", { ascending: true });
+    if (error) throw error;
+    return (data ?? []).map((r) =>
+      mapBuyerQuestionVersion(r as BuyerQuestionVersionDbRow)
+    );
+  },
+
+  async getBuyerQuestionVersion(
+    id: string,
+    projectId: string
+  ): Promise<BuyerQuestionVersion | null> {
+    const { data, error } = await getClient()
+      .from("buyer_question_versions")
+      .select("*")
+      .eq("id", id)
+      .eq("project_id", projectId)
+      .maybeSingle<BuyerQuestionVersionDbRow>();
+    if (error) throw error;
+    return data ? mapBuyerQuestionVersion(data) : null;
+  },
+
+  async approveBuyerQuestionVersion(
+    input: ApproveBuyerQuestionVersionInput
+  ): Promise<ApproveBuyerQuestionVersionResult> {
+    const { data, error } = await getClient().rpc(
+      "approve_buyer_question_version",
+      {
+        p_version_id: input.versionId,
+        p_project_id: input.projectId,
+        p_approved_by: input.approvedBy,
+      }
+    );
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "approveBuyerQuestionVersion: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      version: row.version ? mapBuyerQuestionVersion(row.version) : null,
+    };
+  },
+
+  async createProtocol(input: CreateProtocolInput): Promise<Protocol> {
+    const { data, error } = await getClient()
+      .from("protocols")
+      .insert({
+        project_id: input.projectId,
+        buyer_question_version_id: input.buyerQuestionVersionId,
+        baseline_protocol_id: input.baselineProtocolId ?? null,
+        provider: input.provider,
+        surface: input.surface,
+        model_config: input.modelConfig ?? {},
+        planned_baseline_runs: input.plannedBaselineRuns,
+        planned_retest_runs: input.plannedRetestRuns,
+        paraphrase_plan: input.paraphrasePlan ?? [],
+        unit_of_analysis: input.unitOfAnalysis,
+        primary_metric: input.primaryMetric,
+        minimum_useful_change: input.minimumUsefulChange ?? null,
+        sample_planning_method: input.samplePlanningMethod,
+        sample_planning_assumptions: input.samplePlanningAssumptions ?? {},
+        run_cap: input.runCap,
+        spend_cap_usd: input.spendCapUsd,
+        time_window_seconds: input.timeWindowSeconds,
+        rate_limit_per_hour: input.rateLimitPerHour,
+        concurrency_limit: input.concurrencyLimit,
+        retry_cap: input.retryCap,
+        observation_window_rule: input.observationWindowRule ?? {},
+        analyzer_version: input.analyzerVersion ?? 1,
+        entity_resolution_version: input.entityResolutionVersion ?? 2,
+        methodology_version: input.methodologyVersion ?? "1.1",
+      })
+      .select("*")
+      .single<ProtocolDbRow>();
+    if (error || !data) throw error ?? new Error("createProtocol failed");
+    return mapProtocol(data);
+  },
+
+  async getProtocol(id: string, projectId: string): Promise<Protocol | null> {
+    const { data, error } = await getClient()
+      .from("protocols")
+      .select("*")
+      .eq("id", id)
+      .eq("project_id", projectId)
+      .maybeSingle<ProtocolDbRow>();
+    if (error) throw error;
+    return data ? mapProtocol(data) : null;
+  },
+
+  async approveProtocol(
+    input: ApproveProtocolInput
+  ): Promise<ApproveProtocolResult> {
+    const { data, error } = await getClient().rpc("approve_protocol", {
+      p_protocol_id: input.protocolId,
+      p_project_id: input.projectId,
+      p_approved_by: input.approvedBy,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "approveProtocol: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      protocol: row.protocol ? mapProtocol(row.protocol) : null,
+    };
+  },
+
+  async admitAndReserveAttempt(
+    input: AdmitAndReserveAttemptInput
+  ): Promise<AdmitAndReserveAttemptResult> {
+    const { data, error } = await getClient().rpc(
+      "admit_and_reserve_attempt",
+      {
+        p_protocol_id: input.protocolId,
+        p_project_id: input.projectId,
+        p_attempt_kind: input.attemptKind,
+        p_idempotency_key: input.idempotencyKey,
+        p_estimated_cost_usd: input.estimatedCostUsd,
+        p_retry_of_attempt_id: input.retryOfAttemptId ?? null,
+      }
+    );
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "admitAndReserveAttempt: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      attempt: row.attempt ? mapProtocolAttempt(row.attempt) : null,
+    };
+  },
+
+  async startAttempt(input: StartAttemptInput): Promise<StartAttemptResult> {
+    const { data, error } = await getClient().rpc("start_attempt", {
+      p_attempt_id: input.attemptId,
+      p_project_id: input.projectId,
+      p_probe_run_id: input.probeRunId,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "startAttempt: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      attempt: row.attempt ? mapProtocolAttempt(row.attempt) : null,
+    };
+  },
+
+  async reconcileAttempt(
+    input: ReconcileAttemptInput
+  ): Promise<ReconcileAttemptResult> {
+    const { data, error } = await getClient().rpc("reconcile_attempt", {
+      p_attempt_id: input.attemptId,
+      p_project_id: input.projectId,
+      p_status: input.status,
+      p_actual_cost_usd: input.actualCostUsd,
+      p_probe_run_id: input.probeRunId ?? null,
+      p_termination_reason: input.terminationReason ?? null,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "reconcileAttempt: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      attempt: row.attempt ? mapProtocolAttempt(row.attempt) : null,
+    };
+  },
+
+  async getProtocolAttempts(
+    protocolId: string,
+    projectId: string
+  ): Promise<ProtocolAttempt[]> {
+    const { data, error } = await getClient()
+      .from("protocol_attempts")
+      .select("*")
+      .eq("protocol_id", protocolId)
+      .eq("project_id", projectId)
+      .order("reserved_at", { ascending: true });
+    if (error) throw error;
+    return (data ?? []).map((r) => mapProtocolAttempt(r as ProtocolAttemptDbRow));
   },
 };

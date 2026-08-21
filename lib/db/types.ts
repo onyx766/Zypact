@@ -975,6 +975,307 @@ export interface CreateProjectInput {
   userId?: string | null;
 }
 
+/* -------------------------------------------------------------------------- */
+/*  M4 — buyer question identity, protocol, and paid-attempt ledger          */
+/*                                                                            */
+/*  Legacy notice: nothing here recreates the pre-M4 five-prompt/three-run/  */
+/*  $2 defaults (scripts/mvp-scan.ts, lib/snapshot-worker/execution-         */
+/*  options.ts) or the legacy won/partial/lost verdict. Those remain frozen  */
+/*  legacy paths, unmodified by M4 and never a silent fallback target for    */
+/*  any type below.                                                         */
+/* -------------------------------------------------------------------------- */
+
+export type BuyerQuestionProvenance =
+  | "customer_supplied"
+  | "crm_evidence"
+  | "founder_supplied"
+  | "model_assisted_reviewed"
+  | "public_benchmark";
+
+export interface BuyerQuestion {
+  id: string;
+  projectId: string;
+  createdAt: string;
+}
+
+export interface CreateBuyerQuestionInput {
+  projectId: string;
+}
+
+/**
+ * Rule 1 — a text change is always a new row (a new `versionNumber` for
+ * the same `buyerQuestionId`), never a mutation of an existing one.
+ * `promptHash` is the SHA-256 of the normalized prompt text, computed
+ * exclusively by the TypeScript application layer (same authority
+ * pattern as `lib/evidence/normalize-entity-text.ts`, D-019) — never
+ * recomputed or verified in SQL.
+ */
+export interface BuyerQuestionVersion {
+  id: string;
+  buyerQuestionId: string;
+  projectId: string;
+  versionNumber: number;
+  promptText: string;
+  promptHash: string;
+  intentType: string;
+  commercialValue: number;
+  winnability: number;
+  priority: number;
+  rationale: string;
+  provenance: BuyerQuestionProvenance;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  createdAt: string;
+}
+
+export interface CreateBuyerQuestionVersionInput {
+  buyerQuestionId: string;
+  projectId: string;
+  versionNumber: number;
+  promptText: string;
+  promptHash: string;
+  intentType: string;
+  commercialValue: number;
+  winnability: number;
+  priority: number;
+  rationale: string;
+  provenance: BuyerQuestionProvenance;
+}
+
+export type ApproveBuyerQuestionVersionOutcome =
+  | "APPROVED"
+  | "ALREADY_APPROVED"
+  | "NOT_FOUND";
+
+export interface ApproveBuyerQuestionVersionInput {
+  versionId: string;
+  projectId: string;
+  approvedBy: string;
+}
+
+export interface ApproveBuyerQuestionVersionResult {
+  outcome: ApproveBuyerQuestionVersionOutcome;
+  version: BuyerQuestionVersion | null;
+}
+
+export type ProtocolStatus =
+  | "draft"
+  | "approved"
+  | "active"
+  | "completed"
+  | "abandoned";
+
+/**
+ * One protocol per approved `buyerQuestionVersionId` (product rule:
+ * exactly 1:1, enforced by a partial unique index in migration 0047).
+ * A retest protocol references its own baseline via
+ * `baselineProtocolId`.
+ *
+ * Rule 3/4 — `plannedBaselineRuns + plannedRetestRuns` is the plan;
+ * `runCap` is only ever an upper bound on top of it (`runCap >=` the
+ * sum), never the plan itself. Rule 5/6 — no field here carries a
+ * universal default; every value must be supplied by the caller.
+ */
+export interface Protocol {
+  id: string;
+  projectId: string;
+  buyerQuestionVersionId: string;
+  baselineProtocolId: string | null;
+  provider: string;
+  surface: string;
+  modelConfig: Record<string, unknown>;
+  plannedBaselineRuns: number;
+  plannedRetestRuns: number;
+  /** Rule 2 — each entry is an explicitly declared variant with its own exact text and hash, never a silent rewording. */
+  paraphrasePlan: Array<{ text: string; hash: string }>;
+  unitOfAnalysis: string;
+  primaryMetric: string;
+  minimumUsefulChange: unknown;
+  samplePlanningMethod: string;
+  samplePlanningAssumptions: Record<string, unknown>;
+  runCap: number;
+  spendCapUsd: number;
+  timeWindowSeconds: number;
+  rateLimitPerHour: number;
+  concurrencyLimit: number;
+  retryCap: number;
+  observationWindowRule: Record<string, unknown>;
+  analyzerVersion: number;
+  entityResolutionVersion: number;
+  methodologyVersion: string;
+  status: ProtocolStatus;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateProtocolInput {
+  projectId: string;
+  buyerQuestionVersionId: string;
+  baselineProtocolId?: string | null;
+  provider: string;
+  surface: string;
+  modelConfig?: Record<string, unknown>;
+  plannedBaselineRuns: number;
+  plannedRetestRuns: number;
+  paraphrasePlan?: Array<{ text: string; hash: string }>;
+  unitOfAnalysis: string;
+  primaryMetric: string;
+  minimumUsefulChange?: unknown;
+  samplePlanningMethod: string;
+  samplePlanningAssumptions?: Record<string, unknown>;
+  runCap: number;
+  spendCapUsd: number;
+  timeWindowSeconds: number;
+  rateLimitPerHour: number;
+  concurrencyLimit: number;
+  retryCap: number;
+  observationWindowRule?: Record<string, unknown>;
+  analyzerVersion?: number;
+  entityResolutionVersion?: number;
+  methodologyVersion?: string;
+}
+
+export type ApproveProtocolOutcome =
+  | "APPROVED"
+  | "ALREADY_APPROVED"
+  | "NOT_FOUND"
+  | "VERSION_NOT_APPROVED"
+  | "CONFLICT";
+
+export interface ApproveProtocolInput {
+  protocolId: string;
+  projectId: string;
+  approvedBy: string;
+}
+
+export interface ApproveProtocolResult {
+  outcome: ApproveProtocolOutcome;
+  protocol: Protocol | null;
+}
+
+export type AttemptKind = "baseline" | "retest" | "control" | "paraphrase";
+
+export type ProtocolAttemptStatus =
+  | "reserved"
+  | "in_progress"
+  | "completed"
+  | "failed"
+  | "timed_out"
+  | "cancelled"
+  | "excluded";
+
+/**
+ * The admission/reservation/reconciliation ledger — one row per paid
+ * provider-call attempt. Rule 10 — `probeRunId` starts `null` and is
+ * only ever set by `startAttempt`, called strictly after
+ * `admitAndReserveAttempt` already produced a `"reserved"` row: the
+ * reservation always exists before any `probe_runs` row or provider
+ * call. Rule 12 — `retryOfAttemptId` links a retry to the attempt it
+ * retries; it is never the same row.
+ */
+export interface ProtocolAttempt {
+  id: string;
+  projectId: string;
+  protocolId: string;
+  buyerQuestionVersionId: string;
+  attemptKind: AttemptKind;
+  status: ProtocolAttemptStatus;
+  idempotencyKey: string;
+  reservedCostUsd: number;
+  actualCostUsd: number | null;
+  probeRunId: string | null;
+  retryOfAttemptId: string | null;
+  terminationReason: string | null;
+  reservedAt: string;
+  lastActivityAt: string;
+  terminalizedAt: string | null;
+  createdAt: string;
+}
+
+export type AdmitAndReserveAttemptOutcome =
+  | "RESERVED"
+  | "ALREADY_RESERVED"
+  | "NOT_FOUND"
+  | "PROTOCOL_NOT_APPROVED"
+  | "RUN_CAP_EXCEEDED"
+  | "SPEND_CAP_EXCEEDED"
+  | "RATE_LIMIT_EXCEEDED"
+  | "CONCURRENCY_LIMIT_EXCEEDED"
+  | "RETRY_CAP_EXCEEDED"
+  | "INVALID_RETRY_REFERENCE";
+
+/**
+ * Rule 9 — the adapter implementation (real RPC in Supabase; an
+ * equivalent synchronous, lock-free-but-atomic check-then-write in the
+ * memory adapter) must perform every cap check and the final
+ * reservation inside one atomic operation, after establishing an
+ * exclusive view of the protocol's current state — never two separate
+ * round trips a concurrent caller could interleave with.
+ */
+export interface AdmitAndReserveAttemptInput {
+  protocolId: string;
+  projectId: string;
+  attemptKind: AttemptKind;
+  /** Rule 11 — a duplicate key returns the existing attempt, never a new reservation. */
+  idempotencyKey: string;
+  estimatedCostUsd: number;
+  /** Rule 12 — set only when this call is a retry of a prior attempt. */
+  retryOfAttemptId?: string | null;
+}
+
+export interface AdmitAndReserveAttemptResult {
+  outcome: AdmitAndReserveAttemptOutcome;
+  attempt: ProtocolAttempt | null;
+}
+
+export type StartAttemptOutcome =
+  | "STARTED"
+  | "ALREADY_STARTED"
+  | "NOT_FOUND"
+  | "CONFLICT";
+
+export interface StartAttemptInput {
+  attemptId: string;
+  projectId: string;
+  probeRunId: string;
+}
+
+export interface StartAttemptResult {
+  outcome: StartAttemptOutcome;
+  attempt: ProtocolAttempt | null;
+}
+
+export type ReconcileAttemptStatus =
+  | "completed"
+  | "failed"
+  | "timed_out"
+  | "cancelled"
+  | "excluded";
+
+export type ReconcileAttemptOutcome =
+  | "RECONCILED"
+  | "ALREADY_RECONCILED"
+  | "NOT_FOUND"
+  | "CONFLICT"
+  | "INVALID_STATUS";
+
+/** Rule 13 — the only path to a terminal status; always carries the real cost. */
+export interface ReconcileAttemptInput {
+  attemptId: string;
+  projectId: string;
+  status: ReconcileAttemptStatus;
+  actualCostUsd: number;
+  probeRunId?: string | null;
+  terminationReason?: string | null;
+}
+
+export interface ReconcileAttemptResult {
+  outcome: ReconcileAttemptOutcome;
+  attempt: ProtocolAttempt | null;
+}
+
 export interface DbAdapter {
   getSnapshotRequest(
     requestId: string
@@ -1320,6 +1621,46 @@ export interface DbAdapter {
   getLatestQaReportForAsset(
     generatedAssetId: string
   ): Promise<QaReportRow | null>;
+
+  // M4 — buyer question identity, protocol, and paid-attempt ledger.
+  // createBuyerQuestion/createBuyerQuestionVersion/createProtocol are
+  // simple, non-concurrency-sensitive inserts (direct grant in the
+  // draft migration). Every status/approval transition and every
+  // protocol_attempts write goes through the RPC-wrapper methods below
+  // — never a direct update.
+  createBuyerQuestion(input: CreateBuyerQuestionInput): Promise<BuyerQuestion>;
+  getBuyerQuestion(id: string, projectId: string): Promise<BuyerQuestion | null>;
+  createBuyerQuestionVersion(
+    input: CreateBuyerQuestionVersionInput
+  ): Promise<BuyerQuestionVersion>;
+  getBuyerQuestionVersionsByQuestion(
+    buyerQuestionId: string,
+    projectId: string
+  ): Promise<BuyerQuestionVersion[]>;
+  /** M4 Stage B — resolves a protocol's single canonical prompt text by its own version id, project-scoped. */
+  getBuyerQuestionVersion(
+    id: string,
+    projectId: string
+  ): Promise<BuyerQuestionVersion | null>;
+  approveBuyerQuestionVersion(
+    input: ApproveBuyerQuestionVersionInput
+  ): Promise<ApproveBuyerQuestionVersionResult>;
+
+  createProtocol(input: CreateProtocolInput): Promise<Protocol>;
+  getProtocol(id: string, projectId: string): Promise<Protocol | null>;
+  approveProtocol(input: ApproveProtocolInput): Promise<ApproveProtocolResult>;
+
+  admitAndReserveAttempt(
+    input: AdmitAndReserveAttemptInput
+  ): Promise<AdmitAndReserveAttemptResult>;
+  startAttempt(input: StartAttemptInput): Promise<StartAttemptResult>;
+  reconcileAttempt(
+    input: ReconcileAttemptInput
+  ): Promise<ReconcileAttemptResult>;
+  getProtocolAttempts(
+    protocolId: string,
+    projectId: string
+  ): Promise<ProtocolAttempt[]>;
 }
 
 /* -------------------------------------------------------------------------- */

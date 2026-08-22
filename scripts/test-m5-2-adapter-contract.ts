@@ -27,8 +27,10 @@ delete process.env.ZYPACT_ALLOW_MEMORY_DB;
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { sha256Hex } from "@/lib/evidence/hash";
 import type {
   AttemptKind,
+  CreateProbeRunAndStartAttemptForJobInput,
   CreateProtocolInput,
   DbAdapter,
 } from "@/lib/db/types";
@@ -104,8 +106,12 @@ async function main(): Promise<void> {
       !/require\(["'][^"']*snapshot-worker/.test(supabaseSrc)
   );
   check(
-    "no reference to a 0052 migration anywhere in these three files",
-    !/0052/.test(typesSrc) && !/0052/.test(memorySrc) && !/0052/.test(supabaseSrc)
+    // D-026 (Stage B0.1) legitimately created migration 0052 and these
+    // three files now carry real, authorized D-026 comments naming it —
+    // this check ratchets forward to guard the next boundary instead of
+    // the one this same tranche just crossed on purpose.
+    "no reference to a 0053 migration anywhere in these three files",
+    !/0053/.test(typesSrc) && !/0053/.test(memorySrc) && !/0053/.test(supabaseSrc)
   );
   check(
     "start_attempt_for_job is not exposed as a DbAdapter method name and not called by either adapter",
@@ -274,8 +280,6 @@ async function main(): Promise<void> {
     attemptId,
     platform: "perplexity",
     probeMode: "simulated",
-    datasetId: "44444444-4444-4444-8444-444444444444",
-    datasetSourceType: "manual_scan",
   });
   check(
     "start: reserved attempt -> STARTED, probe run created and attached atomically",
@@ -289,8 +293,6 @@ async function main(): Promise<void> {
     attemptId,
     platform: "perplexity",
     probeMode: "simulated",
-    datasetId: "44444444-4444-4444-8444-444444444444",
-    datasetSourceType: "manual_scan",
   });
   check(
     "start: replay -> ALREADY_STARTED with the SAME probe run, never a second one",
@@ -312,6 +314,7 @@ async function main(): Promise<void> {
     "sent: perplexity call marked sent before any provider call",
     sentP.outcome === "SENT" && sentP.externalCall?.requestSentAt !== null
   );
+  const perplexityAnswerText = "Fixture Perplexity answer text for lifecycle test.";
   const receiptP = await db.recordProviderCallReceiptForJob({
     jobId,
     claimToken,
@@ -321,8 +324,9 @@ async function main(): Promise<void> {
     outcome: "success",
     httpStatus: 200,
     providerRequestId: "req-abc",
-    rawResponseSha256: "b".repeat(64),
+    rawResponseSha256: sha256Hex(perplexityAnswerText),
     latencyMs: 500,
+    rawResponseBody: perplexityAnswerText,
   });
   check(
     "receipt: perplexity success -> RECEIPTED, call completed, actualCostUsd left null (no real cost supplied) per D-023 §3",
@@ -330,6 +334,11 @@ async function main(): Promise<void> {
       receiptP.externalCall?.status === "completed" &&
       receiptP.externalCall?.actualCostUsd === null &&
       receiptP.externalCall?.costBasis === null
+  );
+  check(
+    "D-026: the receipt carries rawResponseBody verbatim, paired with a real matching hash",
+    receiptP.receipt?.rawResponseBody === perplexityAnswerText &&
+      receiptP.receipt?.rawResponseSha256 === sha256Hex(perplexityAnswerText)
   );
 
   const sentA = await db.markExternalCallSentForJob({
@@ -340,6 +349,7 @@ async function main(): Promise<void> {
     probeRunId,
   });
   check("sent: analysis call marked sent", sentA.outcome === "SENT");
+  const analysisOutputText = JSON.stringify({ verdict: "won", clientMentioned: true });
   const receiptA = await db.recordAnalysisCallReceiptForJob({
     jobId,
     claimToken,
@@ -351,12 +361,19 @@ async function main(): Promise<void> {
     model: "gpt-4o-mini",
     usedMock: false,
     requestSha256: "c".repeat(64),
-    responseSha256: "d".repeat(64),
+    responseSha256: sha256Hex(analysisOutputText),
     latencyMs: 300,
+    rawContent: analysisOutputText,
   });
   check(
     "receipt: analysis success -> RECEIPTED, call completed",
     receiptA.outcome === "RECEIPTED" && receiptA.externalCall?.status === "completed"
+  );
+  check(
+    "D-026: the analysis receipt carries rawContent verbatim, paired with a real matching hash; requestSha256 stays hash-only (no paired content field in this tranche)",
+    receiptA.receipt?.rawContent === analysisOutputText &&
+      receiptA.receipt?.responseSha256 === sha256Hex(analysisOutputText) &&
+      receiptA.receipt?.requestSha256 === "c".repeat(64)
   );
 
   // -- reconciliation + completion ----------------------------------------
@@ -730,19 +747,22 @@ async function main(): Promise<void> {
     const start = await db.createProbeRunAndStartAttemptForJob({
       jobId, claimToken, projectId, attemptId,
       platform: "perplexity", probeMode: "simulated",
-      datasetId: "44444444-4444-4444-8444-444444444444", datasetSourceType: "manual_scan",
     });
     const probeRunId = must(start.probeRun, "probe run").id;
+    const answerText = `Fixture Perplexity answer for attempt ${attemptId}.`;
+    const outputText = JSON.stringify({ verdict: "won", attemptId });
     await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: perplexityCallId, probeRunId });
     await db.recordProviderCallReceiptForJob({
       jobId, claimToken, projectId, externalCallId: perplexityCallId, probeRunId, outcome: "success",
-      httpStatus: 200, providerRequestId: "req-x", rawResponseSha256: "b".repeat(64), latencyMs: 400,
+      httpStatus: 200, providerRequestId: "req-x", rawResponseSha256: sha256Hex(answerText), latencyMs: 400,
+      rawResponseBody: answerText,
     });
     await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: analysisCallId, probeRunId });
     await db.recordAnalysisCallReceiptForJob({
       jobId, claimToken, projectId, externalCallId: analysisCallId, probeRunId, outcome: "success",
       provider: "openai", model: "gpt-4o-mini", usedMock: false,
-      requestSha256: "c".repeat(64), responseSha256: "d".repeat(64), latencyMs: 200,
+      requestSha256: "c".repeat(64), responseSha256: sha256Hex(outputText), latencyMs: 200,
+      rawContent: outputText,
     });
     await db.reconcileAttemptForJob({ jobId, claimToken, projectId, attemptId, status: "completed" });
   }
@@ -927,7 +947,6 @@ async function main(): Promise<void> {
     const frStart = await db.createProbeRunAndStartAttemptForJob({
       jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id, attemptId: frSourceAttemptId,
       platform: "perplexity", probeMode: "simulated",
-      datasetId: "44444444-4444-4444-8444-444444444444", datasetSourceType: "manual_scan",
     });
     const frProbeRunId = must(frStart.probeRun, "full-retry-slot probe run").id;
     const frPerplexityCallId = must(frAdmit.perplexityCall, "full-retry-slot perplexity call").id;
@@ -989,6 +1008,502 @@ async function main(): Promise<void> {
     check(
       "D-025 test 7: planned_baseline_runs = 0 refuses enqueue with NO_BASELINE_RUNS_PLANNED, creating no job row",
       zbEnqueue.outcome === "NO_BASELINE_RUNS_PLANNED" && zbEnqueue.job === null
+    );
+  }
+
+  // ========================================================================
+  // Part J — D-026: durable call payloads and probe_result replay safety.
+  // ========================================================================
+  console.log("\n[J] MemoryAdapter — D-026 durable call payloads and probe_result replay");
+
+  {
+    // A fresh attempt with both calls marked sent (genuinely in_progress,
+    // real probe_run attached) but not yet receipted -- exactly the state
+    // the real content-hash CHECK constraints fire against on the first
+    // real INSERT, so these checks must reach the same validation, not a
+    // pre-existing status/ownership gate that would short-circuit first.
+    const { projectId: d26ProjectId, protocolId: d26ProtocolId } = await setupProjectProtocol(db, "d026-violations");
+    const { jobId: d26JobId, claimToken: d26ClaimToken } = await claimFreshJob(
+      db, d26ProjectId, d26ProtocolId, "d026-violations-worker"
+    );
+    const d26Admit = await db.admitAndReserveAttemptForJob({
+      jobId: d26JobId, claimToken: d26ClaimToken, projectId: d26ProjectId, attemptKind: "baseline",
+      idempotencyKey: `${d26JobId}:baseline:1`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
+    });
+    const d26AttemptId = must(d26Admit.attempt, "d026-violations attempt").id;
+    const d26PerplexityCallId = must(d26Admit.perplexityCall, "d026-violations perplexity call").id;
+    const d26AnalysisCallId = must(d26Admit.analysisCall, "d026-violations analysis call").id;
+    const d26Start = await db.createProbeRunAndStartAttemptForJob({
+      jobId: d26JobId, claimToken: d26ClaimToken, projectId: d26ProjectId, attemptId: d26AttemptId,
+      platform: "perplexity", probeMode: "simulated",
+    });
+    const d26ProbeRunId = must(d26Start.probeRun, "d026-violations probe run").id;
+    await db.markExternalCallSentForJob({
+      jobId: d26JobId, claimToken: d26ClaimToken, projectId: d26ProjectId,
+      externalCallId: d26PerplexityCallId, probeRunId: d26ProbeRunId,
+    });
+    await db.markExternalCallSentForJob({
+      jobId: d26JobId, claimToken: d26ClaimToken, projectId: d26ProjectId,
+      externalCallId: d26AnalysisCallId, probeRunId: d26ProbeRunId,
+    });
+
+    let pairingThrew = false;
+    try {
+      await db.recordProviderCallReceiptForJob({
+        jobId: d26JobId, claimToken: d26ClaimToken, projectId: d26ProjectId,
+        externalCallId: d26PerplexityCallId, probeRunId: d26ProbeRunId, outcome: "success",
+        rawResponseSha256: "a".repeat(64),
+        // rawResponseBody deliberately omitted -- hash with no content.
+      });
+    } catch {
+      pairingThrew = true;
+    }
+    check(
+      "D-026: rawResponseBody/rawResponseSha256 pairing is real validation -- a hash with no content throws, mirroring provider_call_receipts_content_hash_pairing_check",
+      pairingThrew
+    );
+
+    let successThrew = false;
+    try {
+      await db.recordProviderCallReceiptForJob({
+        jobId: d26JobId, claimToken: d26ClaimToken, projectId: d26ProjectId,
+        externalCallId: d26PerplexityCallId, probeRunId: d26ProbeRunId, outcome: "success",
+        // Neither rawResponseBody nor rawResponseSha256 supplied at all --
+        // outcome success with genuinely zero evidence.
+      });
+    } catch {
+      successThrew = true;
+    }
+    check(
+      "D-026: outcome 'success' with no content at all throws, mirroring provider_call_receipts_success_requires_content_check",
+      successThrew
+    );
+
+    let hashMismatchThrew = false;
+    try {
+      await db.recordProviderCallReceiptForJob({
+        jobId: d26JobId, claimToken: d26ClaimToken, projectId: d26ProjectId,
+        externalCallId: d26PerplexityCallId, probeRunId: d26ProbeRunId, outcome: "success",
+        rawResponseBody: "the real answer text",
+        rawResponseSha256: "0".repeat(64), // deliberately wrong
+      });
+    } catch {
+      hashMismatchThrew = true;
+    }
+    check(
+      "D-026: a rawResponseSha256 that does not match sha256(rawResponseBody) throws -- real verification, never a bare trust in the caller's claimed hash",
+      hashMismatchThrew
+    );
+
+    // Same three checks, analysis leg -- confirms the mirror is not
+    // Perplexity-specific. The perplexity call above is still 'in_progress'
+    // (every attempt above threw before ever reaching its own INSERT), so
+    // the analysis call -- untouched so far -- is independently available.
+    let analysisPairingThrew = false;
+    try {
+      await db.recordAnalysisCallReceiptForJob({
+        jobId: d26JobId, claimToken: d26ClaimToken, projectId: d26ProjectId,
+        externalCallId: d26AnalysisCallId, probeRunId: d26ProbeRunId, outcome: "success",
+        responseSha256: "a".repeat(64),
+      });
+    } catch {
+      analysisPairingThrew = true;
+    }
+    check(
+      "D-026: rawContent/responseSha256 pairing is real validation on the analysis leg too",
+      analysisPairingThrew
+    );
+
+    let analysisHashMismatchThrew = false;
+    try {
+      await db.recordAnalysisCallReceiptForJob({
+        jobId: d26JobId, claimToken: d26ClaimToken, projectId: d26ProjectId,
+        externalCallId: d26AnalysisCallId, probeRunId: d26ProbeRunId, outcome: "success",
+        rawContent: "the real analysis output", responseSha256: "0".repeat(64),
+      });
+    } catch {
+      analysisHashMismatchThrew = true;
+    }
+    check(
+      "D-026: a responseSha256 that does not match sha256(rawContent) throws on the analysis leg",
+      analysisHashMismatchThrew
+    );
+  }
+
+  // -- probe_result surfaced by getProtocolExecutionJobContext, and
+  //    probe_results_probe_run_id_key parity in saveProbeResult.
+  {
+    const prFixture = await buildFailedAttemptFixture(db, "d026-probe-result");
+    // buildFailedAttemptFixture leaves its attempt reconciled 'failed' with
+    // a real probe_run already attached -- exactly what is needed here:
+    // a probe_run_id to save a probe_results row against.
+    const contextBefore = await db.getProtocolExecutionJobContext({
+      jobId: prFixture.jobId, claimToken: prFixture.claimToken, projectId: prFixture.projectId,
+    });
+    check(
+      "D-026: probeResult is null before any probe_results row has been saved for this probe_run",
+      contextBefore.probeResult === null
+    );
+
+    const probeRunId = must(contextBefore.probeRun, "d026-probe-result probe run").id;
+    const saved = await db.saveProbeResult({
+      probeRunId,
+      projectId: prFixture.projectId,
+      prompt: "fixture prompt",
+      platform: "perplexity",
+      probeMode: "simulated",
+      rawResponse: "fixture raw response",
+      clientMentioned: true,
+      clientPosition: "primary",
+      competitorsMentioned: [],
+      sourcesCited: [],
+      answerSummary: "fixture summary",
+      verdict: "won",
+      whyClientLost: "",
+    });
+
+    const contextAfter = await db.getProtocolExecutionJobContext({
+      jobId: prFixture.jobId, claimToken: prFixture.claimToken, projectId: prFixture.projectId,
+    });
+    check(
+      "D-026: probeResult is surfaced by getProtocolExecutionJobContext once a probe_results row exists for the current attempt's probe_run",
+      contextAfter.probeResult?.id === saved.id && contextAfter.probeResult?.probeRunId === probeRunId
+    );
+
+    let duplicateThrew = false;
+    try {
+      await db.saveProbeResult({
+        probeRunId,
+        projectId: prFixture.projectId,
+        prompt: "a second, duplicate attempt",
+        platform: "perplexity",
+        probeMode: "simulated",
+        rawResponse: "should never be allowed",
+        clientMentioned: false,
+        clientPosition: "absent",
+        competitorsMentioned: [],
+        sourcesCited: [],
+        answerSummary: "",
+        verdict: "lost",
+        whyClientLost: "",
+      });
+    } catch {
+      duplicateThrew = true;
+    }
+    check(
+      "D-026: a second saveProbeResult for the same probeRunId throws, mirroring the real probe_results_probe_run_id_key UNIQUE constraint",
+      duplicateThrew
+    );
+  }
+
+  // ========================================================================
+  // Part K — D-026 (correction): dataset_batch_id durable on the job.
+  // ========================================================================
+  console.log("\n[K] MemoryAdapter — D-026 correction: dataset_batch_id durable on the job");
+
+  {
+    // Zero baseline -> zero job AND zero dataset batch (no batch orphaned
+    // ahead of a refused job).
+    const zbProject = await db.createProject({ domain: "d026-zero-baseline.test" });
+    const zbQuestion = await db.createBuyerQuestion({ projectId: zbProject.id });
+    const zbVersion = await db.createBuyerQuestionVersion({
+      buyerQuestionId: zbQuestion.id, projectId: zbProject.id, versionNumber: 1,
+      promptText: "D-026 zero baseline fixture", promptHash: "b".repeat(64),
+      intentType: "comparison", commercialValue: 3, winnability: 3, priority: 10,
+      rationale: "fixture", provenance: "founder_supplied",
+    });
+    await db.approveBuyerQuestionVersion({
+      versionId: zbVersion.id, projectId: zbProject.id, approvedBy: "11111111-1111-4111-8111-111111111111",
+    });
+    const zbProtocol = await db.createProtocol({
+      ...PROTOCOL_FIXTURE, plannedBaselineRuns: 0,
+      projectId: zbProject.id, buyerQuestionVersionId: zbVersion.id,
+    });
+    await db.approveProtocol({
+      protocolId: zbProtocol.id, projectId: zbProject.id, approvedBy: "11111111-1111-4111-8111-111111111111",
+    });
+    const zbEnqueue = await db.enqueueProtocolExecutionJob({ protocolId: zbProtocol.id, projectId: zbProject.id });
+    check(
+      "D-026: NO_BASELINE_RUNS_PLANNED creates no job row",
+      zbEnqueue.outcome === "NO_BASELINE_RUNS_PLANNED" && zbEnqueue.job === null
+    );
+    const zbBatches = await db.getDatasetBatchesByProject(zbProject.id);
+    check(
+      "D-026: NO_BASELINE_RUNS_PLANNED creates no dataset_batches row either -- zero of either kind",
+      zbBatches.length === 0
+    );
+  }
+
+  {
+    // First enqueue -> exactly one job and exactly one dataset batch,
+    // created atomically, and never through createDatasetBatch (the
+    // primitive createManualScanDatasetBatch/resolveDatasetBatchForInvocation
+    // route through) -- mirrors migration 0052's own direct INSERT.
+    let createDatasetBatchCalls = 0;
+    const originalCreateDatasetBatch = db.createDatasetBatch.bind(db);
+    (db as unknown as { createDatasetBatch: typeof db.createDatasetBatch }).createDatasetBatch = async (
+      input: Parameters<typeof db.createDatasetBatch>[0]
+    ) => {
+      createDatasetBatchCalls += 1;
+      return originalCreateDatasetBatch(input);
+    };
+
+    const { projectId: firstProjectId, protocolId: firstProtocolId } =
+      await setupProjectProtocol(db, "d026-first-enqueue");
+    const firstEnqueue = await db.enqueueProtocolExecutionJob({
+      protocolId: firstProtocolId, projectId: firstProjectId,
+    });
+    const firstJob = must(firstEnqueue.job, "d026 first enqueue job");
+    check(
+      "D-026: the first enqueue for a protocol creates a job with a non-empty datasetBatchId",
+      firstEnqueue.outcome === "QUEUED" &&
+        typeof firstJob.datasetBatchId === "string" &&
+        firstJob.datasetBatchId.length > 0
+    );
+
+    const firstBatches = await db.getDatasetBatchesByProject(firstProjectId);
+    check(
+      "D-026: exactly one dataset_batches row exists after the first enqueue, and it is the job's own datasetBatchId, dataset_source_type manual_scan",
+      firstBatches.length === 1 &&
+        firstBatches[0]!.id === firstJob.datasetBatchId &&
+        firstBatches[0]!.datasetSourceType === "manual_scan"
+    );
+    check(
+      "D-026: enqueueProtocolExecutionJob never calls createDatasetBatch -- the batch is inserted directly, mirroring migration 0052's own INSERT (never createManualScanDatasetBatch/resolveDatasetBatchForInvocation)",
+      createDatasetBatchCalls === 0
+    );
+
+    (db as unknown as { createDatasetBatch: typeof db.createDatasetBatch }).createDatasetBatch =
+      originalCreateDatasetBatch;
+
+    // Replay (ALREADY_EXISTS) for the same protocol -> identical job and
+    // datasetBatchId, no second batch.
+    const replayEnqueue = await db.enqueueProtocolExecutionJob({
+      protocolId: firstProtocolId, projectId: firstProjectId,
+    });
+    check(
+      "D-026: a replay enqueue for the same protocol returns ALREADY_EXISTS with the identical job and datasetBatchId, no second batch",
+      replayEnqueue.outcome === "ALREADY_EXISTS" &&
+        replayEnqueue.job?.id === firstJob.id &&
+        replayEnqueue.job?.datasetBatchId === firstJob.datasetBatchId
+    );
+
+    // This job is left QUEUED, unclaimed -- drain it (see the identical
+    // rationale on the race-test drain below) so it cannot be silently
+    // claimed by a later, unrelated fixture in this file.
+    await db.claimProtocolExecutionJob({ workerId: "d026-first-enqueue-drain", leaseSeconds: 3600 });
+
+    // A burst of "concurrent" enqueue calls for a fresh protocol -> exactly
+    // one QUEUED, the rest ALREADY_EXISTS, all agreeing on one
+    // datasetBatchId, and exactly one dataset_batches row survives. (Real
+    // cross-process concurrency for the same protocol_id is proven safe by
+    // the FOR UPDATE lock on protocols in the disposable-Postgres runtime
+    // test, not here -- MemoryAdapter has no real concurrency to race.)
+    const { projectId: raceProjectId, protocolId: raceProtocolId } =
+      await setupProjectProtocol(db, "d026-concurrent-enqueue");
+    const raceResults = await Promise.all([
+      db.enqueueProtocolExecutionJob({ protocolId: raceProtocolId, projectId: raceProjectId }),
+      db.enqueueProtocolExecutionJob({ protocolId: raceProtocolId, projectId: raceProjectId }),
+      db.enqueueProtocolExecutionJob({ protocolId: raceProtocolId, projectId: raceProjectId }),
+    ]);
+    const raceQueued = raceResults.filter((r) => r.outcome === "QUEUED");
+    const raceAlreadyExists = raceResults.filter((r) => r.outcome === "ALREADY_EXISTS");
+    const raceDatasetIds = new Set(raceResults.map((r) => r.job?.datasetBatchId));
+    check(
+      "D-026: three concurrent enqueue calls for the same protocol produce exactly one QUEUED and the rest ALREADY_EXISTS, all agreeing on one datasetBatchId",
+      raceQueued.length === 1 && raceAlreadyExists.length === 2 && raceDatasetIds.size === 1
+    );
+    const raceBatches = await db.getDatasetBatchesByProject(raceProjectId);
+    check(
+      "D-026: concurrent enqueue never orphans a second dataset_batches row -- exactly one exists after the burst",
+      raceBatches.length === 1
+    );
+
+    // The one QUEUED job from the burst above is otherwise left behind,
+    // unclaimed -- claim_protocol_execution_job claims the oldest eligible
+    // job GLOBALLY, so later fixtures in this file would silently claim
+    // this leftover instead of their own freshly enqueued job. Drain it
+    // here (a long lease keeps it out of the candidate pool for the rest
+    // of this run) rather than let it become a hidden cross-test hazard.
+    await db.claimProtocolExecutionJob({ workerId: "d026-race-drain", leaseSeconds: 3600 });
+  }
+
+  {
+    // Slots 1 & 2, a full retry, and an analysis retry all resolve to the
+    // exact same job.datasetBatchId -- never a per-attempt or per-retry
+    // dataset. Also proves the dataset is recoverable via
+    // getProtocolExecutionJobContext while current_attempt_id is null
+    // (between baseline slots), including after a genuine reclaim by a
+    // different worker.
+    const dsProject = await db.createProject({ domain: "d026-same-batch.test" });
+    const dsQuestion = await db.createBuyerQuestion({ projectId: dsProject.id });
+    const dsVersion = await db.createBuyerQuestionVersion({
+      buyerQuestionId: dsQuestion.id, projectId: dsProject.id, versionNumber: 1,
+      promptText: "D-026 same-batch fixture", promptHash: "d".repeat(64),
+      intentType: "comparison", commercialValue: 3, winnability: 3, priority: 10,
+      rationale: "fixture", provenance: "founder_supplied",
+    });
+    await db.approveBuyerQuestionVersion({
+      versionId: dsVersion.id, projectId: dsProject.id, approvedBy: "11111111-1111-4111-8111-111111111111",
+    });
+    const dsProtocol = await db.createProtocol({
+      ...PROTOCOL_FIXTURE, plannedBaselineRuns: 2, retryCap: 2,
+      projectId: dsProject.id, buyerQuestionVersionId: dsVersion.id,
+    });
+    await db.approveProtocol({
+      protocolId: dsProtocol.id, projectId: dsProject.id, approvedBy: "11111111-1111-4111-8111-111111111111",
+    });
+
+    const dsEnqueue = await db.enqueueProtocolExecutionJob({ protocolId: dsProtocol.id, projectId: dsProject.id });
+    const dsJob = must(dsEnqueue.job, "d026 same-batch job");
+    const dsFirstClaim = await db.claimProtocolExecutionJob({ workerId: "d026-same-batch-worker-1", leaseSeconds: 300 });
+    if (dsFirstClaim.job?.id !== dsJob.id) {
+      throw new Error(
+        `d026-same-batch: claimed job id ${dsFirstClaim.job?.id} does not match freshly enqueued job id ${dsJob.id} -- a prior fixture left an eligible job behind; drain it explicitly before this fixture.`
+      );
+    }
+    let dsClaimTokenBox = must(dsFirstClaim.claimToken, "d026 same-batch claim token");
+
+    // Slot 1.
+    const dsAdmit1 = await db.admitAndReserveAttemptForJob({
+      jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, attemptKind: "baseline",
+      idempotencyKey: `${dsJob.id}:baseline:1`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
+    });
+    const dsAttempt1Id = must(dsAdmit1.attempt, "slot 1 attempt").id;
+    const dsStart1 = await db.createProbeRunAndStartAttemptForJob({
+      jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, attemptId: dsAttempt1Id,
+      platform: "perplexity", probeMode: "simulated",
+    });
+    check(
+      "D-026: slot 1's probe_run carries the job's own datasetBatchId as its datasetId",
+      dsStart1.probeRun?.datasetId === dsJob.datasetBatchId
+    );
+
+    // Passing a caller-supplied dataset at runtime (bypassing the type
+    // system, which no longer has a field for one) has no effect -- the
+    // implementation reads job.datasetBatchId only, never input.datasetId.
+    const dsAttempt1bStart = await db.createProbeRunAndStartAttemptForJob(
+      { jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, attemptId: dsAttempt1Id,
+        platform: "perplexity", probeMode: "simulated",
+        ...( { datasetId: "00000000-0000-4000-8000-000000000000", datasetSourceType: "manual_scan" } as Record<string, unknown> )
+      } as CreateProbeRunAndStartAttemptForJobInput
+    );
+    check(
+      "D-026: a runtime-injected, out-of-type datasetId is ignored entirely -- ALREADY_STARTED still reports the job's real datasetBatchId, never the injected value",
+      dsAttempt1bStart.outcome === "ALREADY_STARTED" && dsAttempt1bStart.probeRun?.datasetId === dsJob.datasetBatchId
+    );
+
+    // Fail slot 1's root, full-retry it -- the child's probe_run must
+    // still carry the same job datasetBatchId.
+    const dsPerplexityCall1Id = must(dsAdmit1.perplexityCall, "slot 1 perplexity call").id;
+    const dsAnalysisCall1Id = must(dsAdmit1.analysisCall, "slot 1 analysis call").id;
+    const dsProbeRun1Id = must(dsStart1.probeRun, "slot 1 probe run").id;
+    await db.markExternalCallSentForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsPerplexityCall1Id, probeRunId: dsProbeRun1Id });
+    await db.recordProviderCallReceiptForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsPerplexityCall1Id, probeRunId: dsProbeRun1Id, outcome: "provider_error" });
+    await db.markExternalCallSentForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsAnalysisCall1Id, probeRunId: dsProbeRun1Id });
+    await db.recordAnalysisCallReceiptForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsAnalysisCall1Id, probeRunId: dsProbeRun1Id, outcome: "provider_error" });
+    await db.reconcileAttemptForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, attemptId: dsAttempt1Id, status: "failed" });
+
+    const dsFullRetry = await db.retryFullAttemptForJob({
+      jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id,
+      sourceAttemptId: dsAttempt1Id, perplexityReservedCostUsd: 0.02, analysisReservedCostUsd: 0.02,
+    });
+    const dsChildAttemptId = must(dsFullRetry.attempt, "full retry child attempt").id;
+    const dsChildStart = await db.createProbeRunAndStartAttemptForJob({
+      jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, attemptId: dsChildAttemptId,
+      platform: "perplexity", probeMode: "simulated",
+    });
+    check(
+      "D-026: a full retry's child attempt starts a probe_run under the exact same job datasetBatchId, never a fresh one",
+      dsChildStart.probeRun?.datasetId === dsJob.datasetBatchId
+    );
+
+    await completeBaselineSlot(
+      dsJob.id, dsClaimTokenBox, dsProject.id, dsChildAttemptId,
+      must(dsFullRetry.perplexityCall, "full retry perplexity call").id,
+      must(dsFullRetry.analysisCall, "full retry analysis call").id
+    );
+    const dsComplete1 = await db.completeProtocolExecutionJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id });
+    check(
+      "D-026: NEXT_BASELINE_REQUIRED still returns the job with its datasetBatchId intact, current_attempt_id null",
+      dsComplete1.outcome === "NEXT_BASELINE_REQUIRED" &&
+        dsComplete1.job?.currentAttemptId === null &&
+        dsComplete1.job?.datasetBatchId === dsJob.datasetBatchId
+    );
+
+    // Dataset recoverable via get_protocol_execution_job_context WHILE
+    // current_attempt_id is null -- exactly the gap this correction closes.
+    const dsContextBetweenSlots = await db.getProtocolExecutionJobContext({
+      jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id,
+    });
+    check(
+      "D-026: getProtocolExecutionJobContext exposes the dataset via job.datasetBatchId even while current_attempt_id is null (between baseline slots)",
+      dsContextBetweenSlots.currentAttempt === null &&
+        dsContextBetweenSlots.job?.datasetBatchId === dsJob.datasetBatchId
+    );
+
+    // A genuine reclaim by a DIFFERENT worker (lease forced expired, then
+    // re-claimed) while current_attempt_id is still null -- the dataset
+    // must still be recoverable under the new claim token.
+    forceLeaseExpired(dsJob.id);
+    const dsReclaim = await db.claimProtocolExecutionJob({ workerId: "d026-same-batch-worker-2", leaseSeconds: 300 });
+    check(
+      "D-026: the job is genuinely reclaimable by a different worker while between baseline slots",
+      dsReclaim.outcome === "CLAIMED" && dsReclaim.job?.id === dsJob.id
+    );
+    dsClaimTokenBox = must(dsReclaim.claimToken, "d026 reclaim token");
+    const dsContextAfterReclaim = await db.getProtocolExecutionJobContext({
+      jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id,
+    });
+    check(
+      "D-026: after a genuine reclaim by a new worker, with current_attempt_id still null, the dataset is still recoverable via job.datasetBatchId",
+      dsContextAfterReclaim.currentAttempt === null &&
+        dsContextAfterReclaim.job?.datasetBatchId === dsJob.datasetBatchId
+    );
+
+    // Slot 2, under the new claim token.
+    const dsAdmit2 = await db.admitAndReserveAttemptForJob({
+      jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, attemptKind: "baseline",
+      idempotencyKey: `${dsJob.id}:baseline:2`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
+    });
+    const dsAttempt2Id = must(dsAdmit2.attempt, "slot 2 attempt").id;
+    const dsStart2 = await db.createProbeRunAndStartAttemptForJob({
+      jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, attemptId: dsAttempt2Id,
+      platform: "perplexity", probeMode: "simulated",
+    });
+    check(
+      "D-026: slot 2's probe_run also carries the exact same job datasetBatchId as slot 1",
+      dsStart2.probeRun?.datasetId === dsJob.datasetBatchId
+    );
+
+    // Analysis retry: Perplexity success, analysis provider_error, then
+    // retry the analysis generation. The dataset was already set by the
+    // ORIGINAL createProbeRunAndStartAttemptForJob call above and is never
+    // re-derived by an analysis-only retry -- confirm it is still the
+    // job's own batch, read back via the still-current attempt's probe_run.
+    const dsPerplexityCall2Id = must(dsAdmit2.perplexityCall, "slot 2 perplexity call").id;
+    const dsAnalysisCall2Id = must(dsAdmit2.analysisCall, "slot 2 analysis call").id;
+    const dsProbeRun2Id = must(dsStart2.probeRun, "slot 2 probe run").id;
+    await db.markExternalCallSentForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsPerplexityCall2Id, probeRunId: dsProbeRun2Id });
+    await db.recordProviderCallReceiptForJob({
+      jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsPerplexityCall2Id, probeRunId: dsProbeRun2Id, outcome: "success",
+      rawResponseSha256: sha256Hex("d026-same-batch-answer"), rawResponseBody: "d026-same-batch-answer",
+    });
+    await db.markExternalCallSentForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsAnalysisCall2Id, probeRunId: dsProbeRun2Id });
+    await db.recordAnalysisCallReceiptForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsAnalysisCall2Id, probeRunId: dsProbeRun2Id, outcome: "provider_error" });
+
+    const dsAnalysisRetry = await db.retryAnalysisGenerationForJob({
+      jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id,
+      sourceExternalCallId: dsAnalysisCall2Id, reservedCostUsd: 0.02,
+    });
+    const dsContextAfterAnalysisRetry = await db.getProtocolExecutionJobContext({
+      jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id,
+    });
+    check(
+      "D-026: an analysis-only retry reuses the same probe_run (and therefore the same job datasetBatchId) -- it never creates, or needs, a new dataset",
+      dsAnalysisRetry.outcome === "RESERVED" &&
+        dsContextAfterAnalysisRetry.probeRun?.id === dsProbeRun2Id &&
+        dsContextAfterAnalysisRetry.probeRun?.datasetId === dsJob.datasetBatchId
     );
   }
 
@@ -1122,13 +1637,17 @@ async function main(): Promise<void> {
   };
   const supaStart = await supabaseAdapter.createProbeRunAndStartAttemptForJob({
     jobId: "j1", claimToken: "tok", projectId: "p1", attemptId: "a1",
-    platform: "perplexity", probeMode: "simulated", datasetId: "d1", datasetSourceType: "manual_scan",
+    platform: "perplexity", probeMode: "simulated",
   });
   check(
     "Supabase createProbeRunAndStartAttemptForJob: correct RPC name, probeRun mapped, never calls start_attempt_for_job",
     rpcCalls[0]!.fn === "create_probe_run_and_start_attempt_for_job" &&
       supaStart.outcome === "STARTED" &&
       supaStart.probeRun?.id === "run1"
+  );
+  check(
+    "D-026 (correction): Supabase createProbeRunAndStartAttemptForJob no longer forwards a caller-supplied dataset -- p_dataset_id/p_dataset_source_type are absent from the RPC call entirely",
+    !("p_dataset_id" in rpcCalls[0]!.args) && !("p_dataset_source_type" in rpcCalls[0]!.args)
   );
 
   rpcCalls = [];
@@ -1148,13 +1667,14 @@ async function main(): Promise<void> {
     data: {
       status: "RECEIPTED",
       external_call: { ...CALL_ROW("perplexity"), status: "completed", actual_cost_usd: null, cost_basis: null },
-      receipt: { id: "r1", project_id: "p1", external_call_id: "call-perplexity", probe_run_id: "run1", outcome: "success", http_status: 200, provider_request_id: "req1", raw_response_sha256: "e".repeat(64), latency_ms: 400, received_at: "2026-01-01T00:00:02.000Z", created_at: "2026-01-01T00:00:02.000Z" },
+      receipt: { id: "r1", project_id: "p1", external_call_id: "call-perplexity", probe_run_id: "run1", outcome: "success", http_status: 200, provider_request_id: "req1", raw_response_sha256: "e".repeat(64), latency_ms: 400, received_at: "2026-01-01T00:00:02.000Z", created_at: "2026-01-01T00:00:02.000Z", raw_response_body: "fixture perplexity answer" },
     },
     error: null,
   };
   const supaReceiptP = await supabaseAdapter.recordProviderCallReceiptForJob({
     jobId: "j1", claimToken: "tok", projectId: "p1", externalCallId: "call-perplexity", probeRunId: "run1",
     outcome: "success", httpStatus: 200, providerRequestId: "req1", rawResponseSha256: "e".repeat(64), latencyMs: 400,
+    rawResponseBody: "fixture perplexity answer",
     // D-023 §3: no real cost known here -- costBasis intentionally omitted.
   });
   check(
@@ -1165,12 +1685,18 @@ async function main(): Promise<void> {
       supaReceiptP.outcome === "RECEIPTED" &&
       supaReceiptP.receipt?.providerRequestId === "req1"
   );
+  check(
+    "D-026: Supabase recordProviderCallReceiptForJob forwards p_raw_response_body and maps rawResponseBody back from the receipt row",
+    rpcCalls[0]!.args.p_raw_response_body === "fixture perplexity answer" &&
+      supaReceiptP.receipt?.rawResponseBody === "fixture perplexity answer"
+  );
 
   rpcCalls = [];
-  nextRpcResponse = { data: { status: "RECEIPTED", external_call: { ...CALL_ROW("analysis"), status: "completed" }, receipt: { id: "r2", project_id: "p1", external_call_id: "call-analysis", probe_run_id: "run1", outcome: "success", provider: "openai", model: "gpt-4o-mini", used_mock: false, request_sha256: "f".repeat(64), response_sha256: "g".repeat(64), latency_ms: 300, received_at: "2026-01-01T00:00:03.000Z", created_at: "2026-01-01T00:00:03.000Z" } }, error: null };
+  nextRpcResponse = { data: { status: "RECEIPTED", external_call: { ...CALL_ROW("analysis"), status: "completed" }, receipt: { id: "r2", project_id: "p1", external_call_id: "call-analysis", probe_run_id: "run1", outcome: "success", provider: "openai", model: "gpt-4o-mini", used_mock: false, request_sha256: "f".repeat(64), response_sha256: "g".repeat(64), latency_ms: 300, received_at: "2026-01-01T00:00:03.000Z", created_at: "2026-01-01T00:00:03.000Z", raw_content: "fixture analysis output" } }, error: null };
   const supaReceiptA = await supabaseAdapter.recordAnalysisCallReceiptForJob({
     jobId: "j1", claimToken: "tok", projectId: "p1", externalCallId: "call-analysis", probeRunId: "run1",
     outcome: "success", provider: "openai", model: "gpt-4o-mini", requestSha256: "f".repeat(64), responseSha256: "g".repeat(64), latencyMs: 300,
+    rawContent: "fixture analysis output",
   });
   check(
     "Supabase recordAnalysisCallReceiptForJob: correct RPC name and full param set",
@@ -1178,6 +1704,11 @@ async function main(): Promise<void> {
       rpcCalls[0]!.args.p_provider === "openai" &&
       rpcCalls[0]!.args.p_request_sha256 === "f".repeat(64) &&
       supaReceiptA.receipt?.requestSha256 === "f".repeat(64)
+  );
+  check(
+    "D-026: Supabase recordAnalysisCallReceiptForJob forwards p_raw_content and maps rawContent back from the receipt row",
+    rpcCalls[0]!.args.p_raw_content === "fixture analysis output" &&
+      supaReceiptA.receipt?.rawContent === "fixture analysis output"
   );
 
   // D-023 §3: an explicit, real, approved cost basis IS forwarded (never
@@ -1290,6 +1821,13 @@ async function main(): Promise<void> {
       status: "OK", job: JOB_ROW, protocol: null, current_attempt: ATTEMPT_ROW,
       external_calls: [CALL_ROW("perplexity"), CALL_ROW("analysis")],
       provider_receipts: [], analysis_receipts: [], probe_run: null,
+      probe_result: {
+        id: "pr1", probe_run_id: "run1", project_id: "p1", generated_prompt_id: null,
+        prompt: "fixture prompt", platform: "perplexity", probe_mode: "simulated",
+        raw_response: "fixture raw response", client_mentioned: true, client_position: "primary",
+        competitors_mentioned: [], sources_cited: [], answer_summary: "fixture summary",
+        verdict: "won", why_client_lost: "", created_at: "2026-01-01T00:00:05.000Z",
+      },
     },
     error: null,
   };
@@ -1302,6 +1840,27 @@ async function main(): Promise<void> {
       supaCtx.outcome === "OK" &&
       supaCtx.externalCalls.length === 2 &&
       supaCtx.externalCalls[0]!.callKind === "perplexity"
+  );
+  check(
+    "D-026: Supabase getProtocolExecutionJobContext maps probe_result via the pre-existing mapProbeResult/ProbeResultDbRow helpers",
+    supaCtx.probeResult?.id === "pr1" && supaCtx.probeResult?.probeRunId === "run1" && supaCtx.probeResult?.verdict === "won"
+  );
+
+  rpcCalls = [];
+  nextRpcResponse = {
+    data: {
+      status: "OK", job: JOB_ROW, protocol: null, current_attempt: ATTEMPT_ROW,
+      external_calls: [], provider_receipts: [], analysis_receipts: [], probe_run: null,
+      probe_result: null,
+    },
+    error: null,
+  };
+  const supaCtxNoResult = await supabaseAdapter.getProtocolExecutionJobContext({
+    jobId: "j1", claimToken: "tok", projectId: "p1",
+  });
+  check(
+    "D-026: Supabase getProtocolExecutionJobContext maps a null probe_result to null, never a synthesized row",
+    supaCtxNoResult.probeResult === null
   );
 
   rpcCalls = [];
@@ -1413,7 +1972,6 @@ async function buildFailedAttemptFixture(
   const start = await db.createProbeRunAndStartAttemptForJob({
     jobId, claimToken, projectId, attemptId: attempt.id,
     platform: "perplexity", probeMode: "simulated",
-    datasetId: "44444444-4444-4444-8444-444444444444", datasetSourceType: "manual_scan",
   });
   const probeRunId = must(start.probeRun, `${tag} probe run`).id;
   await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: perplexityCall.id, probeRunId });
@@ -1445,12 +2003,12 @@ async function buildAnalysisRetryFixture(
   const start = await db.createProbeRunAndStartAttemptForJob({
     jobId, claimToken, projectId, attemptId: attempt.id,
     platform: "perplexity", probeMode: "simulated",
-    datasetId: "44444444-4444-4444-8444-444444444444", datasetSourceType: "manual_scan",
   });
   const probeRunId = must(start.probeRun, `${tag} probe run`).id;
   await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: perplexityCall.id, probeRunId });
   await db.recordProviderCallReceiptForJob({
     jobId, claimToken, projectId, externalCallId: perplexityCall.id, probeRunId, outcome: "success",
+    rawResponseSha256: sha256Hex(`${tag}-perplexity-answer`), rawResponseBody: `${tag}-perplexity-answer`,
   });
   await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: analysisCall.id, probeRunId });
   await db.recordAnalysisCallReceiptForJob({
@@ -1477,7 +2035,6 @@ async function buildNeedsReviewFixture(
   const start = await db.createProbeRunAndStartAttemptForJob({
     jobId, claimToken, projectId, attemptId: attempt.id,
     platform: "perplexity", probeMode: "simulated",
-    datasetId: "44444444-4444-4444-8444-444444444444", datasetSourceType: "manual_scan",
   });
   const probeRunId = must(start.probeRun, `${tag} probe run`).id;
   await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: perplexityCall.id, probeRunId });
@@ -1504,7 +2061,6 @@ async function buildAmbiguousFixture(
   const start = await db.createProbeRunAndStartAttemptForJob({
     jobId, claimToken, projectId, attemptId: attempt.id,
     platform: "perplexity", probeMode: "simulated",
-    datasetId: "44444444-4444-4444-8444-444444444444", datasetSourceType: "manual_scan",
   });
   const probeRunId = must(start.probeRun, `${tag} probe run`).id;
   // Sent, then never receipted -- exactly the crash/reclaim shape.

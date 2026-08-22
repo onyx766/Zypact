@@ -1340,6 +1340,18 @@ export interface ProtocolExecutionJob {
   failureReason: string | null;
   createdAt: string;
   updatedAt: string;
+  /**
+   * D-026 (correction) — a durable attribute of the job itself, chosen
+   * exactly once, atomically with the job, by `enqueueProtocolExecutionJob`
+   * (migration 0052). Never null: the column carries a real NOT NULL
+   * constraint, project-scoped by a composite FK to
+   * `dataset_batches (id, project_id)`, and UNIQUE — one batch never
+   * serves two jobs. This is the sole source of dataset identity for
+   * every baseline slot, retry, reclaim, and reactivation under this
+   * job; `createProbeRunAndStartAttemptForJob` derives the dataset from
+   * this field alone and no longer accepts one as an argument.
+   */
+  datasetBatchId: string;
 }
 
 export type ExternalCallKind = "perplexity" | "analysis";
@@ -1387,10 +1399,10 @@ export type ExternalCallReceiptOutcome =
   | "provider_outcome_unknown";
 
 /**
- * `provider_call_receipts` (migration 0050). Note there is no
- * raw-request-hash column here — only the response is hashed at the
- * receipt level for the Perplexity leg (D-023 §3 is explicit that this
- * decision does not add one).
+ * `provider_call_receipts` (migration 0050, extended by D-026/0052).
+ * Note there is no raw-request-hash column here — only the response is
+ * hashed at the receipt level for the Perplexity leg (D-023 §3 is
+ * explicit that this decision does not add one).
  */
 export interface ProviderCallReceipt {
   id: string;
@@ -1404,11 +1416,24 @@ export interface ProviderCallReceipt {
   latencyMs: number | null;
   receivedAt: string;
   createdAt: string;
+  /**
+   * D-026 — the exact response text, paired with rawResponseSha256 (both
+   * null or both set; a real CHECK constraint verifies the hash actually
+   * matches this content, and outcome='success' requires it). Lets a
+   * crash before the analysis leg replay Perplexity's answer without a
+   * second live call. Service-role only — never surfaced in the
+   * monitoring view or a client-facing response.
+   */
+  rawResponseBody: string | null;
 }
 
 export type AnalysisCallReceiptProvider = "openai" | "anthropic" | "mock";
 
-/** `analysis_call_receipts` (migration 0050) — unlike the Perplexity leg, both request and response hashes exist here. */
+/**
+ * `analysis_call_receipts` (migration 0050, extended by D-026/0052) —
+ * unlike the Perplexity leg, both request and response hashes exist
+ * here.
+ */
 export interface AnalysisCallReceipt {
   id: string;
   projectId: string;
@@ -1423,6 +1448,17 @@ export interface AnalysisCallReceipt {
   latencyMs: number | null;
   receivedAt: string;
   createdAt: string;
+  /**
+   * D-026 — the exact analysis output text, paired with responseSha256
+   * (both null or both set; a real CHECK constraint verifies the hash
+   * matches; outcome='success' requires it). Lets a crash before
+   * `saveProbeResult` replay the agent's output without a second live
+   * LLM call. Pairs only with responseSha256 — requestSha256 stays
+   * hash-only in this tranche, since `callModel()` does not yet expose
+   * the exact outbound bytes it sends (a call-model.ts change, out of
+   * scope here). Service-role only.
+   */
+  rawContent: string | null;
 }
 
 export type OperatorActionType =
@@ -1566,6 +1602,15 @@ export type CreateProbeRunAndStartAttemptForJobOutcome =
   | "JOB_NOT_FOUND"
   | "JOB_NOT_OWNED";
 
+/**
+ * D-026 (correction) — `datasetId`/`datasetSourceType` are deliberately
+ * absent here: migration 0052 removed both parameters from
+ * `create_probe_run_and_start_attempt_for_job`'s signature. The dataset
+ * is derived exclusively from `job.datasetBatchId`; no caller (worker)
+ * may supply, or override, one. A caller must never call
+ * `resolveDatasetBatchForInvocation`/`createManualScanDatasetBatch` to
+ * produce a value for this input — there is no field left to put it in.
+ */
 export interface CreateProbeRunAndStartAttemptForJobInput {
   jobId: string;
   claimToken: string;
@@ -1573,8 +1618,6 @@ export interface CreateProbeRunAndStartAttemptForJobInput {
   attemptId: string;
   platform: string;
   probeMode: ProbeMode;
-  datasetId: string;
-  datasetSourceType: DatasetSourceType;
 }
 
 export interface CreateProbeRunAndStartAttemptForJobResult {
@@ -1627,6 +1670,13 @@ export interface RecordProviderCallReceiptForJobInput {
   /** D-023 §3 — populate only when a real cost is known; leave both this and costBasis unset otherwise. */
   actualCostUsd?: number | null;
   costBasis?: CostBasis | null;
+  /**
+   * D-026 — the exact response text. Must be paired with
+   * rawResponseSha256 (both set or both omitted) and is mandatory when
+   * outcome is 'success'; the real SQL CHECK constraint rejects a
+   * mismatched hash/content pair, not merely application discipline.
+   */
+  rawResponseBody?: string | null;
 }
 
 export interface RecordProviderCallReceiptForJobResult {
@@ -1653,6 +1703,14 @@ export interface RecordAnalysisCallReceiptForJobInput {
   /** D-023 §3 — populate only when a real cost is known; leave both this and costBasis unset otherwise. */
   actualCostUsd?: number | null;
   costBasis?: CostBasis | null;
+  /**
+   * D-026 — the exact analysis output text. Must be paired with
+   * responseSha256 (both set or both omitted) and is mandatory when
+   * outcome is 'success'; the real SQL CHECK constraint rejects a
+   * mismatched hash/content pair. Pairs only with responseSha256 — there
+   * is no equivalent field for requestSha256 in this tranche.
+   */
+  rawContent?: string | null;
 }
 
 export interface RecordAnalysisCallReceiptForJobResult {
@@ -1894,6 +1952,15 @@ export interface GetProtocolExecutionJobContextResult {
    * JOB_NOT_OWNED).
    */
   completedBaselineSlots: number | null;
+  /**
+   * D-026 — the current attempt's `probe_results` row, if one has
+   * already been saved for its `probe_run_id` (looked up under this
+   * same fenced snapshot, never a separate round trip). Null whenever
+   * there is no current attempt, no probe_run yet, or no probe_result
+   * saved yet — never an error. `probe_results_probe_run_id_key` (0052)
+   * guarantees at most one row per probe_run_id, so this is unambiguous.
+   */
+  probeResult: ProbeResult | null;
 }
 
 export type MarkProtocolExecutionJobNeedsReviewForAmbiguityOutcome =

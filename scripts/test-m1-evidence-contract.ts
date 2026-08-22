@@ -693,8 +693,14 @@ async function applicationLayerChecks(): Promise<void> {
   }
 
   console.log("\nPre-M1 rows — no fabricated hash");
+  const legacyRun = await db.createProbeRun(
+    project.id,
+    "perplexity",
+    "simulated",
+    "succeeded",
+  );
   const legacySaved = await db.saveProbeResult({
-    probeRunId: run.id,
+    probeRunId: legacyRun.id,
     projectId: project.id,
     prompt: "legacy pasted answer",
     platform: "perplexity",

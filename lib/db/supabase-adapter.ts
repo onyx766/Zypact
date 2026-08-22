@@ -1274,6 +1274,8 @@ interface ProtocolExecutionJobDbRow {
   failure_reason: string | null;
   created_at: string;
   updated_at: string;
+  /** D-026 (correction, migration 0052) — real, NOT NULL on every row this column applies to; no fallback needed. */
+  dataset_batch_id: string;
 }
 
 function mapProtocolExecutionJob(r: ProtocolExecutionJobDbRow): ProtocolExecutionJob {
@@ -1293,6 +1295,7 @@ function mapProtocolExecutionJob(r: ProtocolExecutionJobDbRow): ProtocolExecutio
     failureReason: r.failure_reason,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    datasetBatchId: r.dataset_batch_id,
   };
 }
 
@@ -1351,6 +1354,8 @@ interface ProviderCallReceiptDbRow {
   latency_ms: number | null;
   received_at: string;
   created_at: string;
+  /** D-026 (migration 0052) — absent (undefined) on rows returned by RPCs that predate this column; normalized to null. */
+  raw_response_body?: string | null;
 }
 
 function mapProviderCallReceiptNullable(
@@ -1369,6 +1374,7 @@ function mapProviderCallReceiptNullable(
     latencyMs: r.latency_ms,
     receivedAt: r.received_at,
     createdAt: r.created_at,
+    rawResponseBody: r.raw_response_body ?? null,
   };
 }
 
@@ -1386,6 +1392,8 @@ interface AnalysisCallReceiptDbRow {
   latency_ms: number | null;
   received_at: string;
   created_at: string;
+  /** D-026 (migration 0052) — absent (undefined) on rows returned by RPCs that predate this column; normalized to null. */
+  raw_content?: string | null;
 }
 
 function mapAnalysisCallReceiptNullable(
@@ -1406,6 +1414,7 @@ function mapAnalysisCallReceiptNullable(
     latencyMs: r.latency_ms,
     receivedAt: r.received_at,
     createdAt: r.created_at,
+    rawContent: r.raw_content ?? null,
   };
 }
 
@@ -3299,6 +3308,10 @@ export const supabaseAdapter: DbAdapter = {
   async createProbeRunAndStartAttemptForJob(
     input: CreateProbeRunAndStartAttemptForJobInput
   ): Promise<CreateProbeRunAndStartAttemptForJobResult> {
+    // D-026 (correction) — migration 0052 removed p_dataset_id/
+    // p_dataset_source_type from this RPC's signature entirely; the
+    // dataset is derived server-side from the job's own
+    // dataset_batch_id. No dataset argument is forwarded here.
     const { data, error } = await getClient().rpc(
       "create_probe_run_and_start_attempt_for_job",
       {
@@ -3308,8 +3321,6 @@ export const supabaseAdapter: DbAdapter = {
         p_attempt_id: input.attemptId,
         p_platform: input.platform,
         p_probe_mode: input.probeMode,
-        p_dataset_id: input.datasetId,
-        p_dataset_source_type: input.datasetSourceType,
       }
     );
     if (error) throw error;
@@ -3378,6 +3389,7 @@ export const supabaseAdapter: DbAdapter = {
       p_latency_ms: input.latencyMs ?? null,
       p_actual_cost_usd: rpcActualCostUsd,
       p_cost_basis: rpcCostBasis,
+      p_raw_response_body: input.rawResponseBody ?? null,
     });
     if (error) throw error;
     const row = Array.isArray(data) ? data[0] : data;
@@ -3420,6 +3432,7 @@ export const supabaseAdapter: DbAdapter = {
       p_latency_ms: input.latencyMs ?? null,
       p_actual_cost_usd: rpcActualCostUsd,
       p_cost_basis: rpcCostBasis,
+      p_raw_content: input.rawContent ?? null,
     });
     if (error) throw error;
     const row = Array.isArray(data) ? data[0] : data;
@@ -3649,6 +3662,7 @@ export const supabaseAdapter: DbAdapter = {
         .filter((r): r is AnalysisCallReceipt => r !== null),
       probeRun: mapProbeRunNullable(row.probe_run as ProbeRunDbRow | null),
       completedBaselineSlots: (row.completed_baseline_slots as number | null) ?? null,
+      probeResult: row.probe_result ? mapProbeResult(row.probe_result as ProbeResultDbRow) : null,
     };
   },
 

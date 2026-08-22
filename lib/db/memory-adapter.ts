@@ -1568,6 +1568,16 @@ export const memoryAdapter: DbAdapter = {
     };
     const store = getStore();
     const list = store.probeResultsByProject.get(input.projectId) ?? [];
+    // D-026: mirrors probe_results_probe_run_id_key (0052) — a real
+    // UNIQUE(probe_run_id) constraint, not merely a convention. Without
+    // this check MemoryAdapter would silently allow a second
+    // probe_results row for the same probe_run_id, something the real
+    // database now rejects outright.
+    if (list.some((existing) => existing.probeRunId === row.probeRunId)) {
+      throw new Error(
+        `saveProbeResult: a probe_results row already exists for probeRunId ${row.probeRunId} (probe_results_probe_run_id_key)`
+      );
+    }
     list.push(row);
     store.probeResultsByProject.set(input.projectId, list);
     return row;
@@ -3178,6 +3188,25 @@ export const memoryAdapter: DbAdapter = {
     }
 
     const now = nowIso();
+
+    // D-026 (correction) — the dataset batch is created directly here,
+    // atomically with the job, mirroring migration 0052's own INSERT
+    // into dataset_batches (never through createDatasetBatch/
+    // createManualScanDatasetBatch/resolveDatasetBatchForInvocation,
+    // which remain reserved for the snapshot-request and legacy-backfill
+    // writers this path has nothing to do with). manual_scan is the only
+    // source type M5 can reach here, matching the SQL exactly.
+    const datasetBatch: DatasetBatch = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      datasetSourceType: "manual_scan",
+      snapshotRequestId: null,
+      backfillKey: null,
+      note: null,
+      createdAt: now,
+    };
+    store.datasetBatches.set(datasetBatch.id, datasetBatch);
+
     const job: ProtocolExecutionJob = {
       id: randomUUID(),
       projectId: input.projectId,
@@ -3194,6 +3223,7 @@ export const memoryAdapter: DbAdapter = {
       failureReason: null,
       createdAt: now,
       updatedAt: now,
+      datasetBatchId: datasetBatch.id,
     };
     store.protocolExecutionJobs.set(job.id, job);
     return { outcome: "QUEUED", job: { ...job } };
@@ -3427,6 +3457,19 @@ export const memoryAdapter: DbAdapter = {
       return { outcome: "ATTEMPT_TERMINAL", attempt: { ...attempt }, probeRun: null };
     }
 
+    // D-026 (correction) — the dataset is derived exclusively from
+    // job.datasetBatchId (set once, atomically, by
+    // enqueueProtocolExecutionJob); no caller-supplied dataset argument
+    // exists on this input anymore. job.datasetBatchId is never null
+    // (mirrors the SQL NOT NULL + composite FK), so this lookup is
+    // defensive, not a real branch.
+    const datasetBatch = store.datasetBatches.get(job.datasetBatchId);
+    if (!datasetBatch || datasetBatch.projectId !== input.projectId) {
+      throw new Error(
+        `dataset_batch_not_found_for_job: job ${job.id} references dataset_batch_id ${job.datasetBatchId}, which does not exist or is not project-scoped`
+      );
+    }
+
     const now = nowIso();
     const run: ProbeRun = {
       id: randomUUID(),
@@ -3435,8 +3478,8 @@ export const memoryAdapter: DbAdapter = {
       status: "pending",
       probeMode: input.probeMode,
       snapshotRequestId: null,
-      datasetId: input.datasetId,
-      datasetSourceType: input.datasetSourceType,
+      datasetId: datasetBatch.id,
+      datasetSourceType: datasetBatch.datasetSourceType,
       createdAt: now,
     };
     store.probeRuns.set(run.id, run);
@@ -3515,6 +3558,29 @@ export const memoryAdapter: DbAdapter = {
       return { outcome: "CONFLICT", externalCall: { ...call }, receipt: null };
     }
 
+    // D-026: mirrors provider_call_receipts_content_hash_pairing_check /
+    // _success_requires_content_check / _content_hash_match_check (0052)
+    // — real validation, not merely documented discipline, so a caller
+    // bug (mismatched hash, or success with no body) fails the same way
+    // here as it would against the real database.
+    const rawResponseBody = input.rawResponseBody ?? null;
+    const rawResponseSha256 = input.rawResponseSha256 ?? null;
+    if ((rawResponseBody === null) !== (rawResponseSha256 === null)) {
+      throw new Error(
+        "invalid_record_provider_call_receipt_for_job_args: rawResponseBody and rawResponseSha256 must be paired"
+      );
+    }
+    if (input.outcome === "success" && rawResponseBody === null) {
+      throw new Error(
+        "invalid_record_provider_call_receipt_for_job_args: outcome 'success' requires rawResponseBody"
+      );
+    }
+    if (rawResponseBody !== null && rawResponseSha256 !== null && sha256Hex(rawResponseBody) !== rawResponseSha256) {
+      throw new Error(
+        "invalid_record_provider_call_receipt_for_job_args: rawResponseSha256 does not match sha256(rawResponseBody)"
+      );
+    }
+
     // D-023 §3: "unknown" is application-level only in Stage A — never
     // written where the real schema's CHECK would reject it (see the
     // Supabase adapter's identical rule).
@@ -3531,10 +3597,11 @@ export const memoryAdapter: DbAdapter = {
       outcome: input.outcome,
       httpStatus: input.httpStatus ?? null,
       providerRequestId: input.providerRequestId ?? null,
-      rawResponseSha256: input.rawResponseSha256 ?? null,
+      rawResponseSha256,
       latencyMs: input.latencyMs ?? null,
       receivedAt: now,
       createdAt: now,
+      rawResponseBody,
     };
     store.providerCallReceipts.set(receipt.id, receipt);
 
@@ -3587,6 +3654,28 @@ export const memoryAdapter: DbAdapter = {
       return { outcome: "CONFLICT", externalCall: { ...call }, receipt: null };
     }
 
+    // D-026: mirrors analysis_call_receipts_content_hash_pairing_check /
+    // _success_requires_content_check / _content_hash_match_check (0052).
+    // rawContent pairs only with responseSha256 — requestSha256 has no
+    // equivalent content field in this tranche.
+    const rawContent = input.rawContent ?? null;
+    const responseSha256 = input.responseSha256 ?? null;
+    if ((rawContent === null) !== (responseSha256 === null)) {
+      throw new Error(
+        "invalid_record_analysis_call_receipt_for_job_args: rawContent and responseSha256 must be paired"
+      );
+    }
+    if (input.outcome === "success" && rawContent === null) {
+      throw new Error(
+        "invalid_record_analysis_call_receipt_for_job_args: outcome 'success' requires rawContent"
+      );
+    }
+    if (rawContent !== null && responseSha256 !== null && sha256Hex(rawContent) !== responseSha256) {
+      throw new Error(
+        "invalid_record_analysis_call_receipt_for_job_args: responseSha256 does not match sha256(rawContent)"
+      );
+    }
+
     const costBasis =
       input.costBasis === "measured" || input.costBasis === "estimated" ? input.costBasis : null;
     const actualCostUsd = costBasis === null ? null : input.actualCostUsd ?? null;
@@ -3602,10 +3691,11 @@ export const memoryAdapter: DbAdapter = {
       model: input.model ?? null,
       usedMock: input.usedMock ?? false,
       requestSha256: input.requestSha256 ?? null,
-      responseSha256: input.responseSha256 ?? null,
+      responseSha256,
       latencyMs: input.latencyMs ?? null,
       receivedAt: now,
       createdAt: now,
+      rawContent,
     };
     store.analysisCallReceipts.set(receipt.id, receipt);
 
@@ -4361,6 +4451,7 @@ export const memoryAdapter: DbAdapter = {
         analysisReceipts: [],
         probeRun: null,
         completedBaselineSlots: null,
+        probeResult: null,
       };
     }
     if (!jobFencingOk(job, input.claimToken)) {
@@ -4374,6 +4465,7 @@ export const memoryAdapter: DbAdapter = {
         analysisReceipts: [],
         probeRun: null,
         completedBaselineSlots: null,
+        probeResult: null,
       };
     }
 
@@ -4396,6 +4488,18 @@ export const memoryAdapter: DbAdapter = {
     const probeRun =
       currentAttempt && currentAttempt.probeRunId
         ? store.probeRuns.get(currentAttempt.probeRunId) ?? null
+        : null;
+
+    // D-026 — the current attempt's probe_results row, if one has
+    // already been saved for its probe_run_id. Real database parity:
+    // saveProbeResult (below) throws on a second row for the same
+    // probeRunId, mirroring probe_results_probe_run_id_key (0052), so
+    // at most one row can ever match here.
+    const probeResult =
+      currentAttempt && currentAttempt.probeRunId
+        ? (store.probeResultsByProject.get(job.projectId) ?? []).find(
+            (r) => r.probeRunId === currentAttempt.probeRunId
+          ) ?? null
         : null;
 
     // D-025: distinct completed baseline slots for this job, counted by
@@ -4424,6 +4528,7 @@ export const memoryAdapter: DbAdapter = {
       analysisReceipts: analysisReceipts.map((r) => ({ ...r })),
       probeRun: probeRun ? { ...probeRun } : null,
       completedBaselineSlots,
+      probeResult: probeResult ? { ...probeResult } : null,
     };
   },
 

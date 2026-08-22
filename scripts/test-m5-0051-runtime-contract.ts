@@ -9,13 +9,19 @@
  * This is NOT a static text check (see scripts/test-m5-0051-schema-
  * contract.ts for that). This test creates a genuinely disposable
  * local Supabase/Postgres stack under a fresh mktemp directory, applies
- * 0001-0051 byte-identically, and exercises D-021's guarantees via real
- * RPC calls over real psql connections/processes — exactly the class of
- * defect static text review cannot catch (the AS core(...) bug in an
- * earlier M5 phase was invisible to grep and only surfaced on real
- * execution; the same is true of the array_agg(composite) construct in
- * get_protocol_execution_job_context, flagged as unexecuted in the
- * prior read-only pass).
+ * EXACTLY migrations 0001-0051 byte-identically (explicitly selected by
+ * number — never "every migration file present", so this stays a fixed
+ * historical snapshot of D-021's own contract regardless of how many
+ * later migrations exist in the repository), and exercises D-021's
+ * guarantees via real RPC calls over real psql connections/processes —
+ * exactly the class of defect static text review cannot catch (the
+ * AS core(...) bug in an earlier M5 phase was invisible to grep and
+ * only surfaced on real execution; the same is true of the
+ * array_agg(composite) construct in get_protocol_execution_job_context,
+ * flagged as unexecuted in the prior read-only pass). Migration 0052
+ * (D-026, Stage B0.1) and any migration after it are deliberately
+ * excluded here by number, not by refusing to run — 0052's own contract
+ * is exercised separately by scripts/test-m5-0052-runtime-contract.ts.
  *
  * Safety (same discipline as scripts/test-m5-0050-runtime-contract.ts):
  *   - opt-in only: does nothing unless ZYPACT_M5_0051_RUNTIME_TEST=1.
@@ -35,9 +41,9 @@
  *     explicit SKIP and exits 0 — it never prints a passing result it
  *     did not actually verify.
  *   - no provider/LLM call of any kind, anywhere in this file.
- *   - confirms, before applying anything, that no 0052 migration
- *     exists in this repository (the cutover migration is deliberately
- *     not yet created per D-021).
+ *   - selects and applies exactly migrations 0001-0051 by number,
+ *     ignoring any 0052+ migration present in the repository — a fixed
+ *     historical snapshot, not a guard against 0052 existing.
  *
  * Optional environment variables:
  *   ZYPACT_M5_0051_RUNTIME_TEST=1   required opt-in to run anything at all
@@ -125,15 +131,20 @@ async function main(): Promise<void> {
   }
 
   // ------------------------------------------------------------------
-  // 1. No 0052 migration exists — the cutover migration is deliberately
-  //    not yet created.
+  // 1. Fixed historical snapshot: this harness applies EXACTLY
+  //    migrations 0001 through 0051, explicitly selected by number
+  //    below (never "everything in the directory"), regardless of how
+  //    many later migrations exist in the repository. This is D-021's
+  //    own reproducible contract test, frozen at 0051 — it is not a
+  //    guard against 0052 existing. 0052 is expected to exist starting
+  //    with D-026 (Stage B0.1) and has its own dedicated harness,
+  //    scripts/test-m5-0052-runtime-contract.ts, which applies through
+  //    0052 and refuses only if 0053 appears.
   // ------------------------------------------------------------------
   const migrationsDirCheck = path.join(REPO_ROOT, "supabase", "migrations");
-  if (readdirSync(migrationsDirCheck).some((f) => f.startsWith("0052"))) {
-    console.log("\n✗ FATAL: a migration matching 0052* exists — this run refuses to proceed.");
-    process.exit(1);
-  }
-  console.log("Confirmed: no 0052* migration exists in this repository.\n");
+  console.log(
+    `Confirmed: this harness selects migrations 0001-0051 explicitly by number from ${migrationsDirCheck} (0052+ present or not, ignored either way).\n`
+  );
 
   // ------------------------------------------------------------------
   // 2. Detect Docker / Supabase CLI / psql before any action.
@@ -221,8 +232,23 @@ async function main(): Promise<void> {
     const sourceMigrationsDir = path.join(REPO_ROOT, "supabase", "migrations");
     const destMigrationsDir = path.join(workdir, "supabase", "migrations");
     mkdirSync(destMigrationsDir, { recursive: true });
-    const migrationFiles = readdirSync(sourceMigrationsDir).filter((f) => f.endsWith(".sql"));
-    check("no 0052* migration file exists among the files about to be copied", !migrationFiles.some((f) => f.startsWith("0052")));
+    // Explicit numeric selection, 0001-0051 inclusive -- never "every .sql
+    // file present", so this harness stays a fixed, reproducible snapshot
+    // of D-021's own contract regardless of how many later migrations
+    // (0052+) exist in the repository at the time it happens to run.
+    const migrationFiles = readdirSync(sourceMigrationsDir)
+      .filter((f) => f.endsWith(".sql"))
+      .filter((f) => {
+        const m = /^(\d{4})_/.exec(f);
+        return m !== null && Number(m[1]) <= 51;
+      });
+    check(
+      "exactly migrations numbered 0001-0051 are selected -- 0052 and any later migration are excluded by explicit number, not merely absent",
+      migrationFiles.every((f) => {
+        const m = /^(\d{4})_/.exec(f);
+        return m !== null && Number(m[1]) <= 51;
+      })
+    );
     for (const f of migrationFiles) {
       copyFileSync(path.join(sourceMigrationsDir, f), path.join(destMigrationsDir, f));
     }

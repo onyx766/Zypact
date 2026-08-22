@@ -305,6 +305,8 @@ interface AdmitCoreParams {
   totalReservedCostUsd: number;
   retryOfAttemptId: string | null;
   jobId: string | null;
+  /** D-025 — mirrors _admit_and_reserve_attempt_core's own p_baseline_ordinal (0051): supplied to the same reservation as job_id, never stamped by a later, separate write. */
+  baselineOrdinal: number | null;
 }
 
 /**
@@ -421,6 +423,12 @@ function admitAndReserveAttemptCore(
     terminalizedAt: null,
     createdAt: now,
     jobId: params.jobId,
+    // D-025: supplied by the caller in the SAME reservation as job_id —
+    // mirrors _admit_and_reserve_attempt_core's own p_baseline_ordinal
+    // (0051), passed straight into its INSERT rather than attached by a
+    // later, separate write (the real SQL CHECK constraint is evaluated
+    // immediately at INSERT time, so a later UPDATE would be too late).
+    baselineOrdinal: params.baselineOrdinal,
   };
   store.protocolAttempts.set(attempt.id, attempt);
   return { status: "RESERVED", attempt: { ...attempt } };
@@ -3059,6 +3067,7 @@ export const memoryAdapter: DbAdapter = {
       // M4 raw admission (not job-scoped) — jobId is exclusively set by
       // the *_for_job admission path below.
       jobId: null,
+      baselineOrdinal: null,
     };
     store.protocolAttempts.set(attempt.id, attempt);
     return { outcome: "RESERVED", attempt: { ...attempt } };
@@ -3154,6 +3163,13 @@ export const memoryAdapter: DbAdapter = {
       return { outcome: "PROTOCOL_NOT_APPROVED", job: null };
     }
 
+    // D-025: a job with no planned baseline slot to run would either
+    // never admit anything or be vacuously completable — refuse before
+    // any row is created.
+    if (protocol.plannedBaselineRuns === 0) {
+      return { outcome: "NO_BASELINE_RUNS_PLANNED", job: null };
+    }
+
     const existing = [...store.protocolExecutionJobs.values()].find(
       (j) => j.protocolId === input.protocolId && j.projectId === input.projectId
     );
@@ -3173,6 +3189,7 @@ export const memoryAdapter: DbAdapter = {
       attemptCount: 0,
       maxAttempts,
       currentAttemptId: null,
+      nextBaselineOrdinal: 1,
       needsReviewReason: null,
       failureReason: null,
       createdAt: now,
@@ -3314,6 +3331,36 @@ export const memoryAdapter: DbAdapter = {
       };
     }
 
+    // D-025: no current attempt — this must be the admission of the slot
+    // named by next_baseline_ordinal, never a free-form caller-chosen key.
+    const expectedKey = `${job.id}:baseline:${job.nextBaselineOrdinal}`;
+    if (input.idempotencyKey !== expectedKey) {
+      return {
+        outcome: "INVALID_IDEMPOTENCY_KEY",
+        attempt: null,
+        perplexityCall: null,
+        analysisCall: null,
+      };
+    }
+
+    const protocol = store.protocols.get(job.protocolId);
+    // Defensive guard: the completion gate only ever advances
+    // next_baseline_ordinal up to planned_baseline_runs, and a succeeded
+    // job is already refused above by jobFencingOk — unreachable in
+    // normal operation.
+    if (!protocol || job.nextBaselineOrdinal > protocol.plannedBaselineRuns) {
+      return {
+        outcome: "BASELINE_SLOTS_EXHAUSTED",
+        attempt: null,
+        perplexityCall: null,
+        analysisCall: null,
+      };
+    }
+
+    // D-025: baselineOrdinal supplied in the SAME reservation as job_id
+    // (never a later, separate stamp) so the memory adapter's own write
+    // ordering matches the real SQL, where the equivalent CHECK
+    // constraint is evaluated immediately at INSERT time.
     const core = admitAndReserveAttemptCore(store, {
       protocolId: job.protocolId,
       projectId: input.projectId,
@@ -3322,6 +3369,7 @@ export const memoryAdapter: DbAdapter = {
       totalReservedCostUsd: input.perplexityReservedCostUsd + input.analysisReservedCostUsd,
       retryOfAttemptId: input.retryOfAttemptId ?? null,
       jobId: job.id,
+      baselineOrdinal: job.nextBaselineOrdinal,
     });
     if (core.status !== "RESERVED" || !core.attempt) {
       return { outcome: core.status, attempt: core.attempt, perplexityCall: null, analysisCall: null };
@@ -3661,7 +3709,18 @@ export const memoryAdapter: DbAdapter = {
     if (!jobFencingOk(job, input.claimToken)) {
       return { outcome: "JOB_NOT_OWNED", job: { ...job } };
     }
+    // D-025: current_attempt_id is null in two distinct cases now — the
+    // job has never been admitted at all (nextBaselineOrdinal still at
+    // its default of 1, genuine NO_CURRENT_ATTEMPT), or it already
+    // advanced past a completed slot and is waiting for the next
+    // admission (nextBaselineOrdinal > 1, set only by this same
+    // function's own advancement below). A replay after that advancement
+    // but before the next admission returns NEXT_BASELINE_REQUIRED
+    // idempotently, with zero further mutation.
     if (job.currentAttemptId === null) {
+      if (job.nextBaselineOrdinal > 1) {
+        return { outcome: "NEXT_BASELINE_REQUIRED", job: { ...job } };
+      }
       return { outcome: "NO_CURRENT_ATTEMPT", job: { ...job } };
     }
 
@@ -3706,6 +3765,24 @@ export const memoryAdapter: DbAdapter = {
       );
     if (!authoritativeAnalysis || authoritativeAnalysis.status !== "completed" || !analysisHasReceipt) {
       return { outcome: "ANALYSIS_NOT_COMPLETED", job: { ...job } };
+    }
+
+    // D-025: every D-020 gate above is satisfied for the current slot.
+    // Whether that is enough to succeed the job now depends on whether
+    // every planned baseline slot has been consumed by a completed root
+    // attempt — never on the raw count of protocol_attempts rows, which
+    // would double-count retry children. attempt.baselineOrdinal is
+    // guaranteed non-null here since attempt.jobId === job.id.
+    const protocol = store.protocols.get(job.protocolId);
+    if (protocol && attempt.baselineOrdinal !== null && attempt.baselineOrdinal < protocol.plannedBaselineRuns) {
+      const advanced: ProtocolExecutionJob = {
+        ...job,
+        currentAttemptId: null,
+        nextBaselineOrdinal: job.nextBaselineOrdinal + 1,
+        updatedAt: nowIso(),
+      };
+      store.protocolExecutionJobs.set(advanced.id, advanced);
+      return { outcome: "NEXT_BASELINE_REQUIRED", job: { ...advanced } };
     }
 
     const succeeded: ProtocolExecutionJob = {
@@ -3925,6 +4002,9 @@ export const memoryAdapter: DbAdapter = {
       };
     }
 
+    // D-025: a full retry always keeps its source's baseline slot,
+    // supplied in the SAME reservation as job_id -- never a new ordinal,
+    // and next_baseline_ordinal is never touched by a retry.
     const core = admitAndReserveAttemptCore(store, {
       protocolId: job.protocolId,
       projectId: input.projectId,
@@ -3933,6 +4013,7 @@ export const memoryAdapter: DbAdapter = {
       totalReservedCostUsd: input.perplexityReservedCostUsd + input.analysisReservedCostUsd,
       retryOfAttemptId: input.sourceAttemptId,
       jobId: job.id,
+      baselineOrdinal: source.baselineOrdinal,
     });
     if (core.status !== "RESERVED" || !core.attempt) {
       return { outcome: core.status, attempt: core.attempt, perplexityCall: null, analysisCall: null };
@@ -4154,6 +4235,9 @@ export const memoryAdapter: DbAdapter = {
     };
 
     if (input.action === "retry_full_attempt") {
+      // D-025: an operator-approved full retry also keeps its source's
+      // baseline slot, supplied in the SAME reservation as job_id --
+      // identical rationale to retryFullAttemptForJob.
       const core = admitAndReserveAttemptCore(store, {
         protocolId: job.protocolId,
         projectId: input.projectId,
@@ -4162,6 +4246,7 @@ export const memoryAdapter: DbAdapter = {
         totalReservedCostUsd: (input.perplexityReservedCostUsd ?? 0) + input.reservedCostUsd,
         retryOfAttemptId: input.sourceAttemptId,
         jobId: job.id,
+        baselineOrdinal: source.baselineOrdinal,
       });
       if (core.status !== "RESERVED" || !core.attempt) {
         recordAction("denied", core.status, null, null);
@@ -4275,6 +4360,7 @@ export const memoryAdapter: DbAdapter = {
         providerReceipts: [],
         analysisReceipts: [],
         probeRun: null,
+        completedBaselineSlots: null,
       };
     }
     if (!jobFencingOk(job, input.claimToken)) {
@@ -4287,6 +4373,7 @@ export const memoryAdapter: DbAdapter = {
         providerReceipts: [],
         analysisReceipts: [],
         probeRun: null,
+        completedBaselineSlots: null,
       };
     }
 
@@ -4311,6 +4398,22 @@ export const memoryAdapter: DbAdapter = {
         ? store.probeRuns.get(currentAttempt.probeRunId) ?? null
         : null;
 
+    // D-025: distinct completed baseline slots for this job, counted by
+    // DISTINCT baselineOrdinal among completed attempts — not by row
+    // count, and not restricted to root attempts. A slot's completion may
+    // be reached by its root attempt OR by a retry child that inherited
+    // its ordinal (retryFullAttemptForJob/authorizeOperatorRetry always
+    // copy the source's baselineOrdinal verbatim) — restricting to
+    // root-only would silently undercount every slot recovered by a
+    // retry. job.nextBaselineOrdinal and protocol.plannedBaselineRuns are
+    // already carried by the rows above.
+    const completedOrdinals = new Set(
+      [...store.protocolAttempts.values()]
+        .filter((a) => a.jobId === job.id && a.baselineOrdinal !== null && a.status === "completed")
+        .map((a) => a.baselineOrdinal)
+    );
+    const completedBaselineSlots = completedOrdinals.size;
+
     return {
       outcome: "OK",
       job: { ...job },
@@ -4320,6 +4423,7 @@ export const memoryAdapter: DbAdapter = {
       providerReceipts: providerReceipts.map((r) => ({ ...r })),
       analysisReceipts: analysisReceipts.map((r) => ({ ...r })),
       probeRun: probeRun ? { ...probeRun } : null,
+      completedBaselineSlots,
     };
   },
 

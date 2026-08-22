@@ -322,7 +322,9 @@ create or replace function public._m5_runtime_test_helper_make_fixture(
   p_run_cap integer default 20,
   p_spend_cap numeric default 100.00,
   p_retry_cap integer default 5,
-  p_max_attempts integer default 3
+  p_max_attempts integer default 3,
+  p_planned_baseline_runs integer default 1,
+  p_planned_retest_runs integer default 0
 ) returns table (project_id uuid, protocol_id uuid) language plpgsql as $f$
 declare
   v_project_id uuid;
@@ -349,15 +351,19 @@ begin
     rate_limit_per_hour, concurrency_limit, retry_cap
   ) values (
     v_project_id, v_bqv_id, 'perplexity_sonar', 'answer',
-    1, 0, 'buyer_question_version', 'presence_rate',
+    p_planned_baseline_runs, p_planned_retest_runs, 'buyer_question_version', 'presence_rate',
     'fixed_by_protocol', p_run_cap, p_spend_cap, 3600,
     1000, 50, p_retry_cap
   ) returning id into v_protocol_id;
+  -- D-025: planned_baseline_runs = 0 is a real, callable fixture shape
+  -- (used to prove NO_BASELINE_RUNS_PLANNED) -- approve_protocol itself
+  -- has no opinion on this value, only enqueue_protocol_execution_job
+  -- does.
   perform status from approve_protocol(v_protocol_id, v_project_id, v_actor);
   return query select v_project_id, v_protocol_id;
 end;
 $f$;
-grant execute on function public._m5_runtime_test_helper_make_fixture(text, integer, numeric, integer, integer) to service_role;
+grant execute on function public._m5_runtime_test_helper_make_fixture(text, integer, numeric, integer, integer, integer, integer) to service_role;
 
 create or replace function public._m5_runtime_test_helper_probe_run(p_project_id uuid, p_label text)
 returns uuid language plpgsql as $f$
@@ -494,6 +500,39 @@ select case when has_table_privilege('authenticated', 'public.protocol_execution
 \\echo '##R## monitoring_service_role_can_select' :monitoring_service_role_can_select
 \\echo '##R## monitoring_anon_can_select' :monitoring_anon_can_select
 \\echo '##R## monitoring_authenticated_can_select' :monitoring_authenticated_can_select
+
+-- M4 non-regression forensic follow-up (D-025 Stage A.2): the real
+-- pg_proc catalog, not just migration text, must show exactly one
+-- _admit_and_reserve_attempt_core overload, at the new 8-arg signature,
+-- with the pre-D-025 7-arg signature genuinely gone and EXECUTE denied
+-- to every role including service_role (internal-only, function-to-
+-- function under SECURITY DEFINER -- never a directly callable RPC).
+select count(*)::text as core_overload_count
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public' and p.proname = '_admit_and_reserve_attempt_core' \\gset
+select case when to_regprocedure('public._admit_and_reserve_attempt_core(uuid,uuid,text,text,numeric,uuid,uuid,integer)') is not null then 't' else 'f' end as core_8arg_present \\gset
+select case when to_regprocedure('public._admit_and_reserve_attempt_core(uuid,uuid,text,text,numeric,uuid,uuid)') is null then 't' else 'f' end as core_7arg_absent \\gset
+select case when has_function_privilege('service_role', 'public._admit_and_reserve_attempt_core(uuid,uuid,text,text,numeric,uuid,uuid,integer)', 'EXECUTE') then 't' else 'f' end as core_service_role_can_execute \\gset
+select case when has_function_privilege('anon', 'public._admit_and_reserve_attempt_core(uuid,uuid,text,text,numeric,uuid,uuid,integer)', 'EXECUTE') then 't' else 'f' end as core_anon_can_execute \\gset
+select case when has_function_privilege('authenticated', 'public._admit_and_reserve_attempt_core(uuid,uuid,text,text,numeric,uuid,uuid,integer)', 'EXECUTE') then 't' else 'f' end as core_authenticated_can_execute \\gset
+select case when exists (
+  select 1
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+   where n.nspname = 'public'
+     and p.proname = '_admit_and_reserve_attempt_core'
+     and p.pronargs = 8
+     and a.grantee = 0
+     and a.privilege_type = 'EXECUTE'
+) then 't' else 'f' end as core_public_has_execute \\gset
+\\echo '##R## core_overload_count' :core_overload_count
+\\echo '##R## core_8arg_present' :core_8arg_present
+\\echo '##R## core_7arg_absent' :core_7arg_absent
+\\echo '##R## core_service_role_can_execute' :core_service_role_can_execute
+\\echo '##R## core_anon_can_execute' :core_anon_can_execute
+\\echo '##R## core_authenticated_can_execute' :core_authenticated_can_execute
+\\echo '##R## core_public_has_execute' :core_public_has_execute
 `;
 
   writeFileSync(path.join(scratchDir, "01-contract.sql"), CONTRACT_SQL);
@@ -523,6 +562,10 @@ select case when has_table_privilege('authenticated', 'public.protocol_execution
   check("M4 raw RPCs (admit_and_reserve_attempt/start_attempt/reconcile_attempt) remain EXECUTE-able by service_role before cutover", c("m4_admit_still_granted") === "t" && c("m4_start_still_granted") === "t" && c("m4_reconcile_still_granted") === "t");
   check("reserve_additional_analysis_generation_for_job is NOT executable by service_role (revoked, orphaned bypass closed)", c("old_reserve_rpc_still_granted") === "f");
   check("protocol_execution_job_monitoring_v1 is selectable by service_role, denied to anon and authenticated", c("monitoring_service_role_can_select") === "t" && c("monitoring_anon_can_select") === "f" && c("monitoring_authenticated_can_select") === "f");
+  check("_admit_and_reserve_attempt_core: exactly one overload exists in the real pg_proc catalog", c("core_overload_count") === "1");
+  check("_admit_and_reserve_attempt_core: the final signature is the 8-arg one (p_baseline_ordinal added by D-025)", c("core_8arg_present") === "t");
+  check("_admit_and_reserve_attempt_core: the pre-D-025 7-arg signature is genuinely absent from the catalog, not merely shadowed", c("core_7arg_absent") === "t");
+  check("_admit_and_reserve_attempt_core: EXECUTE is denied to service_role, anon, authenticated, and PUBLIC alike -- internal-only, function-to-function, never a directly callable RPC", c("core_service_role_can_execute") === "f" && c("core_anon_can_execute") === "f" && c("core_authenticated_can_execute") === "f" && c("core_public_has_execute") === "f");
 
   // ======================================================================
   // Part B — business scenarios. Each wrapped in its own BEGIN/ROLLBACK
@@ -546,7 +589,7 @@ select (job).id as s1_job from enqueue_protocol_execution_job(:'s1_proto', :'s1_
 select claim_token as s1_token from claim_protocol_execution_job('worker-s1', 300) \\gset
 select count(*)::text as s1_attempts_before from protocol_attempts where protocol_id = :'s1_proto' \\gset
 select status as s1_admit_status, coalesce((attempt).id::text, 'NULL') as s1_attempt_id
-  from admit_and_reserve_attempt_for_job(:'s1_job', :'s1_token', :'s1_proj', 'baseline', 's1:initial-attempt', 0.01, 0.01) \\gset
+  from admit_and_reserve_attempt_for_job(:'s1_job', :'s1_token', :'s1_proj', 'baseline', (:'s1_job' || ':baseline:1'), 0.01, 0.01) \\gset
 select count(*)::text as s1_attempts_after from protocol_attempts where protocol_id = :'s1_proto' \\gset
 select status as s1_resume_status, coalesce((attempt).id::text, 'NULL') as s1_resume_attempt_id
   from admit_and_reserve_attempt_for_job(:'s1_job', :'s1_token', :'s1_proj', 'baseline', 's1:a-completely-different-fresh-key', 0.01, 0.01) \\gset
@@ -569,14 +612,14 @@ select project_id as s2_proj, protocol_id as s2_proto from _m5_runtime_test_help
 select (job).id as s2_job from enqueue_protocol_execution_job(:'s2_proto', :'s2_proj', 3) \\gset
 select claim_token as s2_token_a from claim_protocol_execution_job('worker-s2-a', 60) \\gset
 select status as s2_admit_status, coalesce((attempt).id::text, 'NULL') as s2_attempt_id
-  from admit_and_reserve_attempt_for_job(:'s2_job', :'s2_token_a', :'s2_proj', 'baseline', 's2:initial-attempt', 0.01, 0.01) \\gset
+  from admit_and_reserve_attempt_for_job(:'s2_job', :'s2_token_a', :'s2_proj', 'baseline', (:'s2_job' || ':baseline:1'), 0.01, 0.01) \\gset
 RESET ROLE;
 update protocol_execution_jobs set lease_expires_at = now() - interval '1 minute' where id = :'s2_job';
 SET ROLE service_role;
 select claim_token as s2_token_b from claim_protocol_execution_job('worker-s2-b', 300) \\gset
 select count(*)::text as s2_attempts_before_reclaim from protocol_attempts where protocol_id = :'s2_proto' \\gset
 select status as s2_reclaim_status, coalesce((attempt).id::text, 'NULL') as s2_reclaim_attempt_id
-  from admit_and_reserve_attempt_for_job(:'s2_job', :'s2_token_b', :'s2_proj', 'baseline', 's2:initial-attempt', 0.01, 0.01) \\gset
+  from admit_and_reserve_attempt_for_job(:'s2_job', :'s2_token_b', :'s2_proj', 'baseline', (:'s2_job' || ':baseline:1'), 0.01, 0.01) \\gset
 select count(*)::text as s2_attempts_after_reclaim from protocol_attempts where protocol_id = :'s2_proto' \\gset
 \\echo '##R## s2_admit_status' :s2_admit_status
 \\echo '##R## s2_reclaim_status' :s2_reclaim_status
@@ -598,7 +641,7 @@ select project_id as s3_proj, protocol_id as s3_proto from _m5_runtime_test_help
 select (job).id as s3_job from enqueue_protocol_execution_job(:'s3_proto', :'s3_proj', 3) \\gset
 select claim_token as s3_token from claim_protocol_execution_job('worker-s3', 300) \\gset
 select status as s3_admit_status, (attempt).id as s3_attempt_id
-  from admit_and_reserve_attempt_for_job(:'s3_job', :'s3_token', :'s3_proj', 'baseline', 's3:initial-attempt', 0.01, 0.01) \\gset
+  from admit_and_reserve_attempt_for_job(:'s3_job', :'s3_token', :'s3_proj', 'baseline', (:'s3_job' || ':baseline:1'), 0.01, 0.01) \\gset
 RESET ROLE;
 alter table protocol_execution_jobs drop constraint protocol_execution_jobs_current_attempt_fk;
 update protocol_execution_jobs set current_attempt_id = gen_random_uuid() where id = :'s3_job';
@@ -615,7 +658,7 @@ BEGIN;
 select project_id as s4_proj, protocol_id as s4_proto from _m5_runtime_test_helper_make_fixture('s4') \\gset
 select (job).id as s4_job from enqueue_protocol_execution_job(:'s4_proto', :'s4_proj', 3) \\gset
 select claim_token as s4_token from claim_protocol_execution_job('worker-s4', 300) \\gset
-select (attempt).id as s4_attempt from admit_and_reserve_attempt_for_job(:'s4_job', :'s4_token', :'s4_proj', 'baseline', 's4:initial-attempt', 0.01, 0.01) \\gset
+select (attempt).id as s4_attempt from admit_and_reserve_attempt_for_job(:'s4_job', :'s4_token', :'s4_proj', 'baseline', (:'s4_job' || ':baseline:1'), 0.01, 0.01) \\gset
 select _m5_runtime_test_helper_dataset(:'s4_proj') as s4_dataset \\gset
 select count(*)::text as s4_runs_before from probe_runs where project_id = :'s4_proj' \\gset
 select status as s4_start_status, coalesce((probe_run).id::text, 'NULL') as s4_probe_run
@@ -685,7 +728,7 @@ select project_id as s8_proj, protocol_id as s8_proto from _m5_runtime_test_help
 select (job).id as s8_job from enqueue_protocol_execution_job(:'s8_proto', :'s8_proj', 3) \\gset
 select claim_token as s8_token from claim_protocol_execution_job('worker-s8', 300) \\gset
 select (attempt).id as s8_attempt, (perplexity_call).id as s8_pcall
-  from admit_and_reserve_attempt_for_job(:'s8_job', :'s8_token', :'s8_proj', 'baseline', 's8:initial-attempt', 0.01, 0.01) \\gset
+  from admit_and_reserve_attempt_for_job(:'s8_job', :'s8_token', :'s8_proj', 'baseline', (:'s8_job' || ':baseline:1'), 0.01, 0.01) \\gset
 select _m5_runtime_test_helper_probe_run(:'s8_proj', 's8') as s8_probe_run \\gset
 select status from start_attempt_for_job(:'s8_job', :'s8_token', :'s8_proj', :'s8_attempt', :'s8_probe_run');
 select status from mark_external_call_sent_for_job(:'s8_job', :'s8_token', :'s8_proj', :'s8_pcall', :'s8_probe_run');
@@ -767,7 +810,7 @@ select project_id as s9_proj, protocol_id as s9_proto from _m5_runtime_test_help
 select (job).id as s9_job from enqueue_protocol_execution_job(:'s9_proto', :'s9_proj', 3) \\gset
 select claim_token as s9_token from claim_protocol_execution_job('worker-s9', 300) \\gset
 select (attempt).id as s9_attempt, (perplexity_call).id as s9_pcall, (analysis_call).id as s9_acall
-  from admit_and_reserve_attempt_for_job(:'s9_job', :'s9_token', :'s9_proj', 'baseline', 's9:initial-attempt', 0.01, 0.01) \\gset
+  from admit_and_reserve_attempt_for_job(:'s9_job', :'s9_token', :'s9_proj', 'baseline', (:'s9_job' || ':baseline:1'), 0.01, 0.01) \\gset
 select _m5_runtime_test_helper_probe_run(:'s9_proj', 's9') as s9_probe_run \\gset
 select status from start_attempt_for_job(:'s9_job', :'s9_token', :'s9_proj', :'s9_attempt', :'s9_probe_run');
 select status from mark_external_call_sent_for_job(:'s9_job', :'s9_token', :'s9_proj', :'s9_pcall', :'s9_probe_run');
@@ -791,7 +834,7 @@ select count(*)::text as s9_attempts_after_conflict from protocol_attempts where
 select project_id as s9x_proj, protocol_id as s9x_proto from _m5_runtime_test_helper_make_fixture('s9x') \\gset
 select (job).id as s9x_job from enqueue_protocol_execution_job(:'s9x_proto', :'s9x_proj', 3) \\gset
 select claim_token as s9x_token from claim_protocol_execution_job('worker-s9x', 300) \\gset
-select (attempt).id as s9x_attempt from admit_and_reserve_attempt_for_job(:'s9x_job', :'s9x_token', :'s9x_proj', 'baseline', 's9x:initial-attempt', 0.01, 0.01) \\gset
+select (attempt).id as s9x_attempt from admit_and_reserve_attempt_for_job(:'s9x_job', :'s9x_token', :'s9x_proj', 'baseline', (:'s9x_job' || ':baseline:1'), 0.01, 0.01) \\gset
 select status as s9_cross_job_status
   from retry_full_attempt_for_job(:'s9_job', :'s9_token', :'s9_proj', :'s9x_attempt', 0.02, 0.02) \\gset
 \\echo '##R## s9_retry_status' :s9_retry_status
@@ -823,7 +866,7 @@ select project_id as s10_proj, protocol_id as s10_proto from _m5_runtime_test_he
 select (job).id as s10_job from enqueue_protocol_execution_job(:'s10_proto', :'s10_proj', 3) \\gset
 select claim_token as s10_token from claim_protocol_execution_job('worker-s10', 300) \\gset
 select (attempt).id as s10_attempt, (perplexity_call).id as s10_pcall, (analysis_call).id as s10_acall1
-  from admit_and_reserve_attempt_for_job(:'s10_job', :'s10_token', :'s10_proj', 'baseline', 's10:initial-attempt', 0.01, 0.01) \\gset
+  from admit_and_reserve_attempt_for_job(:'s10_job', :'s10_token', :'s10_proj', 'baseline', (:'s10_job' || ':baseline:1'), 0.01, 0.01) \\gset
 select _m5_runtime_test_helper_probe_run(:'s10_proj', 's10') as s10_probe_run \\gset
 select status from start_attempt_for_job(:'s10_job', :'s10_token', :'s10_proj', :'s10_attempt', :'s10_probe_run');
 select status from mark_external_call_sent_for_job(:'s10_job', :'s10_token', :'s10_proj', :'s10_pcall', :'s10_probe_run');
@@ -894,7 +937,7 @@ select project_id as s10c_proj, protocol_id as s10c_proto from _m5_runtime_test_
 select (job).id as s10c_job from enqueue_protocol_execution_job(:'s10c_proto', :'s10c_proj', 3) \\gset
 select claim_token as s10c_token from claim_protocol_execution_job('worker-s10c', 300) \\gset
 select (attempt).id as s10c_attempt, (perplexity_call).id as s10c_pcall, (analysis_call).id as s10c_acall1
-  from admit_and_reserve_attempt_for_job(:'s10c_job', :'s10c_token', :'s10c_proj', 'baseline', 's10c:initial-attempt', 0.01, 0.01) \\gset
+  from admit_and_reserve_attempt_for_job(:'s10c_job', :'s10c_token', :'s10c_proj', 'baseline', (:'s10c_job' || ':baseline:1'), 0.01, 0.01) \\gset
 select _m5_runtime_test_helper_probe_run(:'s10c_proj', 's10c') as s10c_probe_run \\gset
 select status from start_attempt_for_job(:'s10c_job', :'s10c_token', :'s10c_proj', :'s10c_attempt', :'s10c_probe_run');
 select status from mark_external_call_sent_for_job(:'s10c_job', :'s10c_token', :'s10c_proj', :'s10c_pcall', :'s10c_probe_run');
@@ -941,7 +984,7 @@ select project_id as s10b_proj, protocol_id as s10b_proto from _m5_runtime_test_
 select (job).id as s10b_job from enqueue_protocol_execution_job(:'s10b_proto', :'s10b_proj', 3) \\gset
 select claim_token as s10b_token from claim_protocol_execution_job('worker-s10b', 300) \\gset
 select (attempt).id as s10b_attempt, (perplexity_call).id as s10b_pcall, (analysis_call).id as s10b_acall1
-  from admit_and_reserve_attempt_for_job(:'s10b_job', :'s10b_token', :'s10b_proj', 'baseline', 's10b:initial-attempt', 0.01, 0.01) \\gset
+  from admit_and_reserve_attempt_for_job(:'s10b_job', :'s10b_token', :'s10b_proj', 'baseline', (:'s10b_job' || ':baseline:1'), 0.01, 0.01) \\gset
 select _m5_runtime_test_helper_probe_run(:'s10b_proj', 's10b') as s10b_probe_run \\gset
 select status from start_attempt_for_job(:'s10b_job', :'s10b_token', :'s10b_proj', :'s10b_attempt', :'s10b_probe_run');
 select status from mark_external_call_sent_for_job(:'s10b_job', :'s10b_token', :'s10b_proj', :'s10b_pcall', :'s10b_probe_run');
@@ -978,7 +1021,7 @@ select project_id as s11_proj, protocol_id as s11_proto from _m5_runtime_test_he
 select (job).id as s11_job from enqueue_protocol_execution_job(:'s11_proto', :'s11_proj', 3) \\gset
 select claim_token as s11_token from claim_protocol_execution_job('worker-s11', 300) \\gset
 select (attempt).id as s11_attempt, (perplexity_call).id as s11_pcall
-  from admit_and_reserve_attempt_for_job(:'s11_job', :'s11_token', :'s11_proj', 'baseline', 's11:initial-attempt', 0.01, 0.01) \\gset
+  from admit_and_reserve_attempt_for_job(:'s11_job', :'s11_token', :'s11_proj', 'baseline', (:'s11_job' || ':baseline:1'), 0.01, 0.01) \\gset
 select _m5_runtime_test_helper_probe_run(:'s11_proj', 's11') as s11_probe_run \\gset
 select status from start_attempt_for_job(:'s11_job', :'s11_token', :'s11_proj', :'s11_attempt', :'s11_probe_run');
 select status from mark_external_call_sent_for_job(:'s11_job', :'s11_token', :'s11_proj', :'s11_pcall', :'s11_probe_run');
@@ -1000,7 +1043,7 @@ BEGIN;
 select project_id as s11b_proj, protocol_id as s11b_proto from _m5_runtime_test_helper_make_fixture('s11b') \\gset
 select (job).id as s11b_job from enqueue_protocol_execution_job(:'s11b_proto', :'s11b_proj', 3) \\gset
 select claim_token as s11b_token from claim_protocol_execution_job('worker-s11b', 300) \\gset
-select (attempt).id as s11b_attempt from admit_and_reserve_attempt_for_job(:'s11b_job', :'s11b_token', :'s11b_proj', 'baseline', 's11b:initial-attempt', 0.01, 0.01) \\gset
+select (attempt).id as s11b_attempt from admit_and_reserve_attempt_for_job(:'s11b_job', :'s11b_token', :'s11b_proj', 'baseline', (:'s11b_job' || ':baseline:1'), 0.01, 0.01) \\gset
 select status as s11b_job_status_before from protocol_execution_jobs where id = :'s11b_job' \\gset
 select status as s11b_no_ambiguity_status
   from mark_protocol_execution_job_needs_review_for_ambiguity(:'s11b_job', :'s11b_token', :'s11b_proj') \\gset
@@ -1057,7 +1100,7 @@ BEGIN;
 select project_id as s12_proj, protocol_id as s12_proto from _m5_runtime_test_helper_make_fixture('s12') \\gset
 select (job).id as s12_job from enqueue_protocol_execution_job(:'s12_proto', :'s12_proj', 3) \\gset
 select claim_token as s12_token from claim_protocol_execution_job('worker-s12', 300) \\gset
-select (attempt).id as s12_attempt from admit_and_reserve_attempt_for_job(:'s12_job', :'s12_token', :'s12_proj', 'baseline', 's12:initial-attempt', 0.01, 0.01) \\gset
+select (attempt).id as s12_attempt from admit_and_reserve_attempt_for_job(:'s12_job', :'s12_token', :'s12_proj', 'baseline', (:'s12_job' || ':baseline:1'), 0.01, 0.01) \\gset
 select _m5_runtime_test_helper_dataset(:'s12_proj') as s12_dataset \\gset
 
 RESET ROLE;
@@ -1107,7 +1150,7 @@ select project_id as s13_proj, protocol_id as s13_proto from _m5_runtime_test_he
 select (job).id as s13_job from enqueue_protocol_execution_job(:'s13_proto', :'s13_proj', 3) \\gset
 select claim_token as s13_token from claim_protocol_execution_job('worker-s13', 300) \\gset
 select (attempt).id as s13_attempt, (perplexity_call).id as s13_pcall, (analysis_call).id as s13_acall
-  from admit_and_reserve_attempt_for_job(:'s13_job', :'s13_token', :'s13_proj', 'baseline', 's13:initial-attempt', 0.01, 0.01) \\gset
+  from admit_and_reserve_attempt_for_job(:'s13_job', :'s13_token', :'s13_proj', 'baseline', (:'s13_job' || ':baseline:1'), 0.01, 0.01) \\gset
 select _m5_runtime_test_helper_probe_run(:'s13_proj', 's13') as s13_probe_run \\gset
 select status from start_attempt_for_job(:'s13_job', :'s13_token', :'s13_proj', :'s13_attempt', :'s13_probe_run');
 -- Leave the perplexity call sent-but-unreceipted -- exactly the
@@ -1300,6 +1343,237 @@ select count(*)::text as s14e_actions_after_dupe from protocol_operator_actions 
 \\echo '##R## s14e_duplicate_result' :s14e_duplicate_result
 \\echo '##R## s14e_actions_after_dupe' :s14e_actions_after_dupe
 ROLLBACK;
+
+-- ============================================================
+-- s15 (D-025): planned_baseline_runs = 2, planned_retest_runs = 1 --
+-- the exact smoke4 shape. A wrong-ordinal key is refused before any
+-- real admission (test 8). Slot 1 admits, runs to completion, and
+-- complete_protocol_execution_job reports NEXT_BASELINE_REQUIRED --
+-- never SUCCEEDED -- clearing current_attempt_id and advancing
+-- next_baseline_ordinal to 2 while the job stays running with its same
+-- claim/lease (test 2). A replay of that same completion call, before
+-- the next admission, is idempotent (zero further mutation). A lease
+-- loss and reclaim between the advancement and the next admission
+-- resumes cleanly, never creating a duplicate root (test 3). Slot 2
+-- admits exactly once, runs to completion, and only then does the job
+-- reach SUCCEEDED (test 2/9). planned_retest_runs = 1 is never touched
+-- by any of this -- M5 has no automatic retest path; a second enqueue
+-- for the same protocol still always returns ALREADY_EXISTS.
+-- ============================================================
+BEGIN;
+select project_id as s15_proj, protocol_id as s15_proto from _m5_runtime_test_helper_make_fixture('s15', 20, 100.00, 5, 3, 2, 1) \\gset
+select (job).id as s15_job from enqueue_protocol_execution_job(:'s15_proto', :'s15_proj', 3) \\gset
+select claim_token as s15_token_a from claim_protocol_execution_job('worker-s15-a', 300) \\gset
+
+select count(*)::text as s15_attempts_before_badkey from protocol_attempts where protocol_id = :'s15_proto' \\gset
+select status as s15_badkey_status, coalesce((attempt).id::text, 'NULL') as s15_badkey_attempt
+  from admit_and_reserve_attempt_for_job(:'s15_job', :'s15_token_a', :'s15_proj', 'baseline', (:'s15_job' || ':baseline:2'), 0.01, 0.01) \\gset
+select count(*)::text as s15_attempts_after_badkey from protocol_attempts where protocol_id = :'s15_proto' \\gset
+
+select status as s15_admit1_status, (attempt).id as s15_attempt1, (attempt).baseline_ordinal as s15_attempt1_ordinal,
+       (perplexity_call).id as s15_pcall1, (analysis_call).id as s15_acall1
+  from admit_and_reserve_attempt_for_job(:'s15_job', :'s15_token_a', :'s15_proj', 'baseline', (:'s15_job' || ':baseline:1'), 0.01, 0.01) \\gset
+select _m5_runtime_test_helper_probe_run(:'s15_proj', 's15-slot1') as s15_probe_run1 \\gset
+select status from start_attempt_for_job(:'s15_job', :'s15_token_a', :'s15_proj', :'s15_attempt1', :'s15_probe_run1');
+select status from mark_external_call_sent_for_job(:'s15_job', :'s15_token_a', :'s15_proj', :'s15_pcall1', :'s15_probe_run1');
+select status from record_provider_call_receipt_for_job(:'s15_job', :'s15_token_a', :'s15_proj', :'s15_pcall1', :'s15_probe_run1', 'success', 200, 'r', null, 100, 0.01, 'measured');
+select status from mark_external_call_sent_for_job(:'s15_job', :'s15_token_a', :'s15_proj', :'s15_acall1', :'s15_probe_run1');
+select status from record_analysis_call_receipt_for_job(:'s15_job', :'s15_token_a', :'s15_proj', :'s15_acall1', :'s15_probe_run1', 'success', 'openai', 'gpt-4o-mini', false, null, null, 100, 0.01, 'measured');
+select status from reconcile_attempt_for_job(:'s15_job', :'s15_token_a', :'s15_proj', :'s15_attempt1', 'completed', 'slot 1 of 2 succeeded');
+
+select status as s15_complete1_status, coalesce((job).current_attempt_id::text, 'NULL') as s15_complete1_current_attempt,
+       (job).next_baseline_ordinal as s15_complete1_next_ordinal, (job).status as s15_complete1_job_status,
+       coalesce((job).claim_token::text, 'NULL') as s15_complete1_claim_token
+  from complete_protocol_execution_job(:'s15_job', :'s15_token_a', :'s15_proj') \\gset
+select status as s15_complete1_replay_status, (job).next_baseline_ordinal as s15_complete1_replay_next_ordinal
+  from complete_protocol_execution_job(:'s15_job', :'s15_token_a', :'s15_proj') \\gset
+
+-- Test 3: crash/reclaim between the advancement and the next admission.
+RESET ROLE;
+update protocol_execution_jobs set lease_expires_at = now() - interval '1 minute' where id = :'s15_job';
+SET ROLE service_role;
+select claim_token as s15_token_b from claim_protocol_execution_job('worker-s15-b', 300) \\gset
+select count(*)::text as s15_attempts_before_slot2 from protocol_attempts where protocol_id = :'s15_proto' \\gset
+
+select status as s15_admit2_status, (attempt).id as s15_attempt2, (attempt).baseline_ordinal as s15_attempt2_ordinal,
+       (perplexity_call).id as s15_pcall2, (analysis_call).id as s15_acall2
+  from admit_and_reserve_attempt_for_job(:'s15_job', :'s15_token_b', :'s15_proj', 'baseline', (:'s15_job' || ':baseline:2'), 0.01, 0.01) \\gset
+select count(*)::text as s15_attempts_after_slot2 from protocol_attempts where protocol_id = :'s15_proto' \\gset
+select _m5_runtime_test_helper_probe_run(:'s15_proj', 's15-slot2') as s15_probe_run2 \\gset
+select status from start_attempt_for_job(:'s15_job', :'s15_token_b', :'s15_proj', :'s15_attempt2', :'s15_probe_run2');
+select status from mark_external_call_sent_for_job(:'s15_job', :'s15_token_b', :'s15_proj', :'s15_pcall2', :'s15_probe_run2');
+select status from record_provider_call_receipt_for_job(:'s15_job', :'s15_token_b', :'s15_proj', :'s15_pcall2', :'s15_probe_run2', 'success', 200, 'r', null, 100, 0.01, 'measured');
+select status from mark_external_call_sent_for_job(:'s15_job', :'s15_token_b', :'s15_proj', :'s15_acall2', :'s15_probe_run2');
+select status from record_analysis_call_receipt_for_job(:'s15_job', :'s15_token_b', :'s15_proj', :'s15_acall2', :'s15_probe_run2', 'success', 'openai', 'gpt-4o-mini', false, null, null, 100, 0.01, 'measured');
+select status from reconcile_attempt_for_job(:'s15_job', :'s15_token_b', :'s15_proj', :'s15_attempt2', 'completed', 'slot 2 of 2 succeeded');
+
+-- Test 10: read while still running/owned, BEFORE the final completion
+-- call terminalizes the job (get_protocol_execution_job_context requires
+-- claimed/running fencing).
+select completed_baseline_slots as s15_context_completed_slots
+  from get_protocol_execution_job_context(:'s15_job', :'s15_token_b', :'s15_proj') \\gset
+
+select status as s15_complete2_status, (job).status as s15_complete2_job_status
+  from complete_protocol_execution_job(:'s15_job', :'s15_token_b', :'s15_proj') \\gset
+
+select status as s15_enqueue_again_status
+  from enqueue_protocol_execution_job(:'s15_proto', :'s15_proj', 3) \\gset
+
+\\echo '##R## s15_badkey_status' :s15_badkey_status
+\\echo '##R## s15_badkey_attempt' :s15_badkey_attempt
+\\echo '##R## s15_attempts_before_badkey' :s15_attempts_before_badkey
+\\echo '##R## s15_attempts_after_badkey' :s15_attempts_after_badkey
+\\echo '##R## s15_admit1_status' :s15_admit1_status
+\\echo '##R## s15_attempt1_ordinal' :s15_attempt1_ordinal
+\\echo '##R## s15_complete1_status' :s15_complete1_status
+\\echo '##R## s15_complete1_current_attempt' :s15_complete1_current_attempt
+\\echo '##R## s15_complete1_next_ordinal' :s15_complete1_next_ordinal
+\\echo '##R## s15_complete1_job_status' :s15_complete1_job_status
+\\echo '##R## s15_complete1_claim_token' :s15_complete1_claim_token
+\\echo '##R## s15_token_a' :s15_token_a
+\\echo '##R## s15_complete1_replay_status' :s15_complete1_replay_status
+\\echo '##R## s15_complete1_replay_next_ordinal' :s15_complete1_replay_next_ordinal
+\\echo '##R## s15_attempts_before_slot2' :s15_attempts_before_slot2
+\\echo '##R## s15_admit2_status' :s15_admit2_status
+\\echo '##R## s15_attempt2_ordinal' :s15_attempt2_ordinal
+\\echo '##R## s15_attempt1' :s15_attempt1
+\\echo '##R## s15_attempt2' :s15_attempt2
+\\echo '##R## s15_attempts_after_slot2' :s15_attempts_after_slot2
+\\echo '##R## s15_context_completed_slots' :s15_context_completed_slots
+\\echo '##R## s15_complete2_status' :s15_complete2_status
+\\echo '##R## s15_complete2_job_status' :s15_complete2_job_status
+\\echo '##R## s15_enqueue_again_status' :s15_enqueue_again_status
+ROLLBACK;
+
+-- ============================================================
+-- s16 (D-025 test 5): a failed slot 1 root, recovered by a full retry,
+-- still consumes exactly one baseline slot -- never two -- despite
+-- three total attempts existing across the job's lifetime for its two
+-- planned slots (failed root + retried child for slot 1, plus a third,
+-- direct-success root for slot 2). Counters/monitoring must track
+-- distinct completed slots, never raw protocol_attempts rows.
+-- ============================================================
+BEGIN;
+select project_id as s16_proj, protocol_id as s16_proto from _m5_runtime_test_helper_make_fixture('s16', 20, 100.00, 5, 3, 2, 0) \\gset
+select (job).id as s16_job from enqueue_protocol_execution_job(:'s16_proto', :'s16_proj', 3) \\gset
+select claim_token as s16_token from claim_protocol_execution_job('worker-s16', 300) \\gset
+
+select (attempt).id as s16_root1, (perplexity_call).id as s16_root1_pcall, (analysis_call).id as s16_root1_acall
+  from admit_and_reserve_attempt_for_job(:'s16_job', :'s16_token', :'s16_proj', 'baseline', (:'s16_job' || ':baseline:1'), 0.01, 0.01) \\gset
+select _m5_runtime_test_helper_probe_run(:'s16_proj', 's16-root1') as s16_probe_run_root1 \\gset
+select status from start_attempt_for_job(:'s16_job', :'s16_token', :'s16_proj', :'s16_root1', :'s16_probe_run_root1');
+select status from mark_external_call_sent_for_job(:'s16_job', :'s16_token', :'s16_proj', :'s16_root1_pcall', :'s16_probe_run_root1');
+select status from record_provider_call_receipt_for_job(:'s16_job', :'s16_token', :'s16_proj', :'s16_root1_pcall', :'s16_probe_run_root1', 'provider_error', 500, 'r', null, 100, 0.01, 'measured');
+select status from mark_external_call_sent_for_job(:'s16_job', :'s16_token', :'s16_proj', :'s16_root1_acall', :'s16_probe_run_root1');
+select status from record_analysis_call_receipt_for_job(:'s16_job', :'s16_token', :'s16_proj', :'s16_root1_acall', :'s16_probe_run_root1', 'provider_error', 'openai', 'gpt-4o-mini', false, null, null, 100, 0.01, 'measured');
+select status from reconcile_attempt_for_job(:'s16_job', :'s16_token', :'s16_proj', :'s16_root1', 'failed', 'slot 1 root failed both legs');
+
+select status as s16_retry_status, (attempt).id as s16_child1, (attempt).baseline_ordinal as s16_child1_ordinal,
+       (perplexity_call).id as s16_child1_pcall, (analysis_call).id as s16_child1_acall
+  from retry_full_attempt_for_job(:'s16_job', :'s16_token', :'s16_proj', :'s16_root1', 0.02, 0.02) \\gset
+select _m5_runtime_test_helper_probe_run(:'s16_proj', 's16-child1') as s16_probe_run_child1 \\gset
+select status from start_attempt_for_job(:'s16_job', :'s16_token', :'s16_proj', :'s16_child1', :'s16_probe_run_child1');
+select status from mark_external_call_sent_for_job(:'s16_job', :'s16_token', :'s16_proj', :'s16_child1_pcall', :'s16_probe_run_child1');
+select status from record_provider_call_receipt_for_job(:'s16_job', :'s16_token', :'s16_proj', :'s16_child1_pcall', :'s16_probe_run_child1', 'success', 200, 'r', null, 100, 0.01, 'measured');
+select status from mark_external_call_sent_for_job(:'s16_job', :'s16_token', :'s16_proj', :'s16_child1_acall', :'s16_probe_run_child1');
+select status from record_analysis_call_receipt_for_job(:'s16_job', :'s16_token', :'s16_proj', :'s16_child1_acall', :'s16_probe_run_child1', 'success', 'openai', 'gpt-4o-mini', false, null, null, 100, 0.01, 'measured');
+select status from reconcile_attempt_for_job(:'s16_job', :'s16_token', :'s16_proj', :'s16_child1', 'completed', 'slot 1 recovered by its retry');
+
+select status as s16_complete1_status, (job).next_baseline_ordinal as s16_complete1_next_ordinal
+  from complete_protocol_execution_job(:'s16_job', :'s16_token', :'s16_proj') \\gset
+select completed_baseline_slots as s16_context_after_slot1_slots
+  from get_protocol_execution_job_context(:'s16_job', :'s16_token', :'s16_proj') \\gset
+select count(*)::text as s16_total_attempts_after_slot1 from protocol_attempts where job_id = :'s16_job' \\gset
+
+select (attempt).id as s16_root2, (attempt).baseline_ordinal as s16_root2_ordinal,
+       (perplexity_call).id as s16_root2_pcall, (analysis_call).id as s16_root2_acall
+  from admit_and_reserve_attempt_for_job(:'s16_job', :'s16_token', :'s16_proj', 'baseline', (:'s16_job' || ':baseline:2'), 0.01, 0.01) \\gset
+select _m5_runtime_test_helper_probe_run(:'s16_proj', 's16-root2') as s16_probe_run_root2 \\gset
+select status from start_attempt_for_job(:'s16_job', :'s16_token', :'s16_proj', :'s16_root2', :'s16_probe_run_root2');
+select status from mark_external_call_sent_for_job(:'s16_job', :'s16_token', :'s16_proj', :'s16_root2_pcall', :'s16_probe_run_root2');
+select status from record_provider_call_receipt_for_job(:'s16_job', :'s16_token', :'s16_proj', :'s16_root2_pcall', :'s16_probe_run_root2', 'success', 200, 'r', null, 100, 0.01, 'measured');
+select status from mark_external_call_sent_for_job(:'s16_job', :'s16_token', :'s16_proj', :'s16_root2_acall', :'s16_probe_run_root2');
+select status from record_analysis_call_receipt_for_job(:'s16_job', :'s16_token', :'s16_proj', :'s16_root2_acall', :'s16_probe_run_root2', 'success', 'openai', 'gpt-4o-mini', false, null, null, 100, 0.01, 'measured');
+select status from reconcile_attempt_for_job(:'s16_job', :'s16_token', :'s16_proj', :'s16_root2', 'completed', 'slot 2 succeeded directly, no retry needed');
+
+select completed_baseline_slots as s16_context_after_slot2_slots
+  from get_protocol_execution_job_context(:'s16_job', :'s16_token', :'s16_proj') \\gset
+select status as s16_complete2_status
+  from complete_protocol_execution_job(:'s16_job', :'s16_token', :'s16_proj') \\gset
+select count(*)::text as s16_total_attempts_final from protocol_attempts where job_id = :'s16_job' \\gset
+
+\\echo '##R## s16_retry_status' :s16_retry_status
+\\echo '##R## s16_child1_ordinal' :s16_child1_ordinal
+\\echo '##R## s16_complete1_status' :s16_complete1_status
+\\echo '##R## s16_complete1_next_ordinal' :s16_complete1_next_ordinal
+\\echo '##R## s16_context_after_slot1_slots' :s16_context_after_slot1_slots
+\\echo '##R## s16_total_attempts_after_slot1' :s16_total_attempts_after_slot1
+\\echo '##R## s16_root2_ordinal' :s16_root2_ordinal
+\\echo '##R## s16_context_after_slot2_slots' :s16_context_after_slot2_slots
+\\echo '##R## s16_complete2_status' :s16_complete2_status
+\\echo '##R## s16_total_attempts_final' :s16_total_attempts_final
+ROLLBACK;
+
+-- ============================================================
+-- s17 (D-025 test 7): planned_baseline_runs = 0 -- enqueue is refused
+-- with NO_BASELINE_RUNS_PLANNED, creating no job row at all.
+-- ============================================================
+BEGIN;
+select project_id as s17_proj, protocol_id as s17_proto from _m5_runtime_test_helper_make_fixture('s17', 20, 100.00, 5, 3, 0, 0) \\gset
+select status as s17_enqueue_status, coalesce((job).id::text, 'NULL') as s17_job_id
+  from enqueue_protocol_execution_job(:'s17_proto', :'s17_proj', 3) \\gset
+select count(*)::text as s17_jobs_created from protocol_execution_jobs where protocol_id = :'s17_proto' \\gset
+\\echo '##R## s17_enqueue_status' :s17_enqueue_status
+\\echo '##R## s17_job_id' :s17_job_id
+\\echo '##R## s17_jobs_created' :s17_jobs_created
+ROLLBACK;
+
+-- ============================================================
+-- s18 (M4 non-regression, forensic follow-up requested after D-025
+-- Stage A.2): admit_and_reserve_attempt(uuid,uuid,text,text,numeric,uuid)
+-- -- the real, currently-active M4 raw RPC (six declared parameters,
+-- the last with its own default; unchanged text since 0047/0050) -- is
+-- called directly. It must still delegate cleanly to the now-8-arg
+-- _admit_and_reserve_attempt_core purely via that core's own
+-- p_baseline_ordinal default, with zero function-resolution ambiguity:
+-- RESERVED, job_id IS NULL, baseline_ordinal IS NULL, zero
+-- protocol_execution_jobs row ever created, a replay under the same key
+-- resolves to the SAME attempt with zero duplicate, and project/
+-- protocol scoping still refuses a real protocol_id under the wrong
+-- project.
+-- ============================================================
+BEGIN;
+select project_id as s18_proj, protocol_id as s18_proto from _m5_runtime_test_helper_make_fixture('s18') \\gset
+select project_id as s18_other_proj from _m5_runtime_test_helper_make_fixture('s18-other') \\gset
+
+select count(*)::text as s18_jobs_before from protocol_execution_jobs where protocol_id = :'s18_proto' \\gset
+
+select status as s18_admit_status, (attempt).id as s18_attempt,
+       coalesce((attempt).job_id::text, 'NULL') as s18_attempt_job_id,
+       coalesce((attempt).baseline_ordinal::text, 'NULL') as s18_attempt_ordinal
+  from admit_and_reserve_attempt(:'s18_proto', :'s18_proj', 'baseline', 's18:m4-raw-key', 0.01, null) \\gset
+
+select count(*)::text as s18_jobs_after from protocol_execution_jobs where protocol_id = :'s18_proto' \\gset
+
+select status as s18_replay_status, coalesce((attempt).id::text, 'NULL') as s18_replay_attempt
+  from admit_and_reserve_attempt(:'s18_proto', :'s18_proj', 'baseline', 's18:m4-raw-key', 0.01, null) \\gset
+
+select count(*)::text as s18_attempts_total from protocol_attempts where protocol_id = :'s18_proto' \\gset
+
+select status as s18_wrong_project_status
+  from admit_and_reserve_attempt(:'s18_proto', :'s18_other_proj', 'baseline', 's18:wrong-project-key', 0.01, null) \\gset
+
+\\echo '##R## s18_jobs_before' :s18_jobs_before
+\\echo '##R## s18_admit_status' :s18_admit_status
+\\echo '##R## s18_attempt_job_id' :s18_attempt_job_id
+\\echo '##R## s18_attempt_ordinal' :s18_attempt_ordinal
+\\echo '##R## s18_jobs_after' :s18_jobs_after
+\\echo '##R## s18_replay_status' :s18_replay_status
+\\echo '##R## s18_attempt' :s18_attempt
+\\echo '##R## s18_replay_attempt' :s18_replay_attempt
+\\echo '##R## s18_attempts_total' :s18_attempts_total
+\\echo '##R## s18_wrong_project_status' :s18_wrong_project_status
+ROLLBACK;
 `;
 
   writeFileSync(path.join(scratchDir, "02-business.sql"), BUSINESS_SQL);
@@ -1387,6 +1661,108 @@ ROLLBACK;
       r("s14e_actions_after_dupe") === "1"
   );
 
+  // ----------------------------------------------------------------
+  // D-025 — one execution job advances through every planned baseline
+  // slot sequentially (s15/s16/s17).
+  // ----------------------------------------------------------------
+  check(
+    "D-025 test 8: a wrong-ordinal idempotency key (naming slot 2 while next_baseline_ordinal is still 1) is refused with INVALID_IDEMPOTENCY_KEY, zero mutation",
+    r("s15_badkey_status") === "INVALID_IDEMPOTENCY_KEY" &&
+      r("s15_badkey_attempt") === "NULL" &&
+      r("s15_attempts_before_badkey") === r("s15_attempts_after_badkey")
+  );
+  check(
+    "D-025 test 2: slot 1 of 2 admits RESERVED with baseline_ordinal = 1",
+    r("s15_admit1_status") === "RESERVED" && r("s15_attempt1_ordinal") === "1"
+  );
+  check(
+    "D-025 test 2: completing slot 1 of 2 returns NEXT_BASELINE_REQUIRED (never SUCCEEDED), clears current_attempt_id, advances next_baseline_ordinal to 2, and leaves the job running with its same claim_token",
+    r("s15_complete1_status") === "NEXT_BASELINE_REQUIRED" &&
+      r("s15_complete1_current_attempt") === "NULL" &&
+      r("s15_complete1_next_ordinal") === "2" &&
+      r("s15_complete1_job_status") === "running" &&
+      r("s15_complete1_claim_token") === r("s15_token_a")
+  );
+  check(
+    "D-025: a replay of complete_protocol_execution_job after the advancement but before the next admission returns NEXT_BASELINE_REQUIRED idempotently, next_baseline_ordinal unchanged",
+    r("s15_complete1_replay_status") === "NEXT_BASELINE_REQUIRED" && r("s15_complete1_replay_next_ordinal") === "2"
+  );
+  check(
+    "D-025 test 3: a lease loss and reclaim between the advancement and the next admission does not itself create any attempt (still zero for the protocol beyond slot 1's own row)",
+    r("s15_attempts_before_slot2") === "1"
+  );
+  check(
+    "D-025 test 2/3/9: slot 2 admits exactly once (RESERVED) after the reclaim, with baseline_ordinal = 2, a genuinely different attempt from slot 1, and no second root is created",
+    r("s15_admit2_status") === "RESERVED" &&
+      r("s15_attempt2_ordinal") === "2" &&
+      r("s15_attempt2") !== r("s15_attempt1") &&
+      r("s15_attempts_after_slot2") === "2"
+  );
+  check(
+    "D-025 test 10: after both planned baseline slots are completed, get_protocol_execution_job_context reports completed_baseline_slots = 2, read while the job is still running (before the terminal completion call)",
+    r("s15_context_completed_slots") === "2"
+  );
+  check(
+    "D-025 test 2/9: completing slot 2 of 2 (the last planned ordinal) returns SUCCEEDED",
+    r("s15_complete2_status") === "SUCCEEDED" && r("s15_complete2_job_status") === "succeeded"
+  );
+  check(
+    "D-025 (smoke4 shape): a second enqueue for the same protocol (planned_retest_runs = 1, never auto-run by M5) still always returns ALREADY_EXISTS -- no recycling, no second job",
+    r("s15_enqueue_again_status") === "ALREADY_EXISTS"
+  );
+
+  check(
+    "D-025 test 5: a full retry of a failed slot 1 root inherits baseline_ordinal 1 from its source, never a new ordinal",
+    r("s16_retry_status") === "RESERVED" && r("s16_child1_ordinal") === "1"
+  );
+  check(
+    "D-025 test 5: completing the retried child (slot 1) with 2 planned baseline runs returns NEXT_BASELINE_REQUIRED -- a retry never consumes a new slot",
+    r("s16_complete1_status") === "NEXT_BASELINE_REQUIRED" && r("s16_complete1_next_ordinal") === "2"
+  );
+  check(
+    "D-025 test 5/10: after slot 1 (root failed + retried child = 2 rows), completed_baseline_slots is exactly 1 -- distinct ordinals, never raw protocol_attempts rows",
+    r("s16_context_after_slot1_slots") === "1" && r("s16_total_attempts_after_slot1") === "2"
+  );
+  check(
+    "D-025 test 5: slot 2's root succeeds directly with baseline_ordinal 2, no retry needed",
+    r("s16_root2_ordinal") === "2"
+  );
+  check(
+    "D-025 test 5/10: three total attempts exist for this job (failed root + retried child for slot 1, plus slot 2's direct root) but exactly two baseline slots are completed -- counters track slots, never retry rows",
+    r("s16_total_attempts_final") === "3" && r("s16_context_after_slot2_slots") === "2"
+  );
+  check(
+    "D-025 test 5: completing slot 2 (the last of 2 planned ordinals) returns SUCCEEDED",
+    r("s16_complete2_status") === "SUCCEEDED"
+  );
+
+  check(
+    "D-025 test 7: planned_baseline_runs = 0 refuses enqueue with NO_BASELINE_RUNS_PLANNED, creating no job row at all",
+    r("s17_enqueue_status") === "NO_BASELINE_RUNS_PLANNED" && r("s17_job_id") === "NULL" && r("s17_jobs_created") === "0"
+  );
+
+  // ----------------------------------------------------------------
+  // s18 — M4 non-regression (forensic follow-up after D-025 Stage A.2).
+  // ----------------------------------------------------------------
+  check(
+    "s18: the real M4 raw RPC call resolves with zero function ambiguity and returns RESERVED -- delegating to the 8-arg core purely via its own p_baseline_ordinal default",
+    r("s18_jobs_before") === "0" && r("s18_admit_status") === "RESERVED"
+  );
+  check(
+    "s18: the M4-admitted attempt carries job_id IS NULL and baseline_ordinal IS NULL, and creates zero protocol_execution_jobs rows -- the M4 raw path remains structurally job-less after D-025",
+    r("s18_attempt_job_id") === "NULL" && r("s18_attempt_ordinal") === "NULL" && r("s18_jobs_after") === "0"
+  );
+  check(
+    "s18: a replay under the same idempotency key resolves ALREADY_RESERVED to the SAME attempt, zero duplicate row",
+    r("s18_replay_status") === "ALREADY_RESERVED" &&
+      r("s18_replay_attempt") === r("s18_attempt") &&
+      r("s18_attempts_total") === "1"
+  );
+  check(
+    "s18: the same protocol_id under a different project is NOT_FOUND -- project/protocol scoping intact on the M4 raw path",
+    r("s18_wrong_project_status") === "NOT_FOUND"
+  );
+
   // ======================================================================
   // Part C — genuine concurrency: two real, separate psql processes
   // launched together (Promise.all, OS-level parallelism), racing
@@ -1400,7 +1776,7 @@ select project_id as conc1_proj, protocol_id as conc1_proto from _m5_runtime_tes
 select (job).id as conc1_job from enqueue_protocol_execution_job(:'conc1_proto', :'conc1_proj', 3) \\gset
 select claim_token as conc1_token from claim_protocol_execution_job('worker-conc1', 300) \\gset
 select (attempt).id as conc1_attempt, (perplexity_call).id as conc1_pcall
-  from admit_and_reserve_attempt_for_job(:'conc1_job', :'conc1_token', :'conc1_proj', 'baseline', 'conc1:initial-attempt', 0.01, 0.01) \\gset
+  from admit_and_reserve_attempt_for_job(:'conc1_job', :'conc1_token', :'conc1_proj', 'baseline', (:'conc1_job' || ':baseline:1'), 0.01, 0.01) \\gset
 select _m5_runtime_test_helper_probe_run(:'conc1_proj', 'conc1') as conc1_probe_run \\gset
 select status from start_attempt_for_job(:'conc1_job', :'conc1_token', :'conc1_proj', :'conc1_attempt', :'conc1_probe_run');
 select status from mark_external_call_sent_for_job(:'conc1_job', :'conc1_token', :'conc1_proj', :'conc1_pcall', :'conc1_probe_run');
@@ -1410,7 +1786,7 @@ select project_id as conc2_proj, protocol_id as conc2_proto from _m5_runtime_tes
 select (job).id as conc2_job from enqueue_protocol_execution_job(:'conc2_proto', :'conc2_proj', 3) \\gset
 select claim_token as conc2_token from claim_protocol_execution_job('worker-conc2', 300) \\gset
 select (attempt).id as conc2_attempt, (perplexity_call).id as conc2_pcall, (analysis_call).id as conc2_acall
-  from admit_and_reserve_attempt_for_job(:'conc2_job', :'conc2_token', :'conc2_proj', 'baseline', 'conc2:initial-attempt', 0.01, 0.01) \\gset
+  from admit_and_reserve_attempt_for_job(:'conc2_job', :'conc2_token', :'conc2_proj', 'baseline', (:'conc2_job' || ':baseline:1'), 0.01, 0.01) \\gset
 select _m5_runtime_test_helper_probe_run(:'conc2_proj', 'conc2') as conc2_probe_run \\gset
 select status from start_attempt_for_job(:'conc2_job', :'conc2_token', :'conc2_proj', :'conc2_attempt', :'conc2_probe_run');
 select status from mark_external_call_sent_for_job(:'conc2_job', :'conc2_token', :'conc2_proj', :'conc2_pcall', :'conc2_probe_run');
@@ -1419,6 +1795,25 @@ select status from mark_external_call_sent_for_job(:'conc2_job', :'conc2_token',
 select status from record_analysis_call_receipt_for_job(:'conc2_job', :'conc2_token', :'conc2_proj', :'conc2_acall', :'conc2_probe_run', 'provider_error', 'openai', 'gpt-4o-mini', false, null, null, 100, 0.01, 'measured');
 select status from reconcile_attempt_for_job(:'conc2_job', :'conc2_token', :'conc2_proj', :'conc2_attempt', 'failed', 'both legs failed, for concurrent full-retry race');
 
+-- D-025 race 3 fixture: planned_baseline_runs = 2, slot 1 admitted and
+-- run to completion, then complete_protocol_execution_job called once
+-- (sequentially, here in setup) so next_baseline_ordinal = 2 and
+-- current_attempt_id is null before the two racing processes below both
+-- try to admit slot 2 with the identical, correct ordinal-2 key.
+select project_id as conc3_proj, protocol_id as conc3_proto from _m5_runtime_test_helper_make_fixture('conc3', 20, 100.00, 5, 3, 2, 0) \\gset
+select (job).id as conc3_job from enqueue_protocol_execution_job(:'conc3_proto', :'conc3_proj', 3) \\gset
+select claim_token as conc3_token from claim_protocol_execution_job('worker-conc3', 300) \\gset
+select (attempt).id as conc3_attempt1, (perplexity_call).id as conc3_pcall1, (analysis_call).id as conc3_acall1
+  from admit_and_reserve_attempt_for_job(:'conc3_job', :'conc3_token', :'conc3_proj', 'baseline', (:'conc3_job' || ':baseline:1'), 0.01, 0.01) \\gset
+select _m5_runtime_test_helper_probe_run(:'conc3_proj', 'conc3-slot1') as conc3_probe_run1 \\gset
+select status from start_attempt_for_job(:'conc3_job', :'conc3_token', :'conc3_proj', :'conc3_attempt1', :'conc3_probe_run1');
+select status from mark_external_call_sent_for_job(:'conc3_job', :'conc3_token', :'conc3_proj', :'conc3_pcall1', :'conc3_probe_run1');
+select status from record_provider_call_receipt_for_job(:'conc3_job', :'conc3_token', :'conc3_proj', :'conc3_pcall1', :'conc3_probe_run1', 'success', 200, 'r', null, 100, 0.01, 'measured');
+select status from mark_external_call_sent_for_job(:'conc3_job', :'conc3_token', :'conc3_proj', :'conc3_acall1', :'conc3_probe_run1');
+select status from record_analysis_call_receipt_for_job(:'conc3_job', :'conc3_token', :'conc3_proj', :'conc3_acall1', :'conc3_probe_run1', 'success', 'openai', 'gpt-4o-mini', false, null, null, 100, 0.01, 'measured');
+select status from reconcile_attempt_for_job(:'conc3_job', :'conc3_token', :'conc3_proj', :'conc3_attempt1', 'completed', 'slot 1 succeeded, advancing to slot 2 before the race');
+select status from complete_protocol_execution_job(:'conc3_job', :'conc3_token', :'conc3_proj');
+
 \\echo '##R## conc1_job' :conc1_job
 \\echo '##R## conc1_proj' :conc1_proj
 \\echo '##R## conc1_attempt' :conc1_attempt
@@ -1426,6 +1821,9 @@ select status from reconcile_attempt_for_job(:'conc2_job', :'conc2_token', :'con
 \\echo '##R## conc2_token' :conc2_token
 \\echo '##R## conc2_proj' :conc2_proj
 \\echo '##R## conc2_attempt' :conc2_attempt
+\\echo '##R## conc3_job' :conc3_job
+\\echo '##R## conc3_token' :conc3_token
+\\echo '##R## conc3_proj' :conc3_proj
 `;
 
   writeFileSync(path.join(scratchDir, "03-concurrency-setup.sql"), CONCURRENCY_SETUP_SQL);
@@ -1435,6 +1833,7 @@ select status from reconcile_attempt_for_job(:'conc2_job', :'conc2_token', :'con
 
   const conc1Sql = `SET ROLE service_role; select status, outcome, denial_code, (new_attempt).id from authorize_operator_retry('${s("conc1_job")}', '${s("conc1_proj")}', 'qa', 'racer', 'retry_full_attempt', '${s("conc1_attempt")}', 0.02, 'conc1:race-key', null, 0.02);`;
   const conc2Sql = `SET ROLE service_role; select status, (attempt).id from retry_full_attempt_for_job('${s("conc2_job")}', '${s("conc2_token")}', '${s("conc2_proj")}', '${s("conc2_attempt")}', 0.02, 0.02);`;
+  const conc3Sql = `SET ROLE service_role; select status, (attempt).id from admit_and_reserve_attempt_for_job('${s("conc3_job")}', '${s("conc3_token")}', '${s("conc3_proj")}', 'baseline', '${s("conc3_job")}:baseline:2', 0.01, 0.01);`;
 
   await runConcurrencyRaces();
 
@@ -1501,11 +1900,48 @@ select status from reconcile_attempt_for_job(:'conc2_job', :'conc2_token', :'con
     const verify2 = run("psql", [dbUrl, "-X", "-q", "-t", "-A", "-c", verifyRace2Sql]).trim();
     check("concurrency race 2: exactly one retry child attempt exists despite the race, never two", verify2 === "1");
 
-    // Clean up the two committed concurrency fixtures explicitly (this
+    // Race 3 (D-025 test 4): two truly concurrent admit_and_reserve_
+    // attempt_for_job calls, identical correct ordinal-2 key, against the
+    // SAME job -- current_attempt_id is null and next_baseline_ordinal is
+    // 2 (slot 1 already completed and advanced in setup, above). The
+    // job's own row lock (SELECT ... FOR UPDATE, taken before either
+    // caller's current_attempt_id check) is what actually guarantees a
+    // single winner here, exactly as it already does for a fresh job's
+    // very first admission -- this proves that guarantee still holds for
+    // a SECOND slot's admission after D-025, not only the first.
+    const [race3a, race3b] = await Promise.all([
+      spawnAsync("psql", [dbUrl, "-X", "-q", "-t", "-A", "-F", "|", "-c", conc3Sql]),
+      spawnAsync("psql", [dbUrl, "-X", "-q", "-t", "-A", "-F", "|", "-c", conc3Sql]),
+    ]);
+    const race3aLine = race3a.stdout.trim().split("\n").filter(Boolean).pop() ?? "";
+    const race3bLine = race3b.stdout.trim().split("\n").filter(Boolean).pop() ?? "";
+    check(
+      "concurrency race 3: two truly concurrent admit_and_reserve_attempt_for_job calls for slot 2, same correct key, both processes exit cleanly",
+      race3a.code === 0 && race3b.code === 0
+    );
+    const race3aParts = race3aLine.split("|");
+    const race3bParts = race3bLine.split("|");
+    const race3Statuses = [race3aParts[0], race3bParts[0]].sort();
+    check(
+      "concurrency race 3: exactly one caller observes RESERVED (creates slot 2's root attempt) and the other observes RESUME_CURRENT_ATTEMPT (the job row lock already serialized them) -- never two RESERVED",
+      race3aParts.length === 2 &&
+        race3bParts.length === 2 &&
+        race3Statuses[0] === "RESERVED" &&
+        race3Statuses[1] === "RESUME_CURRENT_ATTEMPT"
+    );
+    check(
+      "concurrency race 3: both callers' attempt id refers to the SAME single slot-2 root attempt",
+      race3aParts[1] !== undefined && race3aParts[1].length > 0 && race3aParts[1] === race3bParts[1]
+    );
+    const verifyRace3Sql = `SET ROLE service_role; select count(*) from protocol_attempts where job_id = '${s("conc3_job")}' and baseline_ordinal = 2 and retry_of_attempt_id is null;`;
+    const verify3 = run("psql", [dbUrl, "-X", "-q", "-t", "-A", "-c", verifyRace3Sql]).trim();
+    check("concurrency race 3: exactly one root attempt exists for slot 2 despite the race, never two", verify3 === "1");
+
+    // Clean up the three committed concurrency fixtures explicitly (this
     // part of the test cannot use ROLLBACK, since the whole point was
     // cross-session visibility) -- the disposable database itself is
     // destroyed at the end of this run regardless.
-    const cleanupSql = `RESET ROLE; delete from projects where id in ('${s("conc1_proj")}', '${s("conc2_proj")}');`;
+    const cleanupSql = `RESET ROLE; delete from projects where id in ('${s("conc1_proj")}', '${s("conc2_proj")}', '${s("conc3_proj")}');`;
     tryRun("psql", [dbUrl, "-X", "-q", "-c", cleanupSql]);
   }
 }

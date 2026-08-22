@@ -237,7 +237,7 @@ async function main(): Promise<void> {
     claimToken,
     projectId: project.id,
     attemptKind: "baseline" as AttemptKind,
-    idempotencyKey: `${jobId}:initial-attempt`,
+    idempotencyKey: `${jobId}:baseline:1`,
     perplexityReservedCostUsd: 0.01,
     analysisReservedCostUsd: 0.01,
   });
@@ -713,6 +713,286 @@ async function main(): Promise<void> {
   );
 
   // ========================================================================
+  // Part I — D-025: one execution job advances through every planned
+  //          baseline slot sequentially.
+  // ========================================================================
+  console.log("\n[I] MemoryAdapter — D-025 multi-baseline cardinality");
+
+  /** Runs a fresh attempt's Perplexity + analysis calls through sent/receipt/reconcile-completed, in one call. */
+  async function completeBaselineSlot(
+    jobId: string,
+    claimToken: string,
+    projectId: string,
+    attemptId: string,
+    perplexityCallId: string,
+    analysisCallId: string
+  ): Promise<void> {
+    const start = await db.createProbeRunAndStartAttemptForJob({
+      jobId, claimToken, projectId, attemptId,
+      platform: "perplexity", probeMode: "simulated",
+      datasetId: "44444444-4444-4444-8444-444444444444", datasetSourceType: "manual_scan",
+    });
+    const probeRunId = must(start.probeRun, "probe run").id;
+    await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: perplexityCallId, probeRunId });
+    await db.recordProviderCallReceiptForJob({
+      jobId, claimToken, projectId, externalCallId: perplexityCallId, probeRunId, outcome: "success",
+      httpStatus: 200, providerRequestId: "req-x", rawResponseSha256: "b".repeat(64), latencyMs: 400,
+    });
+    await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: analysisCallId, probeRunId });
+    await db.recordAnalysisCallReceiptForJob({
+      jobId, claimToken, projectId, externalCallId: analysisCallId, probeRunId, outcome: "success",
+      provider: "openai", model: "gpt-4o-mini", usedMock: false,
+      requestSha256: "c".repeat(64), responseSha256: "d".repeat(64), latencyMs: 200,
+    });
+    await db.reconcileAttemptForJob({ jobId, claimToken, projectId, attemptId, status: "completed" });
+  }
+
+  // -- Test 2/6/7/8/9/10 (user's numbered list): planned_baseline_runs = 2,
+  //    planned_retest_runs = 1 -- the exact smoke4 shape.
+  {
+    const mbProject = await db.createProject({ domain: "multi-baseline.test" });
+    const mbQuestion = await db.createBuyerQuestion({ projectId: mbProject.id });
+    const mbVersion = await db.createBuyerQuestionVersion({
+      buyerQuestionId: mbQuestion.id, projectId: mbProject.id, versionNumber: 1,
+      promptText: "Multi-baseline fixture", promptHash: "e".repeat(64),
+      intentType: "comparison", commercialValue: 3, winnability: 3, priority: 10,
+      rationale: "fixture", provenance: "founder_supplied",
+    });
+    await db.approveBuyerQuestionVersion({
+      versionId: mbVersion.id, projectId: mbProject.id, approvedBy: "11111111-1111-4111-8111-111111111111",
+    });
+    const mbProtocol = await db.createProtocol({
+      ...PROTOCOL_FIXTURE, plannedBaselineRuns: 2, plannedRetestRuns: 1, runCap: 5,
+      projectId: mbProject.id, buyerQuestionVersionId: mbVersion.id,
+    });
+    await db.approveProtocol({
+      protocolId: mbProtocol.id, projectId: mbProject.id, approvedBy: "11111111-1111-4111-8111-111111111111",
+    });
+
+    const mbEnqueue = await db.enqueueProtocolExecutionJob({ protocolId: mbProtocol.id, projectId: mbProject.id });
+    const mbJobId = must(mbEnqueue.job, "multi-baseline job").id;
+    const mbClaim = await db.claimProtocolExecutionJob({ workerId: "mb-worker", leaseSeconds: 300 });
+    const mbClaimToken = must(mbClaim.claimToken, "multi-baseline claim token");
+
+    // Test 8: a wrong-ordinal key, while current_attempt_id is still null,
+    // is refused with zero mutation -- checked BEFORE the real admission.
+    const mbBadKey = await db.admitAndReserveAttemptForJob({
+      jobId: mbJobId, claimToken: mbClaimToken, projectId: mbProject.id, attemptKind: "baseline",
+      idempotencyKey: `${mbJobId}:baseline:2`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
+    });
+    check(
+      "D-025 test 8: an idempotency key for the wrong ordinal (2, while next_baseline_ordinal is still 1) is refused with INVALID_IDEMPOTENCY_KEY, zero mutation",
+      mbBadKey.outcome === "INVALID_IDEMPOTENCY_KEY" && mbBadKey.attempt === null
+    );
+
+    // Slot 1/2: admit, run to completion.
+    const mbAdmit1 = await db.admitAndReserveAttemptForJob({
+      jobId: mbJobId, claimToken: mbClaimToken, projectId: mbProject.id, attemptKind: "baseline",
+      idempotencyKey: `${mbJobId}:baseline:1`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
+    });
+    check(
+      "D-025 test 2: slot 1 admits RESERVED with baselineOrdinal 1",
+      mbAdmit1.outcome === "RESERVED" && mbAdmit1.attempt?.baselineOrdinal === 1
+    );
+    const mbAttempt1Id = must(mbAdmit1.attempt, "slot 1 attempt").id;
+    await completeBaselineSlot(
+      mbJobId, mbClaimToken, mbProject.id, mbAttempt1Id,
+      must(mbAdmit1.perplexityCall, "slot 1 perplexity call").id,
+      must(mbAdmit1.analysisCall, "slot 1 analysis call").id
+    );
+
+    const mbComplete1 = await db.completeProtocolExecutionJob({ jobId: mbJobId, claimToken: mbClaimToken, projectId: mbProject.id });
+    check(
+      "D-025 test 2: completing slot 1 of 2 returns NEXT_BASELINE_REQUIRED, never SUCCEEDED",
+      mbComplete1.outcome === "NEXT_BASELINE_REQUIRED"
+    );
+    check(
+      "D-025 test 2: current_attempt_id is cleared and next_baseline_ordinal advances to 2, job stays running with the same claim/lease",
+      mbComplete1.job?.currentAttemptId === null &&
+        mbComplete1.job?.nextBaselineOrdinal === 2 &&
+        mbComplete1.job?.status === "running" &&
+        mbComplete1.job?.claimToken === mbClaimToken
+    );
+
+    // Test: replay after advancement but before the next admission ->
+    // idempotent NEXT_BASELINE_REQUIRED, zero further mutation.
+    const mbCompleteReplay = await db.completeProtocolExecutionJob({ jobId: mbJobId, claimToken: mbClaimToken, projectId: mbProject.id });
+    check(
+      "D-025: a replay of complete() after advancement but before the next admission returns NEXT_BASELINE_REQUIRED idempotently, ordinal unchanged",
+      mbCompleteReplay.outcome === "NEXT_BASELINE_REQUIRED" && mbCompleteReplay.job?.nextBaselineOrdinal === 2
+    );
+
+    const mbContextAfterSlot1 = await db.getProtocolExecutionJobContext({ jobId: mbJobId, claimToken: mbClaimToken, projectId: mbProject.id });
+    check(
+      "D-025 test 10: after slot 1, completedBaselineSlots is exactly 1 -- never confused with the raw protocol_attempts row count",
+      mbContextAfterSlot1.completedBaselineSlots === 1
+    );
+
+    // Slot 2/2: fresh key naming ordinal 2, admits a genuinely new root attempt.
+    const mbAdmit2 = await db.admitAndReserveAttemptForJob({
+      jobId: mbJobId, claimToken: mbClaimToken, projectId: mbProject.id, attemptKind: "baseline",
+      idempotencyKey: `${mbJobId}:baseline:2`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
+    });
+    check(
+      "D-025 test 2/9: slot 2 admits RESERVED with baselineOrdinal 2, a genuinely different attempt from slot 1",
+      mbAdmit2.outcome === "RESERVED" &&
+        mbAdmit2.attempt?.baselineOrdinal === 2 &&
+        mbAdmit2.attempt?.id !== mbAttempt1Id
+    );
+    const mbAttempt2Id = must(mbAdmit2.attempt, "slot 2 attempt").id;
+
+    // Test 3/4 (adapter-level approximation): a second admission call for
+    // the same slot 2, after it is already current, resumes rather than
+    // creating a second root -- the same single-pointer guard that makes
+    // true two-process concurrency safe in the real RPC (proven with real
+    // locking in the disposable-Postgres runtime test, not here).
+    const mbAdmit2Again = await db.admitAndReserveAttemptForJob({
+      jobId: mbJobId, claimToken: mbClaimToken, projectId: mbProject.id, attemptKind: "baseline",
+      idempotencyKey: `${mbJobId}:baseline:2`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
+    });
+    check(
+      "D-025 test 3/4: a repeated admission call for the same (now-current) slot 2 resumes the same attempt, never a second root",
+      mbAdmit2Again.outcome === "RESUME_CURRENT_ATTEMPT" && mbAdmit2Again.attempt?.id === mbAttempt2Id
+    );
+
+    await completeBaselineSlot(
+      mbJobId, mbClaimToken, mbProject.id, mbAttempt2Id,
+      must(mbAdmit2.perplexityCall, "slot 2 perplexity call").id,
+      must(mbAdmit2.analysisCall, "slot 2 analysis call").id
+    );
+
+    // Read the context WHILE the job is still 'running' (both slots'
+    // attempts are reconciled-completed, but complete_protocol_execution_job
+    // has not yet been called for slot 2) -- get_protocol_execution_job_
+    // context requires claimed/running fencing, so this must run before the
+    // job reaches its terminal 'succeeded' status below.
+    const mbContextAfterSlot2 = await db.getProtocolExecutionJobContext({ jobId: mbJobId, claimToken: mbClaimToken, projectId: mbProject.id });
+    check(
+      "D-025 test 9/10: after both planned baseline slots complete, completedBaselineSlots is exactly 2 (smoke4 shape: 2 baseline executed, its planned_retest_runs=1 never auto-run by M5)",
+      mbContextAfterSlot2.completedBaselineSlots === 2
+    );
+
+    const mbComplete2 = await db.completeProtocolExecutionJob({ jobId: mbJobId, claimToken: mbClaimToken, projectId: mbProject.id });
+    check(
+      "D-025 test 2: completing slot 2 of 2 (the last planned ordinal) returns SUCCEEDED",
+      mbComplete2.outcome === "SUCCEEDED" && mbComplete2.job?.status === "succeeded"
+    );
+
+    // A second enqueue for this same protocol still always returns
+    // ALREADY_EXISTS, unaffected by D-025 -- retest (M7) would be a
+    // separate protocols row with its own protocol_id, never this one.
+    const mbEnqueueAgain = await db.enqueueProtocolExecutionJob({ protocolId: mbProtocol.id, projectId: mbProject.id });
+    check(
+      "D-025: a second enqueue for the same (now succeeded) protocol is still always ALREADY_EXISTS -- no recycling",
+      mbEnqueueAgain.outcome === "ALREADY_EXISTS" && mbEnqueueAgain.job?.id === mbJobId
+    );
+  }
+
+  // -- Test 5: a failed slot 1, recovered by a full retry, still consumes
+  //    exactly one baseline slot -- never two, despite three total attempts
+  //    existing across the job's lifetime for two planned slots.
+  {
+    // buildFailedAttemptFixture's protocol uses PROTOCOL_FIXTURE's default
+    // plannedBaselineRuns: 1 -- built inline instead with plannedBaselineRuns:
+    // 2, so completing the retried child still leaves one slot open.
+    const frProject = await db.createProject({ domain: "d025-full-retry.test" });
+    const frQuestion = await db.createBuyerQuestion({ projectId: frProject.id });
+    const frVersion = await db.createBuyerQuestionVersion({
+      buyerQuestionId: frQuestion.id, projectId: frProject.id, versionNumber: 1,
+      promptText: "D-025 full retry fixture", promptHash: "f".repeat(64),
+      intentType: "comparison", commercialValue: 3, winnability: 3, priority: 10,
+      rationale: "fixture", provenance: "founder_supplied",
+    });
+    await db.approveBuyerQuestionVersion({
+      versionId: frVersion.id, projectId: frProject.id, approvedBy: "11111111-1111-4111-8111-111111111111",
+    });
+    const frProtocol = await db.createProtocol({
+      ...PROTOCOL_FIXTURE, plannedBaselineRuns: 2, retryCap: 2,
+      projectId: frProject.id, buyerQuestionVersionId: frVersion.id,
+    });
+    await db.approveProtocol({
+      protocolId: frProtocol.id, projectId: frProject.id, approvedBy: "11111111-1111-4111-8111-111111111111",
+    });
+    const frEnqueue = await db.enqueueProtocolExecutionJob({ protocolId: frProtocol.id, projectId: frProject.id });
+    const frJobId = must(frEnqueue.job, "full-retry-slot job").id;
+    const frClaim = await db.claimProtocolExecutionJob({ workerId: "d025-fr-worker", leaseSeconds: 300 });
+    const frClaimToken = must(frClaim.claimToken, "full-retry-slot claim token");
+
+    const frAdmit = await db.admitAndReserveAttemptForJob({
+      jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id, attemptKind: "baseline",
+      idempotencyKey: `${frJobId}:baseline:1`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
+    });
+    const frSourceAttemptId = must(frAdmit.attempt, "full-retry-slot source attempt").id;
+    // Fail slot 1's root attempt outright (Perplexity provider_error on both legs).
+    const frStart = await db.createProbeRunAndStartAttemptForJob({
+      jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id, attemptId: frSourceAttemptId,
+      platform: "perplexity", probeMode: "simulated",
+      datasetId: "44444444-4444-4444-8444-444444444444", datasetSourceType: "manual_scan",
+    });
+    const frProbeRunId = must(frStart.probeRun, "full-retry-slot probe run").id;
+    const frPerplexityCallId = must(frAdmit.perplexityCall, "full-retry-slot perplexity call").id;
+    const frAnalysisCallId = must(frAdmit.analysisCall, "full-retry-slot analysis call").id;
+    await db.markExternalCallSentForJob({ jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id, externalCallId: frPerplexityCallId, probeRunId: frProbeRunId });
+    await db.recordProviderCallReceiptForJob({ jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id, externalCallId: frPerplexityCallId, probeRunId: frProbeRunId, outcome: "provider_error" });
+    await db.markExternalCallSentForJob({ jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id, externalCallId: frAnalysisCallId, probeRunId: frProbeRunId });
+    await db.recordAnalysisCallReceiptForJob({ jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id, externalCallId: frAnalysisCallId, probeRunId: frProbeRunId, outcome: "provider_error" });
+    await db.reconcileAttemptForJob({ jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id, attemptId: frSourceAttemptId, status: "failed" });
+
+    const frRetry = await db.retryFullAttemptForJob({
+      jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id,
+      sourceAttemptId: frSourceAttemptId, perplexityReservedCostUsd: 0.02, analysisReservedCostUsd: 0.02,
+    });
+    check(
+      "D-025 test 5: a full retry of a failed slot 1 root inherits baselineOrdinal 1 from its source, never a new ordinal",
+      frRetry.outcome === "RESERVED" && frRetry.attempt?.baselineOrdinal === 1 && frRetry.attempt?.id !== frSourceAttemptId
+    );
+    const frChildAttemptId = must(frRetry.attempt, "full-retry-slot child attempt").id;
+    await completeBaselineSlot(
+      frJobId, frClaimToken, frProject.id, frChildAttemptId,
+      must(frRetry.perplexityCall, "full-retry-slot child perplexity call").id,
+      must(frRetry.analysisCall, "full-retry-slot child analysis call").id
+    );
+
+    const frComplete = await db.completeProtocolExecutionJob({ jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id });
+    check(
+      "D-025 test 5: completing the retried child (slot 1) with 2 planned baseline runs returns NEXT_BASELINE_REQUIRED -- a retry never consumes a new slot",
+      frComplete.outcome === "NEXT_BASELINE_REQUIRED" && frComplete.job?.nextBaselineOrdinal === 2
+    );
+    const frContext = await db.getProtocolExecutionJobContext({ jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id });
+    check(
+      "D-025 test 5: three attempts exist for this job (failed root + retried child + none yet for slot 2) but exactly one baseline slot is completed -- counters track slots, never raw attempt rows",
+      frContext.completedBaselineSlots === 1
+    );
+  }
+
+  // -- Test 7: planned_baseline_runs = 0 -- enqueue is refused, no job row.
+  {
+    const zbProject = await db.createProject({ domain: "d025-zero-baseline.test" });
+    const zbQuestion = await db.createBuyerQuestion({ projectId: zbProject.id });
+    const zbVersion = await db.createBuyerQuestionVersion({
+      buyerQuestionId: zbQuestion.id, projectId: zbProject.id, versionNumber: 1,
+      promptText: "D-025 zero baseline fixture", promptHash: "9".repeat(64),
+      intentType: "comparison", commercialValue: 3, winnability: 3, priority: 10,
+      rationale: "fixture", provenance: "founder_supplied",
+    });
+    await db.approveBuyerQuestionVersion({
+      versionId: zbVersion.id, projectId: zbProject.id, approvedBy: "11111111-1111-4111-8111-111111111111",
+    });
+    const zbProtocol = await db.createProtocol({
+      ...PROTOCOL_FIXTURE, plannedBaselineRuns: 0,
+      projectId: zbProject.id, buyerQuestionVersionId: zbVersion.id,
+    });
+    await db.approveProtocol({
+      protocolId: zbProtocol.id, projectId: zbProject.id, approvedBy: "11111111-1111-4111-8111-111111111111",
+    });
+    const zbEnqueue = await db.enqueueProtocolExecutionJob({ protocolId: zbProtocol.id, projectId: zbProject.id });
+    check(
+      "D-025 test 7: planned_baseline_runs = 0 refuses enqueue with NO_BASELINE_RUNS_PLANNED, creating no job row",
+      zbEnqueue.outcome === "NO_BASELINE_RUNS_PLANNED" && zbEnqueue.job === null
+    );
+  }
+
+  // ========================================================================
   // Part H — SupabaseAdapter: RPC name/parameter mapping + row-shape parity.
   // ========================================================================
   console.log("\n[H] SupabaseAdapter — RPC mapping (stub client, no network)");
@@ -796,7 +1076,7 @@ async function main(): Promise<void> {
 
   const ATTEMPT_ROW = {
     id: "a1", project_id: "p1", protocol_id: "pr1", buyer_question_version_id: "v1",
-    attempt_kind: "baseline", status: "reserved", idempotency_key: "j1:initial-attempt",
+    attempt_kind: "baseline", status: "reserved", idempotency_key: "j1:baseline:1",
     reserved_cost_usd: 0.02, actual_cost_usd: null, probe_run_id: null,
     retry_of_attempt_id: null, termination_reason: null,
     reserved_at: "2026-01-01T00:00:00.000Z", last_activity_at: "2026-01-01T00:00:00.000Z",
@@ -821,7 +1101,7 @@ async function main(): Promise<void> {
   };
   const supaAdmit = await supabaseAdapter.admitAndReserveAttemptForJob({
     jobId: "j1", claimToken: "tok", projectId: "p1", attemptKind: "baseline",
-    idempotencyKey: "j1:initial-attempt", perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
+    idempotencyKey: "j1:baseline:1", perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
   });
   check(
     "Supabase admitAndReserveAttemptForJob: correct RPC name, all 8 params, jobId field mapped onto the attempt",
@@ -1125,7 +1405,7 @@ async function buildFailedAttemptFixture(
   const { jobId, claimToken } = await claimFreshJob(db, projectId, protocolId, `${tag}-worker`);
   const admit = await db.admitAndReserveAttemptForJob({
     jobId, claimToken, projectId, attemptKind: "baseline",
-    idempotencyKey: `${jobId}:initial-attempt`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
+    idempotencyKey: `${jobId}:baseline:1`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
   });
   const attempt = must(admit.attempt, `${tag} attempt`);
   const perplexityCall = must(admit.perplexityCall, `${tag} perplexity call`);
@@ -1157,7 +1437,7 @@ async function buildAnalysisRetryFixture(
   const { jobId, claimToken } = await claimFreshJob(db, projectId, protocolId, `${tag}-worker`);
   const admit = await db.admitAndReserveAttemptForJob({
     jobId, claimToken, projectId, attemptKind: "baseline",
-    idempotencyKey: `${jobId}:initial-attempt`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
+    idempotencyKey: `${jobId}:baseline:1`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
   });
   const attempt = must(admit.attempt, `${tag} attempt`);
   const perplexityCall = must(admit.perplexityCall, `${tag} perplexity call`);
@@ -1190,7 +1470,7 @@ async function buildNeedsReviewFixture(
   const { jobId, claimToken } = await claimFreshJob(db, projectId, protocolId, `${tag}-worker`);
   const admit = await db.admitAndReserveAttemptForJob({
     jobId, claimToken, projectId, attemptKind: "baseline",
-    idempotencyKey: `${jobId}:initial-attempt`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
+    idempotencyKey: `${jobId}:baseline:1`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
   });
   const attempt = must(admit.attempt, `${tag} attempt`);
   const perplexityCall = must(admit.perplexityCall, `${tag} perplexity call`);
@@ -1217,7 +1497,7 @@ async function buildAmbiguousFixture(
   const { jobId, claimToken } = await claimFreshJob(db, projectId, protocolId, `${tag}-worker`);
   const admit = await db.admitAndReserveAttemptForJob({
     jobId, claimToken, projectId, attemptKind: "baseline",
-    idempotencyKey: `${jobId}:initial-attempt`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
+    idempotencyKey: `${jobId}:baseline:1`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
   });
   const attempt = must(admit.attempt, `${tag} attempt`);
   const perplexityCall = must(admit.perplexityCall, `${tag} perplexity call`);
@@ -1241,7 +1521,7 @@ async function buildHealthyRunningFixture(
   const { jobId, claimToken } = await claimFreshJob(db, projectId, protocolId, `${tag}-worker`);
   await db.admitAndReserveAttemptForJob({
     jobId, claimToken, projectId, attemptKind: "baseline",
-    idempotencyKey: `${jobId}:initial-attempt`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
+    idempotencyKey: `${jobId}:baseline:1`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
   });
   return { jobId, claimToken, projectId };
 }

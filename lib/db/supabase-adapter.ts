@@ -1225,6 +1225,8 @@ interface ProtocolAttemptDbRow {
   created_at: string;
   /** M5 (migration 0050) — absent (undefined) on rows returned by RPCs that predate this column; normalized to null. */
   job_id?: string | null;
+  /** D-025 (migration 0051) — absent (undefined) on rows returned by RPCs that predate this column; normalized to null. */
+  baseline_ordinal?: number | null;
 }
 
 function mapProtocolAttempt(r: ProtocolAttemptDbRow): ProtocolAttempt {
@@ -1246,6 +1248,7 @@ function mapProtocolAttempt(r: ProtocolAttemptDbRow): ProtocolAttempt {
     terminalizedAt: r.terminalized_at,
     createdAt: r.created_at,
     jobId: r.job_id ?? null,
+    baselineOrdinal: r.baseline_ordinal ?? null,
   };
 }
 
@@ -1265,6 +1268,8 @@ interface ProtocolExecutionJobDbRow {
   attempt_count: number;
   max_attempts: number;
   current_attempt_id: string | null;
+  /** D-025 (migration 0051) — absent (undefined) on rows returned by RPCs that predate this column; normalized to 1. */
+  next_baseline_ordinal?: number;
   needs_review_reason: string | null;
   failure_reason: string | null;
   created_at: string;
@@ -1283,6 +1288,7 @@ function mapProtocolExecutionJob(r: ProtocolExecutionJobDbRow): ProtocolExecutio
     attemptCount: r.attempt_count,
     maxAttempts: r.max_attempts,
     currentAttemptId: r.current_attempt_id,
+    nextBaselineOrdinal: r.next_baseline_ordinal ?? 1,
     needsReviewReason: r.needs_review_reason,
     failureReason: r.failure_reason,
     createdAt: r.created_at,
@@ -3642,6 +3648,7 @@ export const supabaseAdapter: DbAdapter = {
         .map(mapAnalysisCallReceiptNullable)
         .filter((r): r is AnalysisCallReceipt => r !== null),
       probeRun: mapProbeRunNullable(row.probe_run as ProbeRunDbRow | null),
+      completedBaselineSlots: (row.completed_baseline_slots as number | null) ?? null,
     };
   },
 

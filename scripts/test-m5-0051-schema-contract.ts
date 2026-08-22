@@ -486,7 +486,10 @@ function main(): void {
     "get_protocol_execution_job_context is STABLE (read-only), not VOLATILE, and takes no FOR UPDATE lock",
     (() => {
       const idx = code.indexOf("public.get_protocol_execution_job_context(");
-      const section = idx === -1 ? "" : code.slice(idx, idx + 600);
+      // D-025 widened the RETURNS TABLE column list by one column
+      // (completed_baseline_slots) -- window enlarged to still reach
+      // past it to the `stable` keyword.
+      const section = idx === -1 ? "" : code.slice(idx, idx + 700);
       return /\bstable\b/.test(section) && !/for update/i.test(section);
     })()
   );
@@ -711,6 +714,221 @@ function main(): void {
   check(
     "reactivate_abandoned_job: no unique_violation (or any other exception) is ever caught and absorbed",
     reactivateBody !== null && !/exception\s+when\s+unique_violation/i.test(reactivateBody)
+  );
+
+  // ------------------------------------------------------------------
+  // [15] D-025 — one execution job advances through every planned
+  //      baseline slot sequentially.
+  // ------------------------------------------------------------------
+  console.log("\n[15] D-025 — multi-baseline cardinality: schema, admission, completion, context, monitoring");
+
+  check(
+    "protocol_execution_jobs.next_baseline_ordinal added, not null, default 1",
+    /add column if not exists next_baseline_ordinal integer not null default 1;/.test(code)
+  );
+  check(
+    "protocol_attempts.baseline_ordinal added, nullable",
+    /add column if not exists baseline_ordinal integer null;/.test(code)
+  );
+  check(
+    "protocol_execution_jobs_next_baseline_ordinal_check enforces >= 1, preflighted by existence check",
+    /if not exists \(\s*\n\s*select 1 from pg_constraint where conname = 'protocol_execution_jobs_next_baseline_ordinal_check'/.test(
+      code
+    ) && /check \(next_baseline_ordinal >= 1\);/.test(code)
+  );
+  check(
+    "protocol_attempts_baseline_ordinal_check allows null or >= 1, preflighted by existence check",
+    /if not exists \(\s*\n\s*select 1 from pg_constraint where conname = 'protocol_attempts_baseline_ordinal_check'/.test(
+      code
+    ) && /check \(baseline_ordinal is null or baseline_ordinal >= 1\);/.test(code)
+  );
+  check(
+    "a real READ-ONLY preflight counts job_id-not-null rows with a null baseline_ordinal before protocol_attempts_job_baseline_ordinal_check is added, raising an explicit exception on any historical collision",
+    /select count\(\*\) into v_bad_count\s*\n\s*from public\.protocol_attempts\s*\n\s*where job_id is not null and baseline_ordinal is null;/.test(
+      code
+    ) &&
+      /raise exception 'D-025 preflight failed: % protocol_attempts rows carry a job_id with no baseline_ordinal', v_bad_count;/.test(
+        code
+      )
+  );
+  check(
+    "protocol_attempts_job_baseline_ordinal_check: every attempt with a job_id must carry a baseline_ordinal",
+    /check \(job_id is null or baseline_ordinal is not null\);/.test(code)
+  );
+  check(
+    "a real READ-ONLY preflight counts (job_id, baseline_ordinal) pairs with more than one root attempt before the partial unique index is created",
+    /group by job_id, baseline_ordinal\s*\n\s*having count\(\*\) > 1/.test(code) &&
+      /raise exception 'D-025 preflight failed: % \(job_id, baseline_ordinal\) pairs have more than one root attempt', v_dupe_count;/.test(
+        code
+      )
+  );
+  check(
+    "protocol_attempts_job_baseline_ordinal_root_key is a partial unique index scoped to root attempts only (retry_of_attempt_id is null), never colliding with a retry child sharing its source's ordinal",
+    /create unique index if not exists protocol_attempts_job_baseline_ordinal_root_key\s*\n\s*on public\.protocol_attempts \(job_id, baseline_ordinal\)\s*\n\s*where retry_of_attempt_id is null and job_id is not null;/.test(
+      code
+    )
+  );
+  check(
+    "_admit_and_reserve_attempt_core (0050) is redefined with an 8th default parameter, p_baseline_ordinal -- the old 7-arg signature is dropped without CASCADE so no ambiguous overload remains, and the new INSERT's column/VALUES lists both gain baseline_ordinal/p_baseline_ordinal in the same statement that already writes job_id, never a later UPDATE (the real CHECK constraint fires immediately at INSERT time)",
+    /drop function if exists public\._admit_and_reserve_attempt_core\(uuid, uuid, text, text, numeric, uuid, uuid\);/.test(
+      code
+    ) &&
+      /p_job_id uuid,\s*\n\s*p_baseline_ordinal integer default null\s*\n\s*\)/.test(code) &&
+      /project_id, protocol_id, buyer_question_version_id, attempt_kind,\s*\n\s*status, idempotency_key, reserved_cost_usd, retry_of_attempt_id,\s*\n\s*job_id, baseline_ordinal, reserved_at, last_activity_at/.test(
+        code
+      ) &&
+      /p_job_id, p_baseline_ordinal, now\(\), now\(\)/.test(code) &&
+      /revoke all on function\s*\n\s*public\._admit_and_reserve_attempt_core\(uuid, uuid, text, text, numeric, uuid, uuid, integer\)\s*\n\s*from public, anon, authenticated, service_role;/.test(
+        code
+      )
+  );
+
+  const admitForJobBody2 = extractBody(code, "admit_and_reserve_attempt_for_job");
+  check(
+    "admit_and_reserve_attempt_for_job: the RESUME_CURRENT_ATTEMPT guard (current_attempt_id is not null) is still checked before any D-025 idempotency-key validation -- resumption is decided first, exactly as D-021 already required",
+    (() => {
+      if (admitForJobBody2 === null) return false;
+      const resumeIdx = admitForJobBody2.indexOf("if v_job.current_attempt_id is not null then");
+      const keyIdx = admitForJobBody2.indexOf("v_expected_key :=");
+      return resumeIdx !== -1 && keyIdx !== -1 && resumeIdx < keyIdx;
+    })()
+  );
+  check(
+    "admit_and_reserve_attempt_for_job: the expected idempotency key is deterministic, built only from job_id and next_baseline_ordinal -- never a caller-chosen or random value",
+    admitForJobBody2 !== null &&
+      /v_expected_key := p_job_id::text \|\| ':baseline:' \|\| v_job\.next_baseline_ordinal::text;/.test(
+        admitForJobBody2
+      )
+  );
+  check(
+    "admit_and_reserve_attempt_for_job: a mismatched key returns INVALID_IDEMPOTENCY_KEY with zero mutation, strictly before the core admission call",
+    (() => {
+      if (admitForJobBody2 === null) return false;
+      const validateIdx = admitForJobBody2.indexOf("if p_idempotency_key <> v_expected_key then");
+      const coreCallIdx = admitForJobBody2.indexOf("_admit_and_reserve_attempt_core(");
+      return (
+        validateIdx !== -1 &&
+        coreCallIdx !== -1 &&
+        validateIdx < coreCallIdx &&
+        /'INVALID_IDEMPOTENCY_KEY'::text, null::public\.protocol_attempts,/.test(admitForJobBody2)
+      );
+    })()
+  );
+  check(
+    "admit_and_reserve_attempt_for_job: a defensive BASELINE_SLOTS_EXHAUSTED guard refuses admission once next_baseline_ordinal exceeds planned_baseline_runs, before the core call",
+    (() => {
+      if (admitForJobBody2 === null) return false;
+      const guardIdx = admitForJobBody2.indexOf(
+        "if v_job.next_baseline_ordinal > v_protocol.planned_baseline_runs then"
+      );
+      const coreCallIdx = admitForJobBody2.indexOf("_admit_and_reserve_attempt_core(");
+      return (
+        guardIdx !== -1 &&
+        coreCallIdx !== -1 &&
+        guardIdx < coreCallIdx &&
+        /'BASELINE_SLOTS_EXHAUSTED'::text, null::public\.protocol_attempts,/.test(admitForJobBody2)
+      );
+    })()
+  );
+  check(
+    "admit_and_reserve_attempt_for_job: next_baseline_ordinal is passed straight into the core call's 8th argument (p_baseline_ordinal), never attached by a later, separate UPDATE -- the real CHECK constraint is evaluated immediately at INSERT time, so a later stamp would be too late",
+    admitForJobBody2 !== null &&
+      /p_retry_of_attempt_id, p_job_id, v_job\.next_baseline_ordinal\s*\n\s*\);/.test(admitForJobBody2) &&
+      /current_attempt_id = \(v_core\.attempt\)\.id,/.test(admitForJobBody2) &&
+      /'RESERVED'::text, v_core\.attempt, v_calls\.perplexity_call, v_calls\.analysis_call;/.test(admitForJobBody2)
+  );
+
+  const retryFullBody2 = extractBody(code, "retry_full_attempt_for_job");
+  check(
+    "retry_full_attempt_for_job: the child inherits the source's baseline_ordinal verbatim (passed as the core call's 8th argument, never a later UPDATE), never a new one -- and next_baseline_ordinal is never written by this function",
+    retryFullBody2 !== null &&
+      /p_source_attempt_id, p_job_id, v_source\.baseline_ordinal\s*\n\s*\);/.test(retryFullBody2) &&
+      !/next_baseline_ordinal/.test(retryFullBody2)
+  );
+
+  const authorizeOperatorRetryBody2 = extractBody(code, "authorize_operator_retry");
+  check(
+    "authorize_operator_retry's retry_full_attempt branch also passes the source's baseline_ordinal as the core call's 8th argument, using core.attempt (not a later UPDATE) for the external-calls creation, the logged operator action, and current_attempt_id",
+    authorizeOperatorRetryBody2 !== null &&
+      /p_source_attempt_id, p_job_id, v_source\.baseline_ordinal\s*\n\s*\);/.test(authorizeOperatorRetryBody2) &&
+      /current_attempt_id = \(v_core\.attempt\)\.id,/.test(authorizeOperatorRetryBody2)
+  );
+
+  check(
+    "enqueue_protocol_execution_job refuses planned_baseline_runs = 0 with NO_BASELINE_RUNS_PLANNED, creating no job row, strictly before the ALREADY_EXISTS lookup",
+    (() => {
+      const enqueueBody = extractBody(code, "enqueue_protocol_execution_job");
+      if (enqueueBody === null) return false;
+      const zeroCheckIdx = enqueueBody.indexOf("if v_protocol.planned_baseline_runs = 0 then");
+      const existingLookupIdx = enqueueBody.indexOf("select j.* into v_existing");
+      return (
+        zeroCheckIdx !== -1 &&
+        existingLookupIdx !== -1 &&
+        zeroCheckIdx < existingLookupIdx &&
+        /'NO_BASELINE_RUNS_PLANNED'::text, null::public\.protocol_execution_jobs;/.test(enqueueBody)
+      );
+    })()
+  );
+
+  const completeBody2 = extractBody(code, "complete_protocol_execution_job");
+  check(
+    "complete_protocol_execution_job: every D-020 gate (ALREADY_SUCCEEDED, CONFLICT, JOB_NOT_OWNED, CURRENT_ATTEMPT_NOT_FOUND, ATTEMPT_NOT_RECONCILED, ATTEMPT_NOT_COMPLETED, EXTERNAL_CALLS_NOT_TERMINAL, PERPLEXITY_NOT_COMPLETED, ANALYSIS_NOT_COMPLETED) is still present, unchanged, in 0051's redefinition",
+    completeBody2 !== null &&
+      /'ALREADY_SUCCEEDED'::text, v_job;/.test(completeBody2) &&
+      /'ATTEMPT_NOT_RECONCILED'::text, v_job;/.test(completeBody2) &&
+      /'ATTEMPT_NOT_COMPLETED'::text, v_job;/.test(completeBody2) &&
+      /'EXTERNAL_CALLS_NOT_TERMINAL'::text, v_job;/.test(completeBody2) &&
+      /'PERPLEXITY_NOT_COMPLETED'::text, v_job;/.test(completeBody2) &&
+      /'ANALYSIS_NOT_COMPLETED'::text, v_job;/.test(completeBody2)
+  );
+  check(
+    "complete_protocol_execution_job: a null current_attempt_id with next_baseline_ordinal > 1 replays NEXT_BASELINE_REQUIRED idempotently, zero mutation -- distinct from the genuine NO_CURRENT_ATTEMPT case (next_baseline_ordinal still 1)",
+    completeBody2 !== null &&
+      /if v_job\.next_baseline_ordinal > 1 then\s*\n\s*return query select 'NEXT_BASELINE_REQUIRED'::text, v_job;/.test(
+        completeBody2
+      ) &&
+      /return query select 'NO_CURRENT_ATTEMPT'::text, v_job;/.test(completeBody2)
+  );
+  check(
+    "complete_protocol_execution_job: once every D-020 gate passes, baseline_ordinal < planned_baseline_runs clears current_attempt_id and advances next_baseline_ordinal by exactly 1, keeping the job running -- never succeeded",
+    completeBody2 !== null &&
+      /if v_attempt\.baseline_ordinal < v_protocol\.planned_baseline_runs then/.test(completeBody2) &&
+      /current_attempt_id = null,\s*\n\s*next_baseline_ordinal = next_baseline_ordinal \+ 1,/.test(completeBody2) &&
+      /return query select 'NEXT_BASELINE_REQUIRED'::text, v_job;/.test(completeBody2)
+  );
+  check(
+    "complete_protocol_execution_job: the baseline_ordinal < planned_baseline_runs check runs strictly after every D-020 gate (ANALYSIS_NOT_COMPLETED) and strictly before the final succeeded UPDATE",
+    (() => {
+      if (completeBody2 === null) return false;
+      const analysisGateIdx = completeBody2.lastIndexOf("'ANALYSIS_NOT_COMPLETED'::text, v_job;");
+      const advanceIdx = completeBody2.indexOf("if v_attempt.baseline_ordinal < v_protocol.planned_baseline_runs then");
+      const succeededIdx = completeBody2.indexOf("set status = 'succeeded', updated_at = now()");
+      return (
+        analysisGateIdx !== -1 &&
+        advanceIdx !== -1 &&
+        succeededIdx !== -1 &&
+        analysisGateIdx < advanceIdx &&
+        advanceIdx < succeededIdx
+      );
+    })()
+  );
+
+  const contextBody2 = extractBody(code, "get_protocol_execution_job_context");
+  check(
+    "get_protocol_execution_job_context returns completed_baseline_slots as a DISTINCT baseline_ordinal count among completed attempts -- never a raw protocol_attempts row count, and never restricted to root attempts (which would undercount a slot recovered by a retry)",
+    contextBody2 !== null &&
+      /completed_baseline_slots integer/.test(code) &&
+      /select count\(distinct pa\.baseline_ordinal\)::integer\s*\n\s*from public\.protocol_attempts pa\s*\n\s*where pa\.job_id = p_job_id\s*\n\s*and pa\.baseline_ordinal is not null\s*\n\s*and pa\.status = 'completed'\);/.test(
+        contextBody2
+      )
+  );
+
+  check(
+    "protocol_execution_job_monitoring_v1 exposes jobs_awaiting_next_baseline_slot and baseline_slots_completed_total, the latter a DISTINCT (job_id, baseline_ordinal) count -- never a raw protocol_attempts count and never root-only",
+    /as jobs_awaiting_next_baseline_slot,/.test(code) &&
+      /select count\(distinct \(job_id, baseline_ordinal\)\) from public\.protocol_attempts\s*\n\s*where job_id is not null and baseline_ordinal is not null and status = 'completed'\s*\n\s*\) as baseline_slots_completed_total;/.test(
+        code
+      )
   );
 
   console.log(

@@ -407,12 +407,18 @@ begin
   end if;
 
   if p_action = 'retry_full_attempt' then
+    -- D-025: an operator-approved full retry also keeps its source's
+    -- baseline slot -- passed straight into the core's own INSERT
+    -- (p_baseline_ordinal), never attached by a later, separate UPDATE:
+    -- protocol_attempts_job_baseline_ordinal_check is a plain CHECK,
+    -- evaluated immediately at INSERT time, so a job-scoped row with no
+    -- baseline_ordinal yet would violate it the instant it is inserted.
     select * into v_core
       from public._admit_and_reserve_attempt_core(
         v_job.protocol_id, p_project_id, v_source.attempt_kind,
         'operator-retry:' || p_idempotency_key,
         p_perplexity_reserved_cost_usd + p_reserved_cost_usd,
-        p_source_attempt_id, p_job_id
+        p_source_attempt_id, p_job_id, v_source.baseline_ordinal
       );
 
     if v_core.status <> 'RESERVED' then
@@ -521,6 +527,271 @@ revoke all on function
   public.authorize_operator_retry(uuid, uuid, text, text, text, uuid, numeric, text, uuid, numeric) from authenticated;
 grant execute on function
   public.authorize_operator_retry(uuid, uuid, text, text, text, uuid, numeric, text, uuid, numeric) to service_role;
+
+-- =======================================================================
+-- D-025. protocol_execution_jobs.next_baseline_ordinal /
+--    protocol_attempts.baseline_ordinal — one execution job advances
+--    through every protocols.planned_baseline_runs baseline slot
+--    sequentially; never more than one current attempt at a time.
+--    Inserted here, before every function below that needs these
+--    columns (full retry, operator retry, admission, completion,
+--    context, monitoring). Additive only — no 0050 or 0052 change.
+-- =======================================================================
+
+alter table public.protocol_execution_jobs
+  add column if not exists next_baseline_ordinal integer not null default 1;
+
+alter table public.protocol_attempts
+  add column if not exists baseline_ordinal integer null;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'protocol_execution_jobs_next_baseline_ordinal_check'
+  ) then
+    alter table public.protocol_execution_jobs
+      add constraint protocol_execution_jobs_next_baseline_ordinal_check
+      check (next_baseline_ordinal >= 1);
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'protocol_attempts_baseline_ordinal_check'
+  ) then
+    alter table public.protocol_attempts
+      add constraint protocol_attempts_baseline_ordinal_check
+      check (baseline_ordinal is null or baseline_ordinal >= 1);
+  end if;
+end $$;
+
+-- Historical M4 rows (job_id is null, predate M5 entirely) are untouched
+-- and may keep baseline_ordinal null forever; only a row that itself
+-- carries a job_id (M5-admitted) is required to carry a slot ordinal.
+do $$
+declare
+  v_bad_count integer;
+begin
+  select count(*) into v_bad_count
+    from public.protocol_attempts
+   where job_id is not null and baseline_ordinal is null;
+
+  if v_bad_count > 0 then
+    raise exception 'D-025 preflight failed: % protocol_attempts rows carry a job_id with no baseline_ordinal', v_bad_count;
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'protocol_attempts_job_baseline_ordinal_check'
+  ) then
+    alter table public.protocol_attempts
+      add constraint protocol_attempts_job_baseline_ordinal_check
+      check (job_id is null or baseline_ordinal is not null);
+  end if;
+end $$;
+
+-- Partial unique index over root attempts only (retry_of_attempt_id is
+-- null) — a retry child legitimately shares its source's ordinal and
+-- must never collide with it here. Defense-in-depth only: the job row's
+-- own FOR UPDATE lock in admit_and_reserve_attempt_for_job already
+-- serializes concurrent admissions for the same slot before either one
+-- could reach this index.
+do $$
+declare
+  v_dupe_count integer;
+begin
+  select count(*) into v_dupe_count
+    from (
+      select job_id, baseline_ordinal
+        from public.protocol_attempts
+       where retry_of_attempt_id is null and job_id is not null
+       group by job_id, baseline_ordinal
+      having count(*) > 1
+    ) dupes;
+
+  if v_dupe_count > 0 then
+    raise exception 'D-025 preflight failed: % (job_id, baseline_ordinal) pairs have more than one root attempt', v_dupe_count;
+  end if;
+end $$;
+
+create unique index if not exists protocol_attempts_job_baseline_ordinal_root_key
+  on public.protocol_attempts (job_id, baseline_ordinal)
+  where retry_of_attempt_id is null and job_id is not null;
+
+-- D-025: _admit_and_reserve_attempt_core (0050) redefined with one added
+-- default parameter, p_baseline_ordinal. protocol_attempts_job_baseline_
+-- ordinal_check is a plain CHECK constraint -- evaluated immediately at
+-- INSERT time, never deferrable -- so a job-scoped row inserted without
+-- baseline_ordinal and stamped by a LATER, separate UPDATE would violate
+-- it the instant the INSERT itself runs, before that later UPDATE ever
+-- gets a chance to execute. baseline_ordinal must therefore be supplied
+-- to the same INSERT that creates the row, exactly like job_id already
+-- is -- not attached afterward. The old 7-arg signature is dropped
+-- (no CASCADE); every existing 7-arg call site (the M4 raw
+-- admit_and_reserve_attempt wrapper in 0050, unmodified) continues to
+-- resolve correctly against the new signature, since the 8th parameter
+-- defaults to null -- identical to how job_id itself already defaults
+-- meaningfully to null for that same M4 path. Body otherwise byte-
+-- identical to 0050's: every cap check (protocol approval, idempotency,
+-- retry_of_attempt_id/retry_cap, run_cap, spend_cap, rate_limit,
+-- concurrency_limit) is reproduced without modification.
+drop function if exists public._admit_and_reserve_attempt_core(uuid, uuid, text, text, numeric, uuid, uuid);
+
+create or replace function
+  public._admit_and_reserve_attempt_core(
+    p_protocol_id uuid,
+    p_project_id uuid,
+    p_attempt_kind text,
+    p_idempotency_key text,
+    p_estimated_cost_usd numeric,
+    p_retry_of_attempt_id uuid,
+    p_job_id uuid,
+    p_baseline_ordinal integer default null
+  )
+returns table (
+  status  text,
+  attempt public.protocol_attempts
+)
+language plpgsql
+security definer
+volatile
+set search_path = public, pg_temp
+as $$
+declare
+  v_protocol public.protocols%rowtype;
+  v_existing public.protocol_attempts%rowtype;
+  v_retry_row public.protocol_attempts%rowtype;
+  v_consumed integer;
+  v_spent numeric;
+  v_recent integer;
+  v_concurrent integer;
+  v_retry_depth integer;
+  v_new public.protocol_attempts%rowtype;
+begin
+  if p_protocol_id is null or p_project_id is null or p_attempt_kind is null
+     or p_idempotency_key is null or btrim(p_idempotency_key) = ''
+     or p_estimated_cost_usd is null or p_estimated_cost_usd < 0 then
+    raise exception using
+      errcode = '22023',
+      message = 'invalid_admit_and_reserve_attempt_core_args';
+  end if;
+
+  if p_attempt_kind not in ('baseline', 'retest', 'control', 'paraphrase') then
+    raise exception using errcode = '22023', message = 'invalid_attempt_kind';
+  end if;
+
+  select p.* into v_protocol
+    from public.protocols p
+   where p.id = p_protocol_id and p.project_id = p_project_id
+   for update;
+
+  if not found then
+    return query select 'NOT_FOUND'::text, null::public.protocol_attempts;
+    return;
+  end if;
+
+  if v_protocol.status not in ('approved', 'active') then
+    return query select 'PROTOCOL_NOT_APPROVED'::text, null::public.protocol_attempts;
+    return;
+  end if;
+
+  select pa.* into v_existing
+    from public.protocol_attempts pa
+   where pa.protocol_id = p_protocol_id and pa.idempotency_key = p_idempotency_key;
+
+  if found then
+    return query select 'ALREADY_RESERVED'::text, v_existing;
+    return;
+  end if;
+
+  if p_retry_of_attempt_id is not null then
+    select pa.* into v_retry_row
+      from public.protocol_attempts pa
+     where pa.id = p_retry_of_attempt_id
+       and pa.protocol_id = p_protocol_id
+       and pa.project_id = p_project_id;
+
+    if not found then
+      return query select 'INVALID_RETRY_REFERENCE'::text, null::public.protocol_attempts;
+      return;
+    end if;
+
+    with recursive retry_chain(id, parent_id, depth) as (
+      select pa.id, pa.retry_of_attempt_id, 0
+        from public.protocol_attempts pa
+       where pa.id = p_retry_of_attempt_id
+      union all
+      select parent.id, parent.retry_of_attempt_id, retry_chain.depth + 1
+        from public.protocol_attempts parent
+        join retry_chain on parent.id = retry_chain.parent_id
+       where retry_chain.depth < v_protocol.retry_cap + 1
+    )
+    select max(depth) into v_retry_depth from retry_chain;
+
+    if v_retry_depth + 1 > v_protocol.retry_cap then
+      return query select 'RETRY_CAP_EXCEEDED'::text, null::public.protocol_attempts;
+      return;
+    end if;
+  end if;
+
+  select count(*) into v_consumed
+    from public.protocol_attempts pa
+   where pa.protocol_id = p_protocol_id and pa.status <> 'cancelled';
+
+  if v_consumed >= v_protocol.run_cap then
+    return query select 'RUN_CAP_EXCEEDED'::text, null::public.protocol_attempts;
+    return;
+  end if;
+
+  select coalesce(sum(coalesce(pa.actual_cost_usd, pa.reserved_cost_usd)), 0) into v_spent
+    from public.protocol_attempts pa
+   where pa.protocol_id = p_protocol_id and pa.status <> 'cancelled';
+
+  if v_spent + p_estimated_cost_usd > v_protocol.spend_cap_usd then
+    return query select 'SPEND_CAP_EXCEEDED'::text, null::public.protocol_attempts;
+    return;
+  end if;
+
+  select count(*) into v_recent
+    from public.protocol_attempts pa
+   where pa.protocol_id = p_protocol_id
+     and pa.reserved_at >= now() - interval '1 hour';
+
+  if v_recent >= v_protocol.rate_limit_per_hour then
+    return query select 'RATE_LIMIT_EXCEEDED'::text, null::public.protocol_attempts;
+    return;
+  end if;
+
+  select count(*) into v_concurrent
+    from public.protocol_attempts pa
+   where pa.protocol_id = p_protocol_id and pa.status in ('reserved', 'in_progress');
+
+  if v_concurrent >= v_protocol.concurrency_limit then
+    return query select 'CONCURRENCY_LIMIT_EXCEEDED'::text, null::public.protocol_attempts;
+    return;
+  end if;
+
+  insert into public.protocol_attempts (
+    project_id, protocol_id, buyer_question_version_id, attempt_kind,
+    status, idempotency_key, reserved_cost_usd, retry_of_attempt_id,
+    job_id, baseline_ordinal, reserved_at, last_activity_at
+  ) values (
+    p_project_id, p_protocol_id, v_protocol.buyer_question_version_id, p_attempt_kind,
+    'reserved', p_idempotency_key, p_estimated_cost_usd, p_retry_of_attempt_id,
+    p_job_id, p_baseline_ordinal, now(), now()
+  )
+  returning * into v_new;
+
+  return query select 'RESERVED'::text, v_new;
+end;
+$$;
+
+revoke all on function
+  public._admit_and_reserve_attempt_core(uuid, uuid, text, text, numeric, uuid, uuid, integer)
+  from public, anon, authenticated, service_role;
 
 -- =======================================================================
 -- 2. Full-attempt retry — un seul enfant direct par tentative source,
@@ -729,12 +1000,21 @@ begin
     return;
   end if;
 
+  -- D-025: a full retry always keeps its source's baseline slot -- passed
+  -- straight into the core's own INSERT (p_baseline_ordinal), never
+  -- attached by a later, separate UPDATE (protocol_attempts_job_
+  -- baseline_ordinal_check is a plain CHECK, evaluated immediately at
+  -- INSERT time). It is also never a root attempt (retry_of_attempt_id
+  -- is set by the core call itself), so the partial unique index scoped
+  -- to root attempts does not apply to it and it may legitimately share
+  -- its ordinal with its source. next_baseline_ordinal is never touched
+  -- by a retry -- only completion of a root attempt advances it.
   select * into v_core
     from public._admit_and_reserve_attempt_core(
       v_job.protocol_id, p_project_id, v_source.attempt_kind,
       'retry-of-attempt:' || p_source_attempt_id::text,
       p_perplexity_reserved_cost_usd + p_analysis_reserved_cost_usd,
-      p_source_attempt_id, p_job_id
+      p_source_attempt_id, p_job_id, v_source.baseline_ordinal
     );
 
   if v_core.status <> 'RESERVED' then
@@ -1024,11 +1304,13 @@ set search_path = public, pg_temp
 as $$
 declare
   v_job public.protocol_execution_jobs%rowtype;
+  v_protocol public.protocols%rowtype;
   v_core record;
   v_calls record;
   v_resume_attempt public.protocol_attempts%rowtype;
   v_resume_perplexity public.protocol_external_calls%rowtype;
   v_resume_analysis public.protocol_external_calls%rowtype;
+  v_expected_key text;
 begin
   if p_job_id is null or p_claim_token is null or p_project_id is null
      or p_attempt_kind is null or p_idempotency_key is null
@@ -1090,11 +1372,48 @@ begin
     return;
   end if;
 
+  -- D-025: no current attempt — this must be the admission of the slot
+  -- named by next_baseline_ordinal, never a free-form caller-chosen key.
+  -- next_baseline_ordinal, not the caller, is the single source of truth
+  -- for which slot is being admitted; a mismatched key is refused rather
+  -- than silently accepted.
+  v_expected_key := p_job_id::text || ':baseline:' || v_job.next_baseline_ordinal::text;
+
+  if p_idempotency_key <> v_expected_key then
+    return query select 'INVALID_IDEMPOTENCY_KEY'::text, null::public.protocol_attempts,
+      null::public.protocol_external_calls, null::public.protocol_external_calls;
+    return;
+  end if;
+
+  select p.* into v_protocol
+    from public.protocols p
+   where p.id = v_job.protocol_id and p.project_id = p_project_id;
+
+  -- Defensive guard: the completion gate (complete_protocol_execution_job,
+  -- D-025) only ever advances next_baseline_ordinal up to
+  -- planned_baseline_runs, and a job that already succeeded is already
+  -- refused above by the JOB_NOT_OWNED fencing check (status not in
+  -- ('claimed','running')) — this branch should be unreachable in normal
+  -- operation, kept for the same reason CURRENT_ATTEMPT_NOT_FOUND is kept
+  -- above despite its own FK guarantee.
+  if v_job.next_baseline_ordinal > v_protocol.planned_baseline_runs then
+    return query select 'BASELINE_SLOTS_EXHAUSTED'::text, null::public.protocol_attempts,
+      null::public.protocol_external_calls, null::public.protocol_external_calls;
+    return;
+  end if;
+
+  -- D-025: the freshly reserved root attempt is stamped with the slot
+  -- ordinal it is admitted for by passing it straight into the core's
+  -- own INSERT (p_baseline_ordinal), never attached by a later, separate
+  -- UPDATE (protocol_attempts_job_baseline_ordinal_check is a plain
+  -- CHECK, evaluated immediately at INSERT time). The partial unique
+  -- index on (job_id, baseline_ordinal) for root attempts is what
+  -- actually prevents two roots from ever sharing a slot.
   select * into v_core
     from public._admit_and_reserve_attempt_core(
       v_job.protocol_id, p_project_id, p_attempt_kind, p_idempotency_key,
       p_perplexity_reserved_cost_usd + p_analysis_reserved_cost_usd,
-      p_retry_of_attempt_id, p_job_id
+      p_retry_of_attempt_id, p_job_id, v_job.next_baseline_ordinal
     );
 
   if v_core.status <> 'RESERVED' then
@@ -1281,14 +1600,15 @@ create or replace function
     p_project_id uuid
   )
 returns table (
-  status            text,
-  job               public.protocol_execution_jobs,
-  protocol          public.protocols,
-  current_attempt   public.protocol_attempts,
-  external_calls    public.protocol_external_calls[],
-  provider_receipts public.provider_call_receipts[],
-  analysis_receipts public.analysis_call_receipts[],
-  probe_run         public.probe_runs
+  status                   text,
+  job                      public.protocol_execution_jobs,
+  protocol                 public.protocols,
+  current_attempt          public.protocol_attempts,
+  external_calls           public.protocol_external_calls[],
+  provider_receipts        public.provider_call_receipts[],
+  analysis_receipts        public.analysis_call_receipts[],
+  probe_run                public.probe_runs,
+  completed_baseline_slots integer
 )
 language plpgsql
 security definer
@@ -1315,7 +1635,7 @@ begin
     return query select 'JOB_NOT_FOUND'::text, null::public.protocol_execution_jobs,
       null::public.protocols, null::public.protocol_attempts,
       null::public.protocol_external_calls[], null::public.provider_call_receipts[],
-      null::public.analysis_call_receipts[], null::public.probe_runs;
+      null::public.analysis_call_receipts[], null::public.probe_runs, null::integer;
     return;
   end if;
 
@@ -1325,7 +1645,7 @@ begin
     return query select 'JOB_NOT_OWNED'::text, v_job,
       null::public.protocols, null::public.protocol_attempts,
       null::public.protocol_external_calls[], null::public.provider_call_receipts[],
-      null::public.analysis_call_receipts[], null::public.probe_runs;
+      null::public.analysis_call_receipts[], null::public.probe_runs, null::integer;
     return;
   end if;
 
@@ -1361,7 +1681,22 @@ begin
        from public.analysis_call_receipts r
        join public.protocol_external_calls ec on ec.id = r.external_call_id
       where v_attempt.id is not null and ec.protocol_attempt_id = v_attempt.id),
-    v_run;
+    v_run,
+    -- D-025: distinct completed baseline slots for this job — counted by
+    -- DISTINCT baseline_ordinal among completed attempts, not by row
+    -- count and not restricted to root attempts. A slot's completion may
+    -- be reached by its root attempt OR by a retry child that inherited
+    -- its ordinal (retry_full_attempt_for_job / authorize_operator_retry
+    -- always copy the source's baseline_ordinal verbatim) — restricting
+    -- to root-only would silently undercount every slot recovered by a
+    -- retry. next_baseline_ordinal and planned_baseline_runs are already
+    -- visible via the returned job/protocol rows above; this is the one
+    -- number neither of those rows carries on its own.
+    (select count(distinct pa.baseline_ordinal)::integer
+       from public.protocol_attempts pa
+      where pa.job_id = p_job_id
+        and pa.baseline_ordinal is not null
+        and pa.status = 'completed');
 end;
 $$;
 
@@ -1511,7 +1846,24 @@ select
     where actual_cost_usd is null and status in ('completed', 'failed', 'timed_out', 'cancelled')
   ) as terminal_calls_with_unknown_cost,
   (select avg(latency_ms) from public.provider_call_receipts) as provider_latency_ms_avg,
-  (select avg(latency_ms) from public.analysis_call_receipts) as analysis_latency_ms_avg;
+  (select avg(latency_ms) from public.analysis_call_receipts) as analysis_latency_ms_avg,
+  -- D-025: a 'running' job with no current attempt has, by construction,
+  -- already admitted and completed at least one baseline slot and is
+  -- waiting for the next admission (see admit_and_reserve_attempt_for_job
+  -- and complete_protocol_execution_job) — never any other reason a job
+  -- reaches 'running' with a null current_attempt_id.
+  (select count(*) from public.protocol_execution_jobs
+    where status = 'running' and current_attempt_id is null) as jobs_awaiting_next_baseline_slot,
+  -- Distinct (job_id, baseline_ordinal) slots completed across every job —
+  -- deliberately not count(*) from protocol_attempts (would double-count
+  -- every retry alongside its source) and deliberately not restricted to
+  -- root attempts (would silently undercount every slot recovered by a
+  -- retry, since retry_full_attempt_for_job/authorize_operator_retry
+  -- always copy the source's baseline_ordinal verbatim, never mint a new
+  -- one).
+  (select count(distinct (job_id, baseline_ordinal)) from public.protocol_attempts
+    where job_id is not null and baseline_ordinal is not null and status = 'completed'
+  ) as baseline_slots_completed_total;
 
 revoke all on public.protocol_execution_job_monitoring_v1 from public, anon, authenticated, service_role;
 grant select on public.protocol_execution_job_monitoring_v1 to service_role;
@@ -1652,3 +2004,303 @@ revoke all on function
   public.reactivate_abandoned_job(uuid, uuid, text, text, text) from authenticated;
 grant execute on function
   public.reactivate_abandoned_job(uuid, uuid, text, text, text) to service_role;
+
+-- =======================================================================
+-- 10. D-025 — enqueue_protocol_execution_job (0050) redefined: refuse a
+--    protocol with no planned baseline run before any job row is ever
+--    created. Signature unchanged from 0050; ACL untouched by
+--    CREATE OR REPLACE, not repeated here.
+-- =======================================================================
+
+create or replace function
+  public.enqueue_protocol_execution_job(
+    p_protocol_id uuid,
+    p_project_id uuid,
+    p_max_attempts integer default 3
+  )
+returns table (
+  status text,
+  job    public.protocol_execution_jobs
+)
+language plpgsql
+security definer
+volatile
+set search_path = public, pg_temp
+as $$
+declare
+  v_protocol public.protocols%rowtype;
+  v_existing public.protocol_execution_jobs%rowtype;
+  v_new public.protocol_execution_jobs%rowtype;
+begin
+  if p_protocol_id is null or p_project_id is null
+     or p_max_attempts is null or p_max_attempts < 1 then
+    raise exception using
+      errcode = '22023',
+      message = 'invalid_enqueue_protocol_execution_job_args';
+  end if;
+
+  select p.* into v_protocol
+    from public.protocols p
+   where p.id = p_protocol_id and p.project_id = p_project_id
+   for update;
+
+  if not found then
+    return query select 'PROTOCOL_NOT_FOUND'::text, null::public.protocol_execution_jobs;
+    return;
+  end if;
+
+  if v_protocol.status not in ('approved', 'active') then
+    return query select 'PROTOCOL_NOT_APPROVED'::text, null::public.protocol_execution_jobs;
+    return;
+  end if;
+
+  -- D-025: a job with no planned baseline slot to run would either never
+  -- admit anything (current_attempt_id forever null, next_baseline_
+  -- ordinal stuck at its default of 1) or be vacuously completable —
+  -- neither is a coherent job. Refuse at enqueue time, before any row is
+  -- created, rather than let the job exist in a state nothing can ever
+  -- resolve.
+  if v_protocol.planned_baseline_runs = 0 then
+    return query select 'NO_BASELINE_RUNS_PLANNED'::text, null::public.protocol_execution_jobs;
+    return;
+  end if;
+
+  select j.* into v_existing
+    from public.protocol_execution_jobs j
+   where j.protocol_id = p_protocol_id and j.project_id = p_project_id;
+
+  if found then
+    return query select 'ALREADY_EXISTS'::text, v_existing;
+    return;
+  end if;
+
+  insert into public.protocol_execution_jobs (project_id, protocol_id, status, max_attempts)
+  values (p_project_id, p_protocol_id, 'queued', p_max_attempts)
+  returning * into v_new;
+
+  return query select 'QUEUED'::text, v_new;
+end;
+$$;
+
+-- =======================================================================
+-- 11. D-025 — complete_protocol_execution_job (0050) redefined: every
+--    D-020 gate on the current attempt and its two receipts still runs,
+--    in the same order, completely unchanged. What changes is what
+--    happens once they all pass: the job may only reach 'succeeded'
+--    after every protocols.planned_baseline_runs slot has been consumed
+--    by a completed root attempt, never after just the current one.
+--    Signature unchanged from 0050; ACL untouched by CREATE OR REPLACE,
+--    not repeated here.
+-- =======================================================================
+
+create or replace function
+  public.complete_protocol_execution_job(
+    p_job_id uuid,
+    p_claim_token uuid,
+    p_project_id uuid
+  )
+returns table (
+  status text,
+  job    public.protocol_execution_jobs
+)
+language plpgsql
+security definer
+volatile
+set search_path = public, pg_temp
+as $$
+declare
+  v_job public.protocol_execution_jobs%rowtype;
+  v_protocol public.protocols%rowtype;
+  v_attempt public.protocol_attempts%rowtype;
+  v_open_calls integer;
+  v_perplexity public.protocol_external_calls%rowtype;
+  v_max_analysis_generation integer;
+  v_max_analysis public.protocol_external_calls%rowtype;
+begin
+  if p_job_id is null or p_claim_token is null or p_project_id is null then
+    raise exception using
+      errcode = '22023',
+      message = 'invalid_complete_protocol_execution_job_args';
+  end if;
+
+  -- a. verrou du job, scopé par (id, project_id).
+  select j.* into v_job
+    from public.protocol_execution_jobs j
+   where j.id = p_job_id and j.project_id = p_project_id
+   for update;
+
+  -- b. absent -> JOB_NOT_FOUND.
+  if not found then
+    return query select 'JOB_NOT_FOUND'::text, null::public.protocol_execution_jobs;
+    return;
+  end if;
+
+  -- c. déjà succeeded -> ALREADY_SUCCEEDED, avant tout fencing, aucune
+  -- mutation. Un job terminal n'a plus de propriétaire actif à valider.
+  if v_job.status = 'succeeded' then
+    return query select 'ALREADY_SUCCEEDED'::text, v_job;
+    return;
+  end if;
+
+  -- d. un autre état terminal -> CONFLICT, aucune mutation.
+  if v_job.status in ('failed', 'needs_review', 'abandoned_exhausted') then
+    return query select 'CONFLICT'::text, v_job;
+    return;
+  end if;
+
+  -- e. job actif (claimed/running) mais fencing invalide -> JOB_NOT_OWNED.
+  if v_job.claim_token is distinct from p_claim_token
+     or v_job.lease_expires_at is null or v_job.lease_expires_at <= now()
+     or v_job.status not in ('claimed', 'running') then
+    return query select 'JOB_NOT_OWNED'::text, v_job;
+    return;
+  end if;
+
+  -- f. D-025: current_attempt_id is null in two distinct cases now — the
+  -- job has never been admitted at all (next_baseline_ordinal still at
+  -- its default of 1, genuine NO_CURRENT_ATTEMPT), or it already
+  -- advanced past a completed slot and is waiting for the next admission
+  -- (next_baseline_ordinal > 1, set only by this same function's own
+  -- advancement below). A replay of a call made after that advancement
+  -- but before the next admission must return NEXT_BASELINE_REQUIRED
+  -- idempotently — the same state it already reported — never the
+  -- generic NO_CURRENT_ATTEMPT error, and with zero further mutation.
+  if v_job.current_attempt_id is null then
+    if v_job.next_baseline_ordinal > 1 then
+      return query select 'NEXT_BASELINE_REQUIRED'::text, v_job;
+      return;
+    end if;
+    return query select 'NO_CURRENT_ATTEMPT'::text, v_job;
+    return;
+  end if;
+
+  -- g. verrou EXACT de la tentative courante, via id + job_id +
+  -- project_id -- jamais un id de tentative seul.
+  select pa.* into v_attempt
+    from public.protocol_attempts pa
+   where pa.id = v_job.current_attempt_id
+     and pa.job_id = p_job_id
+     and pa.project_id = p_project_id
+   for update;
+
+  -- h. garde défensive : absente malgré la FK composite ci-dessus.
+  if not found then
+    return query select 'CURRENT_ATTEMPT_NOT_FOUND'::text, v_job;
+    return;
+  end if;
+
+  -- i. pas encore réconciliée.
+  if v_attempt.terminalized_at is null then
+    return query select 'ATTEMPT_NOT_RECONCILED'::text, v_job;
+    return;
+  end if;
+
+  -- j. réconciliée mais pas completed.
+  if v_attempt.status <> 'completed' then
+    return query select 'ATTEMPT_NOT_COMPLETED'::text, v_job;
+    return;
+  end if;
+
+  -- k. verrou déterministe de tous les external_calls de cette
+  -- tentative -- même ordre (call_kind, generation) pour tout appelant,
+  -- jamais l'ordre d'arrivée des lignes.
+  perform 1
+    from public.protocol_external_calls ec
+   where ec.protocol_attempt_id = v_attempt.id
+   order by ec.call_kind, ec.generation
+   for update;
+
+  -- l. aucun appel ne peut rester ouvert.
+  select count(*) into v_open_calls
+    from public.protocol_external_calls ec
+   where ec.protocol_attempt_id = v_attempt.id
+     and ec.status in ('reserved', 'in_progress');
+
+  if v_open_calls > 0 then
+    return query select 'EXTERNAL_CALLS_NOT_TERMINAL'::text, v_job;
+    return;
+  end if;
+
+  -- m. Perplexity génération 1 exactement : completed, avec son
+  -- provider_call_receipts correspondant.
+  select ec.* into v_perplexity
+    from public.protocol_external_calls ec
+   where ec.protocol_attempt_id = v_attempt.id
+     and ec.call_kind = 'perplexity'
+     and ec.generation = 1;
+
+  if not found
+     or v_perplexity.status <> 'completed'
+     or not exists (
+       select 1 from public.provider_call_receipts r
+        where r.external_call_id = v_perplexity.id
+     ) then
+    return query select 'PERPLEXITY_NOT_COMPLETED'::text, v_job;
+    return;
+  end if;
+
+  -- n. la génération analysis la PLUS RÉCENTE fait seule autorité :
+  -- completed, avec son analysis_call_receipts correspondant.
+  select max(generation) into v_max_analysis_generation
+    from public.protocol_external_calls
+   where protocol_attempt_id = v_attempt.id and call_kind = 'analysis';
+
+  if v_max_analysis_generation is null then
+    return query select 'ANALYSIS_NOT_COMPLETED'::text, v_job;
+    return;
+  end if;
+
+  select ec.* into v_max_analysis
+    from public.protocol_external_calls ec
+   where ec.protocol_attempt_id = v_attempt.id
+     and ec.call_kind = 'analysis'
+     and ec.generation = v_max_analysis_generation;
+
+  if not found
+     or v_max_analysis.status <> 'completed'
+     or not exists (
+       select 1 from public.analysis_call_receipts r
+        where r.external_call_id = v_max_analysis.id
+     ) then
+    return query select 'ANALYSIS_NOT_COMPLETED'::text, v_job;
+    return;
+  end if;
+
+  -- p. un coût inconnu honnêtement réconcilié (attempt.actual_cost_usd
+  -- NULL) n'est jamais rejeté -- aucune exigence actual_cost_usd non
+  -- NULL n'est imposée ici ni ailleurs au-dessus.
+
+  -- D-025: every D-020 gate above is satisfied for the current slot.
+  -- Whether that is enough to succeed the job now depends on whether
+  -- every planned baseline slot has been consumed by a completed root
+  -- attempt — never on the raw count of protocol_attempts rows, which
+  -- would double-count retry children. v_attempt.baseline_ordinal is
+  -- guaranteed not null here by protocol_attempts_job_baseline_ordinal_
+  -- check, since v_attempt.job_id = p_job_id is itself not null.
+  select p.* into v_protocol
+    from public.protocols p
+   where p.id = v_job.protocol_id and p.project_id = p_project_id;
+
+  if v_attempt.baseline_ordinal < v_protocol.planned_baseline_runs then
+    update public.protocol_execution_jobs
+       set current_attempt_id = null,
+           next_baseline_ordinal = next_baseline_ordinal + 1,
+           updated_at = now()
+     where id = p_job_id and project_id = p_project_id
+    returning * into v_job;
+
+    return query select 'NEXT_BASELINE_REQUIRED'::text, v_job;
+    return;
+  end if;
+
+  -- q. seulement maintenant, marquer le job succeeded. claim_token/bail
+  -- conservés tels quels comme trace d'audit (comportement déjà
+  -- documenté, inchangé).
+  update public.protocol_execution_jobs
+     set status = 'succeeded', updated_at = now()
+   where id = p_job_id and project_id = p_project_id
+  returning * into v_job;
+
+  return query select 'SUCCEEDED'::text, v_job;
+end;
+$$;

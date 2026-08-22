@@ -1200,6 +1200,13 @@ export interface ProtocolAttempt {
    * cutover migration). Set only by the *_for_job admission RPCs.
    */
   jobId: string | null;
+  /**
+   * D-025 — the baseline slot (1-based) this attempt belongs to. Null for
+   * every attempt with a null jobId (pre-D-025 M4/M5 rows); mandatory
+   * whenever jobId is set. A retry child always carries the same value
+   * as its source — a retry never consumes a new slot.
+   */
+  baselineOrdinal: number | null;
 }
 
 export type AdmitAndReserveAttemptOutcome =
@@ -1316,8 +1323,19 @@ export interface ProtocolExecutionJob {
   leaseExpiresAt: string | null;
   attemptCount: number;
   maxAttempts: number;
-  /** D-020 — the attempt this job currently owns; null before first admission. */
+  /**
+   * D-020 — the attempt this job currently owns; null before first
+   * admission, and (D-025) null again between a completed baseline slot
+   * and the admission of the next one.
+   */
   currentAttemptId: string | null;
+  /**
+   * D-025 — the 1-based ordinal of the next baseline slot to admit.
+   * Starts at 1; advances by exactly 1 each time complete_protocol_
+   * execution_job returns NEXT_BASELINE_REQUIRED. Never exceeds
+   * protocols.planned_baseline_runs.
+   */
+  nextBaselineOrdinal: number;
   needsReviewReason: string | null;
   failureReason: string | null;
   createdAt: string;
@@ -1435,7 +1453,9 @@ export type EnqueueProtocolExecutionJobOutcome =
   | "QUEUED"
   | "ALREADY_EXISTS"
   | "PROTOCOL_NOT_FOUND"
-  | "PROTOCOL_NOT_APPROVED";
+  | "PROTOCOL_NOT_APPROVED"
+  /** D-025 — planned_baseline_runs = 0; refused before any job row is created. */
+  | "NO_BASELINE_RUNS_PLANNED";
 
 export interface EnqueueProtocolExecutionJobInput {
   protocolId: string;
@@ -1497,13 +1517,33 @@ export type AdmitAndReserveAttemptForJobOutcome =
   | "RATE_LIMIT_EXCEEDED"
   | "CONCURRENCY_LIMIT_EXCEEDED"
   | "RETRY_CAP_EXCEEDED"
-  | "INVALID_RETRY_REFERENCE";
+  | "INVALID_RETRY_REFERENCE"
+  /**
+   * D-025 — no current attempt, but idempotencyKey does not equal the
+   * deterministic `${jobId}:baseline:${nextBaselineOrdinal}` identity.
+   * Zero mutation.
+   */
+  | "INVALID_IDEMPOTENCY_KEY"
+  /**
+   * D-025 — defensive guard: next_baseline_ordinal already exceeds
+   * planned_baseline_runs. Should be unreachable in normal operation
+   * (a succeeded job is already refused by JOB_NOT_OWNED above).
+   */
+  | "BASELINE_SLOTS_EXHAUSTED";
 
 export interface AdmitAndReserveAttemptForJobInput {
   jobId: string;
   claimToken: string;
   projectId: string;
   attemptKind: AttemptKind;
+  /**
+   * D-025 — ignored on a RESUME_CURRENT_ATTEMPT reply, but on a fresh
+   * (no current attempt) admission this must equal exactly
+   * `${jobId}:baseline:${nextBaselineOrdinal}` or the call is refused
+   * with INVALID_IDEMPOTENCY_KEY and zero mutation. next_baseline_
+   * ordinal, not the caller, is the single source of truth for which
+   * slot is being admitted.
+   */
   idempotencyKey: string;
   perplexityReservedCostUsd: number;
   analysisReservedCostUsd: number;
@@ -1645,7 +1685,7 @@ export interface ReconcileAttemptForJobResult {
   attempt: ProtocolAttempt | null;
 }
 
-/** D-020 — the completion gate's exact ordered outcome set. */
+/** D-020 (extended by D-025) — the completion gate's exact ordered outcome set. */
 export type CompleteProtocolExecutionJobOutcome =
   | "SUCCEEDED"
   | "ALREADY_SUCCEEDED"
@@ -1658,7 +1698,15 @@ export type CompleteProtocolExecutionJobOutcome =
   | "PERPLEXITY_NOT_COMPLETED"
   | "ANALYSIS_NOT_COMPLETED"
   | "JOB_NOT_FOUND"
-  | "JOB_NOT_OWNED";
+  | "JOB_NOT_OWNED"
+  /**
+   * D-025 — every D-020 gate passed for the current slot, but
+   * baselineOrdinal < protocol.plannedBaselineRuns: current_attempt_id is
+   * cleared, next_baseline_ordinal advances by 1, the job stays
+   * 'running'. A replay before the next admission returns this same
+   * outcome idempotently, with zero further mutation.
+   */
+  | "NEXT_BASELINE_REQUIRED";
 
 export interface CompleteProtocolExecutionJobInput {
   jobId: string;
@@ -1836,6 +1884,16 @@ export interface GetProtocolExecutionJobContextResult {
   providerReceipts: ProviderCallReceipt[];
   analysisReceipts: AnalysisCallReceipt[];
   probeRun: ProbeRun | null;
+  /**
+   * D-025 — distinct completed root baseline slots for this job (never
+   * the raw count of protocol_attempts rows, which would double-count
+   * retry children). `job.nextBaselineOrdinal` and
+   * `protocol.plannedBaselineRuns` are the other two progression numbers
+   * a caller needs; both are already carried by the rows above. Null
+   * whenever `job`/`protocol` themselves are null (JOB_NOT_FOUND/
+   * JOB_NOT_OWNED).
+   */
+  completedBaselineSlots: number | null;
 }
 
 export type MarkProtocolExecutionJobNeedsReviewForAmbiguityOutcome =

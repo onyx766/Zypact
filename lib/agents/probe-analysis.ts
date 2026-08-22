@@ -107,12 +107,10 @@ export async function runProbeAnalysisAgent(
   const latencyMs = Date.now() - startedAt;
 
   if (!parsed.ok) {
-    throw new Error(
-      `Probe Analysis Agent output failed validation: ${parsed.error}\n\nRaw output:\n${parsed.rawOutput.slice(
-        0,
-        2000
-      )}`
-    );
+    // D-027 (B0.2A-1) — bounded: only the parse error code, never the raw
+    // model output or the free-text Zod/JSON message (which could echo
+    // fragments of the received value). This message is safe to log.
+    throw new Error(`Probe Analysis Agent output failed validation (${parsed.code})`);
   }
 
   return {

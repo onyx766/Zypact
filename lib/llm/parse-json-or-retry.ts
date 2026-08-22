@@ -1,5 +1,6 @@
 import type { ZodSchema } from "zod";
 import { callModel, type CallModelInput } from "./call-model";
+import { tryParseModelJson, type ModelJsonParseErrorCode } from "./parse-model-json";
 
 /**
  * Parse a model response as JSON and validate it with a Zod schema.
@@ -12,11 +13,29 @@ import { callModel, type CallModelInput } from "./call-model";
  *  5. If any step fails, calls the model ONCE more with a repair prompt
  *     that includes the previous output and the error, then re-validates.
  *  6. Returns a discriminated union — success or failed.
+ *
+ * This is the LEGACY path only (its own hidden repair call is the whole
+ * point). The M5 path uses `lib/pipeline/parse-analysis-content.ts`
+ * instead, which never imports this file or `./call-model`.
  */
 
 export type ParseResult<T> =
   | { ok: true; data: T; usedRetry: boolean; usedMock: boolean }
-  | { ok: false; error: string; rawOutput: string; usedRetry: boolean; usedMock: boolean };
+  | {
+      ok: false;
+      error: string;
+      /**
+       * D-027 (B0.2A-1) — bounded code alongside the existing free-text
+       * `error`, added purely additively so every pre-existing caller
+       * reading `.error`/`.rawOutput` is unaffected. Reflects whichever
+       * parse attempt (first or, if retried, the repair) ultimately
+       * failed.
+       */
+      code: ModelJsonParseErrorCode;
+      rawOutput: string;
+      usedRetry: boolean;
+      usedMock: boolean;
+    };
 
 export interface ParseJsonOrRetryInput<T> {
   schema: ZodSchema<T>;
@@ -42,29 +61,30 @@ export async function parseJsonOrRetry<T>(
 ): Promise<ParseResult<T>> {
   const allowRetry = input.allowRetry ?? true;
 
-  const first = tryParse(input.rawOutput, input.schema, input.preNormalize);
+  const first = tryParseModelJson(input.rawOutput, input.schema, input.preNormalize);
   if (first.ok) {
     return { ok: true, data: first.data, usedRetry: false, usedMock: false };
   }
   if (!allowRetry) {
     return {
       ok: false,
-      error: first.error,
+      error: first.detail,
+      code: first.code,
       rawOutput: input.rawOutput,
       usedRetry: false,
       usedMock: false,
     };
   }
 
-  logValidationRetry(first.error);
+  logValidationRetry(first.code);
 
   const repairUser = [
-    first.error.startsWith("Zod validation failed:")
+    first.code === "schema_validation_failed"
       ? "Your previous output failed validation against the required schema."
       : "Your previous response could not be parsed as valid JSON matching the required schema.",
     "",
     "Error:",
-    first.error,
+    first.detail,
     "",
     "Previous output:",
     "```",
@@ -81,76 +101,30 @@ export async function parseJsonOrRetry<T>(
     // returns the same mockResponse — retry is still safe.
   });
 
-  const second = tryParse(retry.content, input.schema, input.preNormalize);
+  const second = tryParseModelJson(retry.content, input.schema, input.preNormalize);
   if (second.ok) {
     return { ok: true, data: second.data, usedRetry: true, usedMock: retry.usedMock };
   }
   return {
     ok: false,
-    error: second.error,
+    error: second.detail,
+    code: second.code,
     rawOutput: retry.content,
     usedRetry: true,
     usedMock: retry.usedMock,
   };
 }
 
-function logValidationRetry(error: string): void {
-  // Never log raw model output or secrets here. The error summary is capped
-  // and contains only parser/Zod messages.
-  const safeError = error.replace(/\s+/g, " ").slice(0, 500);
+function logValidationRetry(code: ModelJsonParseErrorCode): void {
+  // D-027 (B0.2A-1) — bounded code only. Never the free-text Zod/JSON
+  // message (which could echo fragments of the received value for some
+  // schemas) and never raw model output.
   console.warn(
     JSON.stringify({
       ts: new Date().toISOString(),
       level: "warn",
       event: "llm_output_validation_retry",
-      error: safeError,
+      code,
     })
   );
-}
-
-function tryParse<T>(
-  raw: string,
-  schema: ZodSchema<T>,
-  preNormalize?: (parsed: unknown) => unknown
-): { ok: true; data: T } | { ok: false; error: string } {
-  const cleaned = stripFences(raw);
-  const candidate = extractJsonBlock(cleaned) ?? cleaned;
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(candidate);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return { ok: false, error: `JSON.parse failed: ${msg}` };
-  }
-  const normalized = preNormalize ? preNormalize(parsed) : parsed;
-  const result = schema.safeParse(normalized);
-  if (!result.success) {
-    return { ok: false, error: `Zod validation failed: ${result.error.message}` };
-  }
-  return { ok: true, data: result.data };
-}
-
-function stripFences(raw: string): string {
-  const trimmed = raw.trim();
-  const fenceRegex = /^```(?:json)?\s*([\s\S]*?)\s*```$/i;
-  const match = trimmed.match(fenceRegex);
-  return match ? match[1].trim() : trimmed;
-}
-
-function extractJsonBlock(raw: string): string | null {
-  const firstBrace = raw.indexOf("{");
-  const firstBracket = raw.indexOf("[");
-  const start =
-    firstBrace === -1
-      ? firstBracket
-      : firstBracket === -1
-        ? firstBrace
-        : Math.min(firstBrace, firstBracket);
-  if (start === -1) return null;
-  const openChar = raw[start];
-  const closeChar = openChar === "{" ? "}" : "]";
-  const end = raw.lastIndexOf(closeChar);
-  if (end === -1 || end <= start) return null;
-  return raw.slice(start, end + 1);
 }

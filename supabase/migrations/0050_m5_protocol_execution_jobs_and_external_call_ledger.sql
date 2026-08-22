@@ -93,14 +93,18 @@
 -- précèdent le fencing, puisqu'un job déjà terminal n'a plus de
 -- propriétaire actif à valider.
 --
--- ACL : EXECUTE est révoqué à service_role sur admit_and_reserve_attempt,
--- start_attempt, reconcile_attempt (0047) — ils restent appelables en
--- interne (fonction à fonction, sous l'autorité SECURITY DEFINER du
--- propriétaire) mais plus directement par service_role. Les nouvelles
--- tables ne reçoivent que SELECT pour service_role — aucune écriture
--- directe ; chaque écriture passe par une RPC fencée. Les fonctions
--- privées (préfixées _) ne reçoivent EXECUTE d'aucun rôle, y compris
--- service_role.
+-- ACL : admit_and_reserve_attempt, start_attempt, reconcile_attempt
+-- (0047) restent TEMPORAIREMENT exécutables par service_role dans ce
+-- fichier — leur révocation d'EXECUTE, initialement prévue ici, a été
+-- déplacée vers une future migration de cutover (D-021) qui n'existe
+-- pas encore volontairement : 0050 n'a jamais été appliquée à aucun
+-- environnement distant, donc rien n'impose de casser ce chemin avant
+-- que le worker M5 ne soit déployé et validé. La coupure effective se
+-- fera dans cette migration de cutover séparée, appliquée seulement
+-- après cette validation. Les nouvelles tables ne reçoivent que SELECT
+-- pour service_role — aucune écriture directe ; chaque écriture passe
+-- par une RPC fencée. Les fonctions privées (préfixées _) ne reçoivent
+-- EXECUTE d'aucun rôle, y compris service_role.
 --
 -- Ce que cette migration NE fait PAS :
 --   * Ne modifie pas les migrations 0047, 0048, 0049 elles-mêmes (les
@@ -2466,19 +2470,19 @@ grant execute on function
 
 
 -- ---------------------------------------------------------------------
--- 15. Révocation EXECUTE des RPC M4 directes pour service_role. Elles
---     restent appelables en interne (fonction à fonction, sous
---     l'autorité SECURITY DEFINER du propriétaire) mais plus par
---     service_role directement — tout écrivain externe doit désormais
---     passer par une RPC fencée _for_job. start_attempt et
---     reconcile_attempt restent byte-for-byte inchangés depuis 0047 ;
---     seul admit_and_reserve_attempt a son corps réécrit plus haut
---     (section 8).
+-- 15. (Anciennement : révocation EXECUTE des RPC M4 directes pour
+--     service_role.) Cette section ne contient plus aucune instruction
+--     dans ce fichier. Les trois REVOKE qui coupaient l'accès de
+--     service_role à admit_and_reserve_attempt, start_attempt et
+--     reconcile_attempt (0047) ont été retirés de 0050 avant sa
+--     première application distante (0050 n'a jamais été appliquée à
+--     staging ni Production) et déplacés vers une future migration de
+--     cutover (D-021), créée seulement une fois le worker M5 déployé
+--     et validé — cette migration de cutover n'existe pas encore
+--     volontairement, aucun fichier 0052 n'est présent dans ce dépôt.
+--     D'ici là, service_role conserve l'EXECUTE sur les trois RPC M4
+--     brutes via le grant original de 0047, jamais révoqué par ce
+--     fichier. start_attempt et reconcile_attempt restent byte-for-byte
+--     inchangés depuis 0047 ; seul admit_and_reserve_attempt a son
+--     corps réécrit plus haut (section 8).
 -- ---------------------------------------------------------------------
-
-revoke execute on function
-  public.admit_and_reserve_attempt(uuid, uuid, text, text, numeric, uuid) from service_role;
-revoke execute on function
-  public.start_attempt(uuid, uuid, uuid) from service_role;
-revoke execute on function
-  public.reconcile_attempt(uuid, uuid, text, numeric, uuid, text) from service_role;

@@ -675,10 +675,30 @@ function main(): void {
   }
 
   check(
-    "EXECUTE is revoked from service_role on all three raw M4 RPCs (admit_and_reserve_attempt, start_attempt, reconcile_attempt)",
-    /revoke execute on function\s*\n\s*public\.admit_and_reserve_attempt\(uuid, uuid, text, text, numeric, uuid\) from service_role;/.test(code) &&
-      /revoke execute on function\s*\n\s*public\.start_attempt\(uuid, uuid, uuid\) from service_role;/.test(code) &&
-      /revoke execute on function\s*\n\s*public\.reconcile_attempt\(uuid, uuid, text, numeric, uuid, text\) from service_role;/.test(code)
+    // D-021 rollout correction: 0050 no longer revokes EXECUTE on the
+    // three raw M4 RPCs itself. Since 0050 has never been applied to any
+    // remote environment, that revocation is deferred to a separate,
+    // later cutover migration (not yet created) applied only after the
+    // M5 worker/adapters/CLI are deployed and validated -- never left in
+    // an intermediate state where the M4 path is broken before the M5
+    // path exists. service_role therefore still holds EXECUTE on all
+    // three raw M4 RPCs via 0047's original, never-revoked grant, for as
+    // long as 0050+0051 alone are applied.
+    "0050 does NOT itself revoke EXECUTE from service_role on the three raw M4 RPCs (admit_and_reserve_attempt, start_attempt, reconcile_attempt) -- deferred to a future cutover migration per D-021",
+    !/revoke execute on function\s*\n\s*public\.admit_and_reserve_attempt\(uuid, uuid, text, text, numeric, uuid\) from service_role;/.test(code) &&
+      !/revoke execute on function\s*\n\s*public\.start_attempt\(uuid, uuid, uuid\) from service_role;/.test(code) &&
+      !/revoke execute on function\s*\n\s*public\.reconcile_attempt\(uuid, uuid, text, numeric, uuid, text\) from service_role;/.test(code)
+  );
+  check(
+    // Checked against raw0050 (NOT the comment-stripped `code`) since
+    // this asserts the comment TEXT itself is honest, not executable
+    // SQL -- the exact defect this check exists to catch is a stale
+    // comment describing a revocation the file no longer contains.
+    "the two comment blocks that used to describe the M4 revocation now honestly state it is deferred to a not-yet-created cutover migration, with service_role's access temporarily preserved",
+    (raw0050.match(/temporairement exécutables par service_role|TEMPORAIREMENT exécutables par service_role/g) ?? []).length >= 1 &&
+      /migration de cutover/.test(raw0050) &&
+      /n'existe pas encore|n'existe pas encore volontairement/.test(raw0050) &&
+      /jamais révoqué par ce\s*\n?\s*--\s*fichier|jamais révoqué par ce fichier/.test(raw0050)
   );
 
   check(

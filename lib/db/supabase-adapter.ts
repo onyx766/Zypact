@@ -91,6 +91,51 @@ import type {
   FinalizeSnapshotReportDeliveryInput,
   FinalizedSnapshotReportDelivery,
   ReleaseSnapshotReportDeliveryClaimInput,
+
+  // M5-2 Stage A
+  ProtocolExecutionJob,
+  ProtocolExecutionJobStatus,
+  ProtocolExternalCall,
+  ExternalCallKind,
+  ExternalCallStatus,
+  CostBasis,
+  ProviderCallReceipt,
+  AnalysisCallReceipt,
+  AnalysisCallReceiptProvider,
+  EnqueueProtocolExecutionJobInput,
+  EnqueueProtocolExecutionJobResult,
+  ClaimProtocolExecutionJobInput,
+  ClaimProtocolExecutionJobResult,
+  RenewProtocolExecutionJobLeaseInput,
+  RenewProtocolExecutionJobLeaseResult,
+  AdmitAndReserveAttemptForJobInput,
+  AdmitAndReserveAttemptForJobResult,
+  CreateProbeRunAndStartAttemptForJobInput,
+  CreateProbeRunAndStartAttemptForJobResult,
+  MarkExternalCallSentForJobInput,
+  MarkExternalCallSentForJobResult,
+  RecordProviderCallReceiptForJobInput,
+  RecordProviderCallReceiptForJobResult,
+  RecordAnalysisCallReceiptForJobInput,
+  RecordAnalysisCallReceiptForJobResult,
+  ReconcileAttemptForJobInput,
+  ReconcileAttemptForJobResult,
+  CompleteProtocolExecutionJobInput,
+  CompleteProtocolExecutionJobResult,
+  FailProtocolExecutionJobInput,
+  FailProtocolExecutionJobResult,
+  ReactivateAbandonedJobInput,
+  ReactivateAbandonedJobResult,
+  RetryFullAttemptForJobInput,
+  RetryFullAttemptForJobResult,
+  RetryAnalysisGenerationForJobInput,
+  RetryAnalysisGenerationForJobResult,
+  AuthorizeOperatorRetryInput,
+  AuthorizeOperatorRetryResult,
+  GetProtocolExecutionJobContextInput,
+  GetProtocolExecutionJobContextResult,
+  MarkProtocolExecutionJobNeedsReviewForAmbiguityInput,
+  MarkProtocolExecutionJobNeedsReviewForAmbiguityResult,
 } from "./types";
 import { SnapshotRequestLimitError } from "./types";
 import { validateBuyerQuestionVersionNumericFields } from "@/lib/db/validate-buyer-question-version-fields";
@@ -1178,6 +1223,8 @@ interface ProtocolAttemptDbRow {
   last_activity_at: string;
   terminalized_at: string | null;
   created_at: string;
+  /** M5 (migration 0050) — absent (undefined) on rows returned by RPCs that predate this column; normalized to null. */
+  job_id?: string | null;
 }
 
 function mapProtocolAttempt(r: ProtocolAttemptDbRow): ProtocolAttempt {
@@ -1198,7 +1245,199 @@ function mapProtocolAttempt(r: ProtocolAttemptDbRow): ProtocolAttempt {
     lastActivityAt: r.last_activity_at,
     terminalizedAt: r.terminalized_at,
     createdAt: r.created_at,
+    jobId: r.job_id ?? null,
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  M5-2 Stage A — row mappers. Every method below calls an RPC only; none   */
+/*  performs direct DML against a table introduced by migrations 0050/0051. */
+/* -------------------------------------------------------------------------- */
+
+interface ProtocolExecutionJobDbRow {
+  id: string;
+  project_id: string;
+  protocol_id: string;
+  status: string;
+  worker_id: string | null;
+  claim_token: string | null;
+  lease_expires_at: string | null;
+  attempt_count: number;
+  max_attempts: number;
+  current_attempt_id: string | null;
+  needs_review_reason: string | null;
+  failure_reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function mapProtocolExecutionJob(r: ProtocolExecutionJobDbRow): ProtocolExecutionJob {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    protocolId: r.protocol_id,
+    status: r.status as ProtocolExecutionJobStatus,
+    workerId: r.worker_id,
+    claimToken: r.claim_token,
+    leaseExpiresAt: r.lease_expires_at,
+    attemptCount: r.attempt_count,
+    maxAttempts: r.max_attempts,
+    currentAttemptId: r.current_attempt_id,
+    needsReviewReason: r.needs_review_reason,
+    failureReason: r.failure_reason,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+interface ProtocolExternalCallDbRow {
+  id: string;
+  project_id: string;
+  protocol_attempt_id: string;
+  call_kind: string;
+  generation: number;
+  status: string;
+  reserved_cost_usd: number;
+  actual_cost_usd: number | null;
+  cost_basis: string | null;
+  probe_run_id: string | null;
+  request_sent_at: string | null;
+  terminalized_at: string | null;
+  retry_of_external_call_id: string | null;
+  created_at: string;
+}
+
+function mapProtocolExternalCall(r: ProtocolExternalCallDbRow): ProtocolExternalCall {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    protocolAttemptId: r.protocol_attempt_id,
+    callKind: r.call_kind as ExternalCallKind,
+    generation: r.generation,
+    status: r.status as ExternalCallStatus,
+    reservedCostUsd: r.reserved_cost_usd,
+    actualCostUsd: r.actual_cost_usd,
+    costBasis: r.cost_basis as CostBasis | null,
+    probeRunId: r.probe_run_id,
+    requestSentAt: r.request_sent_at,
+    terminalizedAt: r.terminalized_at,
+    retryOfExternalCallId: r.retry_of_external_call_id,
+    createdAt: r.created_at,
+  };
+}
+
+/** Nullable: RPC branches that return no composite row (e.g. a hard refusal before any call was located) send back `null`, not an all-null-fields row. */
+function mapProtocolExternalCallNullable(
+  r: ProtocolExternalCallDbRow | null
+): ProtocolExternalCall | null {
+  return r ? mapProtocolExternalCall(r) : null;
+}
+
+interface ProviderCallReceiptDbRow {
+  id: string;
+  project_id: string;
+  external_call_id: string;
+  probe_run_id: string;
+  outcome: string;
+  http_status: number | null;
+  provider_request_id: string | null;
+  raw_response_sha256: string | null;
+  latency_ms: number | null;
+  received_at: string;
+  created_at: string;
+}
+
+function mapProviderCallReceiptNullable(
+  r: ProviderCallReceiptDbRow | null
+): ProviderCallReceipt | null {
+  if (!r) return null;
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    externalCallId: r.external_call_id,
+    probeRunId: r.probe_run_id,
+    outcome: r.outcome as ProviderCallReceipt["outcome"],
+    httpStatus: r.http_status,
+    providerRequestId: r.provider_request_id,
+    rawResponseSha256: r.raw_response_sha256,
+    latencyMs: r.latency_ms,
+    receivedAt: r.received_at,
+    createdAt: r.created_at,
+  };
+}
+
+interface AnalysisCallReceiptDbRow {
+  id: string;
+  project_id: string;
+  external_call_id: string;
+  probe_run_id: string;
+  outcome: string;
+  provider: string | null;
+  model: string | null;
+  used_mock: boolean;
+  request_sha256: string | null;
+  response_sha256: string | null;
+  latency_ms: number | null;
+  received_at: string;
+  created_at: string;
+}
+
+function mapAnalysisCallReceiptNullable(
+  r: AnalysisCallReceiptDbRow | null
+): AnalysisCallReceipt | null {
+  if (!r) return null;
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    externalCallId: r.external_call_id,
+    probeRunId: r.probe_run_id,
+    outcome: r.outcome as AnalysisCallReceipt["outcome"],
+    provider: r.provider as AnalysisCallReceiptProvider | null,
+    model: r.model,
+    usedMock: r.used_mock,
+    requestSha256: r.request_sha256,
+    responseSha256: r.response_sha256,
+    latencyMs: r.latency_ms,
+    receivedAt: r.received_at,
+    createdAt: r.created_at,
+  };
+}
+
+interface ProbeRunDbRow {
+  id: string;
+  project_id: string;
+  platform: string;
+  status: string;
+  probe_mode: string;
+  snapshot_request_id?: string | null;
+  dataset_id?: string | null;
+  dataset_source_type?: string | null;
+  created_at: string;
+}
+
+function mapProbeRunNullable(r: ProbeRunDbRow | null): ProbeRun | null {
+  if (!r) return null;
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    platform: r.platform,
+    status: r.status as ProbeRun["status"],
+    probeMode: r.probe_mode as ProbeRun["probeMode"],
+    snapshotRequestId: r.snapshot_request_id ?? null,
+    datasetId: r.dataset_id ?? null,
+    datasetSourceType: r.dataset_source_type as ProbeRun["datasetSourceType"],
+    createdAt: r.created_at,
+  };
+}
+
+function mapProtocolAttemptNullable(r: ProtocolAttemptDbRow | null): ProtocolAttempt | null {
+  return r ? mapProtocolAttempt(r) : null;
+}
+
+function mapProtocolExecutionJobNullable(
+  r: ProtocolExecutionJobDbRow | null
+): ProtocolExecutionJob | null {
+  return r ? mapProtocolExecutionJob(r) : null;
 }
 
 export const supabaseAdapter: DbAdapter = {
@@ -2944,5 +3183,489 @@ export const supabaseAdapter: DbAdapter = {
       .order("reserved_at", { ascending: true });
     if (error) throw error;
     return (data ?? []).map((r) => mapProtocolAttempt(r as ProtocolAttemptDbRow));
+  },
+
+  // ------------------------------------------------------------------------
+  // M5-2 Stage A. Every method below calls exactly one RPC (0050/0051) —
+  // never a direct .from(...) read or write against protocol_execution_jobs,
+  // protocol_external_calls, provider_call_receipts, analysis_call_receipts,
+  // or protocol_operator_actions. start_attempt_for_job and
+  // reserve_additional_analysis_generation_for_job are deliberately not
+  // wrapped here (D-023 §1).
+  // ------------------------------------------------------------------------
+
+  async enqueueProtocolExecutionJob(
+    input: EnqueueProtocolExecutionJobInput
+  ): Promise<EnqueueProtocolExecutionJobResult> {
+    const { data, error } = await getClient().rpc("enqueue_protocol_execution_job", {
+      p_protocol_id: input.protocolId,
+      p_project_id: input.projectId,
+      p_max_attempts: input.maxAttempts ?? 3,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "enqueueProtocolExecutionJob: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      job: mapProtocolExecutionJobNullable(row.job as ProtocolExecutionJobDbRow | null),
+    };
+  },
+
+  async claimProtocolExecutionJob(
+    input: ClaimProtocolExecutionJobInput
+  ): Promise<ClaimProtocolExecutionJobResult> {
+    const { data, error } = await getClient().rpc("claim_protocol_execution_job", {
+      p_worker_id: input.workerId,
+      p_lease_seconds: input.leaseSeconds,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "claimProtocolExecutionJob: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      job: mapProtocolExecutionJobNullable(row.job as ProtocolExecutionJobDbRow | null),
+      claimToken: row.claim_token ?? null,
+    };
+  },
+
+  async renewProtocolExecutionJobLease(
+    input: RenewProtocolExecutionJobLeaseInput
+  ): Promise<RenewProtocolExecutionJobLeaseResult> {
+    const { data, error } = await getClient().rpc("renew_protocol_execution_job_lease", {
+      p_job_id: input.jobId,
+      p_claim_token: input.claimToken,
+      p_project_id: input.projectId,
+      p_lease_seconds: input.leaseSeconds,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "renewProtocolExecutionJobLease: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      job: mapProtocolExecutionJobNullable(row.job as ProtocolExecutionJobDbRow | null),
+    };
+  },
+
+  async admitAndReserveAttemptForJob(
+    input: AdmitAndReserveAttemptForJobInput
+  ): Promise<AdmitAndReserveAttemptForJobResult> {
+    const { data, error } = await getClient().rpc("admit_and_reserve_attempt_for_job", {
+      p_job_id: input.jobId,
+      p_claim_token: input.claimToken,
+      p_project_id: input.projectId,
+      p_attempt_kind: input.attemptKind,
+      p_idempotency_key: input.idempotencyKey,
+      p_perplexity_reserved_cost_usd: input.perplexityReservedCostUsd,
+      p_analysis_reserved_cost_usd: input.analysisReservedCostUsd,
+      p_retry_of_attempt_id: input.retryOfAttemptId ?? null,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "admitAndReserveAttemptForJob: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      attempt: mapProtocolAttemptNullable(row.attempt as ProtocolAttemptDbRow | null),
+      perplexityCall: mapProtocolExternalCallNullable(
+        row.perplexity_call as ProtocolExternalCallDbRow | null
+      ),
+      analysisCall: mapProtocolExternalCallNullable(
+        row.analysis_call as ProtocolExternalCallDbRow | null
+      ),
+    };
+  },
+
+  async createProbeRunAndStartAttemptForJob(
+    input: CreateProbeRunAndStartAttemptForJobInput
+  ): Promise<CreateProbeRunAndStartAttemptForJobResult> {
+    const { data, error } = await getClient().rpc(
+      "create_probe_run_and_start_attempt_for_job",
+      {
+        p_job_id: input.jobId,
+        p_claim_token: input.claimToken,
+        p_project_id: input.projectId,
+        p_attempt_id: input.attemptId,
+        p_platform: input.platform,
+        p_probe_mode: input.probeMode,
+        p_dataset_id: input.datasetId,
+        p_dataset_source_type: input.datasetSourceType,
+      }
+    );
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "createProbeRunAndStartAttemptForJob: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      attempt: mapProtocolAttemptNullable(row.attempt as ProtocolAttemptDbRow | null),
+      probeRun: mapProbeRunNullable(row.probe_run as ProbeRunDbRow | null),
+    };
+  },
+
+  async markExternalCallSentForJob(
+    input: MarkExternalCallSentForJobInput
+  ): Promise<MarkExternalCallSentForJobResult> {
+    const { data, error } = await getClient().rpc("mark_external_call_sent_for_job", {
+      p_job_id: input.jobId,
+      p_claim_token: input.claimToken,
+      p_project_id: input.projectId,
+      p_external_call_id: input.externalCallId,
+      p_probe_run_id: input.probeRunId,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "markExternalCallSentForJob: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      externalCall: mapProtocolExternalCallNullable(
+        row.external_call as ProtocolExternalCallDbRow | null
+      ),
+    };
+  },
+
+  async recordProviderCallReceiptForJob(
+    input: RecordProviderCallReceiptForJobInput
+  ): Promise<RecordProviderCallReceiptForJobResult> {
+    // D-023 §3: `unknown` is an application-level cost-basis value only —
+    // the real CHECK constraint on protocol_external_calls.cost_basis
+    // accepts only measured/estimated (migration 0050). Never forward
+    // "unknown" itself as a literal to Postgres; treat it exactly like an
+    // absent cost.
+    const rpcCostBasis =
+      input.costBasis === "measured" || input.costBasis === "estimated"
+        ? input.costBasis
+        : null;
+    const rpcActualCostUsd = rpcCostBasis === null ? null : input.actualCostUsd ?? null;
+
+    const { data, error } = await getClient().rpc("record_provider_call_receipt_for_job", {
+      p_job_id: input.jobId,
+      p_claim_token: input.claimToken,
+      p_project_id: input.projectId,
+      p_external_call_id: input.externalCallId,
+      p_probe_run_id: input.probeRunId,
+      p_outcome: input.outcome,
+      p_http_status: input.httpStatus ?? null,
+      p_provider_request_id: input.providerRequestId ?? null,
+      p_raw_response_sha256: input.rawResponseSha256 ?? null,
+      p_latency_ms: input.latencyMs ?? null,
+      p_actual_cost_usd: rpcActualCostUsd,
+      p_cost_basis: rpcCostBasis,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "recordProviderCallReceiptForJob: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      externalCall: mapProtocolExternalCallNullable(
+        row.external_call as ProtocolExternalCallDbRow | null
+      ),
+      receipt: mapProviderCallReceiptNullable(row.receipt as ProviderCallReceiptDbRow | null),
+    };
+  },
+
+  async recordAnalysisCallReceiptForJob(
+    input: RecordAnalysisCallReceiptForJobInput
+  ): Promise<RecordAnalysisCallReceiptForJobResult> {
+    // Same D-023 §3 rule as the Perplexity leg above.
+    const rpcCostBasis =
+      input.costBasis === "measured" || input.costBasis === "estimated"
+        ? input.costBasis
+        : null;
+    const rpcActualCostUsd = rpcCostBasis === null ? null : input.actualCostUsd ?? null;
+
+    const { data, error } = await getClient().rpc("record_analysis_call_receipt_for_job", {
+      p_job_id: input.jobId,
+      p_claim_token: input.claimToken,
+      p_project_id: input.projectId,
+      p_external_call_id: input.externalCallId,
+      p_probe_run_id: input.probeRunId,
+      p_outcome: input.outcome,
+      p_provider: input.provider ?? null,
+      p_model: input.model ?? null,
+      p_used_mock: input.usedMock ?? false,
+      p_request_sha256: input.requestSha256 ?? null,
+      p_response_sha256: input.responseSha256 ?? null,
+      p_latency_ms: input.latencyMs ?? null,
+      p_actual_cost_usd: rpcActualCostUsd,
+      p_cost_basis: rpcCostBasis,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "recordAnalysisCallReceiptForJob: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      externalCall: mapProtocolExternalCallNullable(
+        row.external_call as ProtocolExternalCallDbRow | null
+      ),
+      receipt: mapAnalysisCallReceiptNullable(row.receipt as AnalysisCallReceiptDbRow | null),
+    };
+  },
+
+  async reconcileAttemptForJob(
+    input: ReconcileAttemptForJobInput
+  ): Promise<ReconcileAttemptForJobResult> {
+    const { data, error } = await getClient().rpc("reconcile_attempt_for_job", {
+      p_job_id: input.jobId,
+      p_claim_token: input.claimToken,
+      p_project_id: input.projectId,
+      p_attempt_id: input.attemptId,
+      p_status: input.status,
+      p_termination_reason: input.terminationReason ?? null,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "reconcileAttemptForJob: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      attempt: mapProtocolAttemptNullable(row.attempt as ProtocolAttemptDbRow | null),
+    };
+  },
+
+  async completeProtocolExecutionJob(
+    input: CompleteProtocolExecutionJobInput
+  ): Promise<CompleteProtocolExecutionJobResult> {
+    const { data, error } = await getClient().rpc("complete_protocol_execution_job", {
+      p_job_id: input.jobId,
+      p_claim_token: input.claimToken,
+      p_project_id: input.projectId,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "completeProtocolExecutionJob: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      job: mapProtocolExecutionJobNullable(row.job as ProtocolExecutionJobDbRow | null),
+    };
+  },
+
+  async failProtocolExecutionJob(
+    input: FailProtocolExecutionJobInput
+  ): Promise<FailProtocolExecutionJobResult> {
+    const { data, error } = await getClient().rpc("fail_protocol_execution_job", {
+      p_job_id: input.jobId,
+      p_claim_token: input.claimToken,
+      p_project_id: input.projectId,
+      p_reason: input.reason,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "failProtocolExecutionJob: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      job: mapProtocolExecutionJobNullable(row.job as ProtocolExecutionJobDbRow | null),
+    };
+  },
+
+  async reactivateAbandonedJob(
+    input: ReactivateAbandonedJobInput
+  ): Promise<ReactivateAbandonedJobResult> {
+    const { data, error } = await getClient().rpc("reactivate_abandoned_job", {
+      p_job_id: input.jobId,
+      p_project_id: input.projectId,
+      p_actor: input.actor,
+      p_reason: input.reason,
+      p_idempotency_key: input.idempotencyKey,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "reactivateAbandonedJob: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      job: mapProtocolExecutionJobNullable(row.job as ProtocolExecutionJobDbRow | null),
+    };
+  },
+
+  async retryFullAttemptForJob(
+    input: RetryFullAttemptForJobInput
+  ): Promise<RetryFullAttemptForJobResult> {
+    const { data, error } = await getClient().rpc("retry_full_attempt_for_job", {
+      p_job_id: input.jobId,
+      p_claim_token: input.claimToken,
+      p_project_id: input.projectId,
+      p_source_attempt_id: input.sourceAttemptId,
+      p_perplexity_reserved_cost_usd: input.perplexityReservedCostUsd,
+      p_analysis_reserved_cost_usd: input.analysisReservedCostUsd,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "retryFullAttemptForJob: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      attempt: mapProtocolAttemptNullable(row.attempt as ProtocolAttemptDbRow | null),
+      perplexityCall: mapProtocolExternalCallNullable(
+        row.perplexity_call as ProtocolExternalCallDbRow | null
+      ),
+      analysisCall: mapProtocolExternalCallNullable(
+        row.analysis_call as ProtocolExternalCallDbRow | null
+      ),
+    };
+  },
+
+  async retryAnalysisGenerationForJob(
+    input: RetryAnalysisGenerationForJobInput
+  ): Promise<RetryAnalysisGenerationForJobResult> {
+    const { data, error } = await getClient().rpc("retry_analysis_generation_for_job", {
+      p_job_id: input.jobId,
+      p_claim_token: input.claimToken,
+      p_project_id: input.projectId,
+      p_source_external_call_id: input.sourceExternalCallId,
+      p_reserved_cost_usd: input.reservedCostUsd,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "retryAnalysisGenerationForJob: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      externalCall: mapProtocolExternalCallNullable(
+        row.external_call as ProtocolExternalCallDbRow | null
+      ),
+    };
+  },
+
+  async authorizeOperatorRetry(
+    input: AuthorizeOperatorRetryInput
+  ): Promise<AuthorizeOperatorRetryResult> {
+    const { data, error } = await getClient().rpc("authorize_operator_retry", {
+      p_job_id: input.jobId,
+      p_project_id: input.projectId,
+      p_actor: input.actor,
+      p_reason: input.reason,
+      p_action: input.action,
+      p_source_attempt_id: input.sourceAttemptId,
+      p_reserved_cost_usd: input.reservedCostUsd,
+      p_idempotency_key: input.idempotencyKey,
+      p_source_external_call_id: input.sourceExternalCallId ?? null,
+      p_perplexity_reserved_cost_usd: input.perplexityReservedCostUsd ?? null,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "authorizeOperatorRetry: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      status: row.status,
+      outcome: row.outcome ?? null,
+      denialCode: row.denial_code ?? null,
+      newAttempt: mapProtocolAttemptNullable(row.new_attempt as ProtocolAttemptDbRow | null),
+      newExternalCall: mapProtocolExternalCallNullable(
+        row.new_external_call as ProtocolExternalCallDbRow | null
+      ),
+    };
+  },
+
+  async getProtocolExecutionJobContext(
+    input: GetProtocolExecutionJobContextInput
+  ): Promise<GetProtocolExecutionJobContextResult> {
+    const { data, error } = await getClient().rpc("get_protocol_execution_job_context", {
+      p_job_id: input.jobId,
+      p_claim_token: input.claimToken,
+      p_project_id: input.projectId,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "getProtocolExecutionJobContext: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    const externalCalls = (row.external_calls ?? []) as ProtocolExternalCallDbRow[];
+    const providerReceipts = (row.provider_receipts ?? []) as ProviderCallReceiptDbRow[];
+    const analysisReceipts = (row.analysis_receipts ?? []) as AnalysisCallReceiptDbRow[];
+    return {
+      outcome: row.status,
+      job: mapProtocolExecutionJobNullable(row.job as ProtocolExecutionJobDbRow | null),
+      protocol: row.protocol ? mapProtocol(row.protocol as ProtocolDbRow) : null,
+      currentAttempt: mapProtocolAttemptNullable(
+        row.current_attempt as ProtocolAttemptDbRow | null
+      ),
+      externalCalls: externalCalls.map(mapProtocolExternalCall),
+      providerReceipts: providerReceipts
+        .map(mapProviderCallReceiptNullable)
+        .filter((r): r is ProviderCallReceipt => r !== null),
+      analysisReceipts: analysisReceipts
+        .map(mapAnalysisCallReceiptNullable)
+        .filter((r): r is AnalysisCallReceipt => r !== null),
+      probeRun: mapProbeRunNullable(row.probe_run as ProbeRunDbRow | null),
+    };
+  },
+
+  async markProtocolExecutionJobNeedsReviewForAmbiguity(
+    input: MarkProtocolExecutionJobNeedsReviewForAmbiguityInput
+  ): Promise<MarkProtocolExecutionJobNeedsReviewForAmbiguityResult> {
+    const { data, error } = await getClient().rpc(
+      "mark_protocol_execution_job_needs_review_for_ambiguity",
+      {
+        p_job_id: input.jobId,
+        p_claim_token: input.claimToken,
+        p_project_id: input.projectId,
+      }
+    );
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "markProtocolExecutionJobNeedsReviewForAmbiguity: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      job: mapProtocolExecutionJobNullable(row.job as ProtocolExecutionJobDbRow | null),
+    };
   },
 };

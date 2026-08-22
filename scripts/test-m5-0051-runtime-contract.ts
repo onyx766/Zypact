@@ -1143,6 +1143,163 @@ SET ROLE service_role;
 \\echo '##R## s13_sent_without_receipt' :s13_sent_without_receipt
 \\echo '##R## s13_anon_result' :s13_anon_result
 ROLLBACK;
+
+-- ============================================================
+-- s14 (D-024): reactivate_abandoned_job is fingerprinted and
+-- replay-safe. s14a: first reactivation, then replay after the job's
+-- own status has since changed again -- same decision, zero new
+-- mutation. s14b: the same idempotency key already used by a
+-- DIFFERENT operator action type on the same job (the unique
+-- constraint has no action column) -> IDEMPOTENCY_KEY_CONFLICT. s14c:
+-- a non-abandoned job is refused, and that refusal is itself
+-- idempotent. s14d: wrong project scope -> JOB_NOT_FOUND, zero
+-- mutation. s14e: a raw duplicate INSERT bypassing the RPC entirely
+-- proves the unique constraint itself is a real, enforced backstop,
+-- never silently absorbed.
+-- ============================================================
+BEGIN;
+select project_id as s14_proj, protocol_id as s14_proto from _m5_runtime_test_helper_make_fixture('s14', 20, 100.00, 1) \\gset
+select (job).id as s14_job from enqueue_protocol_execution_job(:'s14_proto', :'s14_proj', 1) \\gset
+select claim_token as s14_token from claim_protocol_execution_job('worker-s14', 300) \\gset
+-- Force this job into abandoned_exhausted: backdate its lease directly
+-- (fixture owner only) and let claim_protocol_execution_job's own sweep
+-- step make the transition -- never write abandoned_exhausted directly.
+RESET ROLE;
+update protocol_execution_jobs set lease_expires_at = now() - interval '1 minute' where id = :'s14_job';
+SET ROLE service_role;
+select status from claim_protocol_execution_job('worker-s14-sweep', 300);
+select status as s14_status_before_reactivate from protocol_execution_jobs where id = :'s14_job' \\gset
+select count(*)::text as s14_actions_before from protocol_operator_actions where job_id = :'s14_job' \\gset
+
+select status as s14_reactivate_status, (job).attempt_count::text as s14_attempt_count_after
+  from reactivate_abandoned_job(:'s14_job', :'s14_proj', 'qa', 'recovering an abandoned job', 's14:decision-1') \\gset
+select count(*)::text as s14_actions_after_reactivate from protocol_operator_actions where job_id = :'s14_job' \\gset
+
+-- Change the job's status again before replaying the SAME key -- the
+-- replay must resolve identically regardless of the job's status now.
+RESET ROLE;
+update protocol_execution_jobs set status = 'failed' where id = :'s14_job';
+SET ROLE service_role;
+select status as s14_replay_status
+  from reactivate_abandoned_job(:'s14_job', :'s14_proj', 'qa', 'replaying, irrelevant text', 's14:decision-1') \\gset
+select count(*)::text as s14_actions_after_replay from protocol_operator_actions where job_id = :'s14_job' \\gset
+
+\\echo '##R## s14_status_before_reactivate' :s14_status_before_reactivate
+\\echo '##R## s14_actions_before' :s14_actions_before
+\\echo '##R## s14_reactivate_status' :s14_reactivate_status
+\\echo '##R## s14_attempt_count_after' :s14_attempt_count_after
+\\echo '##R## s14_actions_after_reactivate' :s14_actions_after_reactivate
+\\echo '##R## s14_replay_status' :s14_replay_status
+\\echo '##R## s14_actions_after_replay' :s14_actions_after_replay
+ROLLBACK;
+
+-- s14b: same key already used by a different operator action type on
+-- the same job -> IDEMPOTENCY_KEY_CONFLICT (the unique constraint is
+-- (project_id, job_id, idempotency_key), deliberately without action).
+BEGIN;
+select project_id as s14b_proj, protocol_id as s14b_proto from _m5_runtime_test_helper_make_fixture('s14b') \\gset
+select (job).id as s14b_job from enqueue_protocol_execution_job(:'s14b_proto', :'s14b_proj', 3) \\gset
+RESET ROLE;
+insert into protocol_operator_actions (
+  project_id, job_id, actor, reason, action, outcome, denial_code,
+  idempotency_key, request_fingerprint
+) values (
+  :'s14b_proj', :'s14b_job', 'qa', 'an unrelated earlier decision', 'retry_full_attempt', 'denied', 'SPEND_CAP_EXCEEDED',
+  's14b:shared-key', repeat('0', 64)
+);
+SET ROLE service_role;
+select count(*)::text as s14b_actions_before from protocol_operator_actions where job_id = :'s14b_job' \\gset
+select status as s14b_conflict_status
+  from reactivate_abandoned_job(:'s14b_job', :'s14b_proj', 'qa', 'same key already used by a different action', 's14b:shared-key') \\gset
+select count(*)::text as s14b_actions_after from protocol_operator_actions where job_id = :'s14b_job' \\gset
+
+\\echo '##R## s14b_actions_before' :s14b_actions_before
+\\echo '##R## s14b_conflict_status' :s14b_conflict_status
+\\echo '##R## s14b_actions_after' :s14b_actions_after
+ROLLBACK;
+
+-- s14c: a non-abandoned job is refused, and the refusal is itself
+-- idempotent (a replay of the exact same denial, no new action row).
+BEGIN;
+select project_id as s14c_proj, protocol_id as s14c_proto from _m5_runtime_test_helper_make_fixture('s14c') \\gset
+select (job).id as s14c_job from enqueue_protocol_execution_job(:'s14c_proto', :'s14c_proj', 3) \\gset
+select claim_token as s14c_token from claim_protocol_execution_job('worker-s14c', 300) \\gset
+select count(*)::text as s14c_actions_before from protocol_operator_actions where job_id = :'s14c_job' \\gset
+select status as s14c_denied_status
+  from reactivate_abandoned_job(:'s14c_job', :'s14c_proj', 'qa', 'attempting to reactivate a healthy job', 's14c:decision-1') \\gset
+select count(*)::text as s14c_actions_after_denied from protocol_operator_actions where job_id = :'s14c_job' \\gset
+select status as s14c_job_status_after_denied from protocol_execution_jobs where id = :'s14c_job' \\gset
+
+select status as s14c_denied_replay_status
+  from reactivate_abandoned_job(:'s14c_job', :'s14c_proj', 'qa', 'replaying the same denial', 's14c:decision-1') \\gset
+select count(*)::text as s14c_actions_after_replay from protocol_operator_actions where job_id = :'s14c_job' \\gset
+
+\\echo '##R## s14c_actions_before' :s14c_actions_before
+\\echo '##R## s14c_denied_status' :s14c_denied_status
+\\echo '##R## s14c_actions_after_denied' :s14c_actions_after_denied
+\\echo '##R## s14c_job_status_after_denied' :s14c_job_status_after_denied
+\\echo '##R## s14c_denied_replay_status' :s14c_denied_replay_status
+\\echo '##R## s14c_actions_after_replay' :s14c_actions_after_replay
+ROLLBACK;
+
+-- s14d: wrong project scope -> JOB_NOT_FOUND, zero mutation.
+BEGIN;
+select project_id as s14d_proj, protocol_id as s14d_proto from _m5_runtime_test_helper_make_fixture('s14d') \\gset
+select (job).id as s14d_job from enqueue_protocol_execution_job(:'s14d_proto', :'s14d_proj', 3) \\gset
+select project_id as s14d_other_proj from _m5_runtime_test_helper_make_fixture('s14d-other') \\gset
+select status as s14d_wrong_project_status
+  from reactivate_abandoned_job(:'s14d_job', :'s14d_other_proj', 'qa', 'wrong project scope', 's14d:decision-1') \\gset
+select count(*)::text as s14d_actions_after from protocol_operator_actions where job_id = :'s14d_job' \\gset
+
+\\echo '##R## s14d_wrong_project_status' :s14d_wrong_project_status
+\\echo '##R## s14d_actions_after' :s14d_actions_after
+ROLLBACK;
+
+-- s14e: a raw duplicate INSERT bypassing the RPC entirely proves the
+-- unique constraint is a real, enforced backstop -- never silently
+-- absorbed, never merely assumed. Probe is a parameterized pg_temp
+-- function (never a DO block referencing a psql client variable inside
+-- its dollar-quoted body), same discipline as s11c.
+BEGIN;
+select project_id as s14e_proj, protocol_id as s14e_proto from _m5_runtime_test_helper_make_fixture('s14e', 20, 100.00, 1) \\gset
+select (job).id as s14e_job from enqueue_protocol_execution_job(:'s14e_proto', :'s14e_proj', 1) \\gset
+select claim_token as s14e_token from claim_protocol_execution_job('worker-s14e', 300) \\gset
+RESET ROLE;
+update protocol_execution_jobs set lease_expires_at = now() - interval '1 minute' where id = :'s14e_job';
+SET ROLE service_role;
+select status from claim_protocol_execution_job('worker-s14e-sweep', 300);
+select status as s14e_reactivate_status
+  from reactivate_abandoned_job(:'s14e_job', :'s14e_proj', 'qa', 'first reactivation', 's14e:decision-1') \\gset
+select count(*)::text as s14e_actions_before_dupe from protocol_operator_actions where job_id = :'s14e_job' \\gset
+
+RESET ROLE;
+create temporary table s14e_probe (result text);
+create or replace function pg_temp._m5_0051_s14e_probe_duplicate(p_project_id uuid, p_job_id uuid) returns void language plpgsql as $s14efn$
+begin
+  begin
+    insert into protocol_operator_actions (
+      project_id, job_id, actor, reason, action, outcome, denial_code,
+      idempotency_key, request_fingerprint
+    ) values (
+      p_project_id, p_job_id, 'qa', 'a raw duplicate insert bypassing the RPC entirely', 'reactivate_abandoned_job', 'approved', null,
+      's14e:decision-1', repeat('1', 64)
+    );
+    insert into s14e_probe values ('DUPLICATE_INSERT_SUCCEEDED_BUG');
+  exception when unique_violation then
+    insert into s14e_probe values ('UNIQUE_VIOLATION_CORRECTLY_REJECTED');
+  end;
+end;
+$s14efn$;
+select pg_temp._m5_0051_s14e_probe_duplicate(:'s14e_proj', :'s14e_job');
+select coalesce((select result from s14e_probe limit 1), 'CONSTRAINT_DID_NOT_FIRE_BUG') as s14e_duplicate_result \\gset
+SET ROLE service_role;
+select count(*)::text as s14e_actions_after_dupe from protocol_operator_actions where job_id = :'s14e_job' \\gset
+
+\\echo '##R## s14e_reactivate_status' :s14e_reactivate_status
+\\echo '##R## s14e_actions_before_dupe' :s14e_actions_before_dupe
+\\echo '##R## s14e_duplicate_result' :s14e_duplicate_result
+\\echo '##R## s14e_actions_after_dupe' :s14e_actions_after_dupe
+ROLLBACK;
 `;
 
   writeFileSync(path.join(scratchDir, "02-business.sql"), BUSINESS_SQL);
@@ -1185,6 +1342,50 @@ ROLLBACK;
   check("s13: the monitoring view reflects the real fixture (one claimed/running job)", r("s13_jobs_claimed_or_running") === "1");
   check("s13: sent-without-receipt is counted correctly (exactly the one Perplexity call marked sent with no receipt)", r("s13_sent_without_receipt") === "1");
   check("s13: anon is genuinely denied a real SELECT against the monitoring view (not merely absent from ACL metadata)", r("s13_anon_result") === "ANON_CORRECTLY_DENIED");
+
+  // D-024: reactivate_abandoned_job is fingerprinted and replay-safe.
+  check(
+    "s14: the fixture job genuinely reaches abandoned_exhausted via the real claim sweep before reactivation is attempted",
+    r("s14_status_before_reactivate") === "abandoned_exhausted" && r("s14_actions_before") === "0"
+  );
+  check(
+    "s14: first reactivation of a genuinely abandoned job -> REACTIVATED, attempt_count reset to 0, exactly one operator action logged",
+    r("s14_reactivate_status") === "REACTIVATED" &&
+      r("s14_attempt_count_after") === "0" &&
+      r("s14_actions_after_reactivate") === "1"
+  );
+  check(
+    "s14: replay of the same key + same fingerprint -> the exact same REACTIVATED decision, even after the job's own status has since changed again, and still exactly one operator action (no new row)",
+    r("s14_replay_status") === "REACTIVATED" && r("s14_actions_after_replay") === "1"
+  );
+  check(
+    "s14b: the same idempotency key already used by a different operator action type on the SAME job -> IDEMPOTENCY_KEY_CONFLICT, zero new action row",
+    r("s14b_actions_before") === "1" &&
+      r("s14b_conflict_status") === "IDEMPOTENCY_KEY_CONFLICT" &&
+      r("s14b_actions_after") === "1"
+  );
+  check(
+    "s14c: a non-abandoned job is refused -> JOB_NOT_ABANDONED, and that refusal is itself journaled as exactly one denied operator action",
+    r("s14c_actions_before") === "0" &&
+      r("s14c_denied_status") === "JOB_NOT_ABANDONED" &&
+      r("s14c_actions_after_denied") === "1" &&
+      r("s14c_job_status_after_denied") === "claimed"
+  );
+  check(
+    "s14c: replay of the same denial key -> the exact same JOB_NOT_ABANDONED denial, no new action row",
+    r("s14c_denied_replay_status") === "JOB_NOT_ABANDONED" && r("s14c_actions_after_replay") === "1"
+  );
+  check(
+    "s14d: a real job under the wrong project -> JOB_NOT_FOUND, zero mutation, zero action logged",
+    r("s14d_wrong_project_status") === "JOB_NOT_FOUND" && r("s14d_actions_after") === "0"
+  );
+  check(
+    "s14e: a raw INSERT duplicating (project_id, job_id, idempotency_key) outside the RPC entirely is genuinely rejected by the real unique constraint, never silently absorbed, and the original action row is left exactly as it was",
+    r("s14e_reactivate_status") === "REACTIVATED" &&
+      r("s14e_actions_before_dupe") === "1" &&
+      r("s14e_duplicate_result") === "UNIQUE_VIOLATION_CORRECTLY_REJECTED" &&
+      r("s14e_actions_after_dupe") === "1"
+  );
 
   // ======================================================================
   // Part C — genuine concurrency: two real, separate psql processes

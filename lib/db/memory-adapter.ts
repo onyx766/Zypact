@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { createPublicReportToken } from "@/lib/snapshot-requests/public-report-token";
 import type {
   AdmitAndReserveAttemptInput,
@@ -75,6 +75,51 @@ import type {
   StartAttemptResult,
   StartOrResumeEntityResolutionPassInput,
   StartOrResumeEntityResolutionPassResult,
+  AttemptKind,
+
+  // M5-2 Stage A
+  ProtocolExecutionJob,
+  ProtocolExternalCall,
+  ProviderCallReceipt,
+  AnalysisCallReceipt,
+  ProtocolOperatorAction,
+  EnqueueProtocolExecutionJobInput,
+  EnqueueProtocolExecutionJobResult,
+  ClaimProtocolExecutionJobInput,
+  ClaimProtocolExecutionJobResult,
+  RenewProtocolExecutionJobLeaseInput,
+  RenewProtocolExecutionJobLeaseResult,
+  AdmitAndReserveAttemptForJobInput,
+  AdmitAndReserveAttemptForJobResult,
+  AdmitAndReserveAttemptForJobOutcome,
+  CreateProbeRunAndStartAttemptForJobInput,
+  CreateProbeRunAndStartAttemptForJobResult,
+  MarkExternalCallSentForJobInput,
+  MarkExternalCallSentForJobResult,
+  RecordProviderCallReceiptForJobInput,
+  RecordProviderCallReceiptForJobResult,
+  RecordAnalysisCallReceiptForJobInput,
+  RecordAnalysisCallReceiptForJobResult,
+  ReconcileAttemptForJobInput,
+  ReconcileAttemptForJobResult,
+  CompleteProtocolExecutionJobInput,
+  CompleteProtocolExecutionJobResult,
+  FailProtocolExecutionJobInput,
+  FailProtocolExecutionJobResult,
+  ReactivateAbandonedJobInput,
+  ReactivateAbandonedJobResult,
+  ReactivateAbandonedJobOutcome,
+  RetryFullAttemptForJobInput,
+  RetryFullAttemptForJobResult,
+  RetryAnalysisGenerationForJobInput,
+  RetryAnalysisGenerationForJobResult,
+  RetryAnalysisGenerationForJobOutcome,
+  AuthorizeOperatorRetryInput,
+  AuthorizeOperatorRetryResult,
+  GetProtocolExecutionJobContextInput,
+  GetProtocolExecutionJobContextResult,
+  MarkProtocolExecutionJobNeedsReviewForAmbiguityInput,
+  MarkProtocolExecutionJobNeedsReviewForAmbiguityResult,
 } from "./types";
 import { SnapshotRequestLimitError } from "./types";
 import { evaluateSnapshotRequestLimits } from "@/lib/snapshot-requests/limits";
@@ -126,6 +171,12 @@ interface MemoryStore {
   buyerQuestionVersions: Map<string, BuyerQuestionVersion>;
   protocols: Map<string, Protocol>;
   protocolAttempts: Map<string, ProtocolAttempt>;
+  // M5-2 Stage A (D-020/D-021/D-022/D-023).
+  protocolExecutionJobs: Map<string, ProtocolExecutionJob>;
+  protocolExternalCalls: Map<string, ProtocolExternalCall>;
+  providerCallReceipts: Map<string, ProviderCallReceipt>;
+  analysisCallReceipts: Map<string, AnalysisCallReceipt>;
+  protocolOperatorActions: Map<string, ProtocolOperatorAction>;
 }
 
 const globalKey = "__zypact_memory_store__";
@@ -162,6 +213,11 @@ function getStore(): MemoryStore {
       buyerQuestionVersions: new Map(),
       protocols: new Map(),
       protocolAttempts: new Map(),
+      protocolExecutionJobs: new Map(),
+      protocolExternalCalls: new Map(),
+      providerCallReceipts: new Map(),
+      analysisCallReceipts: new Map(),
+      protocolOperatorActions: new Map(),
     };
   }
   return g[globalKey]!;
@@ -187,6 +243,328 @@ function cloneEvidenceBankInput(
 
 const memorySnapshotReportArtifacts =
   new Map<string, SnapshotReportArtifact>();
+
+/* -------------------------------------------------------------------------- */
+/*  M5-2 Stage A — private helpers (D-020/D-021/D-022/D-023).                */
+/*                                                                            */
+/*  These honestly reproduce the SAME sequential branch order as the real    */
+/*  SQL cores/RPCs (migrations 0050/0051), one JS call at a time. They do    */
+/*  NOT simulate `FOR UPDATE`, `FOR UPDATE SKIP LOCKED`, or any genuine       */
+/*  cross-process race — a single JS call runs to completion before another  */
+/*  can start, which is a real but much weaker guarantee than a database     */
+/*  row lock. Anything claiming to prove concurrency safety belongs in the   */
+/*  disposable-Postgres runtime tests (precedent: scripts/test-m5-0051-      */
+/*  runtime-contract.ts), never in this adapter.                             */
+/* -------------------------------------------------------------------------- */
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+/** Real SHA-256, matching the pgcrypto-backed `_sha256_hex` helper's algorithm class (0051) — not a placeholder. Key order is sorted, not insertion order, since jsonb's own on-disk key order is not JS object insertion order either; this adapter's fingerprints are internally consistent (same input -> same output, different input -> different output) but are never compared byte-for-byte against a real Postgres-computed fingerprint. */
+function sha256Hex(input: string): string {
+  return createHash("sha256").update(input, "utf8").digest("hex");
+}
+
+function operatorRetryFingerprint(fields: {
+  jobId: string;
+  projectId: string;
+  action: string;
+  sourceAttemptId: string;
+  sourceExternalCallId: string | null;
+  reservedCostUsd: number;
+  perplexityReservedCostUsd: number | null;
+}): string {
+  const canonical = {
+    action: fields.action,
+    jobId: fields.jobId,
+    perplexityReservedCostUsd: fields.perplexityReservedCostUsd,
+    projectId: fields.projectId,
+    reservedCostUsd: fields.reservedCostUsd,
+    sourceAttemptId: fields.sourceAttemptId,
+    sourceExternalCallId: fields.sourceExternalCallId,
+  };
+  return sha256Hex(JSON.stringify(canonical));
+}
+
+/** D-024 — reactivate_abandoned_job's fingerprint: exactly job_id/project_id/action. actor/reason are provenance metadata, excluded, exactly as D-021 excludes them for authorize_operator_retry. */
+function reactivateAbandonedJobFingerprint(fields: { jobId: string; projectId: string }): string {
+  const canonical = {
+    action: "reactivate_abandoned",
+    jobId: fields.jobId,
+    projectId: fields.projectId,
+  };
+  return sha256Hex(JSON.stringify(canonical));
+}
+
+interface AdmitCoreParams {
+  protocolId: string;
+  projectId: string;
+  attemptKind: AttemptKind;
+  idempotencyKey: string;
+  totalReservedCostUsd: number;
+  retryOfAttemptId: string | null;
+  jobId: string | null;
+}
+
+/**
+ * Exactly what `_admit_and_reserve_attempt_core` (0050) can itself return —
+ * a strict subset of `AdmitAndReserveAttemptForJobOutcome`/
+ * `RetryFullAttemptForJobOutcome` that deliberately excludes
+ * RESUME_CURRENT_ATTEMPT/CURRENT_ATTEMPT_NOT_FOUND/JOB_NOT_FOUND/
+ * JOB_NOT_OWNED/SOURCE_* — those are decided by each caller BEFORE the
+ * core is ever invoked, never by the core itself.
+ */
+type AdmitCoreOutcome =
+  | "RESERVED"
+  | "NOT_FOUND"
+  | "PROTOCOL_NOT_APPROVED"
+  | "ALREADY_RESERVED"
+  | "RUN_CAP_EXCEEDED"
+  | "SPEND_CAP_EXCEEDED"
+  | "RATE_LIMIT_EXCEEDED"
+  | "CONCURRENCY_LIMIT_EXCEEDED"
+  | "RETRY_CAP_EXCEEDED"
+  | "INVALID_RETRY_REFERENCE";
+
+interface AdmitCoreResult {
+  status: AdmitCoreOutcome;
+  attempt: ProtocolAttempt | null;
+}
+
+/** Mirrors `_admit_and_reserve_attempt_core` (0050) — the shared cap-check/reservation logic underneath both `admitAndReserveAttemptForJob` and `retryFullAttemptForJob`. */
+function admitAndReserveAttemptCore(
+  store: MemoryStore,
+  params: AdmitCoreParams
+): AdmitCoreResult {
+  const protocol = store.protocols.get(params.protocolId);
+  if (!protocol || protocol.projectId !== params.projectId) {
+    return { status: "NOT_FOUND", attempt: null };
+  }
+  if (protocol.status !== "approved" && protocol.status !== "active") {
+    return { status: "PROTOCOL_NOT_APPROVED", attempt: null };
+  }
+
+  const attemptsForProtocol = [...store.protocolAttempts.values()].filter(
+    (a) => a.protocolId === params.protocolId
+  );
+
+  const existing = attemptsForProtocol.find(
+    (a) => a.idempotencyKey === params.idempotencyKey
+  );
+  if (existing) {
+    return { status: "ALREADY_RESERVED", attempt: { ...existing } };
+  }
+
+  if (params.retryOfAttemptId) {
+    const retryTarget = attemptsForProtocol.find((a) => a.id === params.retryOfAttemptId);
+    if (!retryTarget) {
+      return { status: "INVALID_RETRY_REFERENCE", attempt: null };
+    }
+    const byId = new Map(attemptsForProtocol.map((a) => [a.id, a]));
+    let depth = 0;
+    let cursor = retryTarget;
+    while (cursor.retryOfAttemptId) {
+      const parent = byId.get(cursor.retryOfAttemptId);
+      if (!parent) break;
+      depth += 1;
+      cursor = parent;
+    }
+    if (depth + 1 > protocol.retryCap) {
+      return { status: "RETRY_CAP_EXCEEDED", attempt: null };
+    }
+  }
+
+  const consumed = attemptsForProtocol.filter((a) => a.status !== "cancelled").length;
+  if (consumed >= protocol.runCap) {
+    return { status: "RUN_CAP_EXCEEDED", attempt: null };
+  }
+
+  const spent = attemptsForProtocol
+    .filter((a) => a.status !== "cancelled")
+    .reduce((sum, a) => sum + (a.actualCostUsd ?? a.reservedCostUsd), 0);
+  if (spent + params.totalReservedCostUsd > protocol.spendCapUsd) {
+    return { status: "SPEND_CAP_EXCEEDED", attempt: null };
+  }
+
+  const oneHourAgoMs = Date.now() - 60 * 60 * 1000;
+  const recent = attemptsForProtocol.filter(
+    (a) => new Date(a.reservedAt).getTime() >= oneHourAgoMs
+  ).length;
+  if (recent >= protocol.rateLimitPerHour) {
+    return { status: "RATE_LIMIT_EXCEEDED", attempt: null };
+  }
+
+  const concurrent = attemptsForProtocol.filter(
+    (a) => a.status === "reserved" || a.status === "in_progress"
+  ).length;
+  if (concurrent >= protocol.concurrencyLimit) {
+    return { status: "CONCURRENCY_LIMIT_EXCEEDED", attempt: null };
+  }
+
+  const now = nowIso();
+  const attempt: ProtocolAttempt = {
+    id: randomUUID(),
+    projectId: params.projectId,
+    protocolId: params.protocolId,
+    buyerQuestionVersionId: protocol.buyerQuestionVersionId,
+    attemptKind: params.attemptKind,
+    status: "reserved",
+    idempotencyKey: params.idempotencyKey,
+    reservedCostUsd: params.totalReservedCostUsd,
+    actualCostUsd: null,
+    probeRunId: null,
+    retryOfAttemptId: params.retryOfAttemptId,
+    terminationReason: null,
+    reservedAt: now,
+    lastActivityAt: now,
+    terminalizedAt: null,
+    createdAt: now,
+    jobId: params.jobId,
+  };
+  store.protocolAttempts.set(attempt.id, attempt);
+  return { status: "RESERVED", attempt: { ...attempt } };
+}
+
+/** Mirrors `_create_attempt_external_calls_core` (0050) — the two generation-1 rows (perplexity + analysis) created atomically alongside a fresh admission. */
+function createAttemptExternalCallsCore(
+  store: MemoryStore,
+  attemptId: string,
+  projectId: string,
+  perplexityReservedCostUsd: number,
+  analysisReservedCostUsd: number
+): { perplexityCall: ProtocolExternalCall; analysisCall: ProtocolExternalCall } {
+  const now = nowIso();
+  const perplexityCall: ProtocolExternalCall = {
+    id: randomUUID(),
+    projectId,
+    protocolAttemptId: attemptId,
+    callKind: "perplexity",
+    generation: 1,
+    status: "reserved",
+    reservedCostUsd: perplexityReservedCostUsd,
+    actualCostUsd: null,
+    costBasis: null,
+    probeRunId: null,
+    requestSentAt: null,
+    terminalizedAt: null,
+    retryOfExternalCallId: null,
+    createdAt: now,
+  };
+  const analysisCall: ProtocolExternalCall = {
+    id: randomUUID(),
+    projectId,
+    protocolAttemptId: attemptId,
+    callKind: "analysis",
+    generation: 1,
+    status: "reserved",
+    reservedCostUsd: analysisReservedCostUsd,
+    actualCostUsd: null,
+    costBasis: null,
+    probeRunId: null,
+    requestSentAt: null,
+    terminalizedAt: null,
+    retryOfExternalCallId: null,
+    createdAt: now,
+  };
+  store.protocolExternalCalls.set(perplexityCall.id, perplexityCall);
+  store.protocolExternalCalls.set(analysisCall.id, analysisCall);
+  return { perplexityCall: { ...perplexityCall }, analysisCall: { ...analysisCall } };
+}
+
+interface ReserveAdditionalAnalysisCoreResult {
+  status: RetryAnalysisGenerationForJobOutcome;
+  externalCall: ProtocolExternalCall | null;
+}
+
+/** Mirrors `_reserve_additional_analysis_generation_core` (0050/0051) — a new, bounded analysis generation under an attempt still `in_progress`. */
+function reserveAdditionalAnalysisGenerationCore(
+  store: MemoryStore,
+  attemptId: string,
+  projectId: string,
+  reservedCostUsd: number,
+  retryOfExternalCallId: string | null
+): ReserveAdditionalAnalysisCoreResult {
+  const attempt = store.protocolAttempts.get(attemptId);
+  if (!attempt || attempt.projectId !== projectId) {
+    return { status: "NOT_FOUND", externalCall: null };
+  }
+  if (attempt.status !== "in_progress") {
+    return { status: "ATTEMPT_NOT_IN_PROGRESS", externalCall: null };
+  }
+  const protocol = store.protocols.get(attempt.protocolId);
+  if (!protocol || protocol.projectId !== projectId) {
+    return { status: "PROTOCOL_NOT_FOUND", externalCall: null };
+  }
+
+  const analysisCallsForAttempt = [...store.protocolExternalCalls.values()].filter(
+    (ec) => ec.protocolAttemptId === attemptId && ec.callKind === "analysis"
+  );
+  const maxGeneration = analysisCallsForAttempt.reduce(
+    (max, ec) => Math.max(max, ec.generation),
+    0
+  );
+  const nextGeneration = maxGeneration + 1;
+  if (nextGeneration > protocol.retryCap + 1) {
+    return { status: "RETRY_CAP_EXCEEDED", externalCall: null };
+  }
+
+  const attemptsForProtocol = [...store.protocolAttempts.values()].filter(
+    (a) => a.protocolId === protocol.id && a.status !== "cancelled"
+  );
+  const spent = attemptsForProtocol.reduce(
+    (sum, a) => sum + (a.actualCostUsd ?? a.reservedCostUsd),
+    0
+  );
+  if (spent + reservedCostUsd > protocol.spendCapUsd) {
+    return { status: "SPEND_CAP_EXCEEDED", externalCall: null };
+  }
+
+  const now = nowIso();
+  const newCall: ProtocolExternalCall = {
+    id: randomUUID(),
+    projectId,
+    protocolAttemptId: attemptId,
+    callKind: "analysis",
+    generation: nextGeneration,
+    status: "reserved",
+    reservedCostUsd,
+    actualCostUsd: null,
+    costBasis: null,
+    probeRunId: null,
+    requestSentAt: null,
+    terminalizedAt: null,
+    retryOfExternalCallId: retryOfExternalCallId,
+    createdAt: now,
+  };
+  store.protocolExternalCalls.set(newCall.id, newCall);
+  store.protocolAttempts.set(attemptId, {
+    ...attempt,
+    reservedCostUsd: attempt.reservedCostUsd + reservedCostUsd,
+    lastActivityAt: now,
+  });
+  return { status: "RESERVED", externalCall: { ...newCall } };
+}
+
+function jobFencingOk(
+  job: ProtocolExecutionJob,
+  claimToken: string
+): boolean {
+  return (
+    job.claimToken === claimToken &&
+    job.leaseExpiresAt !== null &&
+    new Date(job.leaseExpiresAt).getTime() > Date.now() &&
+    (job.status === "claimed" || job.status === "running")
+  );
+}
+
+function receiptOutcomeToCallStatus(
+  outcome: "success" | "provider_error" | "provider_outcome_unknown"
+): "completed" | "failed" | "timed_out" {
+  if (outcome === "success") return "completed";
+  if (outcome === "provider_error") return "failed";
+  return "timed_out";
+}
 
 export const memoryAdapter: DbAdapter = {
   async getSnapshotRequest(
@@ -2678,6 +3056,9 @@ export const memoryAdapter: DbAdapter = {
       lastActivityAt: now,
       terminalizedAt: null,
       createdAt: now,
+      // M4 raw admission (not job-scoped) — jobId is exclusively set by
+      // the *_for_job admission path below.
+      jobId: null,
     };
     store.protocolAttempts.set(attempt.id, attempt);
     return { outcome: "RESERVED", attempt: { ...attempt } };
@@ -2748,5 +3129,1241 @@ export const memoryAdapter: DbAdapter = {
       .sort(
         (a, b) => new Date(a.reservedAt).getTime() - new Date(b.reservedAt).getTime()
       );
+  },
+
+  // ------------------------------------------------------------------------
+  // M5-2 Stage A (D-020/D-021/D-022/D-023). Sequential, honest reproduction
+  // of the same branch order as the real RPCs — no FOR UPDATE, no real
+  // concurrency guarantee. start_attempt_for_job and
+  // reserve_additional_analysis_generation_for_job are deliberately not
+  // implemented as adapter methods (D-023 §1).
+  // ------------------------------------------------------------------------
+
+  async enqueueProtocolExecutionJob(
+    input: EnqueueProtocolExecutionJobInput
+  ): Promise<EnqueueProtocolExecutionJobResult> {
+    const store = getStore();
+    const maxAttempts = input.maxAttempts ?? 3;
+    if (maxAttempts < 1) throw new Error("invalid_enqueue_protocol_execution_job_args");
+
+    const protocol = store.protocols.get(input.protocolId);
+    if (!protocol || protocol.projectId !== input.projectId) {
+      return { outcome: "PROTOCOL_NOT_FOUND", job: null };
+    }
+    if (protocol.status !== "approved" && protocol.status !== "active") {
+      return { outcome: "PROTOCOL_NOT_APPROVED", job: null };
+    }
+
+    const existing = [...store.protocolExecutionJobs.values()].find(
+      (j) => j.protocolId === input.protocolId && j.projectId === input.projectId
+    );
+    if (existing) {
+      return { outcome: "ALREADY_EXISTS", job: { ...existing } };
+    }
+
+    const now = nowIso();
+    const job: ProtocolExecutionJob = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      protocolId: input.protocolId,
+      status: "queued",
+      workerId: null,
+      claimToken: null,
+      leaseExpiresAt: null,
+      attemptCount: 0,
+      maxAttempts,
+      currentAttemptId: null,
+      needsReviewReason: null,
+      failureReason: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    store.protocolExecutionJobs.set(job.id, job);
+    return { outcome: "QUEUED", job: { ...job } };
+  },
+
+  async claimProtocolExecutionJob(
+    input: ClaimProtocolExecutionJobInput
+  ): Promise<ClaimProtocolExecutionJobResult> {
+    const store = getStore();
+    if (!input.workerId.trim() || input.leaseSeconds <= 0) {
+      throw new Error("invalid_claim_protocol_execution_job_args");
+    }
+
+    const nowMs = Date.now();
+
+    // Sweep expired, exhausted claimed/running jobs to abandoned_exhausted
+    // first — mirrors claim_protocol_execution_job's own leading UPDATE.
+    for (const [id, j] of store.protocolExecutionJobs) {
+      if (
+        (j.status === "claimed" || j.status === "running") &&
+        j.leaseExpiresAt !== null &&
+        new Date(j.leaseExpiresAt).getTime() < nowMs &&
+        j.attemptCount >= j.maxAttempts
+      ) {
+        store.protocolExecutionJobs.set(id, { ...j, status: "abandoned_exhausted", updatedAt: nowIso() });
+      }
+    }
+
+    const candidates = [...store.protocolExecutionJobs.values()]
+      .filter(
+        (j) =>
+          j.status === "queued" ||
+          ((j.status === "claimed" || j.status === "running") &&
+            j.leaseExpiresAt !== null &&
+            new Date(j.leaseExpiresAt).getTime() < nowMs &&
+            j.attemptCount < j.maxAttempts)
+      )
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    const candidate = candidates[0];
+    if (!candidate) {
+      return { outcome: "NO_JOB_AVAILABLE", job: null, claimToken: null };
+    }
+
+    const claimToken = randomUUID();
+    const now = nowIso();
+    const claimed: ProtocolExecutionJob = {
+      ...candidate,
+      status: "claimed",
+      workerId: input.workerId,
+      claimToken,
+      leaseExpiresAt: new Date(nowMs + input.leaseSeconds * 1000).toISOString(),
+      attemptCount: candidate.attemptCount + 1,
+      updatedAt: now,
+    };
+    store.protocolExecutionJobs.set(claimed.id, claimed);
+    return { outcome: "CLAIMED", job: { ...claimed }, claimToken };
+  },
+
+  async renewProtocolExecutionJobLease(
+    input: RenewProtocolExecutionJobLeaseInput
+  ): Promise<RenewProtocolExecutionJobLeaseResult> {
+    const store = getStore();
+    if (input.leaseSeconds <= 0) throw new Error("invalid_renew_protocol_execution_job_lease_args");
+
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) {
+      return { outcome: "JOB_NOT_FOUND", job: null };
+    }
+    if (!jobFencingOk(job, input.claimToken)) {
+      return { outcome: "JOB_NOT_OWNED", job: { ...job } };
+    }
+
+    const now = nowIso();
+    const renewed: ProtocolExecutionJob = {
+      ...job,
+      leaseExpiresAt: new Date(Date.now() + input.leaseSeconds * 1000).toISOString(),
+      updatedAt: now,
+    };
+    store.protocolExecutionJobs.set(renewed.id, renewed);
+    return { outcome: "RENEWED", job: { ...renewed } };
+  },
+
+  async admitAndReserveAttemptForJob(
+    input: AdmitAndReserveAttemptForJobInput
+  ): Promise<AdmitAndReserveAttemptForJobResult> {
+    const store = getStore();
+    if (input.perplexityReservedCostUsd < 0 || input.analysisReservedCostUsd < 0) {
+      throw new Error("invalid_admit_and_reserve_attempt_for_job_args");
+    }
+
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) {
+      return {
+        outcome: "JOB_NOT_FOUND",
+        attempt: null,
+        perplexityCall: null,
+        analysisCall: null,
+      };
+    }
+    if (!jobFencingOk(job, input.claimToken)) {
+      return {
+        outcome: "JOB_NOT_OWNED",
+        attempt: null,
+        perplexityCall: null,
+        analysisCall: null,
+      };
+    }
+
+    // D-021: current_attempt_id already set -> resume, never a second admission.
+    if (job.currentAttemptId !== null) {
+      const resumeAttempt = store.protocolAttempts.get(job.currentAttemptId);
+      if (!resumeAttempt || resumeAttempt.jobId !== job.id || resumeAttempt.projectId !== job.projectId) {
+        return {
+          outcome: "CURRENT_ATTEMPT_NOT_FOUND",
+          attempt: null,
+          perplexityCall: null,
+          analysisCall: null,
+        };
+      }
+      const callsForAttempt = [...store.protocolExternalCalls.values()].filter(
+        (ec) => ec.protocolAttemptId === resumeAttempt.id
+      );
+      const perplexityCall =
+        callsForAttempt.find((ec) => ec.callKind === "perplexity" && ec.generation === 1) ?? null;
+      const analysisCall =
+        callsForAttempt
+          .filter((ec) => ec.callKind === "analysis")
+          .sort((a, b) => b.generation - a.generation)[0] ?? null;
+      return {
+        outcome: "RESUME_CURRENT_ATTEMPT",
+        attempt: { ...resumeAttempt },
+        perplexityCall: perplexityCall ? { ...perplexityCall } : null,
+        analysisCall: analysisCall ? { ...analysisCall } : null,
+      };
+    }
+
+    const core = admitAndReserveAttemptCore(store, {
+      protocolId: job.protocolId,
+      projectId: input.projectId,
+      attemptKind: input.attemptKind,
+      idempotencyKey: input.idempotencyKey,
+      totalReservedCostUsd: input.perplexityReservedCostUsd + input.analysisReservedCostUsd,
+      retryOfAttemptId: input.retryOfAttemptId ?? null,
+      jobId: job.id,
+    });
+    if (core.status !== "RESERVED" || !core.attempt) {
+      return { outcome: core.status, attempt: core.attempt, perplexityCall: null, analysisCall: null };
+    }
+
+    const { perplexityCall, analysisCall } = createAttemptExternalCallsCore(
+      store,
+      core.attempt.id,
+      input.projectId,
+      input.perplexityReservedCostUsd,
+      input.analysisReservedCostUsd
+    );
+
+    const now = nowIso();
+    store.protocolExecutionJobs.set(job.id, {
+      ...job,
+      status: "running",
+      currentAttemptId: core.attempt.id,
+      updatedAt: now,
+    });
+
+    return { outcome: "RESERVED", attempt: core.attempt, perplexityCall, analysisCall };
+  },
+
+  async createProbeRunAndStartAttemptForJob(
+    input: CreateProbeRunAndStartAttemptForJobInput
+  ): Promise<CreateProbeRunAndStartAttemptForJobResult> {
+    const store = getStore();
+
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) {
+      return { outcome: "JOB_NOT_FOUND", attempt: null, probeRun: null };
+    }
+    if (!jobFencingOk(job, input.claimToken)) {
+      return { outcome: "JOB_NOT_OWNED", attempt: null, probeRun: null };
+    }
+
+    const attempt = store.protocolAttempts.get(input.attemptId);
+    if (!attempt || attempt.jobId !== job.id || attempt.projectId !== input.projectId) {
+      return { outcome: "CONFLICT", attempt: null, probeRun: null };
+    }
+
+    if (attempt.status === "in_progress") {
+      if (attempt.probeRunId === null) {
+        return { outcome: "CONFLICT", attempt: { ...attempt }, probeRun: null };
+      }
+      const run = store.probeRuns.get(attempt.probeRunId);
+      if (!run || run.projectId !== input.projectId) {
+        return { outcome: "CONFLICT", attempt: { ...attempt }, probeRun: null };
+      }
+      return { outcome: "ALREADY_STARTED", attempt: { ...attempt }, probeRun: { ...run } };
+    }
+
+    if (attempt.status !== "reserved") {
+      return { outcome: "ATTEMPT_TERMINAL", attempt: { ...attempt }, probeRun: null };
+    }
+
+    const now = nowIso();
+    const run: ProbeRun = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      platform: input.platform,
+      status: "pending",
+      probeMode: input.probeMode,
+      snapshotRequestId: null,
+      datasetId: input.datasetId,
+      datasetSourceType: input.datasetSourceType,
+      createdAt: now,
+    };
+    store.probeRuns.set(run.id, run);
+
+    const started: ProtocolAttempt = {
+      ...attempt,
+      status: "in_progress",
+      probeRunId: run.id,
+      lastActivityAt: now,
+    };
+    store.protocolAttempts.set(started.id, started);
+
+    return { outcome: "STARTED", attempt: { ...started }, probeRun: { ...run } };
+  },
+
+  async markExternalCallSentForJob(
+    input: MarkExternalCallSentForJobInput
+  ): Promise<MarkExternalCallSentForJobResult> {
+    const store = getStore();
+
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) {
+      return { outcome: "JOB_NOT_FOUND", externalCall: null };
+    }
+    if (!jobFencingOk(job, input.claimToken)) {
+      return { outcome: "JOB_NOT_OWNED", externalCall: null };
+    }
+
+    const call = store.protocolExternalCalls.get(input.externalCallId);
+    if (!call || call.projectId !== input.projectId) {
+      return { outcome: "NOT_FOUND", externalCall: null };
+    }
+    const owningAttempt = store.protocolAttempts.get(call.protocolAttemptId);
+    if (!owningAttempt || owningAttempt.jobId !== job.id || owningAttempt.projectId !== input.projectId) {
+      return { outcome: "CALL_NOT_OWNED_BY_JOB", externalCall: null };
+    }
+    if (call.status !== "reserved") {
+      return { outcome: "CONFLICT", externalCall: { ...call } };
+    }
+
+    const sent: ProtocolExternalCall = {
+      ...call,
+      status: "in_progress",
+      probeRunId: input.probeRunId,
+      requestSentAt: nowIso(),
+    };
+    store.protocolExternalCalls.set(sent.id, sent);
+    return { outcome: "SENT", externalCall: { ...sent } };
+  },
+
+  async recordProviderCallReceiptForJob(
+    input: RecordProviderCallReceiptForJobInput
+  ): Promise<RecordProviderCallReceiptForJobResult> {
+    const store = getStore();
+
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) {
+      return { outcome: "JOB_NOT_FOUND", externalCall: null, receipt: null };
+    }
+    if (!jobFencingOk(job, input.claimToken)) {
+      return { outcome: "JOB_NOT_OWNED", externalCall: null, receipt: null };
+    }
+
+    const call = store.protocolExternalCalls.get(input.externalCallId);
+    if (!call || call.projectId !== input.projectId) {
+      return { outcome: "NOT_FOUND", externalCall: null, receipt: null };
+    }
+    if (call.callKind !== "perplexity") {
+      return { outcome: "WRONG_CALL_KIND", externalCall: { ...call }, receipt: null };
+    }
+    const owningAttempt = store.protocolAttempts.get(call.protocolAttemptId);
+    if (!owningAttempt || owningAttempt.jobId !== job.id || owningAttempt.projectId !== input.projectId) {
+      return { outcome: "CALL_NOT_OWNED_BY_JOB", externalCall: null, receipt: null };
+    }
+    if (call.status !== "in_progress" || call.probeRunId !== input.probeRunId) {
+      return { outcome: "CONFLICT", externalCall: { ...call }, receipt: null };
+    }
+
+    // D-023 §3: "unknown" is application-level only in Stage A — never
+    // written where the real schema's CHECK would reject it (see the
+    // Supabase adapter's identical rule).
+    const costBasis =
+      input.costBasis === "measured" || input.costBasis === "estimated" ? input.costBasis : null;
+    const actualCostUsd = costBasis === null ? null : input.actualCostUsd ?? null;
+
+    const now = nowIso();
+    const receipt: ProviderCallReceipt = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      externalCallId: input.externalCallId,
+      probeRunId: input.probeRunId,
+      outcome: input.outcome,
+      httpStatus: input.httpStatus ?? null,
+      providerRequestId: input.providerRequestId ?? null,
+      rawResponseSha256: input.rawResponseSha256 ?? null,
+      latencyMs: input.latencyMs ?? null,
+      receivedAt: now,
+      createdAt: now,
+    };
+    store.providerCallReceipts.set(receipt.id, receipt);
+
+    const updatedCall: ProtocolExternalCall = {
+      ...call,
+      status: receiptOutcomeToCallStatus(input.outcome),
+      actualCostUsd,
+      costBasis,
+      terminalizedAt: now,
+    };
+    store.protocolExternalCalls.set(updatedCall.id, updatedCall);
+
+    if (input.outcome === "provider_outcome_unknown" && (job.status === "claimed" || job.status === "running")) {
+      store.protocolExecutionJobs.set(job.id, {
+        ...job,
+        status: "needs_review",
+        needsReviewReason: "perplexity_outcome_unknown",
+        updatedAt: now,
+      });
+    }
+
+    return { outcome: "RECEIPTED", externalCall: { ...updatedCall }, receipt: { ...receipt } };
+  },
+
+  async recordAnalysisCallReceiptForJob(
+    input: RecordAnalysisCallReceiptForJobInput
+  ): Promise<RecordAnalysisCallReceiptForJobResult> {
+    const store = getStore();
+
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) {
+      return { outcome: "JOB_NOT_FOUND", externalCall: null, receipt: null };
+    }
+    if (!jobFencingOk(job, input.claimToken)) {
+      return { outcome: "JOB_NOT_OWNED", externalCall: null, receipt: null };
+    }
+
+    const call = store.protocolExternalCalls.get(input.externalCallId);
+    if (!call || call.projectId !== input.projectId) {
+      return { outcome: "NOT_FOUND", externalCall: null, receipt: null };
+    }
+    if (call.callKind !== "analysis") {
+      return { outcome: "WRONG_CALL_KIND", externalCall: { ...call }, receipt: null };
+    }
+    const owningAttempt = store.protocolAttempts.get(call.protocolAttemptId);
+    if (!owningAttempt || owningAttempt.jobId !== job.id || owningAttempt.projectId !== input.projectId) {
+      return { outcome: "CALL_NOT_OWNED_BY_JOB", externalCall: null, receipt: null };
+    }
+    if (call.status !== "in_progress" || call.probeRunId !== input.probeRunId) {
+      return { outcome: "CONFLICT", externalCall: { ...call }, receipt: null };
+    }
+
+    const costBasis =
+      input.costBasis === "measured" || input.costBasis === "estimated" ? input.costBasis : null;
+    const actualCostUsd = costBasis === null ? null : input.actualCostUsd ?? null;
+
+    const now = nowIso();
+    const receipt: AnalysisCallReceipt = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      externalCallId: input.externalCallId,
+      probeRunId: input.probeRunId,
+      outcome: input.outcome,
+      provider: input.provider ?? null,
+      model: input.model ?? null,
+      usedMock: input.usedMock ?? false,
+      requestSha256: input.requestSha256 ?? null,
+      responseSha256: input.responseSha256 ?? null,
+      latencyMs: input.latencyMs ?? null,
+      receivedAt: now,
+      createdAt: now,
+    };
+    store.analysisCallReceipts.set(receipt.id, receipt);
+
+    const updatedCall: ProtocolExternalCall = {
+      ...call,
+      status: receiptOutcomeToCallStatus(input.outcome),
+      actualCostUsd,
+      costBasis,
+      terminalizedAt: now,
+    };
+    store.protocolExternalCalls.set(updatedCall.id, updatedCall);
+
+    if (input.outcome === "provider_outcome_unknown" && (job.status === "claimed" || job.status === "running")) {
+      store.protocolExecutionJobs.set(job.id, {
+        ...job,
+        status: "needs_review",
+        needsReviewReason: "analysis_outcome_unknown",
+        updatedAt: now,
+      });
+    }
+
+    return { outcome: "RECEIPTED", externalCall: { ...updatedCall }, receipt: { ...receipt } };
+  },
+
+  async reconcileAttemptForJob(
+    input: ReconcileAttemptForJobInput
+  ): Promise<ReconcileAttemptForJobResult> {
+    const store = getStore();
+    const validStatuses = new Set(["completed", "failed", "timed_out", "cancelled", "excluded"]);
+    if (!validStatuses.has(input.status)) {
+      return { outcome: "INVALID_STATUS", attempt: null };
+    }
+
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) {
+      return { outcome: "JOB_NOT_FOUND", attempt: null };
+    }
+    if (!jobFencingOk(job, input.claimToken)) {
+      return { outcome: "JOB_NOT_OWNED", attempt: null };
+    }
+
+    const attempt = store.protocolAttempts.get(input.attemptId);
+    if (!attempt || attempt.projectId !== input.projectId || attempt.jobId !== job.id) {
+      return { outcome: "ATTEMPT_NOT_OWNED_BY_JOB", attempt: null };
+    }
+
+    if (attempt.terminalizedAt !== null) {
+      if (attempt.status === input.status) {
+        return { outcome: "ALREADY_RECONCILED", attempt: { ...attempt } };
+      }
+      return { outcome: "CONFLICT", attempt: { ...attempt } };
+    }
+
+    const callsForAttempt = [...store.protocolExternalCalls.values()].filter(
+      (ec) => ec.protocolAttemptId === input.attemptId
+    );
+    const openCalls = callsForAttempt.filter(
+      (ec) => ec.status === "reserved" || ec.status === "in_progress"
+    );
+    if (openCalls.length > 0) {
+      return { outcome: "EXTERNAL_CALLS_NOT_TERMINAL", attempt: { ...attempt } };
+    }
+
+    const terminalCalls = callsForAttempt.filter((ec) =>
+      ["completed", "failed", "timed_out", "cancelled"].includes(ec.status)
+    );
+    const hasUnknown = terminalCalls.some((ec) => ec.actualCostUsd === null);
+    const knownSum = terminalCalls.reduce((sum, ec) => sum + (ec.actualCostUsd ?? 0), 0);
+    const actualCostUsd = hasUnknown ? null : knownSum;
+
+    const now = nowIso();
+    const reconciled: ProtocolAttempt = {
+      ...attempt,
+      status: input.status,
+      actualCostUsd,
+      terminationReason: input.terminationReason ?? null,
+      terminalizedAt: now,
+      lastActivityAt: now,
+    };
+    store.protocolAttempts.set(reconciled.id, reconciled);
+    return { outcome: "RECONCILED", attempt: { ...reconciled } };
+  },
+
+  async completeProtocolExecutionJob(
+    input: CompleteProtocolExecutionJobInput
+  ): Promise<CompleteProtocolExecutionJobResult> {
+    const store = getStore();
+
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) {
+      return { outcome: "JOB_NOT_FOUND", job: null };
+    }
+    // D-020: ALREADY_SUCCEEDED / CONFLICT precede fencing — a terminal job
+    // has no live owner left to validate.
+    if (job.status === "succeeded") {
+      return { outcome: "ALREADY_SUCCEEDED", job: { ...job } };
+    }
+    if (job.status === "failed" || job.status === "needs_review" || job.status === "abandoned_exhausted") {
+      return { outcome: "CONFLICT", job: { ...job } };
+    }
+    if (!jobFencingOk(job, input.claimToken)) {
+      return { outcome: "JOB_NOT_OWNED", job: { ...job } };
+    }
+    if (job.currentAttemptId === null) {
+      return { outcome: "NO_CURRENT_ATTEMPT", job: { ...job } };
+    }
+
+    const attempt = store.protocolAttempts.get(job.currentAttemptId);
+    if (!attempt || attempt.jobId !== job.id || attempt.projectId !== job.projectId) {
+      return { outcome: "CURRENT_ATTEMPT_NOT_FOUND", job: { ...job } };
+    }
+    if (attempt.terminalizedAt === null) {
+      return { outcome: "ATTEMPT_NOT_RECONCILED", job: { ...job } };
+    }
+    if (attempt.status !== "completed") {
+      return { outcome: "ATTEMPT_NOT_COMPLETED", job: { ...job } };
+    }
+
+    const callsForAttempt = [...store.protocolExternalCalls.values()].filter(
+      (ec) => ec.protocolAttemptId === attempt.id
+    );
+    const openCalls = callsForAttempt.filter(
+      (ec) => ec.status === "reserved" || ec.status === "in_progress"
+    );
+    if (openCalls.length > 0) {
+      return { outcome: "EXTERNAL_CALLS_NOT_TERMINAL", job: { ...job } };
+    }
+
+    const perplexityCall = callsForAttempt.find(
+      (ec) => ec.callKind === "perplexity" && ec.generation === 1
+    );
+    const perplexityHasReceipt =
+      !!perplexityCall &&
+      [...store.providerCallReceipts.values()].some((r) => r.externalCallId === perplexityCall.id);
+    if (!perplexityCall || perplexityCall.status !== "completed" || !perplexityHasReceipt) {
+      return { outcome: "PERPLEXITY_NOT_COMPLETED", job: { ...job } };
+    }
+
+    const analysisCalls = callsForAttempt.filter((ec) => ec.callKind === "analysis");
+    const maxGeneration = analysisCalls.reduce((max, ec) => Math.max(max, ec.generation), 0);
+    const authoritativeAnalysis = analysisCalls.find((ec) => ec.generation === maxGeneration);
+    const analysisHasReceipt =
+      !!authoritativeAnalysis &&
+      [...store.analysisCallReceipts.values()].some(
+        (r) => r.externalCallId === authoritativeAnalysis.id
+      );
+    if (!authoritativeAnalysis || authoritativeAnalysis.status !== "completed" || !analysisHasReceipt) {
+      return { outcome: "ANALYSIS_NOT_COMPLETED", job: { ...job } };
+    }
+
+    const succeeded: ProtocolExecutionJob = {
+      ...job,
+      status: "succeeded",
+      updatedAt: nowIso(),
+    };
+    store.protocolExecutionJobs.set(succeeded.id, succeeded);
+    return { outcome: "SUCCEEDED", job: { ...succeeded } };
+  },
+
+  async failProtocolExecutionJob(
+    input: FailProtocolExecutionJobInput
+  ): Promise<FailProtocolExecutionJobResult> {
+    const store = getStore();
+
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) {
+      return { outcome: "JOB_NOT_FOUND", job: null };
+    }
+    if (!jobFencingOk(job, input.claimToken)) {
+      return { outcome: "JOB_NOT_OWNED", job: { ...job } };
+    }
+
+    const failed: ProtocolExecutionJob = {
+      ...job,
+      status: "failed",
+      failureReason: input.reason,
+      updatedAt: nowIso(),
+    };
+    store.protocolExecutionJobs.set(failed.id, failed);
+    return { outcome: "FAILED", job: { ...failed } };
+  },
+
+  async reactivateAbandonedJob(
+    input: ReactivateAbandonedJobInput
+  ): Promise<ReactivateAbandonedJobResult> {
+    const store = getStore();
+    if (
+      !input.actor.trim() ||
+      !input.reason.trim() ||
+      !input.idempotencyKey.trim()
+    ) {
+      throw new Error("invalid_reactivate_abandoned_job_args");
+    }
+
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) {
+      return { outcome: "JOB_NOT_FOUND", job: null };
+    }
+
+    // D-024: fingerprint computed under the job's own lock (mirrored here
+    // simply by having already fetched `job` above, single-threaded), then
+    // the existing-action lookup runs BEFORE the abandoned_exhausted status
+    // gate -- exactly the D-022 ordering discipline, so a replay of an
+    // already-decided key is honored regardless of the job's status now.
+    const fingerprint = reactivateAbandonedJobFingerprint({
+      jobId: input.jobId,
+      projectId: input.projectId,
+    });
+    const existingAction = [...store.protocolOperatorActions.values()].find(
+      (a) =>
+        a.projectId === input.projectId &&
+        a.jobId === input.jobId &&
+        a.idempotencyKey === input.idempotencyKey
+    );
+    if (existingAction) {
+      if (existingAction.requestFingerprint === fingerprint) {
+        return {
+          outcome:
+            existingAction.outcome === "approved"
+              ? "REACTIVATED"
+              : (existingAction.denialCode as ReactivateAbandonedJobOutcome),
+          job: { ...job },
+        };
+      }
+      return { outcome: "IDEMPOTENCY_KEY_CONFLICT", job: null };
+    }
+
+    if (job.status !== "abandoned_exhausted") {
+      const now = nowIso();
+      const deniedAction: ProtocolOperatorAction = {
+        id: randomUUID(),
+        projectId: input.projectId,
+        jobId: input.jobId,
+        actor: input.actor,
+        reason: input.reason,
+        action: "reactivate_abandoned_job",
+        outcome: "denied",
+        denialCode: "JOB_NOT_ABANDONED",
+        idempotencyKey: input.idempotencyKey,
+        requestFingerprint: fingerprint,
+        newAttemptId: null,
+        newExternalCallId: null,
+        createdAt: now,
+      };
+      store.protocolOperatorActions.set(deniedAction.id, deniedAction);
+      return { outcome: "JOB_NOT_ABANDONED", job: { ...job } };
+    }
+
+    const now = nowIso();
+    const reactivated: ProtocolExecutionJob = {
+      ...job,
+      status: "queued",
+      attemptCount: 0,
+      workerId: null,
+      claimToken: null,
+      leaseExpiresAt: null,
+      failureReason: null,
+      updatedAt: now,
+    };
+    store.protocolExecutionJobs.set(reactivated.id, reactivated);
+
+    const approvedAction: ProtocolOperatorAction = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      jobId: input.jobId,
+      actor: input.actor,
+      reason: input.reason,
+      action: "reactivate_abandoned_job",
+      outcome: "approved",
+      denialCode: null,
+      idempotencyKey: input.idempotencyKey,
+      requestFingerprint: fingerprint,
+      newAttemptId: null,
+      newExternalCallId: null,
+      createdAt: now,
+    };
+    store.protocolOperatorActions.set(approvedAction.id, approvedAction);
+
+    return { outcome: "REACTIVATED", job: { ...reactivated } };
+  },
+
+  async retryFullAttemptForJob(
+    input: RetryFullAttemptForJobInput
+  ): Promise<RetryFullAttemptForJobResult> {
+    const store = getStore();
+    if (input.perplexityReservedCostUsd < 0 || input.analysisReservedCostUsd < 0) {
+      throw new Error("invalid_retry_full_attempt_for_job_args");
+    }
+
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) {
+      return { outcome: "JOB_NOT_FOUND", attempt: null, perplexityCall: null, analysisCall: null };
+    }
+    if (!jobFencingOk(job, input.claimToken)) {
+      return { outcome: "JOB_NOT_OWNED", attempt: null, perplexityCall: null, analysisCall: null };
+    }
+
+    // D-022: existing-child lookup (retry_of_attempt_id, never changes)
+    // BEFORE the current_attempt_id equality gate.
+    const existingChild = [...store.protocolAttempts.values()].find(
+      (a) => a.retryOfAttemptId === input.sourceAttemptId && a.jobId === job.id && a.projectId === job.projectId
+    );
+    if (existingChild) {
+      const calls = [...store.protocolExternalCalls.values()].filter(
+        (ec) => ec.protocolAttemptId === existingChild.id
+      );
+      const perplexityCall = calls.find((ec) => ec.callKind === "perplexity") ?? null;
+      const analysisCall = calls.find((ec) => ec.callKind === "analysis") ?? null;
+      if (existingChild.reservedCostUsd === input.perplexityReservedCostUsd + input.analysisReservedCostUsd) {
+        return {
+          outcome: "ALREADY_RETRIED",
+          attempt: { ...existingChild },
+          perplexityCall: perplexityCall ? { ...perplexityCall } : null,
+          analysisCall: analysisCall ? { ...analysisCall } : null,
+        };
+      }
+      return {
+        outcome: "SOURCE_ALREADY_RETRIED",
+        attempt: { ...existingChild },
+        perplexityCall: null,
+        analysisCall: null,
+      };
+    }
+
+    if (job.currentAttemptId !== input.sourceAttemptId) {
+      return { outcome: "SOURCE_NOT_CURRENT_ATTEMPT", attempt: null, perplexityCall: null, analysisCall: null };
+    }
+
+    const source = store.protocolAttempts.get(input.sourceAttemptId);
+    if (!source || source.jobId !== job.id || source.projectId !== job.projectId) {
+      return { outcome: "SOURCE_ATTEMPT_NOT_OWNED_BY_JOB", attempt: null, perplexityCall: null, analysisCall: null };
+    }
+    if (source.terminalizedAt === null || !["failed", "timed_out", "cancelled"].includes(source.status)) {
+      return { outcome: "SOURCE_NOT_ELIGIBLE", attempt: { ...source }, perplexityCall: null, analysisCall: null };
+    }
+
+    const sourceCalls = [...store.protocolExternalCalls.values()].filter(
+      (ec) => ec.protocolAttemptId === source.id
+    );
+    const ambiguous = sourceCalls.some(
+      (ec) =>
+        ec.status === "in_progress" &&
+        ec.requestSentAt !== null &&
+        ![...store.providerCallReceipts.values()].some((r) => r.externalCallId === ec.id) &&
+        ![...store.analysisCallReceipts.values()].some((r) => r.externalCallId === ec.id)
+    );
+    if (ambiguous) {
+      return { outcome: "AMBIGUOUS_CALL_PRESENT", attempt: { ...source }, perplexityCall: null, analysisCall: null };
+    }
+
+    const perplexity = sourceCalls.find((ec) => ec.callKind === "perplexity" && ec.generation === 1);
+    const perplexityHasReceipt =
+      !!perplexity &&
+      [...store.providerCallReceipts.values()].some((r) => r.externalCallId === perplexity.id);
+    if (
+      !perplexity ||
+      !["failed", "timed_out", "cancelled"].includes(perplexity.status) ||
+      !perplexityHasReceipt
+    ) {
+      return {
+        outcome: "PERPLEXITY_NOT_ELIGIBLE_FOR_FULL_RETRY",
+        attempt: { ...source },
+        perplexityCall: null,
+        analysisCall: null,
+      };
+    }
+
+    const core = admitAndReserveAttemptCore(store, {
+      protocolId: job.protocolId,
+      projectId: input.projectId,
+      attemptKind: source.attemptKind,
+      idempotencyKey: `retry-of-attempt:${input.sourceAttemptId}`,
+      totalReservedCostUsd: input.perplexityReservedCostUsd + input.analysisReservedCostUsd,
+      retryOfAttemptId: input.sourceAttemptId,
+      jobId: job.id,
+    });
+    if (core.status !== "RESERVED" || !core.attempt) {
+      return { outcome: core.status, attempt: core.attempt, perplexityCall: null, analysisCall: null };
+    }
+
+    const { perplexityCall, analysisCall } = createAttemptExternalCallsCore(
+      store,
+      core.attempt.id,
+      input.projectId,
+      input.perplexityReservedCostUsd,
+      input.analysisReservedCostUsd
+    );
+
+    store.protocolExecutionJobs.set(job.id, {
+      ...job,
+      currentAttemptId: core.attempt.id,
+      updatedAt: nowIso(),
+    });
+
+    return { outcome: "RESERVED", attempt: core.attempt, perplexityCall, analysisCall };
+  },
+
+  async retryAnalysisGenerationForJob(
+    input: RetryAnalysisGenerationForJobInput
+  ): Promise<RetryAnalysisGenerationForJobResult> {
+    const store = getStore();
+    if (input.reservedCostUsd < 0) throw new Error("invalid_retry_analysis_generation_for_job_args");
+
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) {
+      return { outcome: "JOB_NOT_FOUND", externalCall: null };
+    }
+    if (!jobFencingOk(job, input.claimToken)) {
+      return { outcome: "JOB_NOT_OWNED", externalCall: null };
+    }
+    if (job.currentAttemptId === null) {
+      return { outcome: "NO_CURRENT_ATTEMPT", externalCall: null };
+    }
+
+    const source = store.protocolExternalCalls.get(input.sourceExternalCallId);
+    if (
+      !source ||
+      source.projectId !== input.projectId ||
+      source.protocolAttemptId !== job.currentAttemptId ||
+      source.callKind !== "analysis"
+    ) {
+      return { outcome: "SOURCE_NOT_CURRENT_ATTEMPT", externalCall: null };
+    }
+
+    const attempt = store.protocolAttempts.get(job.currentAttemptId);
+    if (!attempt || attempt.jobId !== job.id || attempt.projectId !== job.projectId) {
+      return { outcome: "CURRENT_ATTEMPT_NOT_FOUND", externalCall: null };
+    }
+
+    // D-023 §1 arbitration: existing-child lookup BEFORE the authoritative-
+    // generation check — never reordered.
+    const existingChild = [...store.protocolExternalCalls.values()].find(
+      (ec) =>
+        ec.retryOfExternalCallId === input.sourceExternalCallId &&
+        ec.protocolAttemptId === attempt.id &&
+        ec.projectId === input.projectId
+    );
+    if (existingChild) {
+      if (existingChild.reservedCostUsd === input.reservedCostUsd) {
+        return { outcome: "ALREADY_RETRIED", externalCall: { ...existingChild } };
+      }
+      return { outcome: "SOURCE_ALREADY_RETRIED", externalCall: { ...existingChild } };
+    }
+
+    const perplexity = [...store.protocolExternalCalls.values()].find(
+      (ec) => ec.protocolAttemptId === attempt.id && ec.callKind === "perplexity" && ec.generation === 1
+    );
+    const perplexityHasReceipt =
+      !!perplexity &&
+      [...store.providerCallReceipts.values()].some((r) => r.externalCallId === perplexity.id);
+    if (!perplexity || perplexity.status !== "completed" || !perplexityHasReceipt) {
+      return { outcome: "PERPLEXITY_NOT_COMPLETED", externalCall: null };
+    }
+
+    const analysisCallsForAttempt = [...store.protocolExternalCalls.values()].filter(
+      (ec) => ec.protocolAttemptId === attempt.id && ec.callKind === "analysis"
+    );
+    const maxGeneration = analysisCallsForAttempt.reduce((max, ec) => Math.max(max, ec.generation), 0);
+    if (source.generation !== maxGeneration) {
+      return { outcome: "SOURCE_NOT_AUTHORITATIVE_GENERATION", externalCall: null };
+    }
+
+    const sourceHasReceipt = [...store.analysisCallReceipts.values()].some(
+      (r) => r.externalCallId === source.id
+    );
+    if (!["failed", "timed_out", "cancelled"].includes(source.status) || !sourceHasReceipt) {
+      return { outcome: "SOURCE_NOT_ELIGIBLE", externalCall: null };
+    }
+
+    const ambiguous = [...store.protocolExternalCalls.values()].some(
+      (ec) =>
+        ec.protocolAttemptId === attempt.id &&
+        ec.status === "in_progress" &&
+        ec.requestSentAt !== null &&
+        ![...store.providerCallReceipts.values()].some((r) => r.externalCallId === ec.id) &&
+        ![...store.analysisCallReceipts.values()].some((r) => r.externalCallId === ec.id)
+    );
+    if (ambiguous) {
+      return { outcome: "AMBIGUOUS_CALL_PRESENT", externalCall: null };
+    }
+
+    const core = reserveAdditionalAnalysisGenerationCore(
+      store,
+      attempt.id,
+      input.projectId,
+      input.reservedCostUsd,
+      input.sourceExternalCallId
+    );
+    return { outcome: core.status, externalCall: core.externalCall };
+  },
+
+  async authorizeOperatorRetry(
+    input: AuthorizeOperatorRetryInput
+  ): Promise<AuthorizeOperatorRetryResult> {
+    const store = getStore();
+    if (!input.actor.trim() || !input.reason.trim() || !input.idempotencyKey.trim()) {
+      throw new Error("invalid_authorize_operator_retry_args");
+    }
+    if (input.action !== "retry_full_attempt" && input.action !== "retry_analysis_only") {
+      throw new Error("invalid_operator_retry_action");
+    }
+
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) {
+      return {
+        status: "JOB_NOT_FOUND",
+        outcome: null,
+        denialCode: null,
+        newAttempt: null,
+        newExternalCall: null,
+      };
+    }
+
+    // D-022: idempotent-replay lookup BEFORE the needs_review gate, honored
+    // regardless of the job's current status.
+    const fingerprint = operatorRetryFingerprint({
+      jobId: input.jobId,
+      projectId: input.projectId,
+      action: input.action,
+      sourceAttemptId: input.sourceAttemptId,
+      sourceExternalCallId: input.sourceExternalCallId ?? null,
+      reservedCostUsd: input.reservedCostUsd,
+      perplexityReservedCostUsd: input.perplexityReservedCostUsd ?? null,
+    });
+    const existingAction = [...store.protocolOperatorActions.values()].find(
+      (a) => a.projectId === input.projectId && a.jobId === input.jobId && a.idempotencyKey === input.idempotencyKey
+    );
+    if (existingAction) {
+      if (existingAction.requestFingerprint === fingerprint) {
+        return {
+          status: existingAction.outcome === "approved" ? "APPROVED" : "DENIED",
+          outcome: existingAction.outcome,
+          denialCode: existingAction.denialCode,
+          newAttempt: existingAction.newAttemptId
+            ? { ...(store.protocolAttempts.get(existingAction.newAttemptId) ?? null) } as ProtocolAttempt | null
+            : null,
+          newExternalCall: existingAction.newExternalCallId
+            ? ({ ...(store.protocolExternalCalls.get(existingAction.newExternalCallId) ?? null) } as ProtocolExternalCall | null)
+            : null,
+        };
+      }
+      return {
+        status: "IDEMPOTENCY_KEY_CONFLICT",
+        outcome: null,
+        denialCode: null,
+        newAttempt: null,
+        newExternalCall: null,
+      };
+    }
+
+    if (job.status !== "needs_review") {
+      return {
+        status: "JOB_NOT_IN_NEEDS_REVIEW",
+        outcome: null,
+        denialCode: null,
+        newAttempt: null,
+        newExternalCall: null,
+      };
+    }
+
+    const source = store.protocolAttempts.get(input.sourceAttemptId);
+    if (!source || source.projectId !== input.projectId || source.jobId !== job.id) {
+      return {
+        status: "SOURCE_ATTEMPT_NOT_OWNED_BY_JOB",
+        outcome: null,
+        denialCode: null,
+        newAttempt: null,
+        newExternalCall: null,
+      };
+    }
+
+    const recordAction = (
+      outcome: "approved" | "denied",
+      denialCode: string | null,
+      newAttemptId: string | null,
+      newExternalCallId: string | null
+    ): void => {
+      const action: ProtocolOperatorAction = {
+        id: randomUUID(),
+        projectId: input.projectId,
+        jobId: input.jobId,
+        actor: input.actor,
+        reason: input.reason,
+        action: input.action,
+        outcome,
+        denialCode,
+        idempotencyKey: input.idempotencyKey,
+        requestFingerprint: fingerprint,
+        newAttemptId,
+        newExternalCallId,
+        createdAt: nowIso(),
+      };
+      store.protocolOperatorActions.set(action.id, action);
+    };
+
+    if (input.action === "retry_full_attempt") {
+      const core = admitAndReserveAttemptCore(store, {
+        protocolId: job.protocolId,
+        projectId: input.projectId,
+        attemptKind: source.attemptKind,
+        idempotencyKey: `operator-retry:${input.idempotencyKey}`,
+        totalReservedCostUsd: (input.perplexityReservedCostUsd ?? 0) + input.reservedCostUsd,
+        retryOfAttemptId: input.sourceAttemptId,
+        jobId: job.id,
+      });
+      if (core.status !== "RESERVED" || !core.attempt) {
+        recordAction("denied", core.status, null, null);
+        return {
+          status: "DENIED",
+          outcome: "denied",
+          denialCode: core.status,
+          newAttempt: null,
+          newExternalCall: null,
+        };
+      }
+      const { perplexityCall } = createAttemptExternalCallsCore(
+        store,
+        core.attempt.id,
+        input.projectId,
+        input.perplexityReservedCostUsd ?? 0,
+        input.reservedCostUsd
+      );
+      recordAction("approved", null, core.attempt.id, perplexityCall.id);
+      store.protocolExecutionJobs.set(job.id, {
+        ...job,
+        status: "queued",
+        needsReviewReason: null,
+        currentAttemptId: core.attempt.id,
+        updatedAt: nowIso(),
+      });
+      return {
+        status: "APPROVED",
+        outcome: "approved",
+        denialCode: null,
+        newAttempt: core.attempt,
+        newExternalCall: perplexityCall,
+      };
+    }
+
+    // retry_analysis_only
+    if (source.status !== "in_progress") {
+      return {
+        status: "SOURCE_ATTEMPT_NOT_IN_PROGRESS",
+        outcome: null,
+        denialCode: null,
+        newAttempt: null,
+        newExternalCall: null,
+      };
+    }
+    const sourceExternalCallId = input.sourceExternalCallId ?? null;
+    const sourceCall = sourceExternalCallId
+      ? store.protocolExternalCalls.get(sourceExternalCallId)
+      : undefined;
+    if (
+      !sourceCall ||
+      sourceCall.protocolAttemptId !== input.sourceAttemptId ||
+      sourceCall.projectId !== input.projectId ||
+      sourceCall.callKind !== "analysis"
+    ) {
+      return {
+        status: "SOURCE_EXTERNAL_CALL_NOT_OWNED_BY_ATTEMPT",
+        outcome: null,
+        denialCode: null,
+        newAttempt: null,
+        newExternalCall: null,
+      };
+    }
+
+    const reserve = reserveAdditionalAnalysisGenerationCore(
+      store,
+      input.sourceAttemptId,
+      input.projectId,
+      input.reservedCostUsd,
+      sourceExternalCallId
+    );
+    if (reserve.status !== "RESERVED" || !reserve.externalCall) {
+      recordAction("denied", reserve.status, null, null);
+      return {
+        status: "DENIED",
+        outcome: "denied",
+        denialCode: reserve.status,
+        newAttempt: null,
+        newExternalCall: null,
+      };
+    }
+    recordAction("approved", null, input.sourceAttemptId, reserve.externalCall.id);
+    store.protocolExecutionJobs.set(job.id, {
+      ...job,
+      status: "queued",
+      needsReviewReason: null,
+      updatedAt: nowIso(),
+    });
+    return {
+      status: "APPROVED",
+      outcome: "approved",
+      denialCode: null,
+      newAttempt: { ...source },
+      newExternalCall: reserve.externalCall,
+    };
+  },
+
+  async getProtocolExecutionJobContext(
+    input: GetProtocolExecutionJobContextInput
+  ): Promise<GetProtocolExecutionJobContextResult> {
+    const store = getStore();
+
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) {
+      return {
+        outcome: "JOB_NOT_FOUND",
+        job: null,
+        protocol: null,
+        currentAttempt: null,
+        externalCalls: [],
+        providerReceipts: [],
+        analysisReceipts: [],
+        probeRun: null,
+      };
+    }
+    if (!jobFencingOk(job, input.claimToken)) {
+      return {
+        outcome: "JOB_NOT_OWNED",
+        job: { ...job },
+        protocol: null,
+        currentAttempt: null,
+        externalCalls: [],
+        providerReceipts: [],
+        analysisReceipts: [],
+        probeRun: null,
+      };
+    }
+
+    const protocol = store.protocols.get(job.protocolId) ?? null;
+    const currentAttempt = job.currentAttemptId
+      ? store.protocolAttempts.get(job.currentAttemptId) ?? null
+      : null;
+    const externalCalls = currentAttempt
+      ? [...store.protocolExternalCalls.values()].filter(
+          (ec) => ec.protocolAttemptId === currentAttempt.id
+        )
+      : [];
+    const externalCallIds = new Set(externalCalls.map((ec) => ec.id));
+    const providerReceipts = [...store.providerCallReceipts.values()].filter((r) =>
+      externalCallIds.has(r.externalCallId)
+    );
+    const analysisReceipts = [...store.analysisCallReceipts.values()].filter((r) =>
+      externalCallIds.has(r.externalCallId)
+    );
+    const probeRun =
+      currentAttempt && currentAttempt.probeRunId
+        ? store.probeRuns.get(currentAttempt.probeRunId) ?? null
+        : null;
+
+    return {
+      outcome: "OK",
+      job: { ...job },
+      protocol: protocol ? { ...protocol } : null,
+      currentAttempt: currentAttempt ? { ...currentAttempt } : null,
+      externalCalls: externalCalls.map((ec) => ({ ...ec })),
+      providerReceipts: providerReceipts.map((r) => ({ ...r })),
+      analysisReceipts: analysisReceipts.map((r) => ({ ...r })),
+      probeRun: probeRun ? { ...probeRun } : null,
+    };
+  },
+
+  async markProtocolExecutionJobNeedsReviewForAmbiguity(
+    input: MarkProtocolExecutionJobNeedsReviewForAmbiguityInput
+  ): Promise<MarkProtocolExecutionJobNeedsReviewForAmbiguityResult> {
+    const store = getStore();
+
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) {
+      return { outcome: "JOB_NOT_FOUND", job: null };
+    }
+    // Checked before fencing, mirroring D-020's ALREADY_SUCCEEDED precedent
+    // — a needs_review job has no live owner left to validate.
+    if (job.status === "needs_review") {
+      return { outcome: "ALREADY_NEEDS_REVIEW", job: { ...job } };
+    }
+    if (!jobFencingOk(job, input.claimToken)) {
+      return { outcome: "JOB_NOT_OWNED", job: { ...job } };
+    }
+    if (job.currentAttemptId === null) {
+      return { outcome: "NO_AMBIGUOUS_CALL", job: { ...job } };
+    }
+
+    const ambiguousCount = [...store.protocolExternalCalls.values()].filter(
+      (ec) =>
+        ec.protocolAttemptId === job.currentAttemptId &&
+        ec.status === "in_progress" &&
+        ec.requestSentAt !== null &&
+        ![...store.providerCallReceipts.values()].some((r) => r.externalCallId === ec.id) &&
+        ![...store.analysisCallReceipts.values()].some((r) => r.externalCallId === ec.id)
+    ).length;
+
+    if (ambiguousCount === 0) {
+      return { outcome: "NO_AMBIGUOUS_CALL", job: { ...job } };
+    }
+
+    const updated: ProtocolExecutionJob = {
+      ...job,
+      status: "needs_review",
+      needsReviewReason: "ambiguous_external_call_sent_without_receipt",
+      updatedAt: nowIso(),
+    };
+    store.protocolExecutionJobs.set(updated.id, updated);
+    return { outcome: "NEEDS_REVIEW", job: { ...updated } };
   },
 };

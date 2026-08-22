@@ -602,6 +602,117 @@ function main(): void {
     (code.match(/raise exception 'D-021 preflight failed:/g) ?? []).length >= 5
   );
 
+  // ------------------------------------------------------------------
+  // [14] D-024 — reactivate_abandoned_job, fingerprinted and replay-safe.
+  // ------------------------------------------------------------------
+  console.log("\n[14] D-024 — reactivate_abandoned_job is fingerprinted and replay-safe");
+
+  check(
+    "the old 4-arg reactivate_abandoned_job signature (no idempotency key at all) is explicitly dropped, without CASCADE",
+    /drop function if exists public\.reactivate_abandoned_job\(uuid, uuid, text, text\);/.test(code) &&
+      !/drop function if exists public\.reactivate_abandoned_job\(uuid, uuid, text, text\)\s+cascade/i.test(code)
+  );
+  check(
+    "the new 5-arg reactivate_abandoned_job signature (adding p_idempotency_key) exists",
+    /public\.reactivate_abandoned_job\(\s*\n\s*p_job_id uuid,\s*\n\s*p_project_id uuid,\s*\n\s*p_actor text,\s*\n\s*p_reason text,\s*\n\s*p_idempotency_key text\s*\n\s*\)/.test(
+      code
+    )
+  );
+  check(
+    "no other DROP FUNCTION for reactivate_abandoned_job ever specifies CASCADE",
+    !/drop function[\s\S]{0,80}reactivate_abandoned_job[\s\S]{0,40}cascade/i.test(code)
+  );
+
+  const reactivateBody = extractBody(code, "reactivate_abandoned_job");
+  check(
+    "reactivate_abandoned_job is SECURITY DEFINER with search_path pinned to public, pg_temp",
+    // extractBody's slice starts at `as $$`, which is AFTER the
+    // `language plpgsql / security definer / volatile / set search_path`
+    // header -- checked here directly against the new 5-arg signature's
+    // declaration block instead.
+    /public\.reactivate_abandoned_job\(\s*\n\s*p_job_id uuid,\s*\n\s*p_project_id uuid,\s*\n\s*p_actor text,\s*\n\s*p_reason text,\s*\n\s*p_idempotency_key text\s*\n\s*\)\s*\nreturns table \(\s*\n\s*status text,\s*\n\s*job\s+public\.protocol_execution_jobs\s*\n\s*\)\s*\nlanguage plpgsql\s*\nsecurity definer\s*\nvolatile\s*\nset search_path = public, pg_temp\s*\nas \$\$/.test(
+      code
+    )
+  );
+  check(
+    "reactivate_abandoned_job: EXECUTE is revoked from public/anon/authenticated and granted only to service_role, for the new 5-arg signature",
+    /revoke all on function\s*\n\s*public\.reactivate_abandoned_job\(uuid, uuid, text, text, text\) from public;/.test(
+      code
+    ) &&
+      /revoke all on function\s*\n\s*public\.reactivate_abandoned_job\(uuid, uuid, text, text, text\) from anon;/.test(
+        code
+      ) &&
+      /revoke all on function\s*\n\s*public\.reactivate_abandoned_job\(uuid, uuid, text, text, text\) from authenticated;/.test(
+        code
+      ) &&
+      /grant execute on function\s*\n\s*public\.reactivate_abandoned_job\(uuid, uuid, text, text, text\) to service_role;/.test(
+        code
+      )
+  );
+  check(
+    "reactivate_abandoned_job: the job is locked FOR UPDATE strictly before the idempotent-action lookup",
+    (() => {
+      if (reactivateBody === null) return false;
+      const lockIdx = reactivateBody.indexOf("for update;");
+      const lookupIdx = reactivateBody.indexOf("select * into v_existing_action");
+      return lockIdx !== -1 && lookupIdx !== -1 && lockIdx < lookupIdx;
+    })()
+  );
+  check(
+    "reactivate_abandoned_job: the idempotent-action lookup is checked strictly before the abandoned_exhausted status gate",
+    (() => {
+      if (reactivateBody === null) return false;
+      const lookupIdx = reactivateBody.indexOf("select * into v_existing_action");
+      const statusGateIdx = reactivateBody.indexOf("if v_job.status <> 'abandoned_exhausted' then");
+      return lookupIdx !== -1 && statusGateIdx !== -1 && lookupIdx < statusGateIdx;
+    })()
+  );
+  check(
+    "reactivate_abandoned_job: the fingerprint is a real _sha256_hex(...) call over a canonical jsonb_build_object with exactly job_id/project_id/action, actor and reason excluded",
+    (() => {
+      if (reactivateBody === null) return false;
+      const hasShaCall = /v_fingerprint := public\._sha256_hex\(\s*\n\s*jsonb_build_object\(/.test(reactivateBody);
+      const hasCanonicalKeys =
+        /'job_id', p_job_id,\s*\n\s*'project_id', p_project_id,\s*\n\s*'action', 'reactivate_abandoned'/.test(
+          reactivateBody
+        );
+      const excludesProvenance =
+        !/'actor'/.test(reactivateBody.split("v_fingerprint :=")[1]?.split(");")[0] ?? "") &&
+        !/'reason'/.test(reactivateBody.split("v_fingerprint :=")[1]?.split(");")[0] ?? "");
+      return hasShaCall && hasCanonicalKeys && excludesProvenance;
+    })()
+  );
+  check(
+    "reactivate_abandoned_job: p_idempotency_key is a mandatory, caller-supplied argument -- no gen_random_uuid() or other random key generation anywhere in this function",
+    reactivateBody !== null && !/gen_random_uuid\(\)/.test(reactivateBody)
+  );
+  check(
+    "reactivate_abandoned_job: same key + same fingerprint returns the exact recorded decision verbatim, zero mutation",
+    reactivateBody !== null &&
+      /if v_existing_action\.request_fingerprint = v_fingerprint then/.test(reactivateBody) &&
+      /when v_existing_action\.outcome = 'approved' then 'REACTIVATED'/.test(reactivateBody)
+  );
+  check(
+    "reactivate_abandoned_job: same key + different fingerprint returns IDEMPOTENCY_KEY_CONFLICT, zero mutation",
+    reactivateBody !== null && /'IDEMPOTENCY_KEY_CONFLICT'::text, null::public\.protocol_execution_jobs/.test(reactivateBody)
+  );
+  check(
+    "reactivate_abandoned_job: a non-abandoned job is refused AND that refusal is itself logged as a denied protocol_operator_actions row (idempotent replay of the denial, not just a returned value)",
+    reactivateBody !== null &&
+      /if v_job\.status <> 'abandoned_exhausted' then/.test(reactivateBody) &&
+      /'denied', 'JOB_NOT_ABANDONED',/.test(reactivateBody)
+  );
+  check(
+    "reactivate_abandoned_job: the job UPDATE (status='queued', attempt_count reset) and the approved protocol_operator_actions INSERT happen in the same function call, no separate later write",
+    reactivateBody !== null &&
+      /set status = 'queued',\s*\n\s*attempt_count = 0,/.test(reactivateBody) &&
+      /'reactivate_abandoned_job', 'approved', null,/.test(reactivateBody)
+  );
+  check(
+    "reactivate_abandoned_job: no unique_violation (or any other exception) is ever caught and absorbed",
+    reactivateBody !== null && !/exception\s+when\s+unique_violation/i.test(reactivateBody)
+  );
+
   console.log(
     `\n${checks - failures}/${checks} checks passed. ` +
       (failures === 0 ? "M5 0051 schema contract PASSED." : "M5 0051 schema contract FAILED.")

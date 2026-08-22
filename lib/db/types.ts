@@ -1192,6 +1192,14 @@ export interface ProtocolAttempt {
   lastActivityAt: string;
   terminalizedAt: string | null;
   createdAt: string;
+  /**
+   * M5 (migration 0050) — nullable, no backfill: null for every
+   * pre-M5 row (including the real M4 staging rows already written
+   * before this column existed) and for any future attempt admitted
+   * outside a job (the raw M4 RPC path, still callable until the
+   * cutover migration). Set only by the *_for_job admission RPCs.
+   */
+  jobId: string | null;
 }
 
 export type AdmitAndReserveAttemptOutcome =
@@ -1274,6 +1282,578 @@ export interface ReconcileAttemptInput {
 export interface ReconcileAttemptResult {
   outcome: ReconcileAttemptOutcome;
   attempt: ProtocolAttempt | null;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  M5-2 Stage A — protocol execution jobs, external-call ledger, worker RPCs */
+/*  (D-020, D-021, D-022, D-023). Types and adapter contracts only: no        */
+/*  worker, no CLI wiring, no provider integration in this tranche.          */
+/*                                                                            */
+/*  start_attempt_for_job and reserve_additional_analysis_generation_for_job */
+/*  are deliberately absent below — D-023 names                              */
+/*  create_probe_run_and_start_attempt_for_job as the sole canonical start   */
+/*  path, and reserve_additional_analysis_generation_for_job has been        */
+/*  revoked from service_role since migration 0051 with no remaining         */
+/*  legitimate caller (D-021/D-022).                                         */
+/* -------------------------------------------------------------------------- */
+
+export type ProtocolExecutionJobStatus =
+  | "queued"
+  | "claimed"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "needs_review"
+  | "abandoned_exhausted";
+
+export interface ProtocolExecutionJob {
+  id: string;
+  projectId: string;
+  protocolId: string;
+  status: ProtocolExecutionJobStatus;
+  workerId: string | null;
+  claimToken: string | null;
+  leaseExpiresAt: string | null;
+  attemptCount: number;
+  maxAttempts: number;
+  /** D-020 — the attempt this job currently owns; null before first admission. */
+  currentAttemptId: string | null;
+  needsReviewReason: string | null;
+  failureReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ExternalCallKind = "perplexity" | "analysis";
+
+export type ExternalCallStatus =
+  | "reserved"
+  | "in_progress"
+  | "completed"
+  | "failed"
+  | "timed_out"
+  | "cancelled";
+
+/**
+ * D-023 §3 — application-level vocabulary only in Stage A. The
+ * `protocol_external_calls.cost_basis` CHECK constraint (migration 0050)
+ * presently allows only `measured`/`estimated`; reconciling `unknown`
+ * into that schema-level CHECK is cutover-migration territory, not this
+ * tranche. Adapters accept `"unknown"` on the input side (paired with a
+ * null `actualCostUsd`) but this value is never sent to Postgres today —
+ * see the Supabase adapter implementation notes.
+ */
+export type CostBasis = "measured" | "estimated" | "unknown";
+
+export interface ProtocolExternalCall {
+  id: string;
+  projectId: string;
+  protocolAttemptId: string;
+  callKind: ExternalCallKind;
+  generation: number;
+  status: ExternalCallStatus;
+  reservedCostUsd: number;
+  actualCostUsd: number | null;
+  costBasis: CostBasis | null;
+  probeRunId: string | null;
+  requestSentAt: string | null;
+  terminalizedAt: string | null;
+  /** 0051 — never changes once set; the structural replay key for retries. */
+  retryOfExternalCallId: string | null;
+  createdAt: string;
+}
+
+export type ExternalCallReceiptOutcome =
+  | "success"
+  | "provider_error"
+  | "provider_outcome_unknown";
+
+/**
+ * `provider_call_receipts` (migration 0050). Note there is no
+ * raw-request-hash column here — only the response is hashed at the
+ * receipt level for the Perplexity leg (D-023 §3 is explicit that this
+ * decision does not add one).
+ */
+export interface ProviderCallReceipt {
+  id: string;
+  projectId: string;
+  externalCallId: string;
+  probeRunId: string;
+  outcome: ExternalCallReceiptOutcome;
+  httpStatus: number | null;
+  providerRequestId: string | null;
+  rawResponseSha256: string | null;
+  latencyMs: number | null;
+  receivedAt: string;
+  createdAt: string;
+}
+
+export type AnalysisCallReceiptProvider = "openai" | "anthropic" | "mock";
+
+/** `analysis_call_receipts` (migration 0050) — unlike the Perplexity leg, both request and response hashes exist here. */
+export interface AnalysisCallReceipt {
+  id: string;
+  projectId: string;
+  externalCallId: string;
+  probeRunId: string;
+  outcome: ExternalCallReceiptOutcome;
+  provider: AnalysisCallReceiptProvider | null;
+  model: string | null;
+  usedMock: boolean;
+  requestSha256: string | null;
+  responseSha256: string | null;
+  latencyMs: number | null;
+  receivedAt: string;
+  createdAt: string;
+}
+
+export type OperatorActionType =
+  | "retry_full_attempt"
+  | "retry_analysis_only"
+  | "reactivate_abandoned_job";
+
+export type OperatorActionOutcome = "approved" | "denied";
+
+/** `protocol_operator_actions` (migration 0047, extended by 0051 with idempotency_key/request_fingerprint). */
+export interface ProtocolOperatorAction {
+  id: string;
+  projectId: string;
+  jobId: string;
+  actor: string;
+  reason: string;
+  action: OperatorActionType;
+  outcome: OperatorActionOutcome;
+  denialCode: string | null;
+  idempotencyKey: string;
+  requestFingerprint: string;
+  newAttemptId: string | null;
+  newExternalCallId: string | null;
+  createdAt: string;
+}
+
+export type EnqueueProtocolExecutionJobOutcome =
+  | "QUEUED"
+  | "ALREADY_EXISTS"
+  | "PROTOCOL_NOT_FOUND"
+  | "PROTOCOL_NOT_APPROVED";
+
+export interface EnqueueProtocolExecutionJobInput {
+  protocolId: string;
+  projectId: string;
+  maxAttempts?: number;
+}
+
+export interface EnqueueProtocolExecutionJobResult {
+  outcome: EnqueueProtocolExecutionJobOutcome;
+  job: ProtocolExecutionJob | null;
+}
+
+export type ClaimProtocolExecutionJobOutcome = "CLAIMED" | "NO_JOB_AVAILABLE";
+
+export interface ClaimProtocolExecutionJobInput {
+  workerId: string;
+  leaseSeconds: number;
+}
+
+export interface ClaimProtocolExecutionJobResult {
+  outcome: ClaimProtocolExecutionJobOutcome;
+  job: ProtocolExecutionJob | null;
+  claimToken: string | null;
+}
+
+export type RenewProtocolExecutionJobLeaseOutcome =
+  | "RENEWED"
+  | "JOB_NOT_FOUND"
+  | "JOB_NOT_OWNED";
+
+export interface RenewProtocolExecutionJobLeaseInput {
+  jobId: string;
+  claimToken: string;
+  projectId: string;
+  leaseSeconds: number;
+}
+
+export interface RenewProtocolExecutionJobLeaseResult {
+  outcome: RenewProtocolExecutionJobLeaseOutcome;
+  job: ProtocolExecutionJob | null;
+}
+
+/**
+ * Every outcome the shared `_admit_and_reserve_attempt_core` can
+ * propagate (RUN_CAP_EXCEEDED and siblings), plus the job-fencing and
+ * D-021/D-022 resumption outcomes specific to the `_for_job` wrapper.
+ */
+export type AdmitAndReserveAttemptForJobOutcome =
+  | "RESERVED"
+  | "RESUME_CURRENT_ATTEMPT"
+  | "CURRENT_ATTEMPT_NOT_FOUND"
+  | "JOB_NOT_FOUND"
+  | "JOB_NOT_OWNED"
+  | "NOT_FOUND"
+  | "PROTOCOL_NOT_APPROVED"
+  | "ALREADY_RESERVED"
+  | "RUN_CAP_EXCEEDED"
+  | "SPEND_CAP_EXCEEDED"
+  | "RATE_LIMIT_EXCEEDED"
+  | "CONCURRENCY_LIMIT_EXCEEDED"
+  | "RETRY_CAP_EXCEEDED"
+  | "INVALID_RETRY_REFERENCE";
+
+export interface AdmitAndReserveAttemptForJobInput {
+  jobId: string;
+  claimToken: string;
+  projectId: string;
+  attemptKind: AttemptKind;
+  idempotencyKey: string;
+  perplexityReservedCostUsd: number;
+  analysisReservedCostUsd: number;
+  retryOfAttemptId?: string | null;
+}
+
+export interface AdmitAndReserveAttemptForJobResult {
+  outcome: AdmitAndReserveAttemptForJobOutcome;
+  attempt: ProtocolAttempt | null;
+  perplexityCall: ProtocolExternalCall | null;
+  analysisCall: ProtocolExternalCall | null;
+}
+
+/** D-023 §1 — the sole canonical start RPC; `start_attempt_for_job` is not exposed on `DbAdapter`. */
+export type CreateProbeRunAndStartAttemptForJobOutcome =
+  | "STARTED"
+  | "ALREADY_STARTED"
+  | "CONFLICT"
+  | "ATTEMPT_TERMINAL"
+  | "JOB_NOT_FOUND"
+  | "JOB_NOT_OWNED";
+
+export interface CreateProbeRunAndStartAttemptForJobInput {
+  jobId: string;
+  claimToken: string;
+  projectId: string;
+  attemptId: string;
+  platform: string;
+  probeMode: ProbeMode;
+  datasetId: string;
+  datasetSourceType: DatasetSourceType;
+}
+
+export interface CreateProbeRunAndStartAttemptForJobResult {
+  outcome: CreateProbeRunAndStartAttemptForJobOutcome;
+  attempt: ProtocolAttempt | null;
+  probeRun: ProbeRun | null;
+}
+
+export type MarkExternalCallSentForJobOutcome =
+  | "SENT"
+  | "CONFLICT"
+  | "NOT_FOUND"
+  | "CALL_NOT_OWNED_BY_JOB"
+  | "JOB_NOT_FOUND"
+  | "JOB_NOT_OWNED";
+
+export interface MarkExternalCallSentForJobInput {
+  jobId: string;
+  claimToken: string;
+  projectId: string;
+  externalCallId: string;
+  probeRunId: string;
+}
+
+export interface MarkExternalCallSentForJobResult {
+  outcome: MarkExternalCallSentForJobOutcome;
+  externalCall: ProtocolExternalCall | null;
+}
+
+export type RecordProviderCallReceiptForJobOutcome =
+  | "RECEIPTED"
+  | "CONFLICT"
+  | "NOT_FOUND"
+  | "WRONG_CALL_KIND"
+  | "CALL_NOT_OWNED_BY_JOB"
+  | "JOB_NOT_FOUND"
+  | "JOB_NOT_OWNED";
+
+export interface RecordProviderCallReceiptForJobInput {
+  jobId: string;
+  claimToken: string;
+  projectId: string;
+  externalCallId: string;
+  probeRunId: string;
+  outcome: ExternalCallReceiptOutcome;
+  httpStatus?: number | null;
+  providerRequestId?: string | null;
+  rawResponseSha256?: string | null;
+  latencyMs?: number | null;
+  /** D-023 §3 — populate only when a real cost is known; leave both this and costBasis unset otherwise. */
+  actualCostUsd?: number | null;
+  costBasis?: CostBasis | null;
+}
+
+export interface RecordProviderCallReceiptForJobResult {
+  outcome: RecordProviderCallReceiptForJobOutcome;
+  externalCall: ProtocolExternalCall | null;
+  receipt: ProviderCallReceipt | null;
+}
+
+export type RecordAnalysisCallReceiptForJobOutcome = RecordProviderCallReceiptForJobOutcome;
+
+export interface RecordAnalysisCallReceiptForJobInput {
+  jobId: string;
+  claimToken: string;
+  projectId: string;
+  externalCallId: string;
+  probeRunId: string;
+  outcome: ExternalCallReceiptOutcome;
+  provider?: AnalysisCallReceiptProvider | null;
+  model?: string | null;
+  usedMock?: boolean;
+  requestSha256?: string | null;
+  responseSha256?: string | null;
+  latencyMs?: number | null;
+  /** D-023 §3 — populate only when a real cost is known; leave both this and costBasis unset otherwise. */
+  actualCostUsd?: number | null;
+  costBasis?: CostBasis | null;
+}
+
+export interface RecordAnalysisCallReceiptForJobResult {
+  outcome: RecordAnalysisCallReceiptForJobOutcome;
+  externalCall: ProtocolExternalCall | null;
+  receipt: AnalysisCallReceipt | null;
+}
+
+export type ReconcileAttemptForJobOutcome =
+  | "RECONCILED"
+  | "ALREADY_RECONCILED"
+  | "CONFLICT"
+  | "EXTERNAL_CALLS_NOT_TERMINAL"
+  | "ATTEMPT_NOT_OWNED_BY_JOB"
+  | "INVALID_STATUS"
+  | "JOB_NOT_FOUND"
+  | "JOB_NOT_OWNED";
+
+export interface ReconcileAttemptForJobInput {
+  jobId: string;
+  claimToken: string;
+  projectId: string;
+  attemptId: string;
+  status: ReconcileAttemptStatus;
+  terminationReason?: string | null;
+}
+
+export interface ReconcileAttemptForJobResult {
+  outcome: ReconcileAttemptForJobOutcome;
+  attempt: ProtocolAttempt | null;
+}
+
+/** D-020 — the completion gate's exact ordered outcome set. */
+export type CompleteProtocolExecutionJobOutcome =
+  | "SUCCEEDED"
+  | "ALREADY_SUCCEEDED"
+  | "CONFLICT"
+  | "NO_CURRENT_ATTEMPT"
+  | "CURRENT_ATTEMPT_NOT_FOUND"
+  | "ATTEMPT_NOT_RECONCILED"
+  | "ATTEMPT_NOT_COMPLETED"
+  | "EXTERNAL_CALLS_NOT_TERMINAL"
+  | "PERPLEXITY_NOT_COMPLETED"
+  | "ANALYSIS_NOT_COMPLETED"
+  | "JOB_NOT_FOUND"
+  | "JOB_NOT_OWNED";
+
+export interface CompleteProtocolExecutionJobInput {
+  jobId: string;
+  claimToken: string;
+  projectId: string;
+}
+
+export interface CompleteProtocolExecutionJobResult {
+  outcome: CompleteProtocolExecutionJobOutcome;
+  job: ProtocolExecutionJob | null;
+}
+
+export type FailProtocolExecutionJobOutcome = "FAILED" | "JOB_NOT_FOUND" | "JOB_NOT_OWNED";
+
+export interface FailProtocolExecutionJobInput {
+  jobId: string;
+  claimToken: string;
+  projectId: string;
+  reason: string;
+}
+
+export interface FailProtocolExecutionJobResult {
+  outcome: FailProtocolExecutionJobOutcome;
+  job: ProtocolExecutionJob | null;
+}
+
+/** D-024 — fingerprinted, replay-safe (mirrors authorize_operator_retry's D-021/D-022 contract). */
+export type ReactivateAbandonedJobOutcome =
+  | "REACTIVATED"
+  | "JOB_NOT_ABANDONED"
+  | "IDEMPOTENCY_KEY_CONFLICT"
+  | "JOB_NOT_FOUND";
+
+export interface ReactivateAbandonedJobInput {
+  jobId: string;
+  projectId: string;
+  actor: string;
+  reason: string;
+  /** D-024 — mandatory, caller-supplied; never generated inside the RPC. */
+  idempotencyKey: string;
+}
+
+export interface ReactivateAbandonedJobResult {
+  outcome: ReactivateAbandonedJobOutcome;
+  job: ProtocolExecutionJob | null;
+}
+
+/** D-022 — the existing-child lookup (retry_of_attempt_id) is checked before current_attempt_id; every outcome the shared admission core can propagate is included. */
+export type RetryFullAttemptForJobOutcome =
+  | "RESERVED"
+  | "ALREADY_RETRIED"
+  | "SOURCE_ALREADY_RETRIED"
+  | "SOURCE_NOT_CURRENT_ATTEMPT"
+  | "SOURCE_ATTEMPT_NOT_OWNED_BY_JOB"
+  | "SOURCE_NOT_ELIGIBLE"
+  | "AMBIGUOUS_CALL_PRESENT"
+  | "PERPLEXITY_NOT_ELIGIBLE_FOR_FULL_RETRY"
+  | "NOT_FOUND"
+  | "PROTOCOL_NOT_APPROVED"
+  | "ALREADY_RESERVED"
+  | "RUN_CAP_EXCEEDED"
+  | "SPEND_CAP_EXCEEDED"
+  | "RATE_LIMIT_EXCEEDED"
+  | "CONCURRENCY_LIMIT_EXCEEDED"
+  | "RETRY_CAP_EXCEEDED"
+  | "INVALID_RETRY_REFERENCE"
+  | "JOB_NOT_FOUND"
+  | "JOB_NOT_OWNED";
+
+export interface RetryFullAttemptForJobInput {
+  jobId: string;
+  claimToken: string;
+  projectId: string;
+  sourceAttemptId: string;
+  perplexityReservedCostUsd: number;
+  analysisReservedCostUsd: number;
+}
+
+export interface RetryFullAttemptForJobResult {
+  outcome: RetryFullAttemptForJobOutcome;
+  attempt: ProtocolAttempt | null;
+  perplexityCall: ProtocolExternalCall | null;
+  analysisCall: ProtocolExternalCall | null;
+}
+
+/** D-023 §1 arbitration — the existing-child lookup (retry_of_external_call_id) is checked before SOURCE_NOT_AUTHORITATIVE_GENERATION; never reordered. */
+export type RetryAnalysisGenerationForJobOutcome =
+  | "RESERVED"
+  | "ALREADY_RETRIED"
+  | "SOURCE_ALREADY_RETRIED"
+  | "SOURCE_NOT_CURRENT_ATTEMPT"
+  | "NO_CURRENT_ATTEMPT"
+  | "CURRENT_ATTEMPT_NOT_FOUND"
+  | "PERPLEXITY_NOT_COMPLETED"
+  | "SOURCE_NOT_AUTHORITATIVE_GENERATION"
+  | "SOURCE_NOT_ELIGIBLE"
+  | "AMBIGUOUS_CALL_PRESENT"
+  | "RETRY_CAP_EXCEEDED"
+  | "SPEND_CAP_EXCEEDED"
+  | "NOT_FOUND"
+  | "PROTOCOL_NOT_FOUND"
+  | "ATTEMPT_NOT_IN_PROGRESS"
+  | "JOB_NOT_FOUND"
+  | "JOB_NOT_OWNED";
+
+export interface RetryAnalysisGenerationForJobInput {
+  jobId: string;
+  claimToken: string;
+  projectId: string;
+  sourceExternalCallId: string;
+  reservedCostUsd: number;
+}
+
+export interface RetryAnalysisGenerationForJobResult {
+  outcome: RetryAnalysisGenerationForJobOutcome;
+  externalCall: ProtocolExternalCall | null;
+}
+
+export type OperatorRetryAction = "retry_full_attempt" | "retry_analysis_only";
+
+/**
+ * D-021/D-022 — `status` and `outcome` are two distinct columns on the
+ * real RPC (`status` is this full outcome enum; `outcome` is the stored
+ * `'approved'/'denied'` business value, null only when `status` itself
+ * is a hard refusal such as JOB_NOT_FOUND that never reaches a decision
+ * at all). Named to mirror the RPC exactly rather than collapsing them.
+ */
+export type AuthorizeOperatorRetryOutcome =
+  | "APPROVED"
+  | "DENIED"
+  | "IDEMPOTENCY_KEY_CONFLICT"
+  | "JOB_NOT_FOUND"
+  | "JOB_NOT_IN_NEEDS_REVIEW"
+  | "SOURCE_ATTEMPT_NOT_OWNED_BY_JOB"
+  | "SOURCE_ATTEMPT_NOT_IN_PROGRESS"
+  | "SOURCE_EXTERNAL_CALL_NOT_OWNED_BY_ATTEMPT";
+
+export interface AuthorizeOperatorRetryInput {
+  jobId: string;
+  projectId: string;
+  actor: string;
+  reason: string;
+  action: OperatorRetryAction;
+  sourceAttemptId: string;
+  reservedCostUsd: number;
+  /** Mandatory since D-021 — replaces the old internal fresh-UUID-per-call key. */
+  idempotencyKey: string;
+  sourceExternalCallId?: string | null;
+  perplexityReservedCostUsd?: number | null;
+}
+
+export interface AuthorizeOperatorRetryResult {
+  status: AuthorizeOperatorRetryOutcome;
+  outcome: OperatorActionOutcome | null;
+  denialCode: string | null;
+  newAttempt: ProtocolAttempt | null;
+  newExternalCall: ProtocolExternalCall | null;
+}
+
+export type GetProtocolExecutionJobContextOutcome = "OK" | "JOB_NOT_FOUND" | "JOB_NOT_OWNED";
+
+export interface GetProtocolExecutionJobContextInput {
+  jobId: string;
+  claimToken: string;
+  projectId: string;
+}
+
+/** Single coherent snapshot under one lock read — never composed from several independent SELECTs (0051 §6). */
+export interface GetProtocolExecutionJobContextResult {
+  outcome: GetProtocolExecutionJobContextOutcome;
+  job: ProtocolExecutionJob | null;
+  protocol: Protocol | null;
+  currentAttempt: ProtocolAttempt | null;
+  externalCalls: ProtocolExternalCall[];
+  providerReceipts: ProviderCallReceipt[];
+  analysisReceipts: AnalysisCallReceipt[];
+  probeRun: ProbeRun | null;
+}
+
+export type MarkProtocolExecutionJobNeedsReviewForAmbiguityOutcome =
+  | "NEEDS_REVIEW"
+  | "ALREADY_NEEDS_REVIEW"
+  | "NO_AMBIGUOUS_CALL"
+  | "JOB_NOT_FOUND"
+  | "JOB_NOT_OWNED";
+
+export interface MarkProtocolExecutionJobNeedsReviewForAmbiguityInput {
+  jobId: string;
+  claimToken: string;
+  projectId: string;
+}
+
+export interface MarkProtocolExecutionJobNeedsReviewForAmbiguityResult {
+  outcome: MarkProtocolExecutionJobNeedsReviewForAmbiguityOutcome;
+  job: ProtocolExecutionJob | null;
 }
 
 export interface DbAdapter {
@@ -1661,6 +2241,62 @@ export interface DbAdapter {
     protocolId: string,
     projectId: string
   ): Promise<ProtocolAttempt[]>;
+
+  // M5-2 Stage A — protocol execution jobs, external-call ledger
+  // (D-020/D-021/D-022/D-023). start_attempt_for_job and
+  // reserve_additional_analysis_generation_for_job are deliberately not
+  // exposed here — see the type-block comment above this interface.
+  enqueueProtocolExecutionJob(
+    input: EnqueueProtocolExecutionJobInput
+  ): Promise<EnqueueProtocolExecutionJobResult>;
+  claimProtocolExecutionJob(
+    input: ClaimProtocolExecutionJobInput
+  ): Promise<ClaimProtocolExecutionJobResult>;
+  renewProtocolExecutionJobLease(
+    input: RenewProtocolExecutionJobLeaseInput
+  ): Promise<RenewProtocolExecutionJobLeaseResult>;
+  admitAndReserveAttemptForJob(
+    input: AdmitAndReserveAttemptForJobInput
+  ): Promise<AdmitAndReserveAttemptForJobResult>;
+  createProbeRunAndStartAttemptForJob(
+    input: CreateProbeRunAndStartAttemptForJobInput
+  ): Promise<CreateProbeRunAndStartAttemptForJobResult>;
+  markExternalCallSentForJob(
+    input: MarkExternalCallSentForJobInput
+  ): Promise<MarkExternalCallSentForJobResult>;
+  recordProviderCallReceiptForJob(
+    input: RecordProviderCallReceiptForJobInput
+  ): Promise<RecordProviderCallReceiptForJobResult>;
+  recordAnalysisCallReceiptForJob(
+    input: RecordAnalysisCallReceiptForJobInput
+  ): Promise<RecordAnalysisCallReceiptForJobResult>;
+  reconcileAttemptForJob(
+    input: ReconcileAttemptForJobInput
+  ): Promise<ReconcileAttemptForJobResult>;
+  completeProtocolExecutionJob(
+    input: CompleteProtocolExecutionJobInput
+  ): Promise<CompleteProtocolExecutionJobResult>;
+  failProtocolExecutionJob(
+    input: FailProtocolExecutionJobInput
+  ): Promise<FailProtocolExecutionJobResult>;
+  reactivateAbandonedJob(
+    input: ReactivateAbandonedJobInput
+  ): Promise<ReactivateAbandonedJobResult>;
+  retryFullAttemptForJob(
+    input: RetryFullAttemptForJobInput
+  ): Promise<RetryFullAttemptForJobResult>;
+  retryAnalysisGenerationForJob(
+    input: RetryAnalysisGenerationForJobInput
+  ): Promise<RetryAnalysisGenerationForJobResult>;
+  authorizeOperatorRetry(
+    input: AuthorizeOperatorRetryInput
+  ): Promise<AuthorizeOperatorRetryResult>;
+  getProtocolExecutionJobContext(
+    input: GetProtocolExecutionJobContextInput
+  ): Promise<GetProtocolExecutionJobContextResult>;
+  markProtocolExecutionJobNeedsReviewForAmbiguity(
+    input: MarkProtocolExecutionJobNeedsReviewForAmbiguityInput
+  ): Promise<MarkProtocolExecutionJobNeedsReviewForAmbiguityResult>;
 }
 
 /* -------------------------------------------------------------------------- */

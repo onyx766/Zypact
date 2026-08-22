@@ -1515,3 +1515,140 @@ select
 
 revoke all on public.protocol_execution_job_monitoring_v1 from public, anon, authenticated, service_role;
 grant select on public.protocol_execution_job_monitoring_v1 to service_role;
+
+-- =======================================================================
+-- 9. D-024 — reactivate_abandoned_job (0050) redefined: fingerprinted,
+--    replay-safe operator action, same structural pattern D-021 already
+--    established for authorize_operator_retry. The original 4-arg
+--    signature's own INSERT into protocol_operator_actions supplied
+--    neither idempotency_key nor request_fingerprint, both NOT NULL
+--    since section 1 of this same migration -- every real call to the
+--    old signature raises a not-null violation that rolls back the job
+--    reactivation in the same breath, so it could never actually
+--    succeed. This section corrects that, and adds the idempotency
+--    mechanism the original signature never had at all.
+-- =======================================================================
+
+drop function if exists public.reactivate_abandoned_job(uuid, uuid, text, text);
+
+create or replace function
+  public.reactivate_abandoned_job(
+    p_job_id uuid,
+    p_project_id uuid,
+    p_actor text,
+    p_reason text,
+    p_idempotency_key text
+  )
+returns table (
+  status text,
+  job    public.protocol_execution_jobs
+)
+language plpgsql
+security definer
+volatile
+set search_path = public, pg_temp
+as $$
+declare
+  v_job public.protocol_execution_jobs%rowtype;
+  v_fingerprint text;
+  v_existing_action public.protocol_operator_actions%rowtype;
+  v_action_row public.protocol_operator_actions%rowtype;
+begin
+  if p_job_id is null or p_project_id is null
+     or p_actor is null or btrim(p_actor) = ''
+     or p_reason is null or btrim(p_reason) = ''
+     or p_idempotency_key is null or btrim(p_idempotency_key) = '' then
+    raise exception using
+      errcode = '22023',
+      message = 'invalid_reactivate_abandoned_job_args';
+  end if;
+
+  select j.* into v_job
+    from public.protocol_execution_jobs j
+   where j.id = p_job_id and j.project_id = p_project_id
+   for update;
+
+  if not found then
+    return query select 'JOB_NOT_FOUND'::text, null::public.protocol_execution_jobs;
+    return;
+  end if;
+
+  -- D-024: canonical fingerprint over exactly job_id/project_id/action --
+  -- actor/reason remain provenance metadata, outside the fingerprint,
+  -- exactly as D-021 already excludes them for authorize_operator_retry.
+  v_fingerprint := public._sha256_hex(
+    jsonb_build_object(
+      'job_id', p_job_id,
+      'project_id', p_project_id,
+      'action', 'reactivate_abandoned'
+    )::text
+  );
+
+  -- Existing-action lookup BEFORE the abandoned_exhausted status check --
+  -- the same D-022 ordering discipline: a replay of an already-decided
+  -- key is honored regardless of what the job's status is now.
+  select * into v_existing_action
+    from public.protocol_operator_actions
+   where project_id = p_project_id and job_id = p_job_id and idempotency_key = p_idempotency_key;
+
+  if found then
+    if v_existing_action.request_fingerprint = v_fingerprint then
+      return query select
+        (case
+           when v_existing_action.outcome = 'approved' then 'REACTIVATED'
+           else v_existing_action.denial_code
+         end)::text,
+        v_job;
+      return;
+    else
+      return query select 'IDEMPOTENCY_KEY_CONFLICT'::text, null::public.protocol_execution_jobs;
+      return;
+    end if;
+  end if;
+
+  if v_job.status <> 'abandoned_exhausted' then
+    insert into public.protocol_operator_actions (
+      project_id, job_id, actor, reason, action, outcome, denial_code,
+      idempotency_key, request_fingerprint
+    ) values (
+      p_project_id, p_job_id, p_actor, p_reason, 'reactivate_abandoned_job', 'denied', 'JOB_NOT_ABANDONED',
+      p_idempotency_key, v_fingerprint
+    )
+    returning * into v_action_row;
+
+    return query select 'JOB_NOT_ABANDONED'::text, v_job;
+    return;
+  end if;
+
+  update public.protocol_execution_jobs
+     set status = 'queued',
+         attempt_count = 0,
+         worker_id = null,
+         claim_token = null,
+         lease_expires_at = null,
+         failure_reason = null,
+         updated_at = now()
+   where id = p_job_id
+  returning * into v_job;
+
+  insert into public.protocol_operator_actions (
+    project_id, job_id, actor, reason, action, outcome, denial_code,
+    idempotency_key, request_fingerprint
+  ) values (
+    p_project_id, p_job_id, p_actor, p_reason, 'reactivate_abandoned_job', 'approved', null,
+    p_idempotency_key, v_fingerprint
+  )
+  returning * into v_action_row;
+
+  return query select 'REACTIVATED'::text, v_job;
+end;
+$$;
+
+revoke all on function
+  public.reactivate_abandoned_job(uuid, uuid, text, text, text) from public;
+revoke all on function
+  public.reactivate_abandoned_job(uuid, uuid, text, text, text) from anon;
+revoke all on function
+  public.reactivate_abandoned_job(uuid, uuid, text, text, text) from authenticated;
+grant execute on function
+  public.reactivate_abandoned_job(uuid, uuid, text, text, text) to service_role;

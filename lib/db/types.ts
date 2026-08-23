@@ -1391,7 +1391,26 @@ export interface ProtocolExternalCall {
   /** 0051 — never changes once set; the structural replay key for retries. */
   retryOfExternalCallId: string | null;
   createdAt: string;
+  /**
+   * D-027 — set only via `mark_analysis_parse_failed_for_job`, only on a
+   * `call_kind='analysis'` row whose own status is already 'completed'
+   * (a real receipt succeeded) but whose content failed local
+   * JSON/Zod/normalization parsing. Paired with `parseFailureCode`
+   * (both null or both set); never set for a provider-side failure.
+   */
+  parseFailedAt: string | null;
+  /** D-027 — bounded to the same three codes `parseAnalysisContentOnce` returns. Paired with `parseFailedAt`. */
+  parseFailureCode: ParseAnalysisFailureCode | null;
 }
+
+/**
+ * D-027 — the same three bounded codes `lib/pipeline/parse-analysis-content.ts`'s
+ * `parseAnalysisContentOnce` returns (never a free-text Zod/JSON message).
+ */
+export type ParseAnalysisFailureCode =
+  | "invalid_json"
+  | "schema_validation_failed"
+  | "normalization_failed";
 
 export type ExternalCallReceiptOutcome =
   | "success"
@@ -1459,6 +1478,15 @@ export interface AnalysisCallReceipt {
    * scope here). Service-role only.
    */
   rawContent: string | null;
+  /**
+   * D-027 — the exact outbound request body text, paired with
+   * requestSha256 (both null or both set; a real CHECK constraint
+   * verifies the hash matches). A strict used_mock policy applies:
+   * usedMock=true requires both null (nothing real to durabilize for a
+   * simulated call); usedMock=false requires both non-null (a real call
+   * must always carry its exact request). Service-role only.
+   */
+  rawRequestBody: string | null;
 }
 
 export type OperatorActionType =
@@ -1711,6 +1739,13 @@ export interface RecordAnalysisCallReceiptForJobInput {
    * is no equivalent field for requestSha256 in this tranche.
    */
   rawContent?: string | null;
+  /**
+   * D-027 — the exact outbound request body text. Must be paired with
+   * requestSha256 (both set or both omitted). used_mock=false requires
+   * both; used_mock=true requires both omitted/null — the real SQL
+   * CHECK constraint enforces this, not merely application discipline.
+   */
+  rawRequestBody?: string | null;
 }
 
 export interface RecordAnalysisCallReceiptForJobResult {
@@ -1861,6 +1896,12 @@ export type RetryAnalysisGenerationForJobOutcome =
   | "PERPLEXITY_NOT_COMPLETED"
   | "SOURCE_NOT_AUTHORITATIVE_GENERATION"
   | "SOURCE_NOT_ELIGIBLE"
+  /**
+   * D-027 — the parse-repair eligibility branch's own defensive guard:
+   * a `probe_results` row already exists for the current attempt's
+   * `probe_run_id`, so this source must never be retried.
+   */
+  | "PROBE_RESULT_ALREADY_EXISTS"
   | "AMBIGUOUS_CALL_PRESENT"
   | "RETRY_CAP_EXCEEDED"
   | "SPEND_CAP_EXCEEDED"
@@ -1880,6 +1921,41 @@ export interface RetryAnalysisGenerationForJobInput {
 
 export interface RetryAnalysisGenerationForJobResult {
   outcome: RetryAnalysisGenerationForJobOutcome;
+  externalCall: ProtocolExternalCall | null;
+}
+
+/**
+ * D-027 — `mark_analysis_parse_failed_for_job`'s eleven-status outcome,
+ * in the RPC's own transactional order: JOB_NOT_FOUND, JOB_NOT_OWNED,
+ * NOT_CURRENT_ATTEMPT, WRONG_CALL_KIND, ALREADY_MARKED,
+ * PARSE_FAILURE_CODE_CONFLICT, CURRENT_ATTEMPT_NOT_FOUND (defensive),
+ * PROBE_RESULT_ALREADY_EXISTS, SOURCE_NOT_AUTHORITATIVE_GENERATION,
+ * NOT_ELIGIBLE, MARKED. Never a job-status change, never a repair
+ * policy — this RPC only records durable state.
+ */
+export type MarkAnalysisParseFailedForJobOutcome =
+  | "JOB_NOT_FOUND"
+  | "JOB_NOT_OWNED"
+  | "NOT_CURRENT_ATTEMPT"
+  | "WRONG_CALL_KIND"
+  | "ALREADY_MARKED"
+  | "PARSE_FAILURE_CODE_CONFLICT"
+  | "CURRENT_ATTEMPT_NOT_FOUND"
+  | "PROBE_RESULT_ALREADY_EXISTS"
+  | "SOURCE_NOT_AUTHORITATIVE_GENERATION"
+  | "NOT_ELIGIBLE"
+  | "MARKED";
+
+export interface MarkAnalysisParseFailedForJobInput {
+  jobId: string;
+  claimToken: string;
+  projectId: string;
+  externalCallId: string;
+  parseFailureCode: ParseAnalysisFailureCode;
+}
+
+export interface MarkAnalysisParseFailedForJobResult {
+  outcome: MarkAnalysisParseFailedForJobOutcome;
   externalCall: ProtocolExternalCall | null;
 }
 
@@ -2413,6 +2489,10 @@ export interface DbAdapter {
   retryAnalysisGenerationForJob(
     input: RetryAnalysisGenerationForJobInput
   ): Promise<RetryAnalysisGenerationForJobResult>;
+  /** D-027 — marks a durable parse-failure on the current attempt's authoritative analysis generation. */
+  markAnalysisParseFailedForJob(
+    input: MarkAnalysisParseFailedForJobInput
+  ): Promise<MarkAnalysisParseFailedForJobResult>;
   authorizeOperatorRetry(
     input: AuthorizeOperatorRetryInput
   ): Promise<AuthorizeOperatorRetryResult>;

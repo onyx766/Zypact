@@ -130,6 +130,9 @@ import type {
   RetryFullAttemptForJobResult,
   RetryAnalysisGenerationForJobInput,
   RetryAnalysisGenerationForJobResult,
+  MarkAnalysisParseFailedForJobInput,
+  MarkAnalysisParseFailedForJobResult,
+  ParseAnalysisFailureCode,
   AuthorizeOperatorRetryInput,
   AuthorizeOperatorRetryResult,
   GetProtocolExecutionJobContextInput,
@@ -1314,6 +1317,9 @@ interface ProtocolExternalCallDbRow {
   terminalized_at: string | null;
   retry_of_external_call_id: string | null;
   created_at: string;
+  /** D-027 (migration 0053) — absent (undefined) on rows returned by RPCs that predate these columns; normalized to null. */
+  parse_failed_at?: string | null;
+  parse_failure_code?: string | null;
 }
 
 function mapProtocolExternalCall(r: ProtocolExternalCallDbRow): ProtocolExternalCall {
@@ -1332,6 +1338,8 @@ function mapProtocolExternalCall(r: ProtocolExternalCallDbRow): ProtocolExternal
     terminalizedAt: r.terminalized_at,
     retryOfExternalCallId: r.retry_of_external_call_id,
     createdAt: r.created_at,
+    parseFailedAt: r.parse_failed_at ?? null,
+    parseFailureCode: (r.parse_failure_code as ParseAnalysisFailureCode | null) ?? null,
   };
 }
 
@@ -1394,6 +1402,8 @@ interface AnalysisCallReceiptDbRow {
   created_at: string;
   /** D-026 (migration 0052) — absent (undefined) on rows returned by RPCs that predate this column; normalized to null. */
   raw_content?: string | null;
+  /** D-027 (migration 0053) — absent (undefined) on rows returned by RPCs that predate this column; normalized to null. */
+  raw_request_body?: string | null;
 }
 
 function mapAnalysisCallReceiptNullable(
@@ -1415,6 +1425,7 @@ function mapAnalysisCallReceiptNullable(
     receivedAt: r.received_at,
     createdAt: r.created_at,
     rawContent: r.raw_content ?? null,
+    rawRequestBody: r.raw_request_body ?? null,
   };
 }
 
@@ -3433,6 +3444,7 @@ export const supabaseAdapter: DbAdapter = {
       p_actual_cost_usd: rpcActualCostUsd,
       p_cost_basis: rpcCostBasis,
       p_raw_content: input.rawContent ?? null,
+      p_raw_request_body: input.rawRequestBody ?? null,
     });
     if (error) throw error;
     const row = Array.isArray(data) ? data[0] : data;
@@ -3585,6 +3597,32 @@ export const supabaseAdapter: DbAdapter = {
     if (!row) {
       throw new Error(
         "retryAnalysisGenerationForJob: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      externalCall: mapProtocolExternalCallNullable(
+        row.external_call as ProtocolExternalCallDbRow | null
+      ),
+    };
+  },
+
+  // D-027: markAnalysisParseFailedForJob — no direct DML, RPC only.
+  async markAnalysisParseFailedForJob(
+    input: MarkAnalysisParseFailedForJobInput
+  ): Promise<MarkAnalysisParseFailedForJobResult> {
+    const { data, error } = await getClient().rpc("mark_analysis_parse_failed_for_job", {
+      p_job_id: input.jobId,
+      p_claim_token: input.claimToken,
+      p_project_id: input.projectId,
+      p_external_call_id: input.externalCallId,
+      p_parse_failure_code: input.parseFailureCode,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "markAnalysisParseFailedForJob: RPC returned no row; the return contract guarantees exactly one."
       );
     }
     return {

@@ -106,12 +106,12 @@ async function main(): Promise<void> {
       !/require\(["'][^"']*snapshot-worker/.test(supabaseSrc)
   );
   check(
-    // D-026 (Stage B0.1) legitimately created migration 0052 and these
-    // three files now carry real, authorized D-026 comments naming it —
+    // D-027 (B0.2A-2) legitimately created migration 0053 and these
+    // three files now carry real, authorized D-027 comments naming it —
     // this check ratchets forward to guard the next boundary instead of
     // the one this same tranche just crossed on purpose.
-    "no reference to a 0053 migration anywhere in these three files",
-    !/0053/.test(typesSrc) && !/0053/.test(memorySrc) && !/0053/.test(supabaseSrc)
+    "no reference to a 0054 migration anywhere in these three files",
+    !/0054/.test(typesSrc) && !/0054/.test(memorySrc) && !/0054/.test(supabaseSrc)
   );
   check(
     "start_attempt_for_job is not exposed as a DbAdapter method name and not called by either adapter",
@@ -350,6 +350,7 @@ async function main(): Promise<void> {
   });
   check("sent: analysis call marked sent", sentA.outcome === "SENT");
   const analysisOutputText = JSON.stringify({ verdict: "won", clientMentioned: true });
+  const analysisRequestText = JSON.stringify({ model: "gpt-4o-mini", prompt: "fixture analysis request" });
   const receiptA = await db.recordAnalysisCallReceiptForJob({
     jobId,
     claimToken,
@@ -360,20 +361,22 @@ async function main(): Promise<void> {
     provider: "openai",
     model: "gpt-4o-mini",
     usedMock: false,
-    requestSha256: "c".repeat(64),
+    requestSha256: sha256Hex(analysisRequestText),
     responseSha256: sha256Hex(analysisOutputText),
     latencyMs: 300,
     rawContent: analysisOutputText,
+    rawRequestBody: analysisRequestText,
   });
   check(
     "receipt: analysis success -> RECEIPTED, call completed",
     receiptA.outcome === "RECEIPTED" && receiptA.externalCall?.status === "completed"
   );
   check(
-    "D-026: the analysis receipt carries rawContent verbatim, paired with a real matching hash; requestSha256 stays hash-only (no paired content field in this tranche)",
+    "D-026/D-027: the analysis receipt carries rawContent and rawRequestBody verbatim, each paired with a real matching hash",
     receiptA.receipt?.rawContent === analysisOutputText &&
       receiptA.receipt?.responseSha256 === sha256Hex(analysisOutputText) &&
-      receiptA.receipt?.requestSha256 === "c".repeat(64)
+      receiptA.receipt?.rawRequestBody === analysisRequestText &&
+      receiptA.receipt?.requestSha256 === sha256Hex(analysisRequestText)
   );
 
   // -- reconciliation + completion ----------------------------------------
@@ -758,11 +761,12 @@ async function main(): Promise<void> {
       rawResponseBody: answerText,
     });
     await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: analysisCallId, probeRunId });
+    const requestText = `Fixture analysis request for attempt ${attemptId}.`;
     await db.recordAnalysisCallReceiptForJob({
       jobId, claimToken, projectId, externalCallId: analysisCallId, probeRunId, outcome: "success",
       provider: "openai", model: "gpt-4o-mini", usedMock: false,
-      requestSha256: "c".repeat(64), responseSha256: sha256Hex(outputText), latencyMs: 200,
-      rawContent: outputText,
+      requestSha256: sha256Hex(requestText), responseSha256: sha256Hex(outputText), latencyMs: 200,
+      rawContent: outputText, rawRequestBody: requestText,
     });
     await db.reconcileAttemptForJob({ jobId, claimToken, projectId, attemptId, status: "completed" });
   }
@@ -954,7 +958,11 @@ async function main(): Promise<void> {
     await db.markExternalCallSentForJob({ jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id, externalCallId: frPerplexityCallId, probeRunId: frProbeRunId });
     await db.recordProviderCallReceiptForJob({ jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id, externalCallId: frPerplexityCallId, probeRunId: frProbeRunId, outcome: "provider_error" });
     await db.markExternalCallSentForJob({ jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id, externalCallId: frAnalysisCallId, probeRunId: frProbeRunId });
-    await db.recordAnalysisCallReceiptForJob({ jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id, externalCallId: frAnalysisCallId, probeRunId: frProbeRunId, outcome: "provider_error" });
+    const frRequestText = "Fixture analysis request for the full-retry-slot's own analysis leg.";
+    await db.recordAnalysisCallReceiptForJob({
+      jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id, externalCallId: frAnalysisCallId, probeRunId: frProbeRunId, outcome: "provider_error",
+      requestSha256: sha256Hex(frRequestText), rawRequestBody: frRequestText,
+    });
     await db.reconcileAttemptForJob({ jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id, attemptId: frSourceAttemptId, status: "failed" });
 
     const frRetry = await db.retryFullAttemptForJob({
@@ -1401,7 +1409,11 @@ async function main(): Promise<void> {
     await db.markExternalCallSentForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsPerplexityCall1Id, probeRunId: dsProbeRun1Id });
     await db.recordProviderCallReceiptForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsPerplexityCall1Id, probeRunId: dsProbeRun1Id, outcome: "provider_error" });
     await db.markExternalCallSentForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsAnalysisCall1Id, probeRunId: dsProbeRun1Id });
-    await db.recordAnalysisCallReceiptForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsAnalysisCall1Id, probeRunId: dsProbeRun1Id, outcome: "provider_error" });
+    const dsRequestText1 = "Fixture analysis request for d026-same-batch slot 1.";
+    await db.recordAnalysisCallReceiptForJob({
+      jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsAnalysisCall1Id, probeRunId: dsProbeRun1Id, outcome: "provider_error",
+      requestSha256: sha256Hex(dsRequestText1), rawRequestBody: dsRequestText1,
+    });
     await db.reconcileAttemptForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, attemptId: dsAttempt1Id, status: "failed" });
 
     const dsFullRetry = await db.retryFullAttemptForJob({
@@ -1490,7 +1502,11 @@ async function main(): Promise<void> {
       rawResponseSha256: sha256Hex("d026-same-batch-answer"), rawResponseBody: "d026-same-batch-answer",
     });
     await db.markExternalCallSentForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsAnalysisCall2Id, probeRunId: dsProbeRun2Id });
-    await db.recordAnalysisCallReceiptForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsAnalysisCall2Id, probeRunId: dsProbeRun2Id, outcome: "provider_error" });
+    const dsRequestText2 = "Fixture analysis request for d026-same-batch slot 2.";
+    await db.recordAnalysisCallReceiptForJob({
+      jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsAnalysisCall2Id, probeRunId: dsProbeRun2Id, outcome: "provider_error",
+      requestSha256: sha256Hex(dsRequestText2), rawRequestBody: dsRequestText2,
+    });
 
     const dsAnalysisRetry = await db.retryAnalysisGenerationForJob({
       jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id,
@@ -1504,6 +1520,351 @@ async function main(): Promise<void> {
       dsAnalysisRetry.outcome === "RESERVED" &&
         dsContextAfterAnalysisRetry.probeRun?.id === dsProbeRun2Id &&
         dsContextAfterAnalysisRetry.probeRun?.datasetId === dsJob.datasetBatchId
+    );
+  }
+
+  // ========================================================================
+  // Part L — D-027: mark_analysis_parse_failed_for_job (MemoryAdapter).
+  //
+  // Two of the eleven statuses (CURRENT_ATTEMPT_NOT_FOUND,
+  // SOURCE_NOT_AUTHORITATIVE_GENERATION) are documented, defensive gates
+  // that are structurally unreachable through the legitimate RPC/adapter
+  // surface given this RPC's own ordering (ALREADY_MARKED/
+  // PARSE_FAILURE_CODE_CONFLICT are checked before either): the only way
+  // a second analysis generation can ever exist is via
+  // retryAnalysisGenerationForJob, which itself requires the source to
+  // already be non-eligible (failed/timed_out/cancelled, or already
+  // parse-failed) -- so a completed+success+unmarked generation can
+  // never coexist with a later, authoritative generation reachable from
+  // this test file's public API. Not tested here for that reason,
+  // exactly as retry_analysis_generation_for_job's own identical
+  // CURRENT_ATTEMPT_NOT_FOUND defensive guard (D-020 precedent) is
+  // likewise never exercised by any existing test in this file.
+  // ========================================================================
+  console.log("\n[L] MemoryAdapter — D-027 mark_analysis_parse_failed_for_job");
+
+  {
+    const { projectId: mpProjectId, protocolId: mpProtocolId } = await setupProjectProtocol(db, "d027-mark-parse-failed");
+    const { jobId: mpJobId, claimToken: mpClaimToken } = await claimFreshJob(db, mpProjectId, mpProtocolId, "d027-mark-worker");
+    const mpAdmit = await db.admitAndReserveAttemptForJob({
+      jobId: mpJobId, claimToken: mpClaimToken, projectId: mpProjectId, attemptKind: "baseline",
+      idempotencyKey: `${mpJobId}:baseline:1`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
+    });
+    const mpAttemptId = must(mpAdmit.attempt, "d027 attempt").id;
+    const mpPerplexityCallId = must(mpAdmit.perplexityCall, "d027 perplexity call").id;
+    const mpAnalysisCallId = must(mpAdmit.analysisCall, "d027 analysis call").id;
+    const mpStart = await db.createProbeRunAndStartAttemptForJob({
+      jobId: mpJobId, claimToken: mpClaimToken, projectId: mpProjectId, attemptId: mpAttemptId,
+      platform: "perplexity", probeMode: "simulated",
+    });
+    const mpProbeRunId = must(mpStart.probeRun, "d027 probe run").id;
+
+    check(
+      "JOB_NOT_FOUND: a non-existent jobId",
+      (await db.markAnalysisParseFailedForJob({
+        jobId: "00000000-0000-4000-8000-000000000000", claimToken: mpClaimToken, projectId: mpProjectId,
+        externalCallId: mpAnalysisCallId, parseFailureCode: "invalid_json",
+      })).outcome === "JOB_NOT_FOUND"
+    );
+    check(
+      "JOB_NOT_OWNED: a wrong claimToken",
+      (await db.markAnalysisParseFailedForJob({
+        jobId: mpJobId, claimToken: "00000000-0000-4000-8000-000000000000", projectId: mpProjectId,
+        externalCallId: mpAnalysisCallId, parseFailureCode: "invalid_json",
+      })).outcome === "JOB_NOT_OWNED"
+    );
+    check(
+      "NOT_CURRENT_ATTEMPT: a non-existent externalCallId",
+      (await db.markAnalysisParseFailedForJob({
+        jobId: mpJobId, claimToken: mpClaimToken, projectId: mpProjectId,
+        externalCallId: "00000000-0000-4000-8000-000000000000", parseFailureCode: "invalid_json",
+      })).outcome === "NOT_CURRENT_ATTEMPT"
+    );
+    check(
+      "WRONG_CALL_KIND: the perplexity call, never analysis",
+      (await db.markAnalysisParseFailedForJob({
+        jobId: mpJobId, claimToken: mpClaimToken, projectId: mpProjectId,
+        externalCallId: mpPerplexityCallId, parseFailureCode: "invalid_json",
+      })).outcome === "WRONG_CALL_KIND"
+    );
+    check(
+      "NOT_ELIGIBLE: the analysis call is still 'reserved', never sent, no receipt",
+      (await db.markAnalysisParseFailedForJob({
+        jobId: mpJobId, claimToken: mpClaimToken, projectId: mpProjectId,
+        externalCallId: mpAnalysisCallId, parseFailureCode: "invalid_json",
+      })).outcome === "NOT_ELIGIBLE"
+    );
+
+    await db.markExternalCallSentForJob({ jobId: mpJobId, claimToken: mpClaimToken, projectId: mpProjectId, externalCallId: mpAnalysisCallId, probeRunId: mpProbeRunId });
+    check(
+      "NOT_ELIGIBLE: the analysis call is 'in_progress' (sent, no receipt yet)",
+      (await db.markAnalysisParseFailedForJob({
+        jobId: mpJobId, claimToken: mpClaimToken, projectId: mpProjectId,
+        externalCallId: mpAnalysisCallId, parseFailureCode: "invalid_json",
+      })).outcome === "NOT_ELIGIBLE"
+    );
+
+    const mpRequestText = "Fixture analysis request for d027-mark-parse-failed.";
+    const mpOutputText = "not valid json for the schema -- this is the parse-failure scenario";
+    await db.recordAnalysisCallReceiptForJob({
+      jobId: mpJobId, claimToken: mpClaimToken, projectId: mpProjectId, externalCallId: mpAnalysisCallId, probeRunId: mpProbeRunId,
+      outcome: "success", provider: "openai", model: "gpt-4o-mini", usedMock: false,
+      requestSha256: sha256Hex(mpRequestText), rawRequestBody: mpRequestText,
+      responseSha256: sha256Hex(mpOutputText), rawContent: mpOutputText,
+    });
+
+    const marked = await db.markAnalysisParseFailedForJob({
+      jobId: mpJobId, claimToken: mpClaimToken, projectId: mpProjectId,
+      externalCallId: mpAnalysisCallId, parseFailureCode: "invalid_json",
+    });
+    check("MARKED: a real success receipt, completed status, authoritative generation -> MARKED", marked.outcome === "MARKED");
+    check(
+      "MARKED result carries parseFailedAt/parseFailureCode on the returned externalCall",
+      marked.externalCall?.parseFailedAt !== null && marked.externalCall?.parseFailureCode === "invalid_json"
+    );
+
+    const replaySameCode = await db.markAnalysisParseFailedForJob({
+      jobId: mpJobId, claimToken: mpClaimToken, projectId: mpProjectId,
+      externalCallId: mpAnalysisCallId, parseFailureCode: "invalid_json",
+    });
+    check("ALREADY_MARKED: replay with the same code returns the stable prior result", replaySameCode.outcome === "ALREADY_MARKED");
+
+    const replayDifferentCode = await db.markAnalysisParseFailedForJob({
+      jobId: mpJobId, claimToken: mpClaimToken, projectId: mpProjectId,
+      externalCallId: mpAnalysisCallId, parseFailureCode: "schema_validation_failed",
+    });
+    check("PARSE_FAILURE_CODE_CONFLICT: replay with a different code, zero mutation", replayDifferentCode.outcome === "PARSE_FAILURE_CODE_CONFLICT");
+  }
+
+  {
+    // PROBE_RESULT_ALREADY_EXISTS: a probe_results row already exists for
+    // the current attempt's probe_run BEFORE any mark attempt -- the
+    // defensive contradiction guard, checked before eligibility.
+    const { projectId: prProjectId, protocolId: prProtocolId } = await setupProjectProtocol(db, "d027-probe-result-exists");
+    const { jobId: prJobId, claimToken: prClaimToken } = await claimFreshJob(db, prProjectId, prProtocolId, "d027-pr-worker");
+    const prAdmit = await db.admitAndReserveAttemptForJob({
+      jobId: prJobId, claimToken: prClaimToken, projectId: prProjectId, attemptKind: "baseline",
+      idempotencyKey: `${prJobId}:baseline:1`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
+    });
+    const prAttemptId = must(prAdmit.attempt, "d027-pr attempt").id;
+    const prAnalysisCallId = must(prAdmit.analysisCall, "d027-pr analysis call").id;
+    const prStart = await db.createProbeRunAndStartAttemptForJob({
+      jobId: prJobId, claimToken: prClaimToken, projectId: prProjectId, attemptId: prAttemptId,
+      platform: "perplexity", probeMode: "simulated",
+    });
+    const prProbeRunId = must(prStart.probeRun, "d027-pr probe run").id;
+    await db.markExternalCallSentForJob({ jobId: prJobId, claimToken: prClaimToken, projectId: prProjectId, externalCallId: prAnalysisCallId, probeRunId: prProbeRunId });
+    const prRequestText = "Fixture analysis request for d027-probe-result-exists.";
+    const prOutputText = "invalid json output";
+    await db.recordAnalysisCallReceiptForJob({
+      jobId: prJobId, claimToken: prClaimToken, projectId: prProjectId, externalCallId: prAnalysisCallId, probeRunId: prProbeRunId,
+      outcome: "success", provider: "openai", model: "gpt-4o-mini", usedMock: false,
+      requestSha256: sha256Hex(prRequestText), rawRequestBody: prRequestText,
+      responseSha256: sha256Hex(prOutputText), rawContent: prOutputText,
+    });
+    await db.saveProbeResult({
+      probeRunId: prProbeRunId, projectId: prProjectId, prompt: "fixture prompt", platform: "perplexity", probeMode: "simulated",
+      rawResponse: prOutputText, clientMentioned: false, clientPosition: "absent",
+      competitorsMentioned: [], sourcesCited: [], answerSummary: "", verdict: "lost", whyClientLost: "",
+    });
+
+    const prMark = await db.markAnalysisParseFailedForJob({
+      jobId: prJobId, claimToken: prClaimToken, projectId: prProjectId,
+      externalCallId: prAnalysisCallId, parseFailureCode: "invalid_json",
+    });
+    check("PROBE_RESULT_ALREADY_EXISTS: a probe_results row already exists for this probe_run", prMark.outcome === "PROBE_RESULT_ALREADY_EXISTS");
+  }
+
+  // ========================================================================
+  // Part M — D-027: retry_analysis_generation_for_job's extended
+  //          eligibility branch (parse-repair), MemoryAdapter.
+  // ========================================================================
+  console.log("\n[M] MemoryAdapter — D-027 retry_analysis_generation_for_job parse-repair branch");
+
+  {
+    const { projectId: rpProjectId, protocolId: rpProtocolId } = await setupProjectProtocol(db, "d027-retry-parse-repair");
+    const { jobId: rpJobId, claimToken: rpClaimToken } = await claimFreshJob(db, rpProjectId, rpProtocolId, "d027-retry-worker");
+    const rpAdmit = await db.admitAndReserveAttemptForJob({
+      jobId: rpJobId, claimToken: rpClaimToken, projectId: rpProjectId, attemptKind: "baseline",
+      idempotencyKey: `${rpJobId}:baseline:1`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
+    });
+    const rpAttemptId = must(rpAdmit.attempt, "d027-retry attempt").id;
+    const rpPerplexityCallId = must(rpAdmit.perplexityCall, "d027-retry perplexity call").id;
+    const rpAnalysisCallId = must(rpAdmit.analysisCall, "d027-retry analysis call").id;
+    const rpStart = await db.createProbeRunAndStartAttemptForJob({
+      jobId: rpJobId, claimToken: rpClaimToken, projectId: rpProjectId, attemptId: rpAttemptId,
+      platform: "perplexity", probeMode: "simulated",
+    });
+    const rpProbeRunId = must(rpStart.probeRun, "d027-retry probe run").id;
+    // retry_analysis_generation_for_job's own PERPLEXITY_NOT_COMPLETED gate
+    // requires the Perplexity leg completed+receipted before it will ever
+    // look at the analysis leg's own eligibility -- completed here first,
+    // exactly as every other retry-analysis fixture in this file already does.
+    await db.markExternalCallSentForJob({ jobId: rpJobId, claimToken: rpClaimToken, projectId: rpProjectId, externalCallId: rpPerplexityCallId, probeRunId: rpProbeRunId });
+    await db.recordProviderCallReceiptForJob({
+      jobId: rpJobId, claimToken: rpClaimToken, projectId: rpProjectId, externalCallId: rpPerplexityCallId, probeRunId: rpProbeRunId,
+      outcome: "success", rawResponseSha256: sha256Hex("d027-retry-perplexity-answer"), rawResponseBody: "d027-retry-perplexity-answer",
+    });
+    await db.markExternalCallSentForJob({ jobId: rpJobId, claimToken: rpClaimToken, projectId: rpProjectId, externalCallId: rpAnalysisCallId, probeRunId: rpProbeRunId });
+    const rpRequestText = "Fixture analysis request for d027-retry-parse-repair.";
+    const rpOutputText = "not valid json";
+    await db.recordAnalysisCallReceiptForJob({
+      jobId: rpJobId, claimToken: rpClaimToken, projectId: rpProjectId, externalCallId: rpAnalysisCallId, probeRunId: rpProbeRunId,
+      outcome: "success", provider: "openai", model: "gpt-4o-mini", usedMock: false,
+      requestSha256: sha256Hex(rpRequestText), rawRequestBody: rpRequestText,
+      responseSha256: sha256Hex(rpOutputText), rawContent: rpOutputText,
+    });
+
+    // Before marking: SOURCE_NOT_ELIGIBLE, since this source is 'completed'
+    // but not yet parse-failed (neither branch of the eligibility gate matches).
+    const beforeMark = await db.retryAnalysisGenerationForJob({
+      jobId: rpJobId, claimToken: rpClaimToken, projectId: rpProjectId,
+      sourceExternalCallId: rpAnalysisCallId, reservedCostUsd: 0.02,
+    });
+    check("D-027: a completed, not-yet-parse-failed source is SOURCE_NOT_ELIGIBLE", beforeMark.outcome === "SOURCE_NOT_ELIGIBLE");
+
+    await db.markAnalysisParseFailedForJob({
+      jobId: rpJobId, claimToken: rpClaimToken, projectId: rpProjectId,
+      externalCallId: rpAnalysisCallId, parseFailureCode: "invalid_json",
+    });
+
+    const repair = await db.retryAnalysisGenerationForJob({
+      jobId: rpJobId, claimToken: rpClaimToken, projectId: rpProjectId,
+      sourceExternalCallId: rpAnalysisCallId, reservedCostUsd: 0.02,
+    });
+    check("D-027: a completed, parse-failed, success-receipted source with no probe_result -> RESERVED (generation 2)", repair.outcome === "RESERVED");
+    check("D-027: the repair generation is exactly 2", repair.externalCall?.generation === 2);
+
+    // Replay with the same reserved cost -> ALREADY_RETRIED, the existing
+    // dedup, entirely unaffected by the new branch.
+    const replay = await db.retryAnalysisGenerationForJob({
+      jobId: rpJobId, claimToken: rpClaimToken, projectId: rpProjectId,
+      sourceExternalCallId: rpAnalysisCallId, reservedCostUsd: 0.02,
+    });
+    check("D-027: a replay with the same source/cost is ALREADY_RETRIED -- dedup unaffected by the new branch", replay.outcome === "ALREADY_RETRIED");
+
+    // retry_cap: this protocol was set up with retryCap = 2 (setupProjectProtocol's
+    // default) -- generation 2 is already at the cap's edge (retry_cap + 1 = 3
+    // max generations). Confirm the cap is still enforced on the parse-repair
+    // path by draining it via the historical branch on a fresh source is out of
+    // scope here (covered by the pre-existing D-021/D-025 retry_cap tests);
+    // this assertion instead confirms generation 2 itself never exceeded it.
+    check("D-027: the repair generation never exceeds retry_cap + 1", (repair.externalCall?.generation ?? 0) <= 3);
+  }
+
+  {
+    // PROBE_RESULT_ALREADY_EXISTS on the retry path itself: a source
+    // marked parse-failed, but a probe_result already exists (contrived
+    // via a fresh fixture where saveProbeResult ran before the retry
+    // attempt) -- the retry must refuse, never silently re-derive.
+    const { projectId: rp2ProjectId, protocolId: rp2ProtocolId } = await setupProjectProtocol(db, "d027-retry-probe-result-exists");
+    const { jobId: rp2JobId, claimToken: rp2ClaimToken } = await claimFreshJob(db, rp2ProjectId, rp2ProtocolId, "d027-retry2-worker");
+    const rp2Admit = await db.admitAndReserveAttemptForJob({
+      jobId: rp2JobId, claimToken: rp2ClaimToken, projectId: rp2ProjectId, attemptKind: "baseline",
+      idempotencyKey: `${rp2JobId}:baseline:1`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
+    });
+    const rp2AttemptId = must(rp2Admit.attempt, "d027-retry2 attempt").id;
+    const rp2PerplexityCallId = must(rp2Admit.perplexityCall, "d027-retry2 perplexity call").id;
+    const rp2AnalysisCallId = must(rp2Admit.analysisCall, "d027-retry2 analysis call").id;
+    const rp2Start = await db.createProbeRunAndStartAttemptForJob({
+      jobId: rp2JobId, claimToken: rp2ClaimToken, projectId: rp2ProjectId, attemptId: rp2AttemptId,
+      platform: "perplexity", probeMode: "simulated",
+    });
+    const rp2ProbeRunId = must(rp2Start.probeRun, "d027-retry2 probe run").id;
+    await db.markExternalCallSentForJob({ jobId: rp2JobId, claimToken: rp2ClaimToken, projectId: rp2ProjectId, externalCallId: rp2PerplexityCallId, probeRunId: rp2ProbeRunId });
+    await db.recordProviderCallReceiptForJob({
+      jobId: rp2JobId, claimToken: rp2ClaimToken, projectId: rp2ProjectId, externalCallId: rp2PerplexityCallId, probeRunId: rp2ProbeRunId,
+      outcome: "success", rawResponseSha256: sha256Hex("d027-retry2-perplexity-answer"), rawResponseBody: "d027-retry2-perplexity-answer",
+    });
+    await db.markExternalCallSentForJob({ jobId: rp2JobId, claimToken: rp2ClaimToken, projectId: rp2ProjectId, externalCallId: rp2AnalysisCallId, probeRunId: rp2ProbeRunId });
+    const rp2RequestText = "Fixture analysis request for d027-retry-probe-result-exists.";
+    const rp2OutputText = "still not valid json";
+    await db.recordAnalysisCallReceiptForJob({
+      jobId: rp2JobId, claimToken: rp2ClaimToken, projectId: rp2ProjectId, externalCallId: rp2AnalysisCallId, probeRunId: rp2ProbeRunId,
+      outcome: "success", provider: "openai", model: "gpt-4o-mini", usedMock: false,
+      requestSha256: sha256Hex(rp2RequestText), rawRequestBody: rp2RequestText,
+      responseSha256: sha256Hex(rp2OutputText), rawContent: rp2OutputText,
+    });
+    await db.markAnalysisParseFailedForJob({
+      jobId: rp2JobId, claimToken: rp2ClaimToken, projectId: rp2ProjectId,
+      externalCallId: rp2AnalysisCallId, parseFailureCode: "invalid_json",
+    });
+    // A probe_result appears for this probe_run by some other means before
+    // the retry is attempted (contradiction the retry must catch).
+    await db.saveProbeResult({
+      probeRunId: rp2ProbeRunId, projectId: rp2ProjectId, prompt: "fixture prompt", platform: "perplexity", probeMode: "simulated",
+      rawResponse: rp2OutputText, clientMentioned: false, clientPosition: "absent",
+      competitorsMentioned: [], sourcesCited: [], answerSummary: "", verdict: "lost", whyClientLost: "",
+    });
+
+    const retryAfterResult = await db.retryAnalysisGenerationForJob({
+      jobId: rp2JobId, claimToken: rp2ClaimToken, projectId: rp2ProjectId,
+      sourceExternalCallId: rp2AnalysisCallId, reservedCostUsd: 0.02,
+    });
+    check(
+      "D-027: retrying a parse-failed source whose probe_run already has a probe_result -> PROBE_RESULT_ALREADY_EXISTS, never a silent second generation",
+      retryAfterResult.outcome === "PROBE_RESULT_ALREADY_EXISTS"
+    );
+  }
+
+  // ========================================================================
+  // Part N — D-027: used_mock / raw_request_body pairing enforcement
+  //          (MemoryAdapter).
+  // ========================================================================
+  console.log("\n[N] MemoryAdapter — D-027 raw_request_body pairing/mock-vs-real enforcement");
+
+  {
+    const { projectId: mkProjectId, protocolId: mkProtocolId } = await setupProjectProtocol(db, "d027-mock-pairing");
+    const { jobId: mkJobId, claimToken: mkClaimToken } = await claimFreshJob(db, mkProjectId, mkProtocolId, "d027-mock-worker");
+    const mkAdmit = await db.admitAndReserveAttemptForJob({
+      jobId: mkJobId, claimToken: mkClaimToken, projectId: mkProjectId, attemptKind: "baseline",
+      idempotencyKey: `${mkJobId}:baseline:1`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
+    });
+    const mkAttemptId = must(mkAdmit.attempt, "d027-mock attempt").id;
+    const mkAnalysisCallId = must(mkAdmit.analysisCall, "d027-mock analysis call").id;
+    const mkStart = await db.createProbeRunAndStartAttemptForJob({
+      jobId: mkJobId, claimToken: mkClaimToken, projectId: mkProjectId, attemptId: mkAttemptId,
+      platform: "perplexity", probeMode: "simulated",
+    });
+    const mkProbeRunId = must(mkStart.probeRun, "d027-mock probe run").id;
+    await db.markExternalCallSentForJob({ jobId: mkJobId, claimToken: mkClaimToken, projectId: mkProjectId, externalCallId: mkAnalysisCallId, probeRunId: mkProbeRunId });
+
+    let usedMockFalseNoRequestThrew = false;
+    try {
+      await db.recordAnalysisCallReceiptForJob({
+        jobId: mkJobId, claimToken: mkClaimToken, projectId: mkProjectId, externalCallId: mkAnalysisCallId, probeRunId: mkProbeRunId,
+        outcome: "provider_error", usedMock: false,
+      });
+    } catch {
+      usedMockFalseNoRequestThrew = true;
+    }
+    check(
+      "D-027: usedMock=false with no rawRequestBody/requestSha256 throws -- real validation, mirrors used_mock IS FALSE requiring both non-null",
+      usedMockFalseNoRequestThrew
+    );
+
+    let usedMockTrueWithRequestThrew = false;
+    try {
+      await db.recordAnalysisCallReceiptForJob({
+        jobId: mkJobId, claimToken: mkClaimToken, projectId: mkProjectId, externalCallId: mkAnalysisCallId, probeRunId: mkProbeRunId,
+        outcome: "provider_error", usedMock: true,
+        requestSha256: sha256Hex("x"), rawRequestBody: "x",
+      });
+    } catch {
+      usedMockTrueWithRequestThrew = true;
+    }
+    check(
+      "D-027: usedMock=true WITH a rawRequestBody/requestSha256 throws -- mirrors used_mock IS TRUE requiring both null",
+      usedMockTrueWithRequestThrew
+    );
+
+    const mkReceipt = await db.recordAnalysisCallReceiptForJob({
+      jobId: mkJobId, claimToken: mkClaimToken, projectId: mkProjectId, externalCallId: mkAnalysisCallId, probeRunId: mkProbeRunId,
+      outcome: "provider_error", usedMock: true,
+    });
+    check(
+      "D-027: usedMock=true with no request fields accepted -- rawRequestBody/requestSha256 both null",
+      mkReceipt.outcome === "RECEIPTED" && mkReceipt.receipt?.rawRequestBody === null && mkReceipt.receipt?.requestSha256 === null
     );
   }
 
@@ -1692,11 +2053,11 @@ async function main(): Promise<void> {
   );
 
   rpcCalls = [];
-  nextRpcResponse = { data: { status: "RECEIPTED", external_call: { ...CALL_ROW("analysis"), status: "completed" }, receipt: { id: "r2", project_id: "p1", external_call_id: "call-analysis", probe_run_id: "run1", outcome: "success", provider: "openai", model: "gpt-4o-mini", used_mock: false, request_sha256: "f".repeat(64), response_sha256: "g".repeat(64), latency_ms: 300, received_at: "2026-01-01T00:00:03.000Z", created_at: "2026-01-01T00:00:03.000Z", raw_content: "fixture analysis output" } }, error: null };
+  nextRpcResponse = { data: { status: "RECEIPTED", external_call: { ...CALL_ROW("analysis"), status: "completed" }, receipt: { id: "r2", project_id: "p1", external_call_id: "call-analysis", probe_run_id: "run1", outcome: "success", provider: "openai", model: "gpt-4o-mini", used_mock: false, request_sha256: "f".repeat(64), response_sha256: "g".repeat(64), latency_ms: 300, received_at: "2026-01-01T00:00:03.000Z", created_at: "2026-01-01T00:00:03.000Z", raw_content: "fixture analysis output", raw_request_body: "fixture analysis request" } }, error: null };
   const supaReceiptA = await supabaseAdapter.recordAnalysisCallReceiptForJob({
     jobId: "j1", claimToken: "tok", projectId: "p1", externalCallId: "call-analysis", probeRunId: "run1",
     outcome: "success", provider: "openai", model: "gpt-4o-mini", requestSha256: "f".repeat(64), responseSha256: "g".repeat(64), latencyMs: 300,
-    rawContent: "fixture analysis output",
+    rawContent: "fixture analysis output", rawRequestBody: "fixture analysis request",
   });
   check(
     "Supabase recordAnalysisCallReceiptForJob: correct RPC name and full param set",
@@ -1709,6 +2070,28 @@ async function main(): Promise<void> {
     "D-026: Supabase recordAnalysisCallReceiptForJob forwards p_raw_content and maps rawContent back from the receipt row",
     rpcCalls[0]!.args.p_raw_content === "fixture analysis output" &&
       supaReceiptA.receipt?.rawContent === "fixture analysis output"
+  );
+  check(
+    "D-027: Supabase recordAnalysisCallReceiptForJob forwards p_raw_request_body and maps rawRequestBody back from the receipt row",
+    rpcCalls[0]!.args.p_raw_request_body === "fixture analysis request" &&
+      supaReceiptA.receipt?.rawRequestBody === "fixture analysis request"
+  );
+
+  rpcCalls = [];
+  nextRpcResponse = { data: { status: "MARKED", external_call: { ...CALL_ROW("analysis"), status: "completed" } }, error: null };
+  const supaMarkParseFailed = await supabaseAdapter.markAnalysisParseFailedForJob({
+    jobId: "j1", claimToken: "tok", projectId: "p1", externalCallId: "call-analysis", parseFailureCode: "invalid_json",
+  });
+  check(
+    "D-027: Supabase markAnalysisParseFailedForJob: correct RPC name and exactly five params",
+    rpcCalls[0]!.fn === "mark_analysis_parse_failed_for_job" &&
+      Object.keys(rpcCalls[0]!.args).length === 5 &&
+      rpcCalls[0]!.args.p_job_id === "j1" &&
+      rpcCalls[0]!.args.p_claim_token === "tok" &&
+      rpcCalls[0]!.args.p_project_id === "p1" &&
+      rpcCalls[0]!.args.p_external_call_id === "call-analysis" &&
+      rpcCalls[0]!.args.p_parse_failure_code === "invalid_json" &&
+      supaMarkParseFailed.outcome === "MARKED"
   );
 
   // D-023 §3: an explicit, real, approved cost basis IS forwarded (never
@@ -1981,6 +2364,7 @@ async function buildFailedAttemptFixture(
   await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: analysisCall.id, probeRunId });
   await db.recordAnalysisCallReceiptForJob({
     jobId, claimToken, projectId, externalCallId: analysisCall.id, probeRunId, outcome: "provider_error",
+    requestSha256: sha256Hex(`${tag}-analysis-request`), rawRequestBody: `${tag}-analysis-request`,
   });
   await db.reconcileAttemptForJob({ jobId, claimToken, projectId, attemptId: attempt.id, status: "failed" });
   return { jobId, claimToken, projectId, attemptId: attempt.id };
@@ -2013,6 +2397,7 @@ async function buildAnalysisRetryFixture(
   await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: analysisCall.id, probeRunId });
   await db.recordAnalysisCallReceiptForJob({
     jobId, claimToken, projectId, externalCallId: analysisCall.id, probeRunId, outcome: "provider_error",
+    requestSha256: sha256Hex(`${tag}-analysis-request`), rawRequestBody: `${tag}-analysis-request`,
   });
   // Attempt deliberately left in_progress (never reconciled) --
   // _reserve_additional_analysis_generation_core requires it.

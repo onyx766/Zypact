@@ -69,20 +69,25 @@ function extractBody(sql: string, functionName: string, fromIndex = 0): string |
 
 function main(): void {
   // ------------------------------------------------------------------
-  // [1] Migration 0052 (D-026, Stage B0.1) now legitimately exists as
-  //     an additive, later migration — this decision (D-021/0051) does
-  //     not itself create a cutover migration. 0053 is the new boundary
-  //     this decision's own scope has never crossed.
+  // [1] Migrations 0052 (D-026, Stage B0.1) and 0053 (D-027, B0.2A-2)
+  //     now legitimately exist as additive, later migrations — this
+  //     decision (D-021/0051) does not itself create a cutover
+  //     migration. 0054 is the new boundary this decision's own scope
+  //     has never crossed.
   // ------------------------------------------------------------------
-  console.log("\n[1] 0052 exists (D-026, later and additive); no 0053 — this decision's own scope stops at 0051");
+  console.log("\n[1] 0052 and 0053 exist (later and additive); no 0054 — this decision's own scope stops at 0051");
 
   check(
     "a file matching 0052* exists under supabase/migrations (D-026, Stage B0.1 — additive, does not modify 0050/0051)",
     readdirSync(migrationsDir).some((f) => f.startsWith("0052"))
   );
   check(
-    "no file matching 0053* exists under supabase/migrations",
-    !readdirSync(migrationsDir).some((f) => f.startsWith("0053"))
+    "a file matching 0053* exists under supabase/migrations (D-027, B0.2A-2 — additive, does not modify 0050/0051/0052)",
+    readdirSync(migrationsDir).some((f) => f.startsWith("0053"))
+  );
+  check(
+    "no file matching 0054* exists under supabase/migrations",
+    !readdirSync(migrationsDir).some((f) => f.startsWith("0054"))
   );
   check("0051 file exists at the expected path", existsSync(path0051));
 

@@ -114,6 +114,8 @@ import type {
   RetryAnalysisGenerationForJobInput,
   RetryAnalysisGenerationForJobResult,
   RetryAnalysisGenerationForJobOutcome,
+  MarkAnalysisParseFailedForJobInput,
+  MarkAnalysisParseFailedForJobResult,
   AuthorizeOperatorRetryInput,
   AuthorizeOperatorRetryResult,
   GetProtocolExecutionJobContextInput,
@@ -458,6 +460,8 @@ function createAttemptExternalCallsCore(
     terminalizedAt: null,
     retryOfExternalCallId: null,
     createdAt: now,
+    parseFailedAt: null,
+    parseFailureCode: null,
   };
   const analysisCall: ProtocolExternalCall = {
     id: randomUUID(),
@@ -474,6 +478,8 @@ function createAttemptExternalCallsCore(
     terminalizedAt: null,
     retryOfExternalCallId: null,
     createdAt: now,
+    parseFailedAt: null,
+    parseFailureCode: null,
   };
   store.protocolExternalCalls.set(perplexityCall.id, perplexityCall);
   store.protocolExternalCalls.set(analysisCall.id, analysisCall);
@@ -544,6 +550,8 @@ function reserveAdditionalAnalysisGenerationCore(
     terminalizedAt: null,
     retryOfExternalCallId: retryOfExternalCallId,
     createdAt: now,
+    parseFailedAt: null,
+    parseFailureCode: null,
   };
   store.protocolExternalCalls.set(newCall.id, newCall);
   store.protocolAttempts.set(attemptId, {
@@ -3676,6 +3684,34 @@ export const memoryAdapter: DbAdapter = {
       );
     }
 
+    // D-027: mirrors analysis_call_receipts_request_pairing_check /
+    // _request_hash_match_check / _request_mock_pairing_check (0053).
+    // used_mock=true requires both null; used_mock=false requires both
+    // non-null -- real validation, not merely documented discipline.
+    const usedMock = input.usedMock ?? false;
+    const rawRequestBody = input.rawRequestBody ?? null;
+    const requestSha256 = input.requestSha256 ?? null;
+    if ((rawRequestBody === null) !== (requestSha256 === null)) {
+      throw new Error(
+        "invalid_record_analysis_call_receipt_for_job_args: rawRequestBody and requestSha256 must be paired"
+      );
+    }
+    if (rawRequestBody !== null && requestSha256 !== null && sha256Hex(rawRequestBody) !== requestSha256) {
+      throw new Error(
+        "invalid_record_analysis_call_receipt_for_job_args: requestSha256 does not match sha256(rawRequestBody)"
+      );
+    }
+    if (usedMock && (rawRequestBody !== null || requestSha256 !== null)) {
+      throw new Error(
+        "invalid_record_analysis_call_receipt_for_job_args: usedMock=true requires rawRequestBody/requestSha256 both null"
+      );
+    }
+    if (!usedMock && (rawRequestBody === null || requestSha256 === null)) {
+      throw new Error(
+        "invalid_record_analysis_call_receipt_for_job_args: usedMock=false requires rawRequestBody/requestSha256 both non-null"
+      );
+    }
+
     const costBasis =
       input.costBasis === "measured" || input.costBasis === "estimated" ? input.costBasis : null;
     const actualCostUsd = costBasis === null ? null : input.actualCostUsd ?? null;
@@ -3690,12 +3726,13 @@ export const memoryAdapter: DbAdapter = {
       provider: input.provider ?? null,
       model: input.model ?? null,
       usedMock: input.usedMock ?? false,
-      requestSha256: input.requestSha256 ?? null,
+      requestSha256,
       responseSha256,
       latencyMs: input.latencyMs ?? null,
       receivedAt: now,
       createdAt: now,
       rawContent,
+      rawRequestBody,
     };
     store.analysisCallReceipts.set(receipt.id, receipt);
 
@@ -4191,10 +4228,48 @@ export const memoryAdapter: DbAdapter = {
       return { outcome: "SOURCE_NOT_AUTHORITATIVE_GENERATION", externalCall: null };
     }
 
-    const sourceHasReceipt = [...store.analysisCallReceipts.values()].some(
-      (r) => r.externalCallId === source.id
-    );
-    if (!["failed", "timed_out", "cancelled"].includes(source.status) || !sourceHasReceipt) {
+    // D-027: eligibility now has two independent branches. The historical
+    // branch (failed/timed_out/cancelled with a receipt) is unchanged.
+    // The new branch accepts a completed, parse-failed source only when
+    // its own probe_run_id is coherent with the attempt's, its receipt
+    // is a real, same-project, same-probe_run success, and no
+    // probe_result exists yet.
+    if (["failed", "timed_out", "cancelled"].includes(source.status)) {
+      const sourceHasReceipt = [...store.analysisCallReceipts.values()].some(
+        (r) => r.externalCallId === source.id
+      );
+      if (!sourceHasReceipt) {
+        return { outcome: "SOURCE_NOT_ELIGIBLE", externalCall: null };
+      }
+    } else if (
+      source.status === "completed" &&
+      source.parseFailedAt !== null &&
+      source.parseFailureCode !== null
+    ) {
+      const successReceipt = [...store.analysisCallReceipts.values()].find(
+        (r) =>
+          r.externalCallId === source.id &&
+          r.outcome === "success" &&
+          r.projectId === input.projectId &&
+          r.probeRunId === attempt.probeRunId
+      );
+      if (
+        attempt.probeRunId === null ||
+        source.probeRunId === null ||
+        source.probeRunId !== attempt.probeRunId ||
+        !successReceipt
+      ) {
+        return { outcome: "SOURCE_NOT_ELIGIBLE", externalCall: null };
+      }
+      const probeResultExists =
+        attempt.probeRunId !== null &&
+        (store.probeResultsByProject.get(input.projectId) ?? []).some(
+          (pr) => pr.probeRunId === attempt.probeRunId
+        );
+      if (probeResultExists) {
+        return { outcome: "PROBE_RESULT_ALREADY_EXISTS", externalCall: null };
+      }
+    } else {
       return { outcome: "SOURCE_NOT_ELIGIBLE", externalCall: null };
     }
 
@@ -4218,6 +4293,96 @@ export const memoryAdapter: DbAdapter = {
       input.sourceExternalCallId
     );
     return { outcome: core.status, externalCall: core.externalCall };
+  },
+
+  // D-027: mirrors mark_analysis_parse_failed_for_job (0053) exactly,
+  // same eleven branches in the same order. Never a job-status change,
+  // never a repair policy -- only records durable state.
+  async markAnalysisParseFailedForJob(
+    input: MarkAnalysisParseFailedForJobInput
+  ): Promise<MarkAnalysisParseFailedForJobResult> {
+    const store = getStore();
+    if (
+      !input.parseFailureCode ||
+      !["invalid_json", "schema_validation_failed", "normalization_failed"].includes(input.parseFailureCode)
+    ) {
+      throw new Error("invalid_mark_analysis_parse_failed_for_job_args");
+    }
+
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) {
+      return { outcome: "JOB_NOT_FOUND", externalCall: null };
+    }
+    if (!jobFencingOk(job, input.claimToken)) {
+      return { outcome: "JOB_NOT_OWNED", externalCall: null };
+    }
+
+    const call = store.protocolExternalCalls.get(input.externalCallId);
+    if (!call || call.projectId !== input.projectId || call.protocolAttemptId !== job.currentAttemptId) {
+      return { outcome: "NOT_CURRENT_ATTEMPT", externalCall: null };
+    }
+
+    if (call.callKind !== "analysis") {
+      return { outcome: "WRONG_CALL_KIND", externalCall: { ...call } };
+    }
+
+    if (call.parseFailedAt !== null) {
+      if (call.parseFailureCode === input.parseFailureCode) {
+        return { outcome: "ALREADY_MARKED", externalCall: { ...call } };
+      }
+      return { outcome: "PARSE_FAILURE_CODE_CONFLICT", externalCall: { ...call } };
+    }
+
+    const attempt = job.currentAttemptId ? store.protocolAttempts.get(job.currentAttemptId) : undefined;
+    if (!attempt || attempt.jobId !== job.id || attempt.projectId !== input.projectId) {
+      return { outcome: "CURRENT_ATTEMPT_NOT_FOUND", externalCall: { ...call } };
+    }
+
+    // Probe_result existence derived via protocol_attempts.probeRunId,
+    // project-scoped -- the same convention getProtocolExecutionJobContext
+    // already uses, never protocolExternalCalls.probeRunId directly.
+    if (
+      attempt.probeRunId !== null &&
+      (store.probeResultsByProject.get(input.projectId) ?? []).some(
+        (pr) => pr.probeRunId === attempt.probeRunId
+      )
+    ) {
+      return { outcome: "PROBE_RESULT_ALREADY_EXISTS", externalCall: { ...call } };
+    }
+
+    const analysisCallsForAttempt = [...store.protocolExternalCalls.values()].filter(
+      (ec) => ec.protocolAttemptId === call.protocolAttemptId && ec.callKind === "analysis"
+    );
+    const maxGeneration = analysisCallsForAttempt.reduce((max, ec) => Math.max(max, ec.generation), 0);
+    if (call.generation !== maxGeneration) {
+      return { outcome: "SOURCE_NOT_AUTHORITATIVE_GENERATION", externalCall: { ...call } };
+    }
+
+    const successReceipt = [...store.analysisCallReceipts.values()].find(
+      (r) =>
+        r.externalCallId === call.id &&
+        r.outcome === "success" &&
+        r.projectId === input.projectId &&
+        r.probeRunId === attempt.probeRunId
+    );
+    if (
+      call.status !== "completed" ||
+      attempt.probeRunId === null ||
+      call.probeRunId === null ||
+      call.probeRunId !== attempt.probeRunId ||
+      !successReceipt
+    ) {
+      return { outcome: "NOT_ELIGIBLE", externalCall: { ...call } };
+    }
+
+    const updatedCall: ProtocolExternalCall = {
+      ...call,
+      parseFailedAt: nowIso(),
+      parseFailureCode: input.parseFailureCode,
+    };
+    store.protocolExternalCalls.set(updatedCall.id, updatedCall);
+
+    return { outcome: "MARKED", externalCall: { ...updatedCall } };
   },
 
   async authorizeOperatorRetry(

@@ -45,9 +45,10 @@
  *     did not actually verify.
  *   - no provider/LLM call of any kind, anywhere in this file.
  *   - selects and applies exactly migrations 0001-0052 by number,
- *     ignoring any 0053+ migration present in the repository, and
- *     refuses outright (FATAL, no stack created) if a 0053* file
- *     exists — this harness's own scope stops at 0052.
+ *     ignoring any 0053+ migration present in the repository — a fixed
+ *     historical snapshot, never a guard against 0053 existing (D-027
+ *     legitimately creates it; see scripts/test-m5-0053-runtime-contract.ts
+ *     for its own dedicated harness).
  *
  * Optional environment variables:
  *   ZYPACT_M5_0052_RUNTIME_TEST=1   required opt-in to run anything at all
@@ -217,17 +218,22 @@ async function main(): Promise<void> {
   }
 
   // ------------------------------------------------------------------
-  // 1. This harness applies EXACTLY migrations 0001-0052 and refuses
-  //    outright if a 0053* migration exists — its own scope stops at
-  //    0052 (D-026, Stage B0.1), the same discipline
-  //    scripts/test-m5-0051-runtime-contract.ts now applies for 0051.
+  // 1. Fixed historical snapshot: this harness applies EXACTLY
+  //    migrations 0001 through 0052, explicitly selected by number
+  //    below (never "everything in the directory"), regardless of how
+  //    many later migrations exist in the repository. This is D-026's
+  //    own reproducible contract test, frozen at 0052 — it is not a
+  //    guard against 0053 existing. 0053 is expected to exist starting
+  //    with D-027 (B0.2A-2) and has its own dedicated harness,
+  //    scripts/test-m5-0053-runtime-contract.ts, which applies through
+  //    0053 and refuses only if 0054 appears — the same ratchet
+  //    scripts/test-m5-0051-runtime-contract.ts already applied for
+  //    0052.
   // ------------------------------------------------------------------
   const migrationsDirCheck = path.join(REPO_ROOT, "supabase", "migrations");
-  if (readdirSync(migrationsDirCheck).some((f) => /^0053/.test(f))) {
-    console.log("\n✗ FATAL: a migration matching 0053* exists — this run refuses to proceed.");
-    process.exit(1);
-  }
-  console.log("Confirmed: no 0053* migration exists; this harness selects migrations 0001-0052 explicitly by number.\n");
+  console.log(
+    `Confirmed: this harness selects migrations 0001-0052 explicitly by number from ${migrationsDirCheck} (0053+ present or not, ignored either way).\n`
+  );
 
   // ------------------------------------------------------------------
   // 1.5. pg_temp helper-qualification preflight -- pure static

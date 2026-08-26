@@ -41,16 +41,19 @@ Before implementation begins:
 
 ### Audited reuse baseline
 
-The documentation reset inspected official main commit `b339d42a28014d8436c180a7da0cb0ad876178b8`. M0 must re-verify the actual working base, but an estimate may not assume these foundations are absent:
+The documentation reset inspected official main commit `b339d42a28014d8436c180a7da0cb0ad876178b8`; current `main` is `c962734c2048da35e79c0ab40a8b90e9946cbeda`, tree `042e87006aec88462377c660ce1b2994187603d0`. M0 must re-verify the actual working base, but an estimate may not assume these foundations are absent:
 
 - snapshot request, verification, founder approval/rejection, and secure report routes;
 - manual scan orchestration and the current Perplexity adapter;
-- 35 tracked migrations through `0035`;
+- 54 tracked migrations, `0001` through `0054`, with no gap in the sequence;
 - a database claim queue with worker lease, fencing, idempotency, reclaim, and delivery protections;
-- 73 `scripts/test-*.ts` files, 24 registered `test:*` commands, and 2 registered `verify:*` commands;
-- existing analysis, evidence, competitor, Gap Map, Fix Brief, report, and export paths.
+- 115 `scripts/test-*.ts` files, 24 registered `test:*` commands, and 2 registered `verify:*` commands;
+- existing analysis, evidence, competitor, Gap Map, Fix Brief, report, and export paths;
+- the M1-M5 technical tranches merged by PR #12, including migrations `0036`-`0054` and their schema and runtime contracts.
 
 The current worker is a reuse/refactor candidate, not a greenfield requirement. Its execution options still hard-code legacy prompt/run settings and an estimated project budget guard, and its production hosting/monitoring state is unknown. The current Perplexity adapter reconstructs a transcript after JSON parsing rather than preserving the exact body. The current short report parses the generated full-report Markdown rather than consuming one structured canonical snapshot.
+
+This reuse baseline states what exists, not what is accepted. The merged M1-M5 tranches supply SQL/RPC/adapter foundations; they do not establish a running M5 worker process, provider execution through that worker, alert dispatch or supervised deployment, and they do not by themselves establish completion of any milestone below. Every milestone in section 4 keeps its full acceptance criteria, and none may be marked complete without an explicit audit of each criterion. Current-state inventory and the corresponding list of open items are in [`CURRENT_STATUS.md` section 13](CURRENT_STATUS.md#13-post-pr-12-canonical-repository-status).
 
 Any proposal to replace these foundations must identify the failing requirement, migration risk, test impact, and lower-risk alternative.
 

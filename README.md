@@ -4,6 +4,7 @@
 - **Documentation reset date:** 2026-08-16
 - **Repository baseline audited:** official `ZypactHQ/zypact-clean-mvp` main at `b339d42a28014d8436c180a7da0cb0ad876178b8`
 - **Code effect of this reset:** None
+- **Current `main`:** `c962734c2048da35e79c0ab40a8b90e9946cbeda` (state as of 2026-08-26; see [`docs/CURRENT_STATUS.md` section 13](docs/CURRENT_STATUS.md#13-post-pr-12-canonical-repository-status))
 
 Zypact is building an evidence-backed workflow for examining whether a B2B company appears in AI-generated vendor recommendations for approved buyer questions.
 
@@ -57,6 +58,14 @@ The 2026-08-16 static audit found reusable application, database, and worker fou
 
 The same audit also found that legacy outputs still use fixed three-run settings and `won/partial/lost`, the raw provider response is reconstructed after JSON parsing rather than stored byte-for-byte, report renderers do not yet consume one structured canonical snapshot, and registered retest/uncertainty/Outcome Card behavior is not implemented. See [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) for the precise inventory.
 
+### Current state — superseding the figures above
+
+The bullet list above records the 2026-08-16 audit and is preserved as history. It is no longer the current inventory. Since then, PR #12 merged the cumulative M1-M5 technical tranches into `main`.
+
+Current `main` at `c962734c2048da35e79c0ab40a8b90e9946cbeda` contains **migrations `0001` through `0054`**, runs Next.js `15.5.21` on React `19.2.8`, and carries 115 `scripts/test-*.ts` files.
+
+The authoritative current inventory, the validation matrix and — equally important — the list of what is *not* established by that work is [`docs/CURRENT_STATUS.md` section 13](docs/CURRENT_STATUS.md#13-post-pr-12-canonical-repository-status). Integration of the M1-M5 technical tranches is not acceptance of the M1-M5 milestones.
+
 ## Local setup
 
 Run commands from the repository root.
@@ -80,7 +89,7 @@ The exact registered test and verification commands are listed in [`docs/CURRENT
 
 ## Database authority
 
-The executable schema authority is `supabase/migrations/`. The audited tree contains 35 migrations through `0035_snapshot_report_delivery_fencing.sql`.
+The executable schema authority is `supabase/migrations/`. The 2026-08-16 audited tree contained 35 migrations through `0035_snapshot_report_delivery_fencing.sql`. Current `main` contains 54 migrations, `0001_init.sql` through `0054_m5_worker_probe_result_and_alert_outbox.sql`, with no gap in the sequence.
 
 This repository audit does not prove the production, preview, or staging migration ledger. M0 must verify each environment before any schema work. Historical schema notes are archived because they stop at older migrations and are not an authoritative current schema inventory.
 

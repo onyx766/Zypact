@@ -69,15 +69,18 @@ function extractBody(sql: string, functionName: string, fromIndex = 0): string |
 
 function main(): void {
   // ------------------------------------------------------------------
-  // [1] No migration 0054 exists locally; 0053 is the last local file.
-  //     0050/0051/0052 are read only for cross-reference, never written
-  //     by this migration.
+  // [1] Migration 0054 (D-028) now legitimately exists as an additive,
+  //     later migration — this migration (0053) does not itself create
+  //     a cutover migration. 0055 is the new boundary this migration's
+  //     own scope has never crossed. 0050/0051/0052 are read only for
+  //     cross-reference, never written by this migration.
   // ------------------------------------------------------------------
-  console.log("\n[1] no 0054 — 0053 is the last local migration; 0050/0051/0052 untouched by this file");
+  console.log("\n[1] 0054 exists (D-028, later and additive); no 0055 — 0050/0051/0052 untouched by this file");
 
   check(
-    "no file matching 0054* exists under supabase/migrations",
-    !readdirSync(migrationsDir).some((f) => f.startsWith("0054"))
+    "a file matching 0054* exists under supabase/migrations (D-028 — additive, does not modify 0050/0051/0052/0053), and no file matching 0055* exists",
+    readdirSync(migrationsDir).some((f) => f.startsWith("0054")) &&
+      !readdirSync(migrationsDir).some((f) => f.startsWith("0055"))
   );
   check("0053 file exists at the expected path", existsSync(path0053));
   check(

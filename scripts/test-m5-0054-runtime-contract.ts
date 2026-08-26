@@ -662,7 +662,7 @@ async function runTimeoutMechanismSelfTest(): Promise<void> {
   }
   const GATE_ANCHOR = "if (selfTestFailures.length > 0) {";
   const RMSYNC_ANCHOR = "rmSync(selfTestScratch, { recursive: true, force: true });";
-  const SWAP_PLACEHOLDER = " SEQGATE_SELFTEST_PLACEHOLDER ";
+  const SWAP_PLACEHOLDER = "\u0000SEQGATE_SELFTEST_PLACEHOLDER\u0000";
   const reorderedCopy = selfSource.split(GATE_ANCHOR).join(SWAP_PLACEHOLDER).split(RMSYNC_ANCHOR).join(GATE_ANCHOR).split(SWAP_PLACEHOLDER).join(RMSYNC_ANCHOR);
   selfCheck(
     "negative self-test: a deliberately reordered in-memory copy (cleanup swapped to BEFORE the failure gate) is correctly detected as wrong",

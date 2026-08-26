@@ -6,6 +6,15 @@
 - **Audit type:** Static tracked-tree inspection plus founder-supplied private execution evidence
 - **Not established by this audit:** Production, preview, staging, or worker deployment state
 
+> **Precedence notice — read this before using any figure below.**
+>
+> - **Current state as of:** 2026-08-26
+> - **`main` at:** `c962734c2048da35e79c0ab40a8b90e9946cbeda`
+> - **Validated head:** `3fc52856d34ccdac0b0a7c02d1b766624e3936bc`
+> - **Shared tree:** `042e87006aec88462377c660ce1b2994187603d0` — identical for both commits above, so the merge into `main` added no content of its own
+>
+> Sections 1-12 are preserved historical snapshots, taken on 2026-08-16 and 2026-08-21. They are deliberately not rewritten, and several of their figures are now superseded. For any statement about the *current* repository, section 13 prevails.
+
 ## 1. Reading rule
 
 This file distinguishes repository facts from deployment facts and planned V1 behavior.
@@ -309,3 +318,85 @@ M0 must update this file with:
 - `package.json` and `package-lock.json` are out of scope for this tranche; both carry pre-existing local modifications unrelated to M5-0050/0051 and were not touched by this work.
 
 **What this entry does NOT claim:** this is the **SQL/runtime foundation for M5, validated locally** — not "M5 entirely complete." Still to be built and validated separately: the M5 worker process itself (TypeScript claim/execute loop), its provider/analysis adapters, real end-to-end provider integration, and the future cutover migration that finally revokes the M4 raw RPCs from `service_role`. No fallback to the legacy MVP pipeline, M7/M8, or `lib/snapshot-worker/` exists or is introduced by this tranche; the M5 protocol-execution ledger remains structurally separate from that legacy system.
+
+## 13. Post-PR #12 canonical repository status
+
+- **As of:** 2026-08-26
+- **`main` at:** `c962734c2048da35e79c0ab40a8b90e9946cbeda`
+- **Validated head:** `3fc52856d34ccdac0b0a7c02d1b766624e3936bc`
+- **Shared tree:** `042e87006aec88462377c660ce1b2994187603d0`
+- **Scope of this entry:** current repository inventory and the validation evidence that accompanied PR #12. This section supersedes the inventory figures in sections 3, 7 and 12 for current-state purposes; it does not rewrite them.
+
+PR #12 merged the cumulative M1-M5 **technical tranches** into `main` by merge commit, preserving all 44 commits. The merge commit and the validated head share the tree above, so every figure below was measured on exactly the code that was validated.
+
+### 13.1 Measured inventory
+
+Measured mechanically from tree `042e87006aec88462377c660ce1b2994187603d0`, not carried over from earlier sections.
+
+| Item | Current value |
+|---|---|
+| Framework | Next.js `15.5.21`, React `19.2.8`, React DOM `19.2.8`, TypeScript `5.5.3` |
+| SQL migrations | 54 files, `0001_init.sql` through `0054_m5_worker_probe_result_and_alert_outbox.sql` |
+| Migration continuity | `0001`-`0054` complete: 54 unique numbers, no gap, no `0055` |
+| Test source files | 115 files matching `scripts/test-*.ts` |
+| Verification source files | 4 files matching `scripts/verify-*.ts` |
+| Registered test commands | 24 `test:*` scripts in `package.json` |
+| Registered verification commands | 2 `verify:*` scripts in `package.json` |
+| GitHub Actions workflows | 1 tracked workflow (`.github/workflows/snapshot-worker-postgres-level2.yml`) |
+
+Superseded figures: section 3 records Next.js `14.2.5` / React `18.3.1`, 35 migrations through `0035`, and 73 `scripts/test-*.ts` files. Those were accurate at commit `b339d42a…` on 2026-08-16 and are no longer the current state.
+
+### 13.2 M5 migrations now present
+
+| Migration | Subject |
+|---|---|
+| `0050_m5_protocol_execution_jobs_and_external_call_ledger.sql` | Execution-job and external-call ledger |
+| `0051_m5_protocol_worker_resumption_and_retry_safety.sql` | Worker resumption and retry safety |
+| `0052_m5_durable_call_payloads_and_probe_result_replay.sql` | Durable call payloads and replay-safe probe results |
+| `0053_m5_analysis_parse_failure_and_raw_request_body.sql` | Analysis parse-failure ledger and raw request body |
+| `0054_m5_worker_probe_result_and_alert_outbox.sql` | Worker probe result and alert outbox |
+
+Section 12 states that no migration `0052` exists anywhere in the repository. That was true on 2026-08-21 and is superseded: `0052`, `0053` and `0054` are present in `main`.
+
+### 13.3 Validation matrix
+
+| Contract | Result |
+|---|---:|
+| Typecheck | PASS |
+| Schema contract 0050 | 173/173 |
+| Schema contract 0051 | 109/109 |
+| Schema contract 0052 | 59/59 |
+| Schema contract 0053 | 66/66 |
+| Schema contract 0054 | 143/143 |
+| Content contract 0054 | 34/34 |
+| M5-2 adapter contract | 163/163 |
+| D-027 call-model contract | 88/88 |
+| D-027 parse-analysis contract | 14/14 |
+| Runtime 0050 | 34/34, exit 0, no SKIP |
+| Runtime 0051 | 106/106, exit 0, no SKIP |
+| Runtime 0052 | 86/86, exit 0, no SKIP |
+| Runtime 0053 | 90/90, exit 0, no SKIP |
+| Runtime 0054 Run 15 | 39/39 scenarios, 62/62 checks, exit 0 |
+| GitHub PostgreSQL Level 2 (CI) | 223 passed, 0 failed |
+
+Each runtime figure is backed by a distinct frozen Canonical V2 evidence archive held outside the repository. The 0054 figure is specifically supported by Run 15; the earlier 0054 archives remain preserved. Each archive records the exact harness executed, the migration under test, the terminal output, the true harness exit code and the post-run identity of the protected local container. The `0051` figure supersedes the `70/70` recorded in section 12: the harness has since grown.
+
+The CI figure comes from workflow run `32934943786`, which applied all 54 migrations to a disposable PostgreSQL 16 service container built from GitHub's synthetic merge of `6492adaa…` and `3fc52856…`. It used no repository secret, contacted no remote database or provider, and deployed nothing.
+
+Deliberately not used as a release gate: the legacy full `test-probe-analysis` smoke path, because it crawls `linear.app` and selects a database adapter. Its D-027 bounded-error preflight did pass.
+
+### 13.4 What is established, and what is not
+
+**Established — SQL/RPC/adapter foundations.** Migrations `0036`-`0054` apply cleanly in sequence. Their RPCs, constraints, ACL surface, fencing, retry bounds, replay-safety and monitoring views are covered by schema contracts and by real runtime contracts executed against disposable local PostgreSQL stacks. The M1-M5 technical tranches are integrated into `main`.
+
+**Not established — the M5 worker as a running system.** The real M5 worker process (a long-running TypeScript claim/execute loop), provider execution through that worker, alert dispatch and supervised deployment are outside what PR #12 delivered. Nothing in this section should be read as evidence that they exist or operate. This is a statement about the M5 worker path only: the repository has carried legacy and manual provider paths since well before this work, and they are unaffected.
+
+**Not established — product milestone completion.** Integration of the M1-M5 *technical tranches* is not acceptance of the M1-M5 *milestones*. Each milestone's acceptance criteria in [`ENGINEERING_PLAN.md`](ENGINEERING_PLAN.md) must be audited individually before any milestone is declared complete. No milestone is marked complete by this section.
+
+**Still open — the M4 raw-RPC cutover.** The migration that revokes the three raw M4 RPCs (`admit_and_reserve_attempt`, `start_attempt`, `reconcile_attempt`) from `service_role` has not shipped. A search of all 54 migrations in `main` finds no `REVOKE` targeting those three functions. Section 12 attributed this future work to a then-nonexistent `0052`; `0052` now exists and did not perform the cutover, so the cutover remains pending and absent from `main`.
+
+**Still unknown — environment state.** Production, preview, and staging environment states, together with worker deployment state, remain unverified by this entry, exactly as stated in sections 1 and 9. Repository content proves nothing about any deployed environment. Any future environment-specific schema work must verify the target environment independently before execution.
+
+### 13.5 Superseded local-workstation notes
+
+Section 12 records that `package.json` and `package-lock.json` carried pre-existing local modifications, and that `npm run typecheck` produced exactly one error in `scripts/verify-anon-hardened.ts`. Both were observations of a developer workstation at that date, not facts about the canonical tree. Typecheck passes on the validated head, and PR #12 introduced no effective `package.json`, `package-lock.json`, `tsconfig.json` or `next.config` change relative to `main`.

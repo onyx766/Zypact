@@ -3,6 +3,7 @@
 - **Status:** Canonical required engineering entry point
 - **Purpose:** Tell an engineer exactly what to read, verify, estimate, and deliver
 - **Scope date:** 2026-08-16
+- **Current baseline:** `main` @ `c962734c2048da35e79c0ab40a8b90e9946cbeda` (2026-08-26)
 
 ## 1. Your assignment
 
@@ -10,7 +11,9 @@ Begin with a read-only audit of the existing Zypact repository and deployment ev
 
 Do not assume the product requires a rebuild. Do not begin feature implementation, modify production, or estimate from superseded documents.
 
-This documentation was reconciled against official main commit `b339d42a28014d8436c180a7da0cb0ad876178b8` on 2026-08-16. Re-fetch and identify your actual base before relying on that snapshot.
+This documentation was reconciled against official main commit `b339d42a28014d8436c180a7da0cb0ad876178b8` on 2026-08-16. That snapshot is historical.
+
+The current canonical baseline is `main` at `c962734c2048da35e79c0ab40a8b90e9946cbeda`, whose validated head is `3fc52856d34ccdac0b0a7c02d1b766624e3936bc`; both share tree `042e87006aec88462377c660ce1b2994187603d0`. Re-fetch and identify your actual base before relying on any snapshot, including this one.
 
 The target outcome is:
 
@@ -60,7 +63,9 @@ Use the dated decisions to resolve old assumptions and terminology. If a require
 
 ## 3.1 Existing foundations you must assess before estimating
 
-The audited tree already contains a manual scan engine, a Perplexity adapter, snapshot request and founder approval routes, 35 migrations, report delivery fencing, and a database-backed worker with claim, lease, fencing, idempotency, and recovery logic.
+Current `main` already contains a manual scan engine, a Perplexity adapter, snapshot request and founder approval routes, **54 migrations (`0001` through `0054`)**, report delivery fencing, a database-backed worker with claim, lease, fencing, idempotency and recovery logic, and the M1-M5 technical tranches merged by PR #12.
+
+**The presence of the M1-M5 tranches is not acceptance of milestones M1-M5.** Those tranches deliver SQL/RPC/adapter foundations with schema and runtime contracts. They do not establish a running M5 worker process, provider execution through that worker, alert dispatch or supervised deployment, and no milestone is complete until each of its acceptance criteria in [`ENGINEERING_PLAN.md`](ENGINEERING_PLAN.md) section 4 has been audited individually. Audit them; do not presume them. See [`CURRENT_STATUS.md` section 13](CURRENT_STATUS.md#13-post-pr-12-canonical-repository-status).
 
 Do not quote a new worker or a rebuild merely because hosting is incomplete. Separate:
 

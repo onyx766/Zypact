@@ -78,7 +78,9 @@ export type ProbeMode = "simulated" | "live_perplexity";
 export type DatasetSourceType =
   | "snapshot_request"
   | "manual_scan"
-  | "legacy_unresolved";
+  | "legacy_unresolved"
+  /** D-028 — dataset provenance for M5-authored probe_results rows. */
+  | "protocol_execution_job";
 
 /**
  * M2 canonical observations contract, first tranche (D-014,
@@ -195,6 +197,15 @@ export interface ProbeResult {
    */
   negativeClaimDetected?: boolean | null;
   observationSchemaVersion?: number | null;
+  /**
+   * D-028 — SHA-256 identity of the *parsed* result (a versioned
+   * canonical JSON over every persisted field except `id`/`createdAt`),
+   * computed exclusively server-side by `persistProbeResultForJob`.
+   * Distinct from `analysisReceipt.responseSha256` (D-026), which proves
+   * only the lineage of the raw model output. Null for every row saved
+   * before this column existed.
+   */
+  canonicalResultSha256?: string | null;
   createdAt: string;
 }
 
@@ -2057,6 +2068,176 @@ export interface MarkProtocolExecutionJobNeedsReviewForAmbiguityResult {
   job: ProtocolExecutionJob | null;
 }
 
+/* -------------------------------------------------------------------------- */
+/*  D-028 — persist_probe_result_for_job                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The nine required keys `persist_probe_result_for_job` validates
+ * strictly: no missing key, no extra key, no JSON `null` value. Never
+ * includes `verdict`/`productVerdict`/`runPosition` — those are fixed
+ * placeholders or server-derived, never caller-supplied.
+ */
+export interface PersistProbeResultForJobContent {
+  productMentioned: boolean;
+  productPosition: ClientPositionValue;
+  competitorsMentioned: Array<{ name: string; position: number; context: string }>;
+  sourcesCited: Array<{ source: string; type: SourceTypeValue }>;
+  answerSummary: string;
+  citedAsSource: boolean;
+  clientSourceCount: number;
+  platformsReferenced: string[];
+  negativeClaimDetected: boolean;
+}
+
+export type ClientPositionValue = "primary" | "listed" | "negative" | "absent";
+export type SourceTypeValue = "review_site" | "blog" | "forum" | "vendor_site" | "news" | "other";
+
+export type PersistProbeResultForJobOutcome =
+  | "PERSISTED"
+  | "ALREADY_PERSISTED"
+  | "CONFLICT"
+  | "INVALID_CONTENT_KEYS"
+  | "INVALID_CONTENT_TYPE"
+  | "INVALID_CONTENT_VALUE"
+  | "INVALID_CONTENT_INVARIANT"
+  | "JOB_NOT_FOUND"
+  | "JOB_NOT_OWNED"
+  | "NO_CURRENT_ATTEMPT"
+  | "ATTEMPT_NOT_OWNED_BY_JOB"
+  | "PROTOCOL_NOT_FOUND"
+  | "BUYER_QUESTION_VERSION_NOT_FOUND"
+  | "PROBE_RUN_NOT_FOUND"
+  | "WRONG_CALL_KIND"
+  | "ANALYSIS_NOT_COMPLETED"
+  | "PARSE_ALREADY_MARKED_FAILED"
+  | "RECEIPT_NOT_FOUND";
+
+export interface PersistProbeResultForJobInput {
+  jobId: string;
+  claimToken: string;
+  projectId: string;
+  content: PersistProbeResultForJobContent;
+}
+
+export interface PersistProbeResultForJobResult {
+  outcome: PersistProbeResultForJobOutcome;
+  probeResultId: string | null;
+  canonicalResultSha256: string | null;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  D-028 — durable alert outbox                                               */
+/* -------------------------------------------------------------------------- */
+
+export type AlertEventType = "needs_review" | "abandoned_exhausted";
+
+export type AlertReasonCode =
+  | "perplexity_outcome_unknown"
+  | "analysis_outcome_unknown"
+  | "ambiguous_external_call_sent_without_receipt"
+  | "attempts_exhausted";
+
+export type AlertDeliveryStatus =
+  | "pending"
+  | "claimed"
+  | "request_sent"
+  | "accepted"
+  | "failed"
+  | "needs_review_delivery";
+
+export type AlertDeliveryAttemptOutcome =
+  | "request_sent"
+  | "accepted"
+  | "http_error"
+  | "ambiguous_under_24h"
+  | "ambiguous_over_24h";
+
+export type AlertDeliveryErrorCode =
+  | "network_error"
+  | "http_429"
+  | "http_5xx"
+  | "http_4xx_permanent"
+  | "timeout";
+
+export type ClaimNextPendingAlertOutcome = "CLAIMED" | "NO_ALERT_AVAILABLE";
+
+export interface ClaimNextPendingAlertInput {
+  workerId: string;
+  leaseSeconds: number;
+}
+
+/** Closed payload — never a raw body, prompt, or free-text reason. */
+export interface ClaimNextPendingAlertResult {
+  outcome: ClaimNextPendingAlertOutcome;
+  deliveryId: string | null;
+  alertEventId: string | null;
+  claimToken: string | null;
+  attemptCount: number | null;
+  projectId: string | null;
+  jobId: string | null;
+  eventType: AlertEventType | null;
+  reasonCode: AlertReasonCode | null;
+  idempotencyKey: string | null;
+  reconciledStaleClaimedCount: number;
+  reconciledUnder24hCount: number;
+  reconciledOver24hCount: number;
+}
+
+export type RenewAlertLeaseOutcome = "RENEWED" | "DELIVERY_NOT_FOUND" | "DELIVERY_NOT_OWNED";
+
+export interface RenewAlertLeaseInput {
+  deliveryId: string;
+  claimToken: string;
+  leaseSeconds: number;
+}
+
+export interface RenewAlertLeaseResult {
+  outcome: RenewAlertLeaseOutcome;
+  deliveryId: string | null;
+}
+
+export type MarkAlertRequestSentOutcome =
+  | "REQUEST_MARKED_SENT"
+  | "DELIVERY_NOT_FOUND"
+  | "DELIVERY_NOT_OWNED"
+  | "ALERT_ATTEMPT_CAP_EXCEEDED";
+
+export interface MarkAlertRequestSentInput {
+  deliveryId: string;
+  claimToken: string;
+}
+
+export interface MarkAlertRequestSentResult {
+  outcome: MarkAlertRequestSentOutcome;
+  attemptId: string | null;
+  attemptSeq: number | null;
+  idempotencyKey: string | null;
+}
+
+export type RecordAlertDeliveryReceiptOutcome =
+  | "RECEIPT_RECORDED"
+  | "DELIVERY_NOT_FOUND"
+  | "DELIVERY_NOT_OWNED"
+  | "ATTEMPT_ALREADY_TERMINAL"
+  | "INVALID_OUTCOME";
+
+export interface RecordAlertDeliveryReceiptInput {
+  deliveryId: string;
+  claimToken: string;
+  attemptId: string;
+  outcome: "accepted" | "http_error" | "ambiguous_under_24h" | "ambiguous_over_24h";
+  httpStatus?: number | null;
+  resendEmailId?: string | null;
+  errorCode?: AlertDeliveryErrorCode | null;
+}
+
+export interface RecordAlertDeliveryReceiptResult {
+  outcome: RecordAlertDeliveryReceiptOutcome;
+  deliveryId: string | null;
+  finalDeliveryStatus: AlertDeliveryStatus | null;
+}
+
 export interface DbAdapter {
   getSnapshotRequest(
     requestId: string
@@ -2502,6 +2683,23 @@ export interface DbAdapter {
   markProtocolExecutionJobNeedsReviewForAmbiguity(
     input: MarkProtocolExecutionJobNeedsReviewForAmbiguityInput
   ): Promise<MarkProtocolExecutionJobNeedsReviewForAmbiguityResult>;
+  /** D-028 — the only fenced write path for M5-authored probe_results rows. */
+  persistProbeResultForJob(
+    input: PersistProbeResultForJobInput
+  ): Promise<PersistProbeResultForJobResult>;
+  /** D-028 — durable alert outbox: worker-facing claim, with atomic stale-delivery reconciliation. */
+  claimNextPendingAlert(
+    input: ClaimNextPendingAlertInput
+  ): Promise<ClaimNextPendingAlertResult>;
+  renewAlertLease(
+    input: RenewAlertLeaseInput
+  ): Promise<RenewAlertLeaseResult>;
+  markAlertRequestSent(
+    input: MarkAlertRequestSentInput
+  ): Promise<MarkAlertRequestSentResult>;
+  recordAlertDeliveryReceipt(
+    input: RecordAlertDeliveryReceiptInput
+  ): Promise<RecordAlertDeliveryReceiptResult>;
 }
 
 /* -------------------------------------------------------------------------- */

@@ -139,6 +139,19 @@ import type {
   GetProtocolExecutionJobContextResult,
   MarkProtocolExecutionJobNeedsReviewForAmbiguityInput,
   MarkProtocolExecutionJobNeedsReviewForAmbiguityResult,
+  PersistProbeResultForJobInput,
+  PersistProbeResultForJobResult,
+  AlertEventType,
+  AlertReasonCode,
+  AlertDeliveryStatus,
+  ClaimNextPendingAlertInput,
+  ClaimNextPendingAlertResult,
+  RenewAlertLeaseInput,
+  RenewAlertLeaseResult,
+  MarkAlertRequestSentInput,
+  MarkAlertRequestSentResult,
+  RecordAlertDeliveryReceiptInput,
+  RecordAlertDeliveryReceiptResult,
 } from "./types";
 import { SnapshotRequestLimitError } from "./types";
 import { validateBuyerQuestionVersionNumericFields } from "@/lib/db/validate-buyer-question-version-fields";
@@ -430,6 +443,8 @@ interface ProbeResultDbRow {
   run_position?: string | null;
   negative_claim_detected?: boolean | null;
   observation_schema_version?: number | null;
+  /** D-028 — SHA-256 of the parsed result, computed server-side by persist_probe_result_for_job. */
+  canonical_result_sha256?: string | null;
   created_at: string;
 }
 
@@ -490,7 +505,16 @@ interface DatasetBatchDbRow {
 }
 
 function coerceDatasetSourceType(value: string): DatasetSourceType {
-  return value === "snapshot_request" || value === "manual_scan" || value === "legacy_unresolved"
+  // D-028: 'protocol_execution_job' is only ever real for probe_results
+  // rows (dataset_batches' own CHECK constraint never allows it) --
+  // recognizing it here is harmless for dataset_batches (that value
+  // never actually occurs there) and required for probe_results
+  // (coerceDatasetSourceTypeOrNull delegates to this same function),
+  // rather than silently folding it into 'legacy_unresolved'.
+  return value === "snapshot_request" ||
+    value === "manual_scan" ||
+    value === "legacy_unresolved" ||
+    value === "protocol_execution_job"
     ? value
     : "legacy_unresolved";
 }
@@ -1082,6 +1106,7 @@ function mapProbeResult(r: ProbeResultDbRow): ProbeResult {
     runPosition: coerceRunPositionOrNull(r.run_position),
     negativeClaimDetected: r.negative_claim_detected ?? null,
     observationSchemaVersion: r.observation_schema_version ?? null,
+    canonicalResultSha256: r.canonical_result_sha256 ?? null,
     createdAt: r.created_at,
   };
 }
@@ -3725,6 +3750,137 @@ export const supabaseAdapter: DbAdapter = {
     return {
       outcome: row.status,
       job: mapProtocolExecutionJobNullable(row.job as ProtocolExecutionJobDbRow | null),
+    };
+  },
+
+  async persistProbeResultForJob(
+    input: PersistProbeResultForJobInput
+  ): Promise<PersistProbeResultForJobResult> {
+    const { data, error } = await getClient().rpc("persist_probe_result_for_job", {
+      p_job_id: input.jobId,
+      p_claim_token: input.claimToken,
+      p_project_id: input.projectId,
+      p_content: {
+        product_mentioned: input.content.productMentioned,
+        product_position: input.content.productPosition,
+        competitors_mentioned: input.content.competitorsMentioned,
+        sources_cited: input.content.sourcesCited,
+        answer_summary: input.content.answerSummary,
+        cited_as_source: input.content.citedAsSource,
+        client_source_count: input.content.clientSourceCount,
+        platforms_referenced: input.content.platformsReferenced,
+        negative_claim_detected: input.content.negativeClaimDetected,
+      },
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "persistProbeResultForJob: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      probeResultId: (row.probe_result_id as string | null) ?? null,
+      canonicalResultSha256: (row.canonical_result_sha256 as string | null) ?? null,
+    };
+  },
+
+  async claimNextPendingAlert(
+    input: ClaimNextPendingAlertInput
+  ): Promise<ClaimNextPendingAlertResult> {
+    const { data, error } = await getClient().rpc("claim_next_pending_alert", {
+      p_worker_id: input.workerId,
+      p_lease_seconds: input.leaseSeconds,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "claimNextPendingAlert: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      deliveryId: (row.delivery_id as string | null) ?? null,
+      alertEventId: (row.alert_event_id as string | null) ?? null,
+      claimToken: (row.claim_token as string | null) ?? null,
+      attemptCount: (row.attempt_count as number | null) ?? null,
+      projectId: (row.project_id as string | null) ?? null,
+      jobId: (row.job_id as string | null) ?? null,
+      eventType: (row.event_type as AlertEventType | null) ?? null,
+      reasonCode: (row.reason_code as AlertReasonCode | null) ?? null,
+      idempotencyKey: (row.idempotency_key as string | null) ?? null,
+      reconciledStaleClaimedCount: (row.reconciled_stale_claimed_count as number | null) ?? 0,
+      reconciledUnder24hCount: (row.reconciled_under_24h_count as number | null) ?? 0,
+      reconciledOver24hCount: (row.reconciled_over_24h_count as number | null) ?? 0,
+    };
+  },
+
+  async renewAlertLease(input: RenewAlertLeaseInput): Promise<RenewAlertLeaseResult> {
+    const { data, error } = await getClient().rpc("renew_alert_lease", {
+      p_delivery_id: input.deliveryId,
+      p_claim_token: input.claimToken,
+      p_lease_seconds: input.leaseSeconds,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "renewAlertLease: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      deliveryId: (row.delivery_id as string | null) ?? null,
+    };
+  },
+
+  async markAlertRequestSent(
+    input: MarkAlertRequestSentInput
+  ): Promise<MarkAlertRequestSentResult> {
+    const { data, error } = await getClient().rpc("mark_alert_request_sent", {
+      p_delivery_id: input.deliveryId,
+      p_claim_token: input.claimToken,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "markAlertRequestSent: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      attemptId: (row.attempt_id as string | null) ?? null,
+      attemptSeq: (row.attempt_seq as number | null) ?? null,
+      idempotencyKey: (row.idempotency_key as string | null) ?? null,
+    };
+  },
+
+  async recordAlertDeliveryReceipt(
+    input: RecordAlertDeliveryReceiptInput
+  ): Promise<RecordAlertDeliveryReceiptResult> {
+    const { data, error } = await getClient().rpc("record_alert_delivery_receipt", {
+      p_delivery_id: input.deliveryId,
+      p_claim_token: input.claimToken,
+      p_attempt_id: input.attemptId,
+      p_outcome: input.outcome,
+      p_http_status: input.httpStatus ?? null,
+      p_resend_email_id: input.resendEmailId ?? null,
+      p_error_code: input.errorCode ?? null,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "recordAlertDeliveryReceipt: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      deliveryId: (row.delivery_id as string | null) ?? null,
+      finalDeliveryStatus: (row.final_delivery_status as AlertDeliveryStatus | null) ?? null,
     };
   },
 };

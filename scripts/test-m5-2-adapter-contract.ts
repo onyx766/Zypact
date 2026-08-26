@@ -106,12 +106,12 @@ async function main(): Promise<void> {
       !/require\(["'][^"']*snapshot-worker/.test(supabaseSrc)
   );
   check(
-    // D-027 (B0.2A-2) legitimately created migration 0053 and these
-    // three files now carry real, authorized D-027 comments naming it —
-    // this check ratchets forward to guard the next boundary instead of
-    // the one this same tranche just crossed on purpose.
-    "no reference to a 0054 migration anywhere in these three files",
-    !/0054/.test(typesSrc) && !/0054/.test(memorySrc) && !/0054/.test(supabaseSrc)
+    // D-028 legitimately created migration 0054 and these three files
+    // now carry real, authorized D-028 comments naming it — this check
+    // ratchets forward to guard the next boundary instead of the one
+    // this same tranche just crossed on purpose.
+    "no reference to a 0055 migration anywhere in these three files",
+    !/0055/.test(typesSrc) && !/0055/.test(memorySrc) && !/0055/.test(supabaseSrc)
   );
   check(
     "start_attempt_for_job is not exposed as a DbAdapter method name and not called by either adapter",
@@ -1869,6 +1869,347 @@ async function main(): Promise<void> {
   }
 
   // ========================================================================
+  // Part O — D-028: persist_probe_result_for_job + durable alert outbox
+  //          (MemoryAdapter).
+  // ========================================================================
+  console.log("\n[O] MemoryAdapter — D-028 persist_probe_result_for_job + alert outbox");
+
+  const validM5Content = {
+    productMentioned: true,
+    productPosition: "primary" as const,
+    competitorsMentioned: [{ name: "Rival", position: 2, context: "listed second" }],
+    sourcesCited: [{ source: "example-reviews.com", type: "review_site" as const }],
+    answerSummary: "The client is the top recommendation.",
+    citedAsSource: false,
+    clientSourceCount: 0,
+    platformsReferenced: [] as string[],
+    negativeClaimDetected: false,
+  };
+
+  {
+    const cf = await buildCompletedAnalysisFixture(db, "d028-persist");
+
+    const persist1 = await db.persistProbeResultForJob({
+      jobId: cf.jobId, claimToken: cf.claimToken, projectId: cf.projectId, content: validM5Content,
+    });
+    check(
+      "persist_probe_result_for_job: fresh, valid content -> PERSISTED with a real hash",
+      persist1.outcome === "PERSISTED" && persist1.probeResultId !== null && persist1.canonicalResultSha256?.length === 64
+    );
+
+    const [savedResult] = await db.getProbeResultsByProject(cf.projectId);
+    check(
+      "the persisted row uses 'not_evaluated' for both legacy verdict columns, never a computed judgment",
+      savedResult?.verdict === "not_evaluated" && savedResult?.productVerdict === "not_evaluated"
+    );
+    check(
+      "the persisted row's datasetSourceType is 'protocol_execution_job'",
+      savedResult?.datasetSourceType === "protocol_execution_job"
+    );
+    check(
+      "run_position is derived deterministically from productPosition='primary' -> 'primary_in_run'",
+      savedResult?.runPosition === "primary_in_run"
+    );
+    check(
+      "raw_response_body/raw_response_body_sha256/full_request_body_sha256 are NULL on the persisted row",
+      savedResult?.rawResponseBody === null &&
+        savedResult?.rawResponseBodySha256 === null &&
+        savedResult?.fullRequestBodySha256 === null
+    );
+
+    const persistReplay = await db.persistProbeResultForJob({
+      jobId: cf.jobId, claimToken: cf.claimToken, projectId: cf.projectId, content: validM5Content,
+    });
+    check(
+      "persist_probe_result_for_job: exact replay (same content) -> ALREADY_PERSISTED, same hash, zero new row",
+      persistReplay.outcome === "ALREADY_PERSISTED" &&
+        persistReplay.probeResultId === persist1.probeResultId &&
+        persistReplay.canonicalResultSha256 === persist1.canonicalResultSha256
+    );
+
+    const persistConflict = await db.persistProbeResultForJob({
+      jobId: cf.jobId, claimToken: cf.claimToken, projectId: cf.projectId,
+      content: { ...validM5Content, answerSummary: "A materially different summary." },
+    });
+    check(
+      "persist_probe_result_for_job: same probe_run_id, different parsed content -> CONFLICT, never an overwrite",
+      persistConflict.outcome === "CONFLICT" && persistConflict.probeResultId === persist1.probeResultId
+    );
+
+    const persistInvariant = await db.persistProbeResultForJob({
+      jobId: cf.jobId, claimToken: cf.claimToken, projectId: cf.projectId,
+      content: { ...validM5Content, productPosition: "absent", productMentioned: true },
+    });
+    check(
+      "persist_probe_result_for_job: contradictory productPosition/productMentioned -> INVALID_CONTENT_INVARIANT, zero mutation",
+      persistInvariant.outcome === "INVALID_CONTENT_INVARIANT" && persistInvariant.probeResultId === null
+    );
+
+    const staleFixture = await buildCompletedAnalysisFixture(db, "d028-fencing");
+    const persistWrongToken = await db.persistProbeResultForJob({
+      jobId: staleFixture.jobId, claimToken: "wrong-token", projectId: staleFixture.projectId, content: validM5Content,
+    });
+    check(
+      "persist_probe_result_for_job: wrong claim_token -> JOB_NOT_OWNED, zero mutation",
+      persistWrongToken.outcome === "JOB_NOT_OWNED"
+    );
+
+    // DEFECT_04 corrective tests: MemoryAdapter must genuinely validate
+    // at runtime, not merely rely on TypeScript's compile-time shape --
+    // proven here by deliberately malformed content reaching the
+    // adapter only via an `unknown` cast (bypassing the compiler
+    // exactly as a real jsonb payload could).
+    const malformedFixture = await buildCompletedAnalysisFixture(db, "d028-malformed");
+    const missingKeyContent = { ...validM5Content } as Record<string, unknown>;
+    delete missingKeyContent.answerSummary;
+    const persistMissingKey = await db.persistProbeResultForJob({
+      jobId: malformedFixture.jobId, claimToken: malformedFixture.claimToken, projectId: malformedFixture.projectId,
+      content: missingKeyContent as unknown as typeof validM5Content,
+    });
+    check(
+      "DEFECT_04: MemoryAdapter genuinely returns INVALID_CONTENT_KEYS for a missing key (unknown-cast input, never trusting TypeScript alone)",
+      persistMissingKey.outcome === "INVALID_CONTENT_KEYS"
+    );
+
+    const extraKeyContent = { ...validM5Content, unexpectedField: "nope" } as unknown as typeof validM5Content;
+    const persistExtraKey = await db.persistProbeResultForJob({
+      jobId: malformedFixture.jobId, claimToken: malformedFixture.claimToken, projectId: malformedFixture.projectId,
+      content: extraKeyContent,
+    });
+    check(
+      "DEFECT_04: MemoryAdapter genuinely returns INVALID_CONTENT_KEYS for an extra, unrecognized key",
+      persistExtraKey.outcome === "INVALID_CONTENT_KEYS"
+    );
+
+    const wrongTypeContent = { ...validM5Content, answerSummary: 12345 } as unknown as typeof validM5Content;
+    const persistWrongType = await db.persistProbeResultForJob({
+      jobId: malformedFixture.jobId, claimToken: malformedFixture.claimToken, projectId: malformedFixture.projectId,
+      content: wrongTypeContent,
+    });
+    check(
+      "DEFECT_04: MemoryAdapter genuinely returns INVALID_CONTENT_TYPE for a wrong JS type on a required field",
+      persistWrongType.outcome === "INVALID_CONTENT_TYPE"
+    );
+
+    const fractionalCountContent = {
+      ...validM5Content,
+      clientSourceCount: 1.5 as unknown as number,
+    };
+    const persistFractional = await db.persistProbeResultForJob({
+      jobId: malformedFixture.jobId, claimToken: malformedFixture.claimToken, projectId: malformedFixture.projectId,
+      content: fractionalCountContent,
+    });
+    check(
+      "DEFECT_01/04: MemoryAdapter genuinely returns INVALID_CONTENT_VALUE for clientSourceCount=1.5, never throwing and never silently truncating",
+      persistFractional.outcome === "INVALID_CONTENT_VALUE"
+    );
+
+    const fractionalPositionContent = {
+      ...validM5Content,
+      competitorsMentioned: [{ name: "Rival", position: 1.5 as unknown as number, context: "" }],
+    };
+    const persistFractionalPosition = await db.persistProbeResultForJob({
+      jobId: malformedFixture.jobId, claimToken: malformedFixture.claimToken, projectId: malformedFixture.projectId,
+      content: fractionalPositionContent,
+    });
+    check(
+      "DEFECT_03/04: MemoryAdapter genuinely returns INVALID_CONTENT_VALUE for competitors_mentioned[].position=1.5",
+      persistFractionalPosition.outcome === "INVALID_CONTENT_VALUE"
+    );
+
+    // Secondary gap closed: position=0 is the immediate lower boundary
+    // (one less than the minimum valid value 1) -- distinct from the
+    // already-covered position=1.5 (fractional) and never separately
+    // exercised against the real MemoryAdapter before now.
+    const zeroPositionContent = {
+      ...validM5Content,
+      competitorsMentioned: [{ name: "Rival", position: 0 as unknown as number, context: "" }],
+    };
+    const persistZeroPosition = await db.persistProbeResultForJob({
+      jobId: malformedFixture.jobId, claimToken: malformedFixture.claimToken, projectId: malformedFixture.projectId,
+      content: zeroPositionContent,
+    });
+    check(
+      "DEFECT_03/04 (secondary gap): MemoryAdapter genuinely returns INVALID_CONTENT_VALUE for competitors_mentioned[].position=0 (immediate lower boundary, distinct from the fractional 1.5 case)",
+      persistZeroPosition.outcome === "INVALID_CONTENT_VALUE"
+    );
+
+    // DEFECT_02 corrective tests: PROTOCOL_NOT_FOUND / BUYER_QUESTION_
+    // VERSION_NOT_FOUND / PROBE_RUN_NOT_FOUND, engineered by directly
+    // removing the referenced row from the shared in-process store
+    // (reached via the same global key memory-adapter.ts itself uses,
+    // never a new export) -- proving the guard is real, not merely typed.
+    const globalStore = (globalThis as unknown as Record<string, unknown>)["__zypact_memory_store__"] as {
+      protocolExecutionJobs: Map<string, { protocolId: string }>;
+      protocolAttempts: Map<string, { protocolId: string; probeRunId: string | null }>;
+      protocols: Map<string, { buyerQuestionVersionId: string }>;
+      buyerQuestionVersions: Map<string, unknown>;
+      probeRuns: Map<string, unknown>;
+    };
+
+    {
+      const f = await buildCompletedAnalysisFixture(db, "d028-protocol-missing");
+      const job = must(globalStore.protocolExecutionJobs.get(f.jobId), "protocol-missing job");
+      const savedProtocol = globalStore.protocols.get(job.protocolId);
+      globalStore.protocols.delete(job.protocolId);
+      const result = await db.persistProbeResultForJob({
+        jobId: f.jobId, claimToken: f.claimToken, projectId: f.projectId, content: validM5Content,
+      });
+      check(
+        "DEFECT_02: MemoryAdapter returns PROTOCOL_NOT_FOUND when the job's own protocol row is missing, never continuing with NULL",
+        result.outcome === "PROTOCOL_NOT_FOUND"
+      );
+      if (savedProtocol) globalStore.protocols.set(job.protocolId, savedProtocol);
+    }
+
+    {
+      const f = await buildCompletedAnalysisFixture(db, "d028-bqv-missing");
+      const job = must(globalStore.protocolExecutionJobs.get(f.jobId), "bqv-missing job");
+      const protocol = must(globalStore.protocols.get(job.protocolId), "bqv-missing protocol");
+      const savedBqv = globalStore.buyerQuestionVersions.get(protocol.buyerQuestionVersionId);
+      globalStore.buyerQuestionVersions.delete(protocol.buyerQuestionVersionId);
+      const result = await db.persistProbeResultForJob({
+        jobId: f.jobId, claimToken: f.claimToken, projectId: f.projectId, content: validM5Content,
+      });
+      check(
+        "DEFECT_02: MemoryAdapter returns BUYER_QUESTION_VERSION_NOT_FOUND when the protocol's own buyer_question_version row is missing",
+        result.outcome === "BUYER_QUESTION_VERSION_NOT_FOUND"
+      );
+      if (savedBqv) globalStore.buyerQuestionVersions.set(protocol.buyerQuestionVersionId, savedBqv);
+    }
+
+    {
+      const f = await buildCompletedAnalysisFixture(db, "d028-proberun-missing");
+      const attempt = must(globalStore.protocolAttempts.get(f.attemptId), "proberun-missing attempt");
+      const probeRunId = must(attempt.probeRunId, "proberun-missing probeRunId");
+      const savedProbeRun = globalStore.probeRuns.get(probeRunId);
+      globalStore.probeRuns.delete(probeRunId);
+      const result = await db.persistProbeResultForJob({
+        jobId: f.jobId, claimToken: f.claimToken, projectId: f.projectId, content: validM5Content,
+      });
+      check(
+        "DEFECT_02: MemoryAdapter returns PROBE_RUN_NOT_FOUND when the attempt's own probe_run row is missing",
+        result.outcome === "PROBE_RUN_NOT_FOUND"
+      );
+      if (savedProbeRun) globalStore.probeRuns.set(probeRunId, savedProbeRun);
+    }
+
+    // DEFECT_04: recordAlertDeliveryReceipt must also genuinely validate
+    // its outcome parameter at runtime, never trusting the compile-time
+    // literal union alone.
+    const invalidOutcomeFixture = await buildAmbiguousFixture(db, "d028-invalid-outcome");
+    await db.markProtocolExecutionJobNeedsReviewForAmbiguity({
+      jobId: invalidOutcomeFixture.jobId, claimToken: invalidOutcomeFixture.claimToken, projectId: invalidOutcomeFixture.projectId,
+    });
+    const claimForInvalidOutcome = await db.claimNextPendingAlert({ workerId: "invalid-outcome-worker", leaseSeconds: 60 });
+    if (claimForInvalidOutcome.outcome === "CLAIMED") {
+      const sentForInvalidOutcome = await db.markAlertRequestSent({
+        deliveryId: must(claimForInvalidOutcome.deliveryId, "invalid-outcome delivery id"),
+        claimToken: must(claimForInvalidOutcome.claimToken, "invalid-outcome claim token"),
+      });
+      const invalidOutcomeResult = await db.recordAlertDeliveryReceipt({
+        deliveryId: must(claimForInvalidOutcome.deliveryId, "invalid-outcome delivery id"),
+        claimToken: must(claimForInvalidOutcome.claimToken, "invalid-outcome claim token"),
+        attemptId: must(sentForInvalidOutcome.attemptId, "invalid-outcome attempt id"),
+        outcome: "bogus_outcome" as unknown as "accepted",
+      });
+      check(
+        "DEFECT_04: MemoryAdapter genuinely returns INVALID_OUTCOME for an unrecognized outcome string, never trusting the TypeScript literal union alone",
+        invalidOutcomeResult.outcome === "INVALID_OUTCOME"
+      );
+    } else {
+      check("DEFECT_04: INVALID_OUTCOME fixture claimable (setup precondition)", false);
+    }
+  }
+
+  // Alert outbox: trigger a real needs_review transition, then drive the
+  // full claim -> request_sent -> accepted lifecycle, and separately
+  // prove the three-attempt cap.
+  {
+    // Earlier parts (E, L) already triggered real needs_review
+    // transitions of their own, each producing a real, still-pending
+    // alert delivery -- claim_next_pending_alert is a genuine global
+    // FIFO (oldest first), exactly like claim_protocol_execution_job.
+    // Drain every pending/claimable alert first so the assertions below
+    // observe THIS fixture's own transition, never an earlier one.
+    for (;;) {
+      const drain = await db.claimNextPendingAlert({ workerId: "alert-drain", leaseSeconds: 60 });
+      if (drain.outcome !== "CLAIMED") break;
+      const drainSent = await db.markAlertRequestSent({
+        deliveryId: must(drain.deliveryId, "drain delivery id"), claimToken: must(drain.claimToken, "drain claim token"),
+      });
+      await db.recordAlertDeliveryReceipt({
+        deliveryId: must(drain.deliveryId, "drain delivery id"), claimToken: must(drain.claimToken, "drain claim token"),
+        attemptId: must(drainSent.attemptId, "drain attempt id"), outcome: "accepted", resendEmailId: "resend-drain",
+      });
+    }
+
+    const alertFixture = await buildAmbiguousFixture(db, "d028-alert-happy");
+    await db.markProtocolExecutionJobNeedsReviewForAmbiguity({
+      jobId: alertFixture.jobId, claimToken: alertFixture.claimToken, projectId: alertFixture.projectId,
+    });
+
+    const claim1 = await db.claimNextPendingAlert({ workerId: "alert-worker-1", leaseSeconds: 60 });
+    check(
+      "claim_next_pending_alert: a real needs_review transition produced a claimable delivery, with a closed payload",
+      claim1.outcome === "CLAIMED" &&
+        claim1.eventType === "needs_review" &&
+        claim1.reasonCode === "ambiguous_external_call_sent_without_receipt" &&
+        claim1.jobId === alertFixture.jobId &&
+        claim1.idempotencyKey === `m5-alert:${claim1.alertEventId}`
+    );
+
+    const sent1 = await db.markAlertRequestSent({
+      deliveryId: must(claim1.deliveryId, "d028 delivery id"), claimToken: must(claim1.claimToken, "d028 claim token"),
+    });
+    check("mark_alert_request_sent: first attempt -> REQUEST_MARKED_SENT, attemptSeq=1", sent1.outcome === "REQUEST_MARKED_SENT" && sent1.attemptSeq === 1);
+
+    const receipt1 = await db.recordAlertDeliveryReceipt({
+      deliveryId: must(claim1.deliveryId, "d028 delivery id"), claimToken: must(claim1.claimToken, "d028 claim token"),
+      attemptId: must(sent1.attemptId, "d028 attempt id"), outcome: "accepted", resendEmailId: "resend-msg-1",
+    });
+    check(
+      "record_alert_delivery_receipt: accepted -> final status 'accepted' (Resend accepted the request, not 'delivered')",
+      receipt1.outcome === "RECEIPT_RECORDED" && receipt1.finalDeliveryStatus === "accepted"
+    );
+
+    const receiptReplayOnTerminal = await db.recordAlertDeliveryReceipt({
+      deliveryId: must(claim1.deliveryId, "d028 delivery id"), claimToken: must(claim1.claimToken, "d028 claim token"),
+      attemptId: must(sent1.attemptId, "d028 attempt id"), outcome: "accepted", resendEmailId: "resend-msg-1-replay",
+    });
+    check(
+      "record_alert_delivery_receipt: a second call against an already-owned-but-now-accepted delivery -> DELIVERY_NOT_OWNED, never a second terminal write",
+      receiptReplayOnTerminal.outcome === "DELIVERY_NOT_OWNED"
+    );
+
+    // Cap: three failed attempts must exhaust attempt_count and block a
+    // fourth request_sent row entirely. Uses 'ambiguous_under_24h'
+    // (nextAttemptAt = now(), immediately reclaimable) rather than
+    // 'http_error' (which schedules a real 30s/300s wall-clock backoff
+    // -- correct production behavior, but impractical to wait out
+    // synchronously in this test).
+    const capFixture = await buildAmbiguousFixture(db, "d028-alert-cap");
+    await db.markProtocolExecutionJobNeedsReviewForAmbiguity({
+      jobId: capFixture.jobId, claimToken: capFixture.claimToken, projectId: capFixture.projectId,
+    });
+    let deliveryId: string | null = null;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const claimed = await db.claimNextPendingAlert({ workerId: `cap-worker-${attempt}`, leaseSeconds: 60 });
+      deliveryId = must(claimed.deliveryId, `cap delivery id, attempt ${attempt}`);
+      const sent = await db.markAlertRequestSent({ deliveryId, claimToken: must(claimed.claimToken, "cap claim token") });
+      await db.recordAlertDeliveryReceipt({
+        deliveryId, claimToken: must(claimed.claimToken, "cap claim token"),
+        attemptId: must(sent.attemptId, "cap attempt id"), outcome: "ambiguous_under_24h",
+      });
+    }
+    const capClaimAfterThree = await db.claimNextPendingAlert({ workerId: "cap-worker-4", leaseSeconds: 60 });
+    check(
+      "claim_next_pending_alert: after 3 failed attempts (the cap), the delivery is excluded from further claims -- never a 4th HTTP attempt",
+      capClaimAfterThree.outcome === "NO_ALERT_AVAILABLE" || capClaimAfterThree.deliveryId !== deliveryId
+    );
+  }
+
+  // ========================================================================
   // Part H — SupabaseAdapter: RPC name/parameter mapping + row-shape parity.
   // ========================================================================
   console.log("\n[H] SupabaseAdapter — RPC mapping (stub client, no network)");
@@ -2258,6 +2599,89 @@ async function main(): Promise<void> {
       supaNr.job?.needsReviewReason === "ambiguous_external_call_sent_without_receipt"
   );
 
+  // D-028 — persist_probe_result_for_job + alert outbox: RPC name and
+  // snake_case parameter mapping only (stub client, no real fixture).
+  rpcCalls = [];
+  nextRpcResponse = { data: { status: "PERSISTED", probe_result_id: "pres1", canonical_result_sha256: "a".repeat(64) }, error: null };
+  const supaPersist = await supabaseAdapter.persistProbeResultForJob({
+    jobId: "j1", claimToken: "tok", projectId: "p1",
+    content: {
+      productMentioned: true, productPosition: "primary",
+      competitorsMentioned: [{ name: "Rival", position: 1, context: "" }],
+      sourcesCited: [{ source: "x.com", type: "other" }],
+      answerSummary: "s", citedAsSource: false, clientSourceCount: 0,
+      platformsReferenced: [], negativeClaimDetected: false,
+    },
+  });
+  check(
+    "Supabase persistProbeResultForJob: correct RPC name; p_content nested as snake_case; outcome/hash mapped",
+    rpcCalls.length === 1 &&
+      rpcCalls[0]!.fn === "persist_probe_result_for_job" &&
+      rpcCalls[0]!.args.p_job_id === "j1" &&
+      (rpcCalls[0]!.args.p_content as Record<string, unknown>).product_mentioned === true &&
+      (rpcCalls[0]!.args.p_content as Record<string, unknown>).client_source_count === 0 &&
+      supaPersist.outcome === "PERSISTED" &&
+      supaPersist.probeResultId === "pres1" &&
+      supaPersist.canonicalResultSha256 === "a".repeat(64)
+  );
+
+  rpcCalls = [];
+  nextRpcResponse = {
+    data: {
+      status: "CLAIMED", delivery_id: "d1", alert_event_id: "ae1", claim_token: "atok", attempt_count: 0,
+      project_id: "p1", job_id: "j1", event_type: "needs_review", reason_code: "perplexity_outcome_unknown",
+      idempotency_key: "m5-alert:ae1", reconciled_stale_claimed_count: 0, reconciled_under_24h_count: 0, reconciled_over_24h_count: 0,
+    },
+    error: null,
+  };
+  const supaClaimAlert = await supabaseAdapter.claimNextPendingAlert({ workerId: "w1", leaseSeconds: 60 });
+  check(
+    "Supabase claimNextPendingAlert: correct RPC name/args; closed payload mapped including reconciliation counters",
+    rpcCalls[0]!.fn === "claim_next_pending_alert" &&
+      rpcCalls[0]!.args.p_worker_id === "w1" &&
+      rpcCalls[0]!.args.p_lease_seconds === 60 &&
+      supaClaimAlert.outcome === "CLAIMED" &&
+      supaClaimAlert.deliveryId === "d1" &&
+      supaClaimAlert.reasonCode === "perplexity_outcome_unknown" &&
+      supaClaimAlert.idempotencyKey === "m5-alert:ae1"
+  );
+
+  rpcCalls = [];
+  nextRpcResponse = { data: { status: "RENEWED", delivery_id: "d1" }, error: null };
+  const supaRenew = await supabaseAdapter.renewAlertLease({ deliveryId: "d1", claimToken: "atok", leaseSeconds: 60 });
+  check(
+    "Supabase renewAlertLease: correct RPC name/args",
+    rpcCalls[0]!.fn === "renew_alert_lease" &&
+      rpcCalls[0]!.args.p_delivery_id === "d1" &&
+      rpcCalls[0]!.args.p_claim_token === "atok" &&
+      supaRenew.outcome === "RENEWED"
+  );
+
+  rpcCalls = [];
+  nextRpcResponse = { data: { status: "REQUEST_MARKED_SENT", attempt_id: "att1", attempt_seq: 1, idempotency_key: "m5-alert:ae1" }, error: null };
+  const supaMarkSent = await supabaseAdapter.markAlertRequestSent({ deliveryId: "d1", claimToken: "atok" });
+  check(
+    "Supabase markAlertRequestSent: correct RPC name/args",
+    rpcCalls[0]!.fn === "mark_alert_request_sent" &&
+      rpcCalls[0]!.args.p_delivery_id === "d1" &&
+      supaMarkSent.outcome === "REQUEST_MARKED_SENT" &&
+      supaMarkSent.attemptSeq === 1
+  );
+
+  rpcCalls = [];
+  nextRpcResponse = { data: { status: "RECEIPT_RECORDED", delivery_id: "d1", final_delivery_status: "accepted" }, error: null };
+  const supaReceipt = await supabaseAdapter.recordAlertDeliveryReceipt({
+    deliveryId: "d1", claimToken: "atok", attemptId: "att1", outcome: "accepted", resendEmailId: "msg1",
+  });
+  check(
+    "Supabase recordAlertDeliveryReceipt: correct RPC name/args; p_resend_email_id forwarded",
+    rpcCalls[0]!.fn === "record_alert_delivery_receipt" &&
+      rpcCalls[0]!.args.p_attempt_id === "att1" &&
+      rpcCalls[0]!.args.p_resend_email_id === "msg1" &&
+      supaReceipt.outcome === "RECEIPT_RECORDED" &&
+      supaReceipt.finalDeliveryStatus === "accepted"
+  );
+
   __setSupabaseAdapterClientForTests(null);
 
   console.log(
@@ -2402,6 +2826,44 @@ async function buildAnalysisRetryFixture(
   // Attempt deliberately left in_progress (never reconciled) --
   // _reserve_additional_analysis_generation_core requires it.
   return { jobId, claimToken, projectId, analysisCallId: analysisCall.id };
+}
+
+/**
+ * D-028 — Perplexity AND analysis both completed with receipts, job
+ * still running with current_attempt_id pointing at this attempt
+ * (never reconciled/completed): exactly persist_probe_result_for_job's
+ * own preconditions.
+ */
+async function buildCompletedAnalysisFixture(
+  db: DbAdapter,
+  tag: string
+): Promise<{ jobId: string; claimToken: string; projectId: string; attemptId: string; analysisCallId: string }> {
+  const { projectId, protocolId } = await setupProjectProtocol(db, tag, 1);
+  const { jobId, claimToken } = await claimFreshJob(db, projectId, protocolId, `${tag}-worker`);
+  const admit = await db.admitAndReserveAttemptForJob({
+    jobId, claimToken, projectId, attemptKind: "baseline",
+    idempotencyKey: `${jobId}:baseline:1`, perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
+  });
+  const attempt = must(admit.attempt, `${tag} attempt`);
+  const perplexityCall = must(admit.perplexityCall, `${tag} perplexity call`);
+  const analysisCall = must(admit.analysisCall, `${tag} analysis call`);
+  const start = await db.createProbeRunAndStartAttemptForJob({
+    jobId, claimToken, projectId, attemptId: attempt.id,
+    platform: "perplexity", probeMode: "simulated",
+  });
+  const probeRunId = must(start.probeRun, `${tag} probe run`).id;
+  await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: perplexityCall.id, probeRunId });
+  await db.recordProviderCallReceiptForJob({
+    jobId, claimToken, projectId, externalCallId: perplexityCall.id, probeRunId, outcome: "success",
+    rawResponseSha256: sha256Hex(`${tag}-perplexity-answer`), rawResponseBody: `${tag}-perplexity-answer`,
+  });
+  await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: analysisCall.id, probeRunId });
+  await db.recordAnalysisCallReceiptForJob({
+    jobId, claimToken, projectId, externalCallId: analysisCall.id, probeRunId, outcome: "success",
+    requestSha256: sha256Hex(`${tag}-analysis-request`), rawRequestBody: `${tag}-analysis-request`,
+    responseSha256: sha256Hex(`${tag}-analysis-response`), rawContent: `${tag}-analysis-response`,
+  });
+  return { jobId, claimToken, projectId, attemptId: attempt.id, analysisCallId: analysisCall.id };
 }
 
 /** A needs_review job with one in_progress attempt, for authorize_operator_retry. */

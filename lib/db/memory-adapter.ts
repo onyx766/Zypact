@@ -122,11 +122,28 @@ import type {
   GetProtocolExecutionJobContextResult,
   MarkProtocolExecutionJobNeedsReviewForAmbiguityInput,
   MarkProtocolExecutionJobNeedsReviewForAmbiguityResult,
+  PersistProbeResultForJobInput,
+  PersistProbeResultForJobResult,
+  PersistProbeResultForJobOutcome,
+  PersistProbeResultForJobContent,
+  AlertEventType,
+  AlertReasonCode,
+  AlertDeliveryStatus,
+  AlertDeliveryAttemptOutcome,
+  ClaimNextPendingAlertInput,
+  ClaimNextPendingAlertResult,
+  RenewAlertLeaseInput,
+  RenewAlertLeaseResult,
+  MarkAlertRequestSentInput,
+  MarkAlertRequestSentResult,
+  RecordAlertDeliveryReceiptInput,
+  RecordAlertDeliveryReceiptResult,
 } from "./types";
 import { SnapshotRequestLimitError } from "./types";
 import { evaluateSnapshotRequestLimits } from "@/lib/snapshot-requests/limits";
 import { validateBuyerQuestionVersionNumericFields } from "@/lib/db/validate-buyer-question-version-fields";
 import { validateApprovedByUuid } from "@/lib/db/validate-approved-by-uuid";
+import { mapProductPositionToRunPosition } from "@/lib/probe-analysis/product-recommendation";
 
 /**
  * In-memory adapter. Used when Supabase is not configured so Sprint 1 is
@@ -179,6 +196,52 @@ interface MemoryStore {
   providerCallReceipts: Map<string, ProviderCallReceipt>;
   analysisCallReceipts: Map<string, AnalysisCallReceipt>;
   protocolOperatorActions: Map<string, ProtocolOperatorAction>;
+  // D-028 — durable alert outbox.
+  protocolExecutionJobAlerts: Map<string, MemoryAlertEvent>;
+  protocolExecutionJobAlertDeliveries: Map<string, MemoryAlertDelivery>;
+  protocolExecutionJobAlertDeliveryAttempts: Map<string, MemoryAlertDeliveryAttempt>;
+  alertTransitionSeqCounter: number;
+}
+
+/** D-028 — mirrors protocol_execution_job_alerts. Immutable once inserted. */
+interface MemoryAlertEvent {
+  alertEventId: string;
+  projectId: string;
+  jobId: string;
+  eventType: AlertEventType;
+  reasonCode: AlertReasonCode;
+  sourceAttemptId: string | null;
+  sourceExternalCallId: string | null;
+  transitionAt: string;
+  transitionSeq: number;
+}
+
+/** D-028 — mirrors protocol_execution_job_alert_deliveries. */
+interface MemoryAlertDelivery {
+  deliveryId: string;
+  alertEventId: string;
+  status: AlertDeliveryStatus;
+  workerId: string | null;
+  claimToken: string | null;
+  leaseExpiresAt: string | null;
+  nextAttemptAt: string | null;
+  attemptCount: number;
+  createdAt: string;
+}
+
+/** D-028 — mirrors protocol_execution_job_alert_delivery_attempts. */
+interface MemoryAlertDeliveryAttempt {
+  attemptId: string;
+  deliveryId: string;
+  attemptSeq: number;
+  idempotencyKey: string;
+  outcome: AlertDeliveryAttemptOutcome;
+  requestSentAt: string;
+  finishedAt: string | null;
+  resendEmailId: string | null;
+  httpStatus: number | null;
+  errorCode: string | null;
+  createdAt: string;
 }
 
 const globalKey = "__zypact_memory_store__";
@@ -220,6 +283,10 @@ function getStore(): MemoryStore {
       providerCallReceipts: new Map(),
       analysisCallReceipts: new Map(),
       protocolOperatorActions: new Map(),
+      protocolExecutionJobAlerts: new Map(),
+      protocolExecutionJobAlertDeliveries: new Map(),
+      protocolExecutionJobAlertDeliveryAttempts: new Map(),
+      alertTransitionSeqCounter: 0,
     };
   }
   return g[globalKey]!;
@@ -572,6 +639,54 @@ function jobFencingOk(
     new Date(job.leaseExpiresAt).getTime() > Date.now() &&
     (job.status === "claimed" || job.status === "running")
   );
+}
+
+/**
+ * D-028 — mirrors the outbox-emission CTE pattern added to
+ * record_provider_call_receipt_for_job / record_analysis_call_receipt_
+ * for_job / mark_protocol_execution_job_needs_review_for_ambiguity /
+ * claim_protocol_execution_job's sweep: one immutable alert event per
+ * real transition, plus its corresponding 'pending' delivery row,
+ * created together -- never a delivery-less event.
+ */
+function recordAlertEvent(
+  store: MemoryStore,
+  fields: {
+    projectId: string;
+    jobId: string;
+    eventType: AlertEventType;
+    reasonCode: AlertReasonCode;
+    sourceAttemptId: string | null;
+    sourceExternalCallId: string | null;
+  }
+): void {
+  store.alertTransitionSeqCounter += 1;
+  const alertEventId = randomUUID();
+  const event: MemoryAlertEvent = {
+    alertEventId,
+    projectId: fields.projectId,
+    jobId: fields.jobId,
+    eventType: fields.eventType,
+    reasonCode: fields.reasonCode,
+    sourceAttemptId: fields.sourceAttemptId,
+    sourceExternalCallId: fields.sourceExternalCallId,
+    transitionAt: nowIso(),
+    transitionSeq: store.alertTransitionSeqCounter,
+  };
+  store.protocolExecutionJobAlerts.set(alertEventId, event);
+
+  const delivery: MemoryAlertDelivery = {
+    deliveryId: randomUUID(),
+    alertEventId,
+    status: "pending",
+    workerId: null,
+    claimToken: null,
+    leaseExpiresAt: null,
+    nextAttemptAt: null,
+    attemptCount: 0,
+    createdAt: nowIso(),
+  };
+  store.protocolExecutionJobAlertDeliveries.set(delivery.deliveryId, delivery);
 }
 
 function receiptOutcomeToCallStatus(
@@ -3257,6 +3372,14 @@ export const memoryAdapter: DbAdapter = {
         j.attemptCount >= j.maxAttempts
       ) {
         store.protocolExecutionJobs.set(id, { ...j, status: "abandoned_exhausted", updatedAt: nowIso() });
+        recordAlertEvent(store, {
+          projectId: j.projectId,
+          jobId: id,
+          eventType: "abandoned_exhausted",
+          reasonCode: "attempts_exhausted",
+          sourceAttemptId: null,
+          sourceExternalCallId: null,
+        });
       }
     }
 
@@ -3629,6 +3752,14 @@ export const memoryAdapter: DbAdapter = {
         needsReviewReason: "perplexity_outcome_unknown",
         updatedAt: now,
       });
+      recordAlertEvent(store, {
+        projectId: job.projectId,
+        jobId: job.id,
+        eventType: "needs_review",
+        reasonCode: "perplexity_outcome_unknown",
+        sourceAttemptId: call.protocolAttemptId,
+        sourceExternalCallId: input.externalCallId,
+      });
     }
 
     return { outcome: "RECEIPTED", externalCall: { ...updatedCall }, receipt: { ...receipt } };
@@ -3751,6 +3882,14 @@ export const memoryAdapter: DbAdapter = {
         status: "needs_review",
         needsReviewReason: "analysis_outcome_unknown",
         updatedAt: now,
+      });
+      recordAlertEvent(store, {
+        projectId: job.projectId,
+        jobId: job.id,
+        eventType: "needs_review",
+        reasonCode: "analysis_outcome_unknown",
+        sourceAttemptId: call.protocolAttemptId,
+        sourceExternalCallId: input.externalCallId,
       });
     }
 
@@ -4738,6 +4877,591 @@ export const memoryAdapter: DbAdapter = {
       updatedAt: nowIso(),
     };
     store.protocolExecutionJobs.set(updated.id, updated);
+    recordAlertEvent(store, {
+      projectId: updated.projectId,
+      jobId: updated.id,
+      eventType: "needs_review",
+      reasonCode: "ambiguous_external_call_sent_without_receipt",
+      sourceAttemptId: updated.currentAttemptId,
+      sourceExternalCallId: null,
+    });
     return { outcome: "NEEDS_REVIEW", job: { ...updated } };
+  },
+
+  async persistProbeResultForJob(
+    input: PersistProbeResultForJobInput
+  ): Promise<PersistProbeResultForJobResult> {
+    const store = getStore();
+
+    // DEFECT_04: real runtime validation, mirroring persist_probe_
+    // result_for_job's own SQL-side checks byte-for-byte in spirit --
+    // never trusting TypeScript's compile-time shape alone. A caller can
+    // bypass the compile-time type entirely (e.g. `content as unknown as
+    // PersistProbeResultForJobContent`), exactly as a real jsonb payload
+    // sent to the RPC could carry anything; MemoryAdapter must be able
+    // to actually reach INVALID_CONTENT_KEYS/_TYPE/_VALUE, not just
+    // INVALID_CONTENT_INVARIANT, for adapter-contract parity with SQL.
+    const invalid = (
+      outcome: PersistProbeResultForJobOutcome
+    ): PersistProbeResultForJobResult => ({ outcome, probeResultId: null, canonicalResultSha256: null });
+
+    const raw: unknown = input.content;
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      return invalid("INVALID_CONTENT_KEYS");
+    }
+    const allowedKeys = [
+      "productMentioned", "productPosition", "competitorsMentioned", "sourcesCited",
+      "answerSummary", "citedAsSource", "clientSourceCount", "platformsReferenced",
+      "negativeClaimDetected",
+    ] as const;
+    const rec = raw as Record<string, unknown>;
+    const rawKeys = Object.keys(rec);
+    if (
+      rawKeys.length !== allowedKeys.length ||
+      !allowedKeys.every((k) => rawKeys.includes(k))
+    ) {
+      return invalid("INVALID_CONTENT_KEYS");
+    }
+    if (allowedKeys.some((k) => rec[k] === null || rec[k] === undefined)) {
+      return invalid("INVALID_CONTENT_KEYS");
+    }
+    if (
+      typeof rec.productMentioned !== "boolean" ||
+      typeof rec.productPosition !== "string" ||
+      !Array.isArray(rec.competitorsMentioned) ||
+      !Array.isArray(rec.sourcesCited) ||
+      typeof rec.answerSummary !== "string" ||
+      typeof rec.citedAsSource !== "boolean" ||
+      typeof rec.clientSourceCount !== "number" ||
+      !Array.isArray(rec.platformsReferenced) ||
+      typeof rec.negativeClaimDetected !== "boolean"
+    ) {
+      return invalid("INVALID_CONTENT_TYPE");
+    }
+
+    const content = rec as unknown as PersistProbeResultForJobContent;
+
+    if (!["primary", "listed", "negative", "absent"].includes(content.productPosition)) {
+      return invalid("INVALID_CONTENT_VALUE");
+    }
+    if (content.answerSummary.length > 4000) {
+      return invalid("INVALID_CONTENT_VALUE");
+    }
+    // DEFECT_01: integer-ness + int4 range checked BEFORE the value is
+    // ever trusted as a safe integer -- mirrors the SQL fix exactly
+    // (numeric-then-integer-check, never a bare, unguarded cast).
+    if (
+      !Number.isFinite(content.clientSourceCount) ||
+      !Number.isInteger(content.clientSourceCount) ||
+      content.clientSourceCount < 0 ||
+      content.clientSourceCount > 2147483647
+    ) {
+      return invalid("INVALID_CONTENT_VALUE");
+    }
+    if (content.clientSourceCount > 50) {
+      return invalid("INVALID_CONTENT_VALUE");
+    }
+    if (
+      content.competitorsMentioned.length > 50 ||
+      content.sourcesCited.length > 50 ||
+      content.platformsReferenced.length > 20
+    ) {
+      return invalid("INVALID_CONTENT_VALUE");
+    }
+    for (const el of content.competitorsMentioned as unknown[]) {
+      if (el === null || typeof el !== "object" || Array.isArray(el)) {
+        return invalid("INVALID_CONTENT_VALUE");
+      }
+      const elRec = el as Record<string, unknown>;
+      const elKeys = Object.keys(elRec);
+      if (elKeys.length !== 3 || !["name", "position", "context"].every((k) => elKeys.includes(k))) {
+        return invalid("INVALID_CONTENT_VALUE");
+      }
+      if (
+        typeof elRec.name !== "string" ||
+        typeof elRec.position !== "number" ||
+        typeof elRec.context !== "string"
+      ) {
+        return invalid("INVALID_CONTENT_VALUE");
+      }
+      // DEFECT_03: integer-ness + range (1-500) checked before ever
+      // trusting `position` -- a fractional value (e.g. 1.5) or one
+      // outside range is rejected here, never silently accepted.
+      if (
+        !Number.isFinite(elRec.position) ||
+        !Number.isInteger(elRec.position) ||
+        elRec.position < 1 ||
+        elRec.position > 500 ||
+        elRec.name.length < 1 ||
+        elRec.name.length > 200 ||
+        elRec.context.length > 500
+      ) {
+        return invalid("INVALID_CONTENT_VALUE");
+      }
+    }
+    for (const el of content.sourcesCited as unknown[]) {
+      if (el === null || typeof el !== "object" || Array.isArray(el)) {
+        return invalid("INVALID_CONTENT_VALUE");
+      }
+      const elRec = el as Record<string, unknown>;
+      const elKeys = Object.keys(elRec);
+      if (elKeys.length !== 2 || !["source", "type"].every((k) => elKeys.includes(k))) {
+        return invalid("INVALID_CONTENT_VALUE");
+      }
+      if (typeof elRec.source !== "string" || typeof elRec.type !== "string") {
+        return invalid("INVALID_CONTENT_VALUE");
+      }
+      if (
+        elRec.source.length < 1 ||
+        elRec.source.length > 500 ||
+        !["review_site", "blog", "forum", "vendor_site", "news", "other"].includes(elRec.type)
+      ) {
+        return invalid("INVALID_CONTENT_VALUE");
+      }
+    }
+    for (const plat of content.platformsReferenced as unknown[]) {
+      if (typeof plat !== "string" || plat.length < 1 || plat.length > 100) {
+        return invalid("INVALID_CONTENT_VALUE");
+      }
+    }
+
+    // Cross invariants -- mirrors persist_probe_result_for_job's own checks.
+    const positionOk =
+      (content.productPosition === "absent" && content.productMentioned === false) ||
+      (["primary", "listed", "negative"].includes(content.productPosition) &&
+        content.productMentioned === true);
+    if (!positionOk) {
+      return invalid("INVALID_CONTENT_INVARIANT");
+    }
+    if (content.negativeClaimDetected !== (content.productPosition === "negative")) {
+      return invalid("INVALID_CONTENT_INVARIANT");
+    }
+    if (content.citedAsSource !== content.clientSourceCount > 0) {
+      return invalid("INVALID_CONTENT_INVARIANT");
+    }
+    const platformsCovered = content.platformsReferenced.every((plat) =>
+      content.sourcesCited.some((src) => src.source.toLowerCase().includes(plat.toLowerCase()))
+    );
+    if (!platformsCovered) {
+      return invalid("INVALID_CONTENT_INVARIANT");
+    }
+
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) {
+      return invalid("JOB_NOT_FOUND");
+    }
+    if (!jobFencingOk(job, input.claimToken)) {
+      return invalid("JOB_NOT_OWNED");
+    }
+    if (job.currentAttemptId === null) {
+      return invalid("NO_CURRENT_ATTEMPT");
+    }
+
+    const attempt = store.protocolAttempts.get(job.currentAttemptId);
+    if (!attempt || attempt.jobId !== input.jobId || attempt.projectId !== input.projectId) {
+      return invalid("ATTEMPT_NOT_OWNED_BY_JOB");
+    }
+
+    // DEFECT_02: explicit existence checks -- never continue with a NULL
+    // lookup, mirroring the SQL fix exactly.
+    const protocol = store.protocols.get(job.protocolId);
+    if (!protocol || protocol.projectId !== input.projectId) {
+      return invalid("PROTOCOL_NOT_FOUND");
+    }
+    const buyerQuestionVersion = store.buyerQuestionVersions.get(protocol.buyerQuestionVersionId);
+    if (!buyerQuestionVersion || buyerQuestionVersion.projectId !== input.projectId) {
+      return invalid("BUYER_QUESTION_VERSION_NOT_FOUND");
+    }
+    const probeRun = attempt.probeRunId ? store.probeRuns.get(attempt.probeRunId) : undefined;
+    if (!probeRun || probeRun.projectId !== input.projectId) {
+      return invalid("PROBE_RUN_NOT_FOUND");
+    }
+
+    const analysisCalls = [...store.protocolExternalCalls.values()].filter(
+      (ec) => ec.protocolAttemptId === attempt.id && ec.callKind === "analysis"
+    );
+    const maxGeneration = analysisCalls.reduce((max, ec) => Math.max(max, ec.generation), 0);
+    const analysisCall = analysisCalls.find((ec) => ec.generation === maxGeneration);
+    if (!analysisCall) {
+      return { outcome: "WRONG_CALL_KIND", probeResultId: null, canonicalResultSha256: null };
+    }
+    if (analysisCall.status !== "completed") {
+      return { outcome: "ANALYSIS_NOT_COMPLETED", probeResultId: null, canonicalResultSha256: null };
+    }
+    if (analysisCall.parseFailedAt !== null) {
+      return { outcome: "PARSE_ALREADY_MARKED_FAILED", probeResultId: null, canonicalResultSha256: null };
+    }
+    const analysisReceipt = [...store.analysisCallReceipts.values()].find(
+      (r) => r.externalCallId === analysisCall.id
+    );
+    if (!analysisReceipt) {
+      return { outcome: "RECEIPT_NOT_FOUND", probeResultId: null, canonicalResultSha256: null };
+    }
+
+    const perplexityCall = [...store.protocolExternalCalls.values()].find(
+      (ec) => ec.protocolAttemptId === attempt.id && ec.callKind === "perplexity" && ec.generation === 1
+    );
+    const providerReceipt = perplexityCall
+      ? [...store.providerCallReceipts.values()].find((r) => r.externalCallId === perplexityCall.id)
+      : undefined;
+    if (!providerReceipt) {
+      return { outcome: "RECEIPT_NOT_FOUND", probeResultId: null, canonicalResultSha256: null };
+    }
+
+    const runPosition = mapProductPositionToRunPosition(content.productPosition);
+    const retryCount = analysisCall.generation - 1;
+    // protocol/buyerQuestionVersion/probeRun already resolved and
+    // existence-checked above (DEFECT_02) -- never re-fetched here.
+    const buyerQuestion = buyerQuestionVersion.promptText;
+
+    // Canonical JSON: same 35-field/2-exclusion shape as
+    // persist_probe_result_for_job's own v_canonical, sorted keys (not
+    // insertion order) so the fingerprint is internally reproducible.
+    const canonical = {
+      answerSummary: content.answerSummary,
+      citedAsSource: content.citedAsSource,
+      clientMentioned: content.productMentioned,
+      clientPosition: content.productPosition,
+      clientSourceCount: content.clientSourceCount,
+      competitorsMentioned: content.competitorsMentioned,
+      datasetId: job.datasetBatchId,
+      datasetSourceType: "protocol_execution_job",
+      fullRequestBodySha256: null,
+      negativeClaimDetected: content.negativeClaimDetected,
+      observationSchemaVersion: 1,
+      platform: "perplexity",
+      platformsReferenced: content.platformsReferenced,
+      probeMode: probeRun?.probeMode ?? null,
+      probeRunId: attempt.probeRunId,
+      productMentioned: content.productMentioned,
+      productPosition: content.productPosition,
+      productVerdict: "not_evaluated",
+      projectId: input.projectId,
+      prompt: buyerQuestion,
+      providerHttpStatus: providerReceipt.httpStatus,
+      providerLatencyMs: providerReceipt.latencyMs,
+      providerModel: null,
+      providerRequestId: providerReceipt.providerRequestId,
+      rawProbeRequest: buyerQuestion,
+      rawProbeRequestSha256: sha256Hex(buyerQuestion),
+      rawResponse: providerReceipt.rawResponseBody,
+      rawResponseBody: null,
+      rawResponseBodySha256: null,
+      rawResponseSha256: providerReceipt.rawResponseSha256,
+      retryCount,
+      runPosition,
+      schemaVersion: 1,
+      sourcesCited: content.sourcesCited,
+      verdict: "not_evaluated",
+      whyClientLost: "",
+    };
+    const hash = sha256Hex(JSON.stringify(canonical, Object.keys(canonical).sort()));
+
+    const list = store.probeResultsByProject.get(input.projectId) ?? [];
+    const existing = list.find((r) => r.probeRunId === attempt.probeRunId);
+    if (existing) {
+      if (existing.canonicalResultSha256 === hash) {
+        return { outcome: "ALREADY_PERSISTED", probeResultId: existing.id, canonicalResultSha256: hash };
+      }
+      return {
+        outcome: "CONFLICT",
+        probeResultId: existing.id,
+        canonicalResultSha256: existing.canonicalResultSha256 ?? null,
+      };
+    }
+
+    const row: ProbeResult = {
+      id: randomUUID(),
+      probeRunId: attempt.probeRunId ?? "",
+      projectId: input.projectId,
+      generatedPromptId: null,
+      prompt: buyerQuestion,
+      platform: "perplexity",
+      probeMode: (probeRun?.probeMode ?? "simulated") as ProbeMode,
+      rawResponse: providerReceipt.rawResponseBody ?? "",
+      rawProbeRequest: buyerQuestion,
+      productMentioned: content.productMentioned,
+      productPosition: content.productPosition,
+      productVerdict: "not_evaluated",
+      citedAsSource: content.citedAsSource,
+      clientSourceCount: content.clientSourceCount,
+      platformsReferenced: [...content.platformsReferenced],
+      clientMentioned: content.productMentioned,
+      clientPosition: content.productPosition,
+      competitorsMentioned: content.competitorsMentioned,
+      sourcesCited: content.sourcesCited,
+      answerSummary: content.answerSummary,
+      verdict: "not_evaluated",
+      whyClientLost: "",
+      rawResponseSha256: providerReceipt.rawResponseSha256 ?? null,
+      rawResponseBody: null,
+      rawResponseBodySha256: null,
+      rawProbeRequestSha256: sha256Hex(buyerQuestion),
+      fullRequestBodySha256: null,
+      providerHttpStatus: providerReceipt.httpStatus ?? null,
+      providerLatencyMs: providerReceipt.latencyMs ?? null,
+      providerRequestId: providerReceipt.providerRequestId ?? null,
+      providerModel: null,
+      retryCount,
+      snapshotRequestId: null,
+      datasetId: job.datasetBatchId,
+      datasetSourceType: "protocol_execution_job",
+      runPosition,
+      negativeClaimDetected: content.negativeClaimDetected,
+      observationSchemaVersion: 1,
+      canonicalResultSha256: hash,
+      createdAt: nowIso(),
+    };
+    list.push(row);
+    store.probeResultsByProject.set(input.projectId, list);
+
+    return { outcome: "PERSISTED", probeResultId: row.id, canonicalResultSha256: hash };
+  },
+
+  async claimNextPendingAlert(
+    input: ClaimNextPendingAlertInput
+  ): Promise<ClaimNextPendingAlertResult> {
+    const store = getStore();
+    const nowMs = Date.now();
+    let reconciledClaimed = 0;
+    let reconciledUnder24h = 0;
+    let reconciledOver24h = 0;
+
+    for (const delivery of store.protocolExecutionJobAlertDeliveries.values()) {
+      if (delivery.status !== "claimed" && delivery.status !== "request_sent") continue;
+      if (delivery.leaseExpiresAt === null || new Date(delivery.leaseExpiresAt).getTime() >= nowMs) continue;
+
+      if (delivery.status === "claimed") {
+        const inFlight = [...store.protocolExecutionJobAlertDeliveryAttempts.values()].some(
+          (a) => a.deliveryId === delivery.deliveryId && a.outcome === "request_sent"
+        );
+        if (!inFlight) {
+          delivery.status = "pending";
+          delivery.workerId = null;
+          delivery.claimToken = null;
+          delivery.leaseExpiresAt = null;
+          reconciledClaimed += 1;
+        }
+        continue;
+      }
+
+      // status === "request_sent"
+      const staleAttempt = [...store.protocolExecutionJobAlertDeliveryAttempts.values()].find(
+        (a) => a.deliveryId === delivery.deliveryId && a.outcome === "request_sent"
+      );
+      if (!staleAttempt) continue;
+      const ageMs = nowMs - new Date(staleAttempt.requestSentAt).getTime();
+      const isUnder24h = ageMs < 24 * 60 * 60 * 1000;
+
+      staleAttempt.outcome = isUnder24h ? "ambiguous_under_24h" : "ambiguous_over_24h";
+      staleAttempt.finishedAt = nowIso();
+
+      if (isUnder24h && delivery.attemptCount < 3) {
+        delivery.status = "pending";
+        delivery.nextAttemptAt = nowIso();
+        reconciledUnder24h += 1;
+      } else {
+        delivery.status = "needs_review_delivery";
+        delivery.nextAttemptAt = null;
+        reconciledOver24h += 1;
+      }
+      delivery.workerId = null;
+      delivery.claimToken = null;
+      delivery.leaseExpiresAt = null;
+    }
+
+    const candidate = [...store.protocolExecutionJobAlertDeliveries.values()]
+      .filter(
+        (d) =>
+          d.status === "pending" &&
+          (d.nextAttemptAt === null || new Date(d.nextAttemptAt).getTime() <= nowMs) &&
+          d.attemptCount < 3
+      )
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
+
+    if (!candidate) {
+      return {
+        outcome: "NO_ALERT_AVAILABLE",
+        deliveryId: null,
+        alertEventId: null,
+        claimToken: null,
+        attemptCount: null,
+        projectId: null,
+        jobId: null,
+        eventType: null,
+        reasonCode: null,
+        idempotencyKey: null,
+        reconciledStaleClaimedCount: reconciledClaimed,
+        reconciledUnder24hCount: reconciledUnder24h,
+        reconciledOver24hCount: reconciledOver24h,
+      };
+    }
+
+    const token = randomUUID();
+    candidate.status = "claimed";
+    candidate.workerId = input.workerId;
+    candidate.claimToken = token;
+    candidate.leaseExpiresAt = new Date(nowMs + input.leaseSeconds * 1000).toISOString();
+
+    const event = store.protocolExecutionJobAlerts.get(candidate.alertEventId)!;
+
+    return {
+      outcome: "CLAIMED",
+      deliveryId: candidate.deliveryId,
+      alertEventId: event.alertEventId,
+      claimToken: token,
+      attemptCount: candidate.attemptCount,
+      projectId: event.projectId,
+      jobId: event.jobId,
+      eventType: event.eventType,
+      reasonCode: event.reasonCode,
+      idempotencyKey: `m5-alert:${event.alertEventId}`,
+      reconciledStaleClaimedCount: reconciledClaimed,
+      reconciledUnder24hCount: reconciledUnder24h,
+      reconciledOver24hCount: reconciledOver24h,
+    };
+  },
+
+  async renewAlertLease(input: RenewAlertLeaseInput): Promise<RenewAlertLeaseResult> {
+    const store = getStore();
+    const delivery = store.protocolExecutionJobAlertDeliveries.get(input.deliveryId);
+    if (!delivery) {
+      return { outcome: "DELIVERY_NOT_FOUND", deliveryId: null };
+    }
+    const owned =
+      delivery.claimToken === input.claimToken &&
+      delivery.leaseExpiresAt !== null &&
+      new Date(delivery.leaseExpiresAt).getTime() > Date.now() &&
+      (delivery.status === "claimed" || delivery.status === "request_sent");
+    if (!owned) {
+      return { outcome: "DELIVERY_NOT_OWNED", deliveryId: null };
+    }
+    delivery.leaseExpiresAt = new Date(Date.now() + input.leaseSeconds * 1000).toISOString();
+    return { outcome: "RENEWED", deliveryId: delivery.deliveryId };
+  },
+
+  async markAlertRequestSent(
+    input: MarkAlertRequestSentInput
+  ): Promise<MarkAlertRequestSentResult> {
+    const store = getStore();
+    const delivery = store.protocolExecutionJobAlertDeliveries.get(input.deliveryId);
+    if (!delivery) {
+      return { outcome: "DELIVERY_NOT_FOUND", attemptId: null, attemptSeq: null, idempotencyKey: null };
+    }
+    const owned =
+      delivery.claimToken === input.claimToken &&
+      delivery.leaseExpiresAt !== null &&
+      new Date(delivery.leaseExpiresAt).getTime() > Date.now() &&
+      delivery.status === "claimed";
+    if (!owned) {
+      return { outcome: "DELIVERY_NOT_OWNED", attemptId: null, attemptSeq: null, idempotencyKey: null };
+    }
+    if (delivery.attemptCount >= 3) {
+      return {
+        outcome: "ALERT_ATTEMPT_CAP_EXCEEDED",
+        attemptId: null,
+        attemptSeq: null,
+        idempotencyKey: null,
+      };
+    }
+
+    const nextSeq = delivery.attemptCount + 1;
+    const key = `m5-alert:${delivery.alertEventId}`;
+    const attempt: MemoryAlertDeliveryAttempt = {
+      attemptId: randomUUID(),
+      deliveryId: delivery.deliveryId,
+      attemptSeq: nextSeq,
+      idempotencyKey: key,
+      outcome: "request_sent",
+      requestSentAt: nowIso(),
+      finishedAt: null,
+      resendEmailId: null,
+      httpStatus: null,
+      errorCode: null,
+      createdAt: nowIso(),
+    };
+    store.protocolExecutionJobAlertDeliveryAttempts.set(attempt.attemptId, attempt);
+    delivery.status = "request_sent";
+    delivery.attemptCount = nextSeq;
+
+    return { outcome: "REQUEST_MARKED_SENT", attemptId: attempt.attemptId, attemptSeq: nextSeq, idempotencyKey: key };
+  },
+
+  async recordAlertDeliveryReceipt(
+    input: RecordAlertDeliveryReceiptInput
+  ): Promise<RecordAlertDeliveryReceiptResult> {
+    const store = getStore();
+
+    // DEFECT_04: real runtime validation, matching record_alert_
+    // delivery_receipt's own ordering exactly (outcome validated before
+    // any lookup) -- never relying on TypeScript's compile-time literal
+    // union alone, since a caller can bypass it via an `unknown` cast,
+    // exactly as a real text parameter sent to the RPC could carry
+    // anything.
+    const allowedOutcomes = ["accepted", "http_error", "ambiguous_under_24h", "ambiguous_over_24h"];
+    if (!allowedOutcomes.includes(input.outcome as unknown as string)) {
+      return { outcome: "INVALID_OUTCOME", deliveryId: null, finalDeliveryStatus: null };
+    }
+
+    const delivery = store.protocolExecutionJobAlertDeliveries.get(input.deliveryId);
+    if (!delivery) {
+      return { outcome: "DELIVERY_NOT_FOUND", deliveryId: null, finalDeliveryStatus: null };
+    }
+    const owned =
+      delivery.claimToken === input.claimToken &&
+      delivery.leaseExpiresAt !== null &&
+      new Date(delivery.leaseExpiresAt).getTime() > Date.now() &&
+      delivery.status === "request_sent";
+    if (!owned) {
+      return { outcome: "DELIVERY_NOT_OWNED", deliveryId: null, finalDeliveryStatus: null };
+    }
+
+    const attempt = store.protocolExecutionJobAlertDeliveryAttempts.get(input.attemptId);
+    if (!attempt || attempt.deliveryId !== input.deliveryId || attempt.outcome !== "request_sent") {
+      return { outcome: "ATTEMPT_ALREADY_TERMINAL", deliveryId: null, finalDeliveryStatus: null };
+    }
+
+    attempt.outcome = input.outcome;
+    attempt.finishedAt = nowIso();
+    attempt.resendEmailId = input.outcome === "accepted" ? input.resendEmailId ?? null : null;
+    attempt.httpStatus = input.httpStatus ?? null;
+    attempt.errorCode = input.outcome === "http_error" ? input.errorCode ?? null : null;
+
+    const jitter = 0.8 + Math.random() * 0.4;
+    let nextStatus: AlertDeliveryStatus;
+    let nextAttemptAt: string | null;
+
+    if (input.outcome === "accepted") {
+      nextStatus = "accepted";
+      nextAttemptAt = null;
+    } else if (input.outcome === "http_error") {
+      if (input.errorCode === "http_4xx_permanent" || delivery.attemptCount >= 3) {
+        nextStatus = "failed";
+        nextAttemptAt = null;
+      } else {
+        nextStatus = "pending";
+        const baseSeconds = delivery.attemptCount === 1 ? 30 : 300;
+        nextAttemptAt = new Date(Date.now() + baseSeconds * 1000 * jitter).toISOString();
+      }
+    } else if (input.outcome === "ambiguous_under_24h") {
+      if (delivery.attemptCount >= 3) {
+        nextStatus = "needs_review_delivery";
+        nextAttemptAt = null;
+      } else {
+        nextStatus = "pending";
+        nextAttemptAt = nowIso();
+      }
+    } else {
+      nextStatus = "needs_review_delivery";
+      nextAttemptAt = null;
+    }
+
+    delivery.status = nextStatus;
+    delivery.nextAttemptAt = nextAttemptAt;
+    delivery.workerId = null;
+    delivery.claimToken = null;
+    delivery.leaseExpiresAt = null;
+
+    return { outcome: "RECEIPT_RECORDED", deliveryId: delivery.deliveryId, finalDeliveryStatus: nextStatus };
   },
 };

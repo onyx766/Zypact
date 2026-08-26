@@ -92,8 +92,143 @@ function tryRun(cmd: string, args: string[]): { ok: boolean; output: string } {
   }
 }
 
+// ------------------------------------------------------------------
+// Migration selection: this harness applies EXACTLY migrations
+// 0001-0050 -- explicitly selected by number, never "every .sql file
+// present" (the prior form here, `readdirSync(...).filter((f) =>
+// f.endsWith(".sql"))`, would silently pick up 0051 and any later
+// migration, including a future 0054, and run its SQL against this
+// harness's own disposable stack -- exactly the coupling this fix
+// closes, mirroring the `<= 51` / `<= 52` / `<= 53` pattern already
+// established by the 0051/0052/0053 runtime harnesses).
+// ------------------------------------------------------------------
+const MAX_MIGRATION_VERSION = 50;
+const NUMBERED_MIGRATION_RE = /^(\d{4})_[a-z0-9_]+\.sql$/;
+
+type MigrationSelectionResult = { ok: true; files: string[] } | { ok: false; reason: string };
+
+/**
+ * Parses every `.sql` entry against the strict `NNNN_name.sql` shape,
+ * selects only those with version <= maxVersion, and fails closed
+ * (never a silent partial result) on any invalid numbered name, any
+ * duplicate version, or any gap in 1..maxVersion. Sorted numerically
+ * (falling back to filename) rather than relying on `readdirSync`'s
+ * unspecified ordering.
+ */
+function selectNumberedMigrations(entries: string[], maxVersion: number): MigrationSelectionResult {
+  const sqlFiles = entries.filter((f) => f.endsWith(".sql"));
+  const parsed: { file: string; version: number }[] = [];
+  for (const f of sqlFiles) {
+    const m = NUMBERED_MIGRATION_RE.exec(f);
+    if (!m) return { ok: false, reason: `invalid numbered migration name: ${f}` };
+    parsed.push({ file: f, version: Number(m[1]) });
+  }
+
+  const seen = new Set<number>();
+  for (const { version, file } of parsed) {
+    if (seen.has(version)) {
+      return { ok: false, reason: `duplicate migration version ${String(version).padStart(4, "0")} (${file})` };
+    }
+    seen.add(version);
+  }
+  for (let v = 1; v <= maxVersion; v++) {
+    if (!seen.has(v)) return { ok: false, reason: `missing migration version ${String(v).padStart(4, "0")}` };
+  }
+
+  const files = parsed
+    .filter((p) => p.version <= maxVersion)
+    .sort((a, b) => a.version - b.version || a.file.localeCompare(b.file))
+    .map((p) => p.file);
+
+  return { ok: true, files };
+}
+
+/**
+ * Static preflight (no Docker, no network, no filesystem writes): proves
+ * the selection logic above on the real migrations directory (positive)
+ * and on synthetic, in-memory lists (negative) -- never counted among
+ * this harness's runtime assertions/counters. Runs unconditionally, even
+ * without ZYPACT_M5_RUNTIME_TEST=1 set, since it is pure and harmless;
+ * placed before the opt-in gate so its result is visible on every
+ * invocation, including a plain SKIP.
+ */
+function runMigrationSelectionPreflight(): void {
+  console.log("\n=== Preflight: migration selection (static, before opt-in gate, no Docker) ===");
+  let failed = false;
+
+  // Positive: the real migrations directory selects exactly 0001-0050.
+  const realDir = path.join(REPO_ROOT, "supabase", "migrations");
+  const realEntries = readdirSync(realDir);
+  const realResult = selectNumberedMigrations(realEntries, MAX_MIGRATION_VERSION);
+  if (!realResult.ok) {
+    failed = true;
+    console.log(`  ✗ POSITIVE self-test failed on the real migrations directory: ${realResult.reason}`);
+  } else {
+    const versions = realResult.files.map((f) => Number(NUMBERED_MIGRATION_RE.exec(f)![1]));
+    const isExactRange =
+      realResult.files.length === MAX_MIGRATION_VERSION &&
+      versions.every((v, i) => v === i + 1);
+    if (!isExactRange) {
+      failed = true;
+      console.log(`  ✗ POSITIVE self-test: selection is not exactly 0001-${String(MAX_MIGRATION_VERSION).padStart(4, "0")} (got ${realResult.files.length} files)`);
+    } else {
+      console.log(`  ✓ POSITIVE: real directory selects exactly 0001-0050 (${realResult.files.length} files), 0051 and later excluded`);
+    }
+  }
+
+  const fixtureRange = (n: number) => Array.from({ length: n }, (_, i) => `${String(i + 1).padStart(4, "0")}_fixture.sql`);
+
+  // Negative: a synthetic list containing 0051 and 0054 must exclude both.
+  const syntheticWithFuture = [...fixtureRange(50), "0051_fixture.sql", "0054_fixture.sql"];
+  const futureResult = selectNumberedMigrations(syntheticWithFuture, MAX_MIGRATION_VERSION);
+  if (!futureResult.ok || futureResult.files.some((f) => f.startsWith("0051_") || f.startsWith("0054_"))) {
+    failed = true;
+    console.log("  ✗ NEGATIVE self-test failed: 0051/0054 were not excluded from a synthetic list");
+  } else {
+    console.log("  ✓ NEGATIVE: synthetic list containing 0051 and 0054 confirms both excluded from the <=50 selection");
+  }
+
+  // Negative: a synthetic list missing 0025 (gap) must be detected.
+  const syntheticGap = fixtureRange(50).filter((f) => !f.startsWith("0025_"));
+  const gapResult = selectNumberedMigrations(syntheticGap, MAX_MIGRATION_VERSION);
+  if (gapResult.ok) {
+    failed = true;
+    console.log("  ✗ NEGATIVE self-test failed: a missing migration (0025) in 0001-0050 was not detected");
+  } else {
+    console.log(`  ✓ NEGATIVE: a missing migration (0025) in 0001-0050 is detected — ${gapResult.reason}`);
+  }
+
+  // Negative: a synthetic list with a duplicate version must be detected.
+  const syntheticDup = [...fixtureRange(50), "0010_duplicate_fixture.sql"];
+  const dupResult = selectNumberedMigrations(syntheticDup, MAX_MIGRATION_VERSION);
+  if (dupResult.ok) {
+    failed = true;
+    console.log("  ✗ NEGATIVE self-test failed: a duplicate migration version (0010) was not detected");
+  } else {
+    console.log(`  ✓ NEGATIVE: a duplicate migration version (0010) is detected — ${dupResult.reason}`);
+  }
+
+  // Negative: an invalid numbered name must be detected.
+  const syntheticInvalid = [...fixtureRange(50), "051_bad_name.sql"];
+  const invalidResult = selectNumberedMigrations(syntheticInvalid, MAX_MIGRATION_VERSION);
+  if (invalidResult.ok) {
+    failed = true;
+    console.log("  ✗ NEGATIVE self-test failed: an invalid numbered migration name (051_bad_name.sql) was not detected");
+  } else {
+    console.log(`  ✓ NEGATIVE: an invalid numbered migration name is detected — ${invalidResult.reason}`);
+  }
+
+  if (failed) {
+    console.log("\n✗ FATAL: migration-selection preflight failed. No Docker command will run.");
+    process.exit(1);
+  }
+  console.log("✓ Migration-selection preflight passed: real directory + all self-tests behave exactly as required.\n");
+}
+
 function main(): void {
   console.log("=== M5 0050 — real runtime contract test for the D-020 completion gate ===\n");
+
+  runMigrationSelectionPreflight();
 
   // ------------------------------------------------------------------
   // 0. Opt-in gate — do nothing at all unless explicitly requested.
@@ -176,7 +311,11 @@ function main(): void {
     const sourceMigrationsDir = path.join(REPO_ROOT, "supabase", "migrations");
     const destMigrationsDir = path.join(workdir, "supabase", "migrations");
     mkdirSync(destMigrationsDir, { recursive: true });
-    const migrationFiles = readdirSync(sourceMigrationsDir).filter((f) => f.endsWith(".sql"));
+    const migrationSelection = selectNumberedMigrations(readdirSync(sourceMigrationsDir), MAX_MIGRATION_VERSION);
+    if (!migrationSelection.ok) {
+      throw new Error(`migration selection failed inside main(): ${migrationSelection.reason}`);
+    }
+    const migrationFiles = migrationSelection.files;
     for (const f of migrationFiles) {
       copyFileSync(path.join(sourceMigrationsDir, f), path.join(destMigrationsDir, f));
     }

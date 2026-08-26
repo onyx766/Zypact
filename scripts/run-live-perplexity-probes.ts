@@ -16,6 +16,7 @@
 import "dotenv/config";
 import { getDb } from "@/lib/db";
 import { runLivePerplexityProbes } from "@/lib/pipeline/run-live-perplexity-probes";
+import { createManualScanDatasetBatch } from "@/lib/evidence/resolve-dataset-batch";
 
 async function main() {
   const projectId = process.argv[2]?.trim();
@@ -44,6 +45,13 @@ async function main() {
   const before = await db.getProbeResultsByProject(projectId);
   const beforeCount = before.length;
 
+  // M2 canonical observations contract, second tranche (D-014) — this
+  // CLI has no snapshot-request concept, so every invocation is
+  // manual_scan, resolved here (once, before calling the pipeline
+  // function) rather than inside runLivePerplexityProbes itself, which
+  // must not guess its own caller's context.
+  const datasetBatch = await createManualScanDatasetBatch(db, projectId);
+
   const result = await runLivePerplexityProbes({
     projectId,
     count,
@@ -51,6 +59,8 @@ async function main() {
     // Sprint 13C: a true commercial probe may find zero brand mentions.
     // Do not fail the run just because the audited brand lost.
     requireClientMentionedSomewhere: false,
+    datasetId: datasetBatch.id,
+    datasetSourceType: datasetBatch.datasetSourceType,
   });
 
   if (!result.ok) {

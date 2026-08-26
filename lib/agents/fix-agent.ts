@@ -18,9 +18,6 @@ import {
   type GeneratedAssetOutput,
 } from "@/lib/schemas/generated-asset.schema";
 import type { SiteReaderOutput } from "@/lib/schemas/site-reader.schema";
-import type {
-  CompetitorMention,
-} from "@/lib/schemas/probe-analysis.schema";
 import type { EvidenceBankOutput } from "@/lib/schemas/evidence-bank.schema";
 import type { FixBriefRow, Gap, ProbeResult } from "@/lib/db/types";
 import {
@@ -83,6 +80,14 @@ export interface RunFixBriefResult {
   output: FixBriefOutput;
   usedMock: boolean;
   usedRetry: boolean;
+  /** M1 evidence contract — provider that produced the final accepted output. */
+  provider: "openai" | "anthropic" | "mock";
+  /** M1 evidence contract — exact model string used for the final accepted output. */
+  model: string;
+  /** M1 evidence contract — wall-clock milliseconds across the call (plus repair retry, if any). */
+  latencyMs: number;
+  /** M1 evidence contract — exact request text sent to the model (system + user). */
+  requestText: string;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -201,12 +206,14 @@ export async function runFixBriefAgent(
   // no path that persists an unvalidated claim.
   const schema = buildValidatedFixBriefSchema(input.grounding);
 
+  const startedAt = Date.now();
   const initial = await callModel(call);
   const parsed = await parseJsonOrRetry({
     schema,
     rawOutput: initial.content,
     originalCall: call,
   });
+  const latencyMs = Date.now() - startedAt;
 
   if (!parsed.ok) {
     throw new Error(
@@ -221,6 +228,10 @@ export async function runFixBriefAgent(
     output: parsed.data as FixBriefOutput,
     usedMock: initial.usedMock,
     usedRetry: parsed.usedRetry,
+    provider: initial.provider,
+    model: initial.model,
+    latencyMs,
+    requestText: `${call.system}\n\n${call.user}`,
   };
 }
 
@@ -235,24 +246,34 @@ function priorityFromSeverity(sev: string): number {
   return 5;
 }
 
-function chooseCompetitor(
-  gap: Gap,
-  probeResult: ProbeResult
-): string {
-  // 1. Prefer the competitor named on the gap row.
-  if (gap.competitorName && gap.competitorName.trim().length > 0) {
-    return gap.competitorName.trim();
+/**
+ * M3 — source unique: `gap.competitorName` here is `gapFromGrounding`'s
+ * own construction (`g.promptLocalCompetitors[0] ?? null`), NOT the
+ * raw legacy `Gap` DB row — `promptLocalCompetitors` is itself sourced
+ * from resolved, canonical, prompt-scoped evidence (via
+ * lib/pipeline/scorecard-competitors.ts's `canonicalEntityId`-grouped
+ * output, flowing through the Gap Map's `promptEvidence`). This is
+ * therefore already the correct, canonical primary source — not a
+ * fallback to guard against.
+ *
+ * No legacy fallback of any kind remains: no
+ * `probeResult.competitorsMentioned` read, no generic placeholder
+ * string. If grounding genuinely resolved no competitor for this gap,
+ * `gap.competitorName` is null and this throws — the orchestrator
+ * (lib/pipeline/generate-fix-brief.ts) checks for exactly this
+ * condition first and returns the project's own explicit
+ * `NO_RESOLVED_COMPETITOR_MESSAGE` error before ever reaching here;
+ * this throw is a defense-in-depth backstop for any other caller, not
+ * a new persistent status — nothing is written to any table.
+ */
+function chooseCompetitor(gap: Gap): string {
+  const name = gap.competitorName?.trim();
+  if (!name) {
+    throw new Error(
+      "chooseCompetitor: no resolved competitor available for this fix brief (grounding.promptLocalCompetitors is empty)"
+    );
   }
-  // 2. Fallback: the top position competitor in the probe.
-  const mentions = Array.isArray(probeResult.competitorsMentioned)
-    ? (probeResult.competitorsMentioned as CompetitorMention[])
-    : [];
-  const sorted = [...mentions].sort(
-    (a, b) => (a.position ?? 99) - (b.position ?? 99)
-  );
-  const first = sorted[0]?.name?.trim();
-  if (first) return first;
-  return "an alternative recommended by the AI";
+  return name;
 }
 
 /**
@@ -406,7 +427,7 @@ export function buildMockFixBrief(input: RunFixBriefInput): FixBriefOutput {
   const { probeResult, mirrorProfile, evidenceBank } = input;
   const gap = gapFromGrounding(input.grounding);
 
-  const competitor = chooseCompetitor(gap, probeResult);
+  const competitor = chooseCompetitor(gap);
   const fixType = inferFixType(gap.type, gap.suggestedFixDirection);
   const assets: AssetType[] = defaultAssetsForFixType(fixType);
   const priority = priorityFromSeverity(gap.severity);
@@ -467,6 +488,18 @@ export interface RunGenerateAssetResult {
   /** Sprint 13B.1 — persisted traceability for asset-generation benchmarks. */
   generationProvider: string;
   generationModel: string;
+  /**
+   * M1 evidence contract — wall-clock milliseconds across the call (plus
+   * repair retry, if any). 0 for the deterministic `json_ld_schema` path,
+   * which never calls the model.
+   */
+  latencyMs: number;
+  /**
+   * M1 evidence contract — exact request text sent to the model. Empty
+   * for the deterministic `json_ld_schema` path, which never calls the
+   * model — there is no request to record.
+   */
+  requestText: string;
 }
 
 function slimFixBriefForAgent(f: FixBriefRow): unknown {
@@ -520,6 +553,8 @@ export async function runGenerateAssetAgent(
       usedRetry: false,
       generationProvider: "deterministic",
       generationModel: "json_ld_template_v1",
+      latencyMs: 0,
+      requestText: "",
     };
   }
 
@@ -538,6 +573,7 @@ export async function runGenerateAssetAgent(
     model: assetGenerationModel,
   };
 
+  const startedAt = Date.now();
   const initial = await callModel(call);
   const parsed = await parseJsonOrRetry({
     schema: GeneratedAssetOutputSchema,
@@ -546,6 +582,7 @@ export async function runGenerateAssetAgent(
     preNormalize: (raw) =>
       preNormalizeGeneratedAssetContent(raw, input.assetType),
   });
+  const latencyMs = Date.now() - startedAt;
 
   if (!parsed.ok) {
     throw new Error(
@@ -562,6 +599,8 @@ export async function runGenerateAssetAgent(
     usedRetry: parsed.usedRetry,
     generationProvider: initial.provider,
     generationModel: initial.model,
+    latencyMs,
+    requestText: `${call.system}\n\n${call.user}`,
   };
 }
 

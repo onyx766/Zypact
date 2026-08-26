@@ -1,4 +1,5 @@
 import { runFixBriefAgent } from "@/lib/agents/fix-agent";
+import { recordAnalysisTrace } from "@/lib/evidence/analysis-trace";
 import { getDb } from "@/lib/db";
 import type { FixBriefRow, FixBriefRowInput, ProbeResult } from "@/lib/db/types";
 import { hasUsableEvidenceBank } from "@/lib/evidence-bank/has-usable-evidence-bank";
@@ -54,6 +55,18 @@ export const UNGROUNDED_GAP_MESSAGE =
 
 export const GAP_NOT_FOUND_MESSAGE =
   "Gap not found for this project.";
+
+/**
+ * M3 — source unique: raised when grounding resolved zero competitors
+ * for this gap's buyer question (`context.promptLocalCompetitors` is
+ * empty). Generation stops explicitly here rather than falling back to
+ * a raw legacy probe mention or a generic placeholder competitor name
+ * — no unresolved data is ever presented as a reliable competitor
+ * identity. This is a transient generation-time rejection, not a new
+ * persistent status: nothing is written to any table.
+ */
+export const NO_RESOLVED_COMPETITOR_MESSAGE =
+  "No resolved competitor evidence is available for this gap's buyer question. Re-run Gap Map generation or verify entity resolution completed for the grounding probe result.";
 
 export interface GenerateFixBriefInput {
   projectId: string;
@@ -170,6 +183,17 @@ export async function generateFixBrief(
     return { ok: false, error: NO_LOST_PROBE_MESSAGE, status: 409 };
   }
 
+  // M3 — source unique: `context.promptLocalCompetitors` is already
+  // resolved, canonical, prompt-scoped evidence (sourced via
+  // lib/pipeline/scorecard-competitors.ts's canonicalEntityId-grouped
+  // output, through the Gap Map's promptEvidence). If grounding
+  // genuinely resolved no competitor for this gap, generation stops
+  // explicitly here — never a fallback to a raw legacy probe mention
+  // or a generic placeholder name.
+  if (context.promptLocalCompetitors.length === 0) {
+    return { ok: false, error: NO_RESOLVED_COMPETITOR_MESSAGE, status: 409 };
+  }
+
   try {
     const agent = await withPipelineStep(
       { projectId: input.projectId, agent: "fix-brief" },
@@ -181,6 +205,21 @@ export async function generateFixBrief(
           evidenceBank,
         })
     );
+
+    // M1 evidence contract, third tranche. Traces the model's raw
+    // accepted output, before the grounding rewrite below — the trace
+    // records what the model actually said, not what we corrected it to.
+    await recordAnalysisTrace({
+      projectId: input.projectId,
+      stage: "fix-brief",
+      provider: agent.provider,
+      model: agent.model,
+      usedMock: agent.usedMock,
+      usedRetry: agent.usedRetry,
+      latencyMs: agent.latencyMs,
+      requestText: agent.requestText,
+      responseValue: agent.output,
+    });
 
     // The grounded values replace the model's on the returned output too:
     // a caller rendering `result.output` must not see causal prose or a

@@ -1,10 +1,12 @@
 import { runGapMapAgent } from "@/lib/agents/gap-map";
+import { recordAnalysisTrace } from "@/lib/evidence/analysis-trace";
 import {
   buildDiagnosticCompetitors,
   buildScorecardCompetitorEvidence,
   isRecoveryEligible,
 } from "@/lib/pipeline/scorecard-competitors";
 import { getDb } from "@/lib/db";
+import { getResolvedCompetitorMentions } from "@/lib/evidence/get-resolved-competitor-mentions";
 import { buildProbeSetSummary } from "@/lib/probe-results/report-selection";
 import type { Competitor, Gap, GapInput, GapMapRow } from "@/lib/db/types";
 import {
@@ -85,6 +87,19 @@ export async function generateGapMap(
     return { ok: false, error: NO_PROBE_RESULTS_MESSAGE };
   }
 
+  // M3 — source unique: pre-fetch resolved (canonical-entity) competitor
+  // mentions for every scorecard-scoped probe_result, once, here in the
+  // DB-aware orchestrator. buildScorecardCompetitorEvidence stays pure
+  // and synchronous — it only ever reads this already-fetched map.
+  const resolvedMentionsByProbeResult = new Map(
+    await Promise.all(
+      probeResults.map(
+        async (pr) =>
+          [pr.id, await getResolvedCompetitorMentions(db, input.projectId, pr.id)] as const
+      )
+    )
+  );
+
   // Competitor evidence is grounded in the scored buyer probes rather than
   // the project-wide discovery table. That table mixes crawled vendors and
   // cited sources with genuine shortlist rivals and carries no prompt
@@ -94,7 +109,8 @@ export async function generateGapMap(
   // Only prompt groups that can support a *recovery* gap contribute: a won
   // prompt is positive evidence and must never be read as a loss.
   const competitorEvidence = buildScorecardCompetitorEvidence(
-    probeSummary.scorecardPromptGroups
+    probeSummary.scorecardPromptGroups,
+    resolvedMentionsByProbeResult
   ).filter((entry) => isRecoveryEligible(entry.outcome));
 
   const projectCompetitors = await db.getCompetitorsByProject(input.projectId);
@@ -118,8 +134,22 @@ export async function generateGapMap(
           probeResults,
           competitors,
           competitorEvidence,
+          resolvedMentionsByProbeResult,
         })
     );
+
+    // M1 evidence contract, third tranche.
+    await recordAnalysisTrace({
+      projectId: input.projectId,
+      stage: "gap-map",
+      provider: agent.provider,
+      model: agent.model,
+      usedMock: agent.usedMock,
+      usedRetry: agent.usedRetry,
+      latencyMs: agent.latencyMs,
+      requestText: agent.requestText,
+      responseValue: agent.output,
+    });
 
     const gapMapRow = await db.saveGapMap(input.projectId, agent.output);
 

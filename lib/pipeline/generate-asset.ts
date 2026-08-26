@@ -1,4 +1,5 @@
 import { runGenerateAssetAgent } from "@/lib/agents/fix-agent";
+import { recordAnalysisTrace } from "@/lib/evidence/analysis-trace";
 import { getDb } from "@/lib/db";
 import type { GeneratedAssetRow, GeneratedAssetRowInput } from "@/lib/db/types";
 import { hasUsableEvidenceBank } from "@/lib/evidence-bank/has-usable-evidence-bank";
@@ -136,6 +137,29 @@ export async function generateAsset(
           assetType,
         })
     );
+
+    // M1 evidence contract, third tranche. `json_ld_schema` never calls
+    // the model (`generationProvider: "deterministic"`, Sprint 13B.1) —
+    // there is no analysis LLM call to trace for that asset type, so we
+    // deliberately skip recording rather than fabricate a trace row for
+    // a call that never happened.
+    if (
+      agent.generationProvider === "openai" ||
+      agent.generationProvider === "anthropic" ||
+      agent.generationProvider === "mock"
+    ) {
+      await recordAnalysisTrace({
+        projectId: input.projectId,
+        stage: "generate-asset",
+        provider: agent.generationProvider,
+        model: agent.generationModel,
+        usedMock: agent.usedMock,
+        usedRetry: agent.usedRetry,
+        latencyMs: agent.latencyMs,
+        requestText: agent.requestText,
+        responseValue: agent.output,
+      });
+    }
 
     // Sprint 8 always saves with pending_qa. The QA Agent (out of scope)
     // will move it to safe_to_publish / needs_evidence / unsupported_claims.

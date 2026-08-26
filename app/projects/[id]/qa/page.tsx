@@ -5,6 +5,7 @@ import { hasUsableEvidenceBank } from "@/lib/evidence-bank/has-usable-evidence-b
 import { EvidenceBankOutputSchema } from "@/lib/schemas/evidence-bank.schema";
 import type { QaReportRow } from "@/lib/db/types";
 import { QaAssetPanel } from "./qa-asset-panel";
+import { ExportDownloadButton } from "./export-download-button";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -372,23 +373,9 @@ export default async function QaPage({ params }: PageProps) {
             those blocks as-is.
           </p>
         )}
-        <p style={{ marginBottom: 0 }}>
-          <a
-            href={`/api/projects/${project.id}/export`}
-            download
-            style={{
-              display: "inline-block",
-              padding: "8px 14px",
-              background: "#111",
-              color: "#fff",
-              textDecoration: "none",
-              borderRadius: 4,
-              fontWeight: 600,
-            }}
-          >
-            Download report (.md)
-          </a>
-        </p>
+        <div style={{ marginBottom: 0 }}>
+          <ExportDownloadButton projectId={project.id} />
+        </div>
       </div>
 
       <p className="muted" style={{ marginTop: 24, fontSize: 12 }}>

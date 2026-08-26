@@ -25,6 +25,7 @@ import { computeGapScores } from "@/lib/gap-map/compute-gap-scores";
 import { buildMockGapMap } from "@/lib/agents/gap-map";
 import type { RunGapMapInput } from "@/lib/agents/gap-map";
 import type { Competitor, ProbeResult } from "@/lib/db/types";
+import type { ResolvedCompetitorMention } from "@/lib/evidence/get-resolved-competitor-mentions";
 
 let failures = 0;
 function check(label: string, condition: boolean): void {
@@ -126,6 +127,37 @@ const summary = buildProbeSetSummary(probeResults, null, {
 });
 const groups = summary.scorecardPromptGroups;
 
+// M3 — simulate the M2 canonical layer's own output for these fixture
+// probe_results, the same way scripts/test-scorecard-competitors.ts does:
+// the same (trimmed, lowercased) name always resolves to the same
+// canonical_entity_id, exactly like real entity resolution would.
+const canonicalIdByNormalizedName = new Map<string, string>();
+function canonicalIdFor(name: string): string {
+  const key = name.trim().toLowerCase();
+  let id = canonicalIdByNormalizedName.get(key);
+  if (!id) {
+    id = `canonical:${key}`;
+    canonicalIdByNormalizedName.set(key, id);
+  }
+  return id;
+}
+const resolvedMentionsByProbeResult = new Map<string, ResolvedCompetitorMention[]>(
+  probeResults.map((pr) => [
+    pr.id,
+    (Array.isArray(pr.competitorsMentioned)
+      ? (pr.competitorsMentioned as Array<{ name: string; position: number }>)
+      : []
+    ).map((c) => ({
+      canonicalEntityId: canonicalIdFor(c.name),
+      rawText: c.name,
+      normalizedText: c.name.trim().toLowerCase(),
+      mentionOrdinal: c.position,
+      context: null,
+      generatedPromptId: pr.generatedPromptId ?? null,
+    })),
+  ])
+);
+
 // ---------- Gate 1: historical scorecard must be exact ----------
 console.log("\n [Gate 1 — historical scorecard]");
 const totalRuns = groups.reduce((n, g) => n + g.runs, 0);
@@ -150,7 +182,7 @@ if (failures > 0) {
 
 // ---------- Gate 2: prompt-scoped diagnostic competitor evidence ----------
 console.log("\n [Gate 2 — diagnostic competitor evidence]");
-const evidence = buildScorecardCompetitorEvidence(groups);
+const evidence = buildScorecardCompetitorEvidence(groups, resolvedMentionsByProbeResult);
 for (const e of evidence) {
   console.log(`    [${e.outcome}] ${e.prompt.slice(0, 52)}… -> ${e.competitors.map((c) => `${c.name}(${c.recommendationCount}/${c.runs})`).join(", ") || "(none)"}`);
 }
@@ -185,6 +217,7 @@ const competitors: Competitor[] = Array.from(evidencedKeys).map((key) => {
     id: `scorecard:${key}`, projectId: PROJECT, name: strongest.name, website: null,
     discoverySource: "ai_answer", mentionCount: strongest.recommendationCount, promptIds: [],
     threatLevel: "medium", confidence: "unverified", isPhantom: false, isBlindSpot: false,
+    canonicalEntityId: strongest.canonicalEntityId,
     createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
   };
 });
@@ -192,11 +225,14 @@ console.log(`    gap map competitor input: ${competitors.map((c) => c.name).join
 check("no source-only domain entered the Gap Map competitor input",
   !competitors.some((c) => SOURCE_ONLY.includes(c.name)));
 
-const input = {
+const input: RunGapMapInput = {
   mirrorProfile, probeResults, competitors, competitorEvidence: evidence,
-} as unknown as RunGapMapInput;
+  resolvedMentionsByProbeResult,
+};
 
-const baseline = computeGapScores({ mirrorProfile, probeResults, competitors } as never);
+const baseline = computeGapScores({
+  mirrorProfile, probeResults, competitors, resolvedMentionsByProbeResult,
+});
 console.log("\n    dimension scores per competitor:");
 for (const c of competitors) {
   const s = baseline[c.name];

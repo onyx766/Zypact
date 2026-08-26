@@ -51,6 +51,7 @@ function evidence(
     competitors: names.map((name, i) => ({
       name,
       nameKey: name.trim().toLowerCase(),
+      canonicalEntityId: `canonical:${name.trim().toLowerCase()}`,
       prompt,
       promptKey: prompt.toLowerCase(),
       promptOutcome: outcome,

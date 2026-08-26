@@ -14,17 +14,32 @@ import { createClient } from "@supabase/supabase-js";
 
 import { getDb } from "@/lib/db";
 import type {
+  DatasetBatch,
+  DbAdapter,
   GeneratedPrompt,
   ProbeMode,
   ProbeResult,
   Project,
+  Protocol,
   QaReportRow,
   SnapshotProgressStage,
 } from "@/lib/db/types";
+import { resolveDatasetBatchForInvocation } from "@/lib/evidence/resolve-dataset-batch";
+import {
+  checkProtocolExecutionGate,
+  reservationOverrunUsd,
+  runProtocolGatedBaseline,
+  type ProtocolProbeCaller,
+} from "@/lib/pipeline/run-protocol-gated-baseline";
 import { runMirrorScan } from "@/lib/pipeline/run-mirror-scan";
 import { generateBuyerPrompts } from "@/lib/pipeline/generate-buyer-prompts";
 import { getOrCreateEvidenceBank } from "@/lib/pipeline/get-or-create-evidence-bank";
-import { runPerplexityProbe } from "@/lib/probes/perplexity";
+import {
+  PerplexityProbeFailure,
+  runPerplexityProbe,
+  type PerplexityProbeResult,
+} from "@/lib/probes/perplexity";
+import { failProbeRunOrThrow } from "@/lib/pipeline/mark-probe-run-failed";
 import { analyzeProbeResponse } from "@/lib/pipeline/analyze-probe-response";
 import { discoverCompetitors } from "@/lib/pipeline/discover-competitors";
 import {
@@ -33,7 +48,7 @@ import {
 } from "@/lib/snapshot-worker/lease-renewal";
 import { generateGapMap } from "@/lib/pipeline/generate-gap-map";
 import { generateFixBrief } from "@/lib/pipeline/generate-fix-brief";
-import { buildMvpReport } from "@/lib/export/build-mvp-report";
+import { buildMvpReport, loadReportInputs } from "@/lib/export/build-mvp-report";
 import { resolveModel, resolveProvider } from "@/lib/llm/call-model";
 import {
   applyPromptShortfallPolicy,
@@ -53,6 +68,13 @@ interface Args {
   category: string;
   userId: string;
   projectId?: string;
+  /**
+   * M4 Stage B — the protocol-gated V1 path. Mutually exclusive with
+   * every legacy prompt-count/run-count/budget flag: a protocol's own
+   * planned*Runs/spend_cap_usd govern this path completely, never a
+   * DEFAULT_PROMPTS/DEFAULT_RUNS/DEFAULT_BUDGET_USD fallback.
+   */
+  protocolId?: string;
   prompts: number;
   runs: number;
   promptsFile?: string;
@@ -111,11 +133,42 @@ function assertLeaseOwnership(): void {
   leaseRenewer?.assertOwned();
 }
 
+/**
+ * Frozen legacy constants — the pre-M4 multi-prompt CLI path only.
+ * `runProtocolGatedScan` below never reads any of these three; its own
+ * planned-run counts and cost figures come entirely from the protocol
+ * row and the two constants that follow it.
+ */
 const DEFAULT_PROMPTS = 5;
 const DEFAULT_RUNS = 3;
 const DEFAULT_BUDGET_USD = 2;
 const ESTIMATED_COST_PER_LIVE_PROBE_USD = Number.parseFloat(
   process.env.ZYPACT_ESTIMATED_COST_PER_LIVE_PROBE_USD || "0.03",
+);
+
+/**
+ * M4 Stage B — cost constants for the protocol-gated path ONLY. Named
+ * and scoped separately from the legacy constants above; neither value
+ * is a fallback for the other under any condition.
+ *
+ * `RESERVATION_CEILING` is a conservative per-call CEILING, deliberately
+ * higher than the flat average below, so a single call's real cost
+ * rarely exceeds what was reserved against the spend cap (item 2 — a
+ * ceiling, not an average estimate).
+ *
+ * `ACTUAL_COST` is the best available approximation of real per-call
+ * cost until genuine provider usage/billing data is wired in —
+ * lib/probes/perplexity.ts's PerplexityProbeResult carries no
+ * usage/cost field today (confirmed by inspection). This is an honest,
+ * explicitly-labeled approximation, never a fabricated exact figure;
+ * reconcileAttempt always records whatever this constant says the real
+ * cost was, even when that is higher than the reservation ceiling.
+ */
+const PROTOCOL_RESERVATION_CEILING_PER_CALL_USD = Number.parseFloat(
+  process.env.ZYPACT_PROTOCOL_RESERVATION_CEILING_PER_CALL_USD || "0.15",
+);
+const PROTOCOL_ACTUAL_COST_PER_LIVE_PROBE_USD = Number.parseFloat(
+  process.env.ZYPACT_PROTOCOL_ACTUAL_COST_PER_LIVE_PROBE_USD || "0.03",
 );
 
 function fail(message: string, code = 1): never {
@@ -164,6 +217,7 @@ function parseArgs(argv: string[]): Args {
     "userId",
     "user-id",
     "project-id",
+    "protocol-id",
     "prompts",
     "runs",
     "prompts-file",
@@ -226,6 +280,40 @@ function parseArgs(argv: string[]): Args {
     );
   }
 
+  const protocolId = get("protocol-id")?.trim();
+
+  if (
+    protocolId &&
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      protocolId
+    )
+  ) {
+    fail("--protocol-id must be a valid UUID.");
+  }
+
+  if (protocolId && !projectId) {
+    fail(
+      "--protocol-id requires --project-id: a protocol is always scoped to an existing project, never inferred or created fresh."
+    );
+  }
+
+  if (protocolId && has("force-new-project")) {
+    fail("--protocol-id cannot be combined with --force-new-project.");
+  }
+
+  if (protocolId && (has("prompts") || has("runs") || has("budget-usd"))) {
+    fail(
+      "--protocol-id cannot be combined with --prompts, --runs, or --budget-usd. " +
+      "The protocol's own planned runs and spend_cap_usd govern this path; there is no legacy fallback count or budget to blend with it."
+    );
+  }
+
+  if (protocolId && promptsFile) {
+    fail(
+      "--protocol-id cannot be combined with --prompts-file. The protocol's buyer_question_version already carries its own single canonical prompt text."
+    );
+  }
+
   if (promptsFile && competitors.length === 0 && !allowUnguardedFrame) {
     fail("Missing --competitors. Custom prompts require an explicit competitor frame. Use --allow-unguarded-frame only for internal tests.");
   }
@@ -240,6 +328,7 @@ function parseArgs(argv: string[]): Args {
     category,
     userId: get("userId")?.trim() || get("user-id")?.trim() || DEFAULT_USER_ID,
     projectId,
+    protocolId,
     prompts: parsePositiveInt(get("prompts"), DEFAULT_PROMPTS, "--prompts"),
     runs: parsePositiveInt(get("runs"), DEFAULT_RUNS, "--runs"),
     promptsFile,
@@ -508,14 +597,19 @@ function makeSimulatedResponse(prompt: string, brand: string, competitors: strin
   ].join(" ");
 }
 
-async function saveSimulatedProbe(projectId: string, prompt: GeneratedPrompt, brand: string, competitors: string[]): Promise<ProbeResult> {
+async function saveSimulatedProbe(projectId: string, prompt: GeneratedPrompt, brand: string, competitors: string[], datasetBatch: DatasetBatch): Promise<ProbeResult> {
   const db = getDb();
-  const run = await db.createProbeRun(projectId, "perplexity", "simulated", "succeeded");
+  const run = await db.createProbeRun(projectId, "perplexity", "simulated", "succeeded", {
+    datasetId: datasetBatch.id,
+    datasetSourceType: datasetBatch.datasetSourceType,
+  });
   const names = simulatedCompetitorNames(competitors);
 
   return db.saveProbeResult({
     probeRunId: run.id,
     projectId,
+    datasetId: datasetBatch.id,
+    datasetSourceType: datasetBatch.datasetSourceType,
     generatedPromptId: prompt.id,
     prompt: prompt.prompt,
     platform: "perplexity",
@@ -553,6 +647,18 @@ async function runMissingProbes(args: Args, project: Project, promptTargets: Gen
   const mirrorCompetitors = mirrorParsed.success ? mirrorParsed.data.competitorsMentioned : [];
   const knownCompetitors = Array.from(new Set([...args.competitors, ...dbCompetitors.map((c) => c.name), ...mirrorCompetitors].filter(Boolean)));
 
+  // M2 canonical observations contract, second tranche (D-014) —
+  // resolved once, before the first probe_run of this invocation, never
+  // after. SNAPSHOT_REQUEST_ID is set by run-approved-snapshot.ts when
+  // this script runs as its spawned child; when absent (a bare manual
+  // invocation), this is a fresh manual_scan batch, never inferred
+  // retroactively.
+  const datasetBatch = await resolveDatasetBatchForInvocation(
+    db,
+    project.id,
+    process.env.SNAPSHOT_REQUEST_ID
+  );
+
   let attempted = 0;
   let saved = 0;
   let usedMock = false;
@@ -568,7 +674,7 @@ async function runMissingProbes(args: Args, project: Project, promptTargets: Gen
     for (let i = 0; i < missing; i += 1) {
       attempted += 1;
       if (args.probeMode === "simulated") {
-        await saveSimulatedProbe(project.id, prompt, brandName, args.competitors);
+        await saveSimulatedProbe(project.id, prompt, brandName, args.competitors, datasetBatch);
         saved += 1;
         savedForPrompt += 1;
         usedMock = true;
@@ -580,7 +686,56 @@ async function runMissingProbes(args: Args, project: Project, promptTargets: Gen
       // to return; that is the bounded waste the policy accepts.
       assertLeaseOwnership();
 
-      const live = await runPerplexityProbe({ prompt: prompt.prompt, brandName, domain: project.domain });
+      // M1 evidence contract, fourth tranche — the run is created before
+      // the provider call so a failure at any point below (provider
+      // failure or the identity-leak check) has a real probe_runs row to
+      // attach to. `analyzeProbeResponse` reuses this id and never
+      // creates a second row for the same attempt.
+      const probeRun = await db.createProbeRun(project.id, "perplexity", "live_perplexity", "pending", {
+        datasetId: datasetBatch.id,
+        datasetSourceType: datasetBatch.datasetSourceType,
+      });
+
+      let live;
+      try {
+        live = await runPerplexityProbe({ prompt: prompt.prompt, brandName, domain: project.domain });
+      } catch (err) {
+        if (err instanceof PerplexityProbeFailure) {
+          // M1 second tranche, extended in the fourth tranche — persist
+          // the failed attempt before it propagates, now attached to the
+          // run created above.
+          await db.recordProbeFailure({
+            probeRunId: probeRun.id,
+            projectId: project.id,
+            platform: "perplexity",
+            prompt: prompt.prompt,
+            failureReason: err.reason,
+            providerHttpStatus: err.httpStatus,
+            providerErrorBody: err.errorBody,
+            providerErrorBodySha256: err.errorBodySha256,
+            providerLatencyMs: err.latencyMs,
+            providerRequestId: err.providerRequestId,
+            rawProbeRequestSha256: err.rawProbeRequestSha256,
+            fullRequestBodySha256: err.fullRequestBodySha256,
+            retryCount: 0,
+          });
+        }
+        // M1 evidence contract, fourth-tranche correction — no longer
+        // `.catch(() => undefined)`. If the status write itself fails,
+        // failProbeRunOrThrow throws a compound error instead of
+        // silently leaving this run stuck in "pending"; the original
+        // `err` is folded into that error's message so nothing is lost.
+        // If the status write succeeds, execution reaches `throw err`
+        // below exactly as before.
+        await failProbeRunOrThrow(
+          db,
+          probeRun.id,
+          `Perplexity probe failed for prompt "${prompt.prompt}": ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+        throw err;
+      }
       usedMock = usedMock || live.usedMock;
       if (probeRequestLeaksClientIdentity({
         rawRequest: live.rawProbeRequest ?? prompt.prompt,
@@ -588,7 +743,19 @@ async function runMissingProbes(args: Args, project: Project, promptTargets: Gen
         brandTerms: terms,
         domain: project.domain,
       })) {
-        throw new Error(`Probe request integrity failed for prompt: ${prompt.prompt}`);
+        // M1 evidence contract, fourth tranche — deliberately does NOT
+        // call db.recordProbeFailure here. `failure_reason` is
+        // constrained to network_error/http_error/empty_answer (0037);
+        // an identity leak is none of those, and inventing a value would
+        // misrepresent what actually happened. Only the run's status is
+        // recorded — that is honest and sufficient.
+        //
+        // Fourth-tranche correction — no longer `.catch(() => undefined)`:
+        // a status-write failure here now throws (with the integrity
+        // failure folded into its message) instead of being discarded.
+        const integrityError = `Probe request integrity failed for prompt: ${prompt.prompt}`;
+        await failProbeRunOrThrow(db, probeRun.id, integrityError);
+        throw new Error(integrityError);
       }
 
       const analyzed = await analyzeProbeResponse({
@@ -596,10 +763,23 @@ async function runMissingProbes(args: Args, project: Project, promptTargets: Gen
         generatedPromptId: prompt.id,
         prompt: prompt.prompt,
         platform: "perplexity",
+        probeRunId: probeRun.id,
         rawResponse: live.rawResponse,
         rawProbeRequest: live.rawProbeRequest,
         knownCompetitors,
         probeMode: "live_perplexity",
+        rawResponseSha256: live.rawResponseSha256,
+        rawResponseBody: live.rawResponseBody,
+        rawResponseBodySha256: live.rawResponseBodySha256,
+        rawProbeRequestSha256: live.rawProbeRequestSha256,
+        fullRequestBodySha256: live.fullRequestBodySha256,
+        providerHttpStatus: live.httpStatus,
+        providerLatencyMs: live.latencyMs,
+        providerRequestId: live.providerRequestId,
+        providerModel: live.model,
+        retryCount: 0,
+        datasetId: datasetBatch.id,
+        datasetSourceType: datasetBatch.datasetSourceType,
       });
       if (!analyzed.ok) throw new Error(analyzed.error);
       saved += 1;
@@ -795,24 +975,12 @@ async function regenerateRecommendations(projectId: string): Promise<void> {
 
 async function exportReport(args: Args, project: Project, outPath: string): Promise<string> {
   const db = getDb();
-  const [mirrorProfile, prompts, probeResults, competitors, gapMap, gaps, evidenceBank, fixBriefs, assets, qaReports] = await Promise.all([
-    db.getMirrorProfile(project.id),
-    db.getGeneratedPrompts(project.id),
-    db.getProbeResultsByProject(project.id),
-    db.getCompetitorsByProject(project.id),
-    db.getLatestGapMap(project.id),
-    db.getGapsByProject(project.id),
-    db.getEvidenceBankByProject(project.id),
-    db.getFixBriefsByProject(project.id),
-    db.getGeneratedAssetsByProject(project.id),
-    db.getQaReportsByProject(project.id),
-  ]);
-
-  const latestQaByAsset = new Map<string, QaReportRow>();
-  for (const qa of qaReports) {
-    const prev = latestQaByAsset.get(qa.generatedAssetId);
-    if (!prev || Date.parse(qa.createdAt) > Date.parse(prev.createdAt)) latestQaByAsset.set(qa.generatedAssetId, qa);
-  }
+  // M3 — source unique: loadReportInputs is the one canonical,
+  // DB-aware path that assembles BuildMvpReportInput, including
+  // resolvedMentionsByProbeResult — replacing this function's own,
+  // previously-duplicated Promise.all fetch of the same rows.
+  const inputs = await loadReportInputs(db, project.id);
+  if (!inputs) throw new Error(`loadReportInputs returned null for project ${project.id}`);
 
   const sensitiveValues = [
     process.env.SUPABASE_SERVICE_ROLE_KEY,
@@ -828,17 +996,7 @@ async function exportReport(args: Args, project: Project, outPath: string): Prom
   const reportedProvider = resolveProvider();
 
   const report = buildMvpReport({
-    project,
-    mirrorProfile,
-    prompts,
-    probeResults,
-    competitors,
-    gapMap,
-    gaps,
-    evidenceBank,
-    fixBriefs,
-    assets,
-    latestQaByAsset,
+    ...inputs,
     // Traceability metadata must describe the execution that actually
     // happened, so it comes from the same resolvers the agents call rather
     // than a second, independent reading of the environment. The previous
@@ -1113,6 +1271,204 @@ async function updateSnapshotProgress(
   );
 }
 
+/**
+ * M4 Stage B — the protocol-gated V1 path. Entered only when
+ * `--protocol-id` is supplied; the legacy multi-prompt path below is
+ * completely untouched and unreachable from here. Never reads
+ * DEFAULT_PROMPTS, DEFAULT_RUNS, DEFAULT_BUDGET_USD, args.prompts,
+ * args.runs, or args.budgetUsd — every count and every cap comes from
+ * the protocol row itself, enforced inside admitAndReserveAttempt /
+ * reconcileAttempt.
+ */
+async function runProtocolGatedScan(args: Args): Promise<void> {
+  const db = getDb();
+
+  const project = await findExistingProject(args);
+  if (!project) {
+    fail(`Reserved project ${args.projectId} was not found.`);
+  }
+
+  const protocol = await db.getProtocol(args.protocolId!, project.id);
+  const version = protocol
+    ? await db.getBuyerQuestionVersion(protocol.buyerQuestionVersionId, project.id)
+    : null;
+
+  const gate = checkProtocolExecutionGate(protocol, version);
+  if (!gate.ok) {
+    fail(
+      `Protocol ${args.protocolId} refused execution (${gate.reason}). This path admits no attempt without a real, approved protocol and a real, approved buyer_question_version — there is no fallback plan.`
+    );
+  }
+  // Narrowed by the gate above: both are non-null past this point.
+  const approvedProtocol: Protocol = protocol!;
+  const approvedVersion = version!;
+
+  await ensureMirrorProfile(project);
+  const mirror = await db.getMirrorProfile(project.id);
+  const mirrorParsed = SiteReaderOutputSchema.safeParse(mirror?.json ?? null);
+  const brandName =
+    project.companyName?.trim() ||
+    (mirrorParsed.success ? mirrorParsed.data.companyName.trim() : "") ||
+    args.brand;
+  const dbCompetitors = await db.getCompetitorsByProject(project.id);
+  const mirrorCompetitors = mirrorParsed.success
+    ? mirrorParsed.data.competitorsMentioned
+    : [];
+  const knownCompetitors = Array.from(
+    new Set(
+      [...args.competitors, ...dbCompetitors.map((c) => c.name), ...mirrorCompetitors].filter(
+        Boolean
+      )
+    )
+  );
+
+  const isLive = args.probeMode === "live";
+  const reservationCeilingUsd = isLive
+    ? PROTOCOL_RESERVATION_CEILING_PER_CALL_USD
+    : 0;
+  const actualCostUsd = isLive ? PROTOCOL_ACTUAL_COST_PER_LIVE_PROBE_USD : 0;
+
+  console.log("Zypact MVP scan plan — M4 protocol-gated path");
+  console.log(`brand               : ${args.brand}`);
+  console.log(`domain              : ${hostnameOf(args.domain)}`);
+  console.log(`projectId           : ${project.id}`);
+  console.log(`protocolId          : ${approvedProtocol.id} (status=${approvedProtocol.status})`);
+  console.log(
+    `buyer question ver. : ${approvedVersion.id} (v${approvedVersion.versionNumber}, approved)`
+  );
+  // Point 3 (final Stage B review) — text, hash, provenance, and
+  // approval are printed exactly as stored on buyer_question_versions;
+  // nothing here is recomputed, and no other flag (e.g. --prompts-file,
+  // already rejected above) may substitute a free-text question for it.
+  console.log(`prompt text         : ${approvedVersion.promptText}`);
+  console.log(`prompt hash         : ${approvedVersion.promptHash}`);
+  console.log(`provenance          : ${approvedVersion.provenance}`);
+  console.log(
+    `version approved by : ${approvedVersion.approvedBy} at ${approvedVersion.approvedAt}`
+  );
+  console.log(`planned baseline    : ${approvedProtocol.plannedBaselineRuns}`);
+  console.log(
+    `planned retest      : ${approvedProtocol.plannedRetestRuns} (not run by this path — retest is M7)`
+  );
+  console.log(`run_cap             : ${approvedProtocol.runCap}`);
+  console.log(`spend_cap_usd       : $${approvedProtocol.spendCapUsd.toFixed(2)}`);
+  console.log(`probe mode          : ${args.probeMode}`);
+  console.log(
+    `reservation ceiling : $${reservationCeilingUsd.toFixed(4)} per call (a conservative ceiling, not an average estimate)`
+  );
+  console.log(
+    `actual cost model   : $${actualCostUsd.toFixed(4)} per call (approximation pending real provider usage/billing data)`
+  );
+
+  if (args.dryRun) {
+    console.log(
+      "dry-run complete: no admission, no reservation, no paid probes, no writes."
+    );
+    return;
+  }
+  if (args.probeMode === "live" && !process.env.PERPLEXITY_API_KEY) {
+    fail(
+      "PERPLEXITY_API_KEY is required for --probe-mode live. Use --probe-mode simulated for a free test."
+    );
+  }
+
+  assertLeaseOwnership();
+  await updateSnapshotProgress(args, "checking_ai_visibility");
+
+  const datasetBatch = await resolveDatasetBatchForInvocation(
+    db,
+    project.id,
+    process.env.SNAPSHOT_REQUEST_ID
+  );
+
+  const simulatedCaller: ProtocolProbeCaller = async ({ prompt, brandName: bn }) => {
+    const text = makeSimulatedResponse(prompt, bn, args.competitors);
+    const result: PerplexityProbeResult = {
+      prompt,
+      answer: text,
+      rawResponse: text,
+      rawProbeRequest: prompt,
+      citations: [],
+      searchResults: [],
+      sourceCitations: [],
+      model: "simulated",
+      usedMock: true,
+    };
+    return result;
+  };
+  const callProvider: ProtocolProbeCaller = isLive
+    ? runPerplexityProbe
+    : simulatedCaller;
+
+  const result = await runProtocolGatedBaseline({
+    db,
+    projectId: project.id,
+    protocol: approvedProtocol,
+    promptText: approvedVersion.promptText,
+    brandName,
+    domain: project.domain,
+    knownCompetitors,
+    datasetBatch,
+    plannedRuns: approvedProtocol.plannedBaselineRuns,
+    attemptKind: "baseline",
+    probeMode: isLive ? "live_perplexity" : "simulated",
+    reservationCeilingUsd,
+    actualCostUsd,
+    callProvider,
+    assertLeaseOwnership,
+  });
+
+  assertLeaseOwnership();
+  await updateSnapshotProgress(args, "building_diagnosis");
+
+  console.log("M4 protocol-gated scan completed.");
+  console.log(`planned runs        : ${result.plannedRuns}`);
+  console.log(`attempted           : ${result.attemptedPlannedRuns}`);
+  console.log(`completed           : ${result.completed}`);
+  console.log(`failed/exhausted    : ${result.failedExhausted}`);
+  console.log(`skipped (resumed)   : ${result.skippedAlreadyDone}`);
+  console.log(`stopped early       : ${result.stoppedReason ?? "no"}`);
+  if (result.stoppedReason === "unresolved_in_flight_attempt") {
+    console.log(
+      "  -> a prior invocation left a reserved/in_progress attempt behind (a crash between reservation and reconciliation). " +
+      "This path never calls the provider for it, never touches it, and never retries it automatically — " +
+      "it remains exactly as found, explicitly unresolved. Durable resume/recovery is M5's responsibility, not this CLI's."
+    );
+  }
+  if (result.totalReservationOverrunUsd > 0) {
+    console.log(
+      `reservation overrun : $${result.totalReservationOverrunUsd.toFixed(4)} (real cost exceeded the per-call ceiling on at least one attempt — already spent, never retroactively blocked)`
+    );
+  }
+
+  // Point 6 (final Stage B review) — planned/completed/failed/excluded/
+  // remaining, recomputed fresh from the ledger, never accumulated ad
+  // hoc. planned is ALWAYS plannedBaselineRuns + plannedRetestRuns
+  // (Rule 3), even though this path only ever executes the baseline
+  // slice of it.
+  const lc = result.ledgerCounters;
+  console.log(`ledger planned      : ${lc.planned} (= ${approvedProtocol.plannedBaselineRuns} baseline + ${approvedProtocol.plannedRetestRuns} retest)`);
+  console.log(`ledger completed    : ${lc.completed}`);
+  console.log(`ledger failed       : ${lc.failed}`);
+  console.log(`ledger excluded     : ${lc.excluded}`);
+  console.log(`ledger remaining    : ${lc.remaining}`);
+
+  console.log(
+    "report export is not wired to the M4 ledger yet (deferred, flagged as an open Stage B decision) — no report was written by this path."
+  );
+
+  if (leaseRenewer) {
+    const finalOwnership = await leaseRenewer.renewOnce();
+    leaseRenewer.stop();
+
+    if (!finalOwnership.owned) {
+      throw new Error(
+        `Worker lease could not be renewed before handoff (${finalOwnership.reason}): ${finalOwnership.detail}`
+      );
+    }
+  }
+}
+
 function validatePromptFilePlaceholdersBeforeScan(
   promptsFile: string | undefined,
   dryRun: boolean,
@@ -1181,6 +1537,19 @@ async function main(): Promise<void> {
 
   const originalMockMode = process.env.ZYPACT_MOCK_MODE;
   if (args.probeMode === "simulated") process.env.ZYPACT_MOCK_MODE = "on";
+
+  // M4 Stage B — a completely separate, mutually-exclusive branch. The
+  // legacy multi-prompt path below (buildPlan onward) is entirely
+  // unreachable and unmodified when --protocol-id is supplied.
+  if (args.protocolId) {
+    try {
+      await runProtocolGatedScan(args);
+    } finally {
+      if (originalMockMode === undefined) delete process.env.ZYPACT_MOCK_MODE;
+      else process.env.ZYPACT_MOCK_MODE = originalMockMode;
+    }
+    return;
+  }
 
   const dry = await buildPlan(args);
   printPlan(args, dry.plan, dry.outputPath, dry.spend, dry.promptSelection);

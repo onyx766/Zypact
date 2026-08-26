@@ -28,6 +28,14 @@ export interface RunSiteReaderResult {
   output: SiteReaderOutput;
   usedMock: boolean;
   usedRetry: boolean;
+  /** M1 evidence contract — provider that produced the final accepted output. */
+  provider: "openai" | "anthropic" | "mock";
+  /** M1 evidence contract — exact model string used for the final accepted output. */
+  model: string;
+  /** M1 evidence contract — wall-clock milliseconds across the call (plus repair retry, if any). */
+  latencyMs: number;
+  /** M1 evidence contract — exact request text sent to the model (system + user). */
+  requestText: string;
 }
 
 const MAX_CHARS_PER_PAGE = 8_000;
@@ -81,12 +89,14 @@ export async function runSiteReaderAgent(
     mockResponse,
   };
 
+  const startedAt = Date.now();
   const initial = await callModel(call);
   const parsed = await parseJsonOrRetry({
     schema: SiteReaderOutputSchema,
     rawOutput: initial.content,
     originalCall: call,
   });
+  const latencyMs = Date.now() - startedAt;
 
   if (!parsed.ok) {
     throw new Error(
@@ -98,10 +108,42 @@ export async function runSiteReaderAgent(
   }
 
   return {
-    output: parsed.data,
+    output: {
+      ...parsed.data,
+      competitorsMentioned: stripGenericCompetitorPlaceholders(
+        parsed.data.competitorsMentioned
+      ),
+    },
     usedMock: initial.usedMock,
     usedRetry: parsed.usedRetry,
+    provider: initial.provider,
+    model: initial.model,
+    latencyMs,
+    requestText: `${call.system}\n\n${call.user}`,
   };
+}
+
+/**
+ * The model sometimes falls back to generic filler names ("Competitor A",
+ * "Competitor B") when it cannot find real competitors in the crawled
+ * pages, rather than returning an empty list. Those are not evidence of a
+ * real competitor and must never reach `competitorsMentioned` — downstream
+ * consumers (Gap Map, competitor discovery, reports) treat every entry as
+ * a named, real competitor.
+ *
+ * Deliberately narrow: matches only "Competitor" + exactly one letter
+ * ("Competitor A", "competitor b"), so a real company whose name happens
+ * to start with "Competitor" (unlikely, but not this function's call to
+ * make) is never dropped.
+ */
+const GENERIC_COMPETITOR_PLACEHOLDER = /^competitor\s+[a-z]$/i;
+
+export function stripGenericCompetitorPlaceholders(
+  competitors: string[]
+): string[] {
+  return competitors.filter(
+    (name) => !GENERIC_COMPETITOR_PLACEHOLDER.test(name.trim())
+  );
 }
 
 function buildMockMirrorProfile(input: RunSiteReaderInput): SiteReaderOutput {

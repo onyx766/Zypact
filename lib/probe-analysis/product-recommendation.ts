@@ -4,6 +4,39 @@ import { isAiPlatformName } from "@/lib/ai-platforms/platform-registry";
 export type ProductRecommendationPosition = "primary" | "listed" | "negative" | "absent";
 export type ProductRecommendationVerdict = "won" | "partial" | "lost" | "not_relevant";
 
+/**
+ * M3 reliquat (D-014 §9) — the only sanctioned mapping from this
+ * deterministic position signal to the canonical run-level vocabulary.
+ * Deliberately total and deliberately narrow: every `ProductRecommendationPosition`
+ * maps to exactly one of these three values, and the return type
+ * structurally cannot include `ambiguous_in_run` or `analysis_failed` —
+ * no branch here may ever produce them. Those two values have no
+ * deterministic source in this pipeline today; inventing one is out of
+ * scope for this fix (see METHODOLOGY.md §9 and the M3 closure notes).
+ */
+export type DeterministicRunPosition =
+  | "primary_in_run"
+  | "listed_in_run"
+  | "not_observed_in_run";
+
+export function mapProductPositionToRunPosition(
+  position: ProductRecommendationPosition
+): DeterministicRunPosition {
+  switch (position) {
+    case "primary":
+      return "primary_in_run";
+    case "listed":
+      return "listed_in_run";
+    case "negative":
+      // D-014 v1.1: a negative mention is still `listed_in_run` — sentiment
+      // is tracked separately via `negativeClaimDetected`, never as its own
+      // position label.
+      return "listed_in_run";
+    case "absent":
+      return "not_observed_in_run";
+  }
+}
+
 export interface ProductRecommendationInput {
   prompt: string;
   rawResponse: string;

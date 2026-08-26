@@ -1,10 +1,27 @@
 # Zypact V1 Methodology
 
 - **Status:** Canonical V1 methodology
-- **Version:** 1.0
+- **Version:** 1.1
 - **Method date:** 2026-08-16
+- **Version 1.1 date:** 2026-08-19 (see D-014 in `DECISIONS.md`)
 - **Initial live surface:** Perplexity Sonar
 - **Authority:** Governs evidence, sampling, observations, uncertainty, retest comparisons, and client-facing methodological language
+
+## Version history
+
+- **1.0** (2026-08-16): Initial canonical methodology.
+- **1.1** (2026-08-19): Clarifies vocabulary already introduced in §9
+  and §10, tied to D-014 — `negative_claim_detected` as a field
+  distinct from run position; `not_relevant` as a context field
+  rather than a position; `analysis_failed` as its own denominator
+  category, separate from a provider-level failure; and a mandatory
+  `dataset_id`/`dataset_source_type` identity enforcing the
+  live/simulated/historical/current separation already required by
+  §16. No existing rule in §9, §10, §11, or §16 is changed in
+  substance; this version documents how those rules are implemented.
+  Results computed before and after this version are not directly
+  comparable for any question whose underlying sample was actually
+  mixed.
 
 ## 1. Purpose
 
@@ -199,6 +216,12 @@ Only responses satisfying the registered inclusion rules enter the analysis. Exc
 
 No report may display a rate without both numerator and denominator.
 
+An analyzer-level failure (`analysis_failed`, §9) is its own failure
+category, separate from a provider-level failure such as a timeout or
+an empty response. It is excluded from the observed/not-observed
+denominator and must remain visible and auditable in the same way as
+any other excluded or failed attempt (v1.1).
+
 ## 9. Run-level observations
 
 Run-level observations describe only the stored response.
@@ -222,6 +245,20 @@ Additional observations may include:
 - relevant claims or decision criteria;
 - negative or inaccurate claims with evidence references;
 - parsing/analyzer warnings.
+
+### 9.1 Position, sentiment, and relevance are separate (v1.1)
+
+A negative or inaccurate claim recorded under "Additional
+observations" above is tracked as its own field,
+`negative_claim_detected`, separate from the position label. A
+mention that is negative in tone is still `listed_in_run` (or another
+applicable position label); sentiment does not change the position.
+
+Whether the question applied to the response at all is tracked
+separately from position, as a context field, not as a sixth position
+label. `analysis_failed` records that the analyzer itself could not
+classify the response; it is excluded from the observed/not-observed
+denominator described in §8, not merged into `not_observed_in_run`.
 
 ## 10. Question- and portfolio-level summaries
 
@@ -368,6 +405,13 @@ Before automatic delivery, the report builder must confirm:
 13. sensitive technical metadata and secrets are excluded from client content;
 14. the rendered artifact agrees with the canonical stored snapshot.
 
+Gate 4 (live, simulated, historical, and current data are not
+silently mixed) is enforced through a mandatory, non-null dataset
+identity — `dataset_id` and `dataset_source_type` — carried by every
+canonical observation and aggregate. `dataset_source_type` is one of
+`snapshot_request`, `manual_scan`, or `legacy_unresolved` (v1.1; see
+D-014).
+
 Resulting report states:
 
 - `integrity_passed` — automatic generation/delivery allowed;
@@ -439,3 +483,12 @@ Any material change to sampling, inclusion rules, entity resolution, uncertainty
 - disclosure when old and new results are not directly comparable.
 
 Methodology changes do not rewrite immutable raw evidence.
+
+Version 1.1 (D-014) is such a change: it replaces
+`won`/`partial`/`lost`/`not_relevant` with the run-level and
+question-level vocabulary already defined in §9 and §10, and requires
+that a question-level result actually observed as mixed is never
+reported as a single stable verdict. Results computed under the
+pre-1.1 verdict heuristic and results computed under the 1.1
+vocabulary are not directly comparable for any question whose
+underlying sample was mixed.

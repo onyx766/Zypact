@@ -25,6 +25,7 @@ import {
   sumGapScores,
   type BaselineScores,
 } from "@/lib/gap-map/compute-gap-scores";
+import type { ResolvedCompetitorMention } from "@/lib/evidence/get-resolved-competitor-mentions";
 
 /**
  * Gap Map Agent.
@@ -57,6 +58,18 @@ export interface RunGapMapInput {
    * another. Optional: callers that omit it keep the prior behaviour.
    */
   competitorEvidence?: PromptCompetitorEvidence[];
+  /**
+   * M3 — source unique, Option A: resolved competitor mentions per
+   * `probe_result.id`, from the M2 canonical entity-resolution layer,
+   * pre-fetched by the DB-aware orchestrator (generate-gap-map.ts).
+   * Forwarded verbatim to computeGapScores() so its mention-identity
+   * matching can use `canonicalEntityId` equality instead of a
+   * name-normalization heuristic. Mandatory, not optional — every
+   * caller must explicitly decide what this map contains, even if that
+   * decision is "empty array, nothing resolved yet" for a given
+   * probe_result.
+   */
+  resolvedMentionsByProbeResult: ReadonlyMap<string, ResolvedCompetitorMention[]>;
 }
 
 export interface RunGapMapResult {
@@ -68,6 +81,14 @@ export interface RunGapMapResult {
    * recommendationDistance to keep it consistent with the sub-scores.
    */
   normalizedDistances: boolean;
+  /** M1 evidence contract — provider that produced the final accepted output. */
+  provider: "openai" | "anthropic" | "mock";
+  /** M1 evidence contract — exact model string used for the final accepted output. */
+  model: string;
+  /** M1 evidence contract — wall-clock milliseconds across the call (plus repair retry, if any). */
+  latencyMs: number;
+  /** M1 evidence contract — exact request text sent to the model (system + user). */
+  requestText: string;
 }
 
 const MAX_PROBE_CHARS = 20_000;
@@ -152,6 +173,7 @@ export async function runGapMapAgent(
     mockResponse,
   };
 
+  const startedAt = Date.now();
   const initial = await callModel(call);
   const parsed = await parseJsonOrRetry({
     schema: GapMapOutputSchema,
@@ -159,6 +181,7 @@ export async function runGapMapAgent(
     originalCall: call,
     preNormalize: preNormalizeGapMapArithmetic,
   });
+  const latencyMs = Date.now() - startedAt;
 
   if (!parsed.ok) {
     throw new Error(
@@ -176,6 +199,10 @@ export async function runGapMapAgent(
     usedMock: initial.usedMock,
     usedRetry: parsed.usedRetry,
     normalizedDistances: changed,
+    provider: initial.provider,
+    model: initial.model,
+    latencyMs,
+    requestText: `${call.system}\n\n${call.user}`,
   };
 }
 

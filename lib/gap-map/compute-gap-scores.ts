@@ -2,10 +2,10 @@ import type { Competitor, ProbeResult } from "@/lib/db/types";
 import { buildPromptProbeAggregates } from "@/lib/probe-results/report-selection";
 import type { SiteReaderOutput } from "@/lib/schemas/site-reader.schema";
 import type {
-  CompetitorMention,
   SourceCitation,
 } from "@/lib/schemas/probe-analysis.schema";
 import type { GapScores } from "@/lib/schemas/gap-map.schema";
+import type { ResolvedCompetitorMention } from "@/lib/evidence/get-resolved-competitor-mentions";
 
 /**
  * Deterministic gap scoring.
@@ -51,6 +51,16 @@ export interface ComputeGapScoresInput {
   mirrorProfile: SiteReaderOutput;
   probeResults: ProbeResult[];
   competitors: Competitor[];
+  /**
+   * M3 — source unique, Option A: resolved competitor mentions per
+   * `probe_result.id`, from the M2 canonical entity-resolution layer.
+   * `collectCompetitorSignals` matches a probe's mentions to a competitor
+   * by `canonicalEntityId` equality when the competitor has one — never
+   * by name normalization. Mandatory, not optional: every caller must
+   * explicitly decide what this map contains, even "empty, nothing
+   * resolved yet" for a given probe_result.
+   */
+  resolvedMentionsByProbeResult: ReadonlyMap<string, ResolvedCompetitorMention[]>;
 }
 
 export interface CompetitorSignals {
@@ -110,10 +120,10 @@ function sourceDirectlyNamesCompetitor(
 }
 
 export function collectCompetitorSignals(
-  competitor: Pick<Competitor, "name" | "website">,
-  probes: ProbeResult[]
+  competitor: Pick<Competitor, "name" | "website" | "canonicalEntityId">,
+  probes: ProbeResult[],
+  resolvedMentionsByProbeResult: ReadonlyMap<string, ResolvedCompetitorMention[]>
 ): CompetitorSignals {
-  const key = normalizeName(competitor.name);
   const s: CompetitorSignals = {
     appearances: 0,
     clientLostWhenAppears: 0,
@@ -126,17 +136,29 @@ export function collectCompetitorSignals(
     hasSummaryDescription: false,
   };
 
+  // M3 — source unique, Option A: a competitor's mentions are the resolved,
+  // canonical-entity mentions carrying its OWN canonicalEntityId — matched
+  // by exact equality, never by name normalization. A competitor row with
+  // no canonical_entity_id (declared by the user, discovered on the
+  // client's own site, or an ai_answer name the discovery agent
+  // paraphrased past an exact match) has no mentions here at all: every
+  // mention-derived signal below stays at its zero default for it,
+  // honestly, rather than falling back to a name guess.
+  const canonicalEntityId = competitor.canonicalEntityId;
+  function resolvedMentionsFor(p: ProbeResult): ResolvedCompetitorMention[] {
+    if (!canonicalEntityId) return [];
+    const mentions = resolvedMentionsByProbeResult.get(p.id) ?? [];
+    return mentions.filter((m) => m.canonicalEntityId === canonicalEntityId);
+  }
+
   // Sprint 13A.3: prompt_loss is a prompt-group truth, not a single-run truth.
   // One volatile Perplexity run should affect mentionRate, but it must not
   // let the Gap Map claim "Linear is absent" when the prompt group is won.
   const groups = buildPromptProbeAggregates(probes);
   for (const group of groups) {
-    const rowsWhereCompetitorAppears = group.rows.filter((p) => {
-      const mentions = Array.isArray(p.competitorsMentioned)
-        ? (p.competitorsMentioned as CompetitorMention[])
-        : [];
-      return mentions.some((m) => normalizeName(m.name) === key);
-    });
+    const rowsWhereCompetitorAppears = group.rows.filter(
+      (p) => resolvedMentionsFor(p).length > 0
+    );
     if (rowsWhereCompetitorAppears.length === 0) continue;
 
     s.appearances += 1;
@@ -165,11 +187,7 @@ export function collectCompetitorSignals(
         s.inComparisonPrompt = true;
       }
 
-      const mentions = Array.isArray(p.competitorsMentioned)
-        ? (p.competitorsMentioned as CompetitorMention[])
-        : [];
-      for (const m of mentions) {
-        if (normalizeName(m.name) !== key) continue;
+      for (const m of resolvedMentionsFor(p)) {
         if (PROOF_TERMS.test(m.context ?? "")) s.proofSignalCount += 1;
       }
 
@@ -255,7 +273,7 @@ export function computeGapScores(input: ComputeGapScoresInput): BaselineScores {
 
   const out: BaselineScores = {};
   for (const c of input.competitors) {
-    const signals = collectCompetitorSignals(c, input.probeResults);
+    const signals = collectCompetitorSignals(c, input.probeResults, input.resolvedMentionsByProbeResult);
     const scores: GapScores = {
       prompt_loss: toIntClamp(scorePromptLoss(signals, totalPromptGroups), 0, 10),
       citation: toIntClamp(scoreCitation(signals), 0, 10),

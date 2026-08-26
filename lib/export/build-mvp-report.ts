@@ -57,6 +57,10 @@ import type {
 } from "@/lib/db/types";
 import { buildProbeSetSummary, isBrandedPrompt, probeSetLabel, type PromptProbeAggregate } from "@/lib/probe-results/report-selection";
 import { isAiPlatformName } from "@/lib/ai-platforms/platform-registry";
+import {
+  getResolvedCompetitorMentions,
+  type ResolvedCompetitorMention,
+} from "@/lib/evidence/get-resolved-competitor-mentions";
 
 export const EXPORT_FORMAT_VERSION = 3;
 
@@ -103,6 +107,22 @@ export interface BuildMvpReportInput {
   mirrorProfile: MirrorProfileRow | null;
   prompts: GeneratedPrompt[];
   probeResults: ProbeResult[];
+  /**
+   * M3 — source unique: resolved competitor mentions per `probe_result.id`,
+   * from the M2 canonical entity-resolution layer
+   * (lib/evidence/get-resolved-competitor-mentions.ts). Mandatory, not
+   * optional: every caller must explicitly decide what this map
+   * contains, even if that decision is "empty array, nothing resolved
+   * yet" for a given probe_result — there is no silent-absence path
+   * that would fall back to `probeResults[].competitorsMentioned`.
+   * Used only by the three AI-probe-evidence competitor sections (top
+   * competitors, per-run competitor detail); the Mirror Profile's own
+   * "competitors mentioned on the site" section reads
+   * `mirrorProfile.json.competitorsMentioned` directly and is
+   * untouched — a different, site-reader source, never AI-probe
+   * evidence.
+   */
+  resolvedMentionsByProbeResult: ReadonlyMap<string, ResolvedCompetitorMention[]>;
   competitors: Competitor[];
   gapMap: GapMapRow | null;
   gaps: Gap[];
@@ -654,6 +674,43 @@ function qaContextTagline(qaStatus: string): string {
 /*  Section builders                                                          */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * M3 — source unique: tallies resolved competitor mentions across a set
+ * of probe_results, grouped by `canonicalEntityId` — never by raw name
+ * string, so two surface forms of the same competitor (already
+ * resolved to one canonical identity by the M2 RPC) count as one
+ * entry, not two. Platform names are excluded defensively even though
+ * `entityType: "competitor"` mentions never include them in practice
+ * (they are diverted to the separate `platformsReferenced` legacy
+ * field before entity resolution ever runs).
+ */
+function tallyResolvedCompetitors(
+  rows: readonly ProbeResult[],
+  resolvedMentionsByProbeResult: ReadonlyMap<string, ResolvedCompetitorMention[]>
+): Array<{ canonicalEntityId: string; name: string; count: number }> {
+  const byId = new Map<string, { name: string; count: number }>();
+  for (const r of rows) {
+    const mentions = resolvedMentionsByProbeResult.get(r.id) ?? [];
+    for (const m of mentions) {
+      if (isAiPlatformName(m.rawText)) continue;
+      const existing = byId.get(m.canonicalEntityId);
+      if (existing) {
+        existing.count += 1;
+        // Prefer the longer surface form for display, same rule as
+        // lib/agents/competitor-discovery.ts's pickDisplayName.
+        if (m.rawText.trim().length > existing.name.length) existing.name = m.rawText.trim();
+      } else {
+        byId.set(m.canonicalEntityId, { name: m.rawText.trim(), count: 1 });
+      }
+    }
+  }
+  return Array.from(byId.entries()).map(([canonicalEntityId, v]) => ({
+    canonicalEntityId,
+    name: v.name,
+    count: v.count,
+  }));
+}
+
 function sectionExecSummary(
   input: BuildMvpReportInput,
   brandName: string,
@@ -708,22 +765,14 @@ function sectionExecSummary(
   // Top competitors recommended instead. Prefer the probe set that drives
   // the main report. Simulated rows stay visible later but do not decide
   // the client-facing live summary once live Perplexity data exists.
-  const mentionCounts = new Map<string, number>();
-  for (const r of probeSet.scorecardProbeResults) {
-    const arr = Array.isArray(r.competitorsMentioned)
-      ? (r.competitorsMentioned as Array<{ name?: string }>)
-      : [];
-    for (const c of arr) {
-      const name = typeof c.name === "string" ? c.name.trim() : "";
-      if (!name) continue;
-      if (isAiPlatformName(name)) continue;
-      mentionCounts.set(name, (mentionCounts.get(name) ?? 0) + 1);
-    }
-  }
-  let topCompetitors: string[] = [...mentionCounts.entries()]
-    .sort((a, b) => b[1] - a[1])
+  const tallied = tallyResolvedCompetitors(
+    probeSet.scorecardProbeResults,
+    input.resolvedMentionsByProbeResult
+  );
+  let topCompetitors: string[] = [...tallied]
+    .sort((a, b) => b.count - a.count)
     .slice(0, 3)
-    .map(([n]) => n);
+    .map((c) => c.name);
   if (topCompetitors.length === 0) {
     topCompetitors = [...input.competitors]
       .sort((a, b) => b.mentionCount - a.mentionCount)
@@ -1141,9 +1190,12 @@ function sectionProbeResults(input: BuildMvpReportInput): string {
     if (r.whyClientLost && r.whyClientLost.trim().length > 0) {
       parts.push(`- **whyClientLost**: ${mdEscape(r.whyClientLost)}`);
     }
-    const comps = Array.isArray(r.competitorsMentioned)
-      ? (r.competitorsMentioned as Array<{ name?: string; position?: number; context?: string }>)
-      : [];
+    // M3 — source unique: this per-run transcript reads resolved
+    // competitor observations (mentionOrdinal/rawText/context), never
+    // `r.competitorsMentioned` directly. Duplicates and ordinal order
+    // are preserved exactly as recorded — this is a transcript of one
+    // run's mentions, not a deduplicated tally.
+    const comps = input.resolvedMentionsByProbeResult.get(r.id) ?? [];
     if (comps.length > 0) {
       parts.push(`- **competitors mentioned (in the ${mode === "live_perplexity" ? "live Perplexity answer" : "simulated answer"})**:`);
       parts.push("");
@@ -1151,7 +1203,7 @@ function sectionProbeResults(input: BuildMvpReportInput): string {
       parts.push("  |---|---|---|");
       for (const c of comps) {
         parts.push(
-          `  | ${safeString(c.position)} | ${mdEscape(safeString(c.name))} | ${mdEscape(safeString(c.context))} |`
+          `  | ${safeString(c.mentionOrdinal)} | ${mdEscape(safeString(c.rawText))} | ${mdEscape(safeString(c.context))} |`
         );
       }
     }
@@ -1255,21 +1307,10 @@ function sectionWhatThisMeans(
     parts.push("");
   }
 
-  const mentionCounts = new Map<string, number>();
-  for (const r of mainProbes) {
-    const arr = Array.isArray(r.competitorsMentioned)
-      ? (r.competitorsMentioned as Array<{ name?: string }>)
-      : [];
-    for (const c of arr) {
-      const name = typeof c.name === "string" ? c.name.trim() : "";
-      if (!name) continue;
-      if (isAiPlatformName(name)) continue;
-      mentionCounts.set(name, (mentionCounts.get(name) ?? 0) + 1);
-    }
-  }
-  const rankedCompetitors = [...mentionCounts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5);
+  const rankedCompetitors = tallyResolvedCompetitors(mainProbes, input.resolvedMentionsByProbeResult)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5)
+    .map((c) => [c.name, c.count] as const);
   parts.push(lostResults.length > 0 || partialResults.length > 0 ? "### Which competitors appeared instead" : "### Which competitors appeared alongside");
   if (rankedCompetitors.length === 0) {
     parts.push("_No specific competitors were named in the sampled main probe answers._");
@@ -2110,6 +2151,19 @@ export async function loadReportInputs(
     db.getQaReportsByProject(projectId),
   ]);
 
+  // M3 — source unique: the single, canonical path providing resolved
+  // competitor evidence to buildMvpReport. Every real caller
+  // (the export API route, scripts/verify-export-readonly-live.ts, and
+  // any future one) goes through this loader, so this fetch happens
+  // exactly once, here, rather than being duplicated per caller.
+  const resolvedMentionsByProbeResult = new Map(
+    await Promise.all(
+      probeResults.map(
+        async (pr) => [pr.id, await getResolvedCompetitorMentions(db, projectId, pr.id)] as const
+      )
+    )
+  );
+
   const latestQaByAsset = new Map<string, QaReportRow>();
   const sortedReports = [...qaReports].sort(
     (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)
@@ -2125,6 +2179,7 @@ export async function loadReportInputs(
     mirrorProfile,
     prompts,
     probeResults,
+    resolvedMentionsByProbeResult,
     competitors,
     gapMap,
     gaps,

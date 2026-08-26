@@ -9,7 +9,8 @@
  *   - authenticated non-owner        → 404 (byte-identical to missing;
  *                                     enumeration guard)
  *   - legacy `user_id IS NULL`       → 404
- *   - owner                          → 200 + text/markdown attachment
+ *   - owner                          → 200; body depends on the M3
+ *                                     integrity gate (see below)
  *
  * Read-only contract:
  *   - No database writes.
@@ -23,6 +24,14 @@
  *     known secret env var value AND for well-known secret prefixes
  *     (`sb_secret_…`, `sk-live-…`, `sk-proj-…`, `sk-…`) before being
  *     returned. Any match is replaced with `[REDACTED]`.
+ *
+ * M3 integrity gate (METHODOLOGY.md §16; lib/export/report-integrity.ts):
+ *   - Evaluated on every newly-built artifact before it is returned.
+ *   - `integrity_passed` → 200 + `text/markdown` attachment (unchanged
+ *     from before this gate existed).
+ *   - `needs_review` / `blocked` → 200 + JSON
+ *     `{ ok: true, integrityStatus, reasons }`; the markdown body is
+ *     never included in the response. No automatic delivery either way.
  */
 
 import { NextResponse } from "next/server";
@@ -30,6 +39,7 @@ import { getDb } from "@/lib/db";
 import { requireProjectOwner } from "@/lib/auth/current-user";
 import { authErrorResponse } from "@/lib/auth/route-helpers";
 import { buildMvpReport, loadReportInputs } from "@/lib/export/build-mvp-report";
+import { buildExportGateResponse } from "@/lib/export/export-gate-response";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -108,27 +118,17 @@ export async function GET(_req: Request, { params }: RouteContext) {
     sensitiveValues: collectSensitiveEnvValues(),
   });
 
-  console.info(
-    JSON.stringify({
-      ts: new Date().toISOString(),
-      level: "info",
-      event: "export_generated",
-      route: `export/${projectId}`,
-      projectId,
-      bytes: markdown.length,
-      secretsRedactedCount: warnings.secretsRedactedCount,
-      notReadyAssetCount: warnings.notReadyAssetCount,
-    })
-  );
+  const hasCompleteEvidenceHashes =
+    inputs.probeResults.length > 0 &&
+    inputs.probeResults.every(
+      (r) => typeof r.rawResponseSha256 === "string" && r.rawResponseSha256.length > 0
+    );
 
-  return new NextResponse(markdown, {
-    status: 200,
-    headers: {
-      "Content-Type": "text/markdown; charset=utf-8",
-      "Content-Disposition": `attachment; filename="${filename}"`,
-      "Cache-Control": "no-store",
-      "X-Zypact-Export-Version": "1",
-      "X-Zypact-Redactions": String(warnings.secretsRedactedCount),
-    },
+  return buildExportGateResponse({
+    projectId,
+    markdown,
+    filename,
+    warnings,
+    hasCompleteEvidenceHashes,
   });
 }

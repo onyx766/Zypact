@@ -40,8 +40,8 @@ import type {
   FixBriefRow,
   GeneratedAssetRow,
   MirrorProfileRow,
-  ProbeResult,
 } from "@/lib/db/types";
+import type { ResolvedCompetitorMention } from "@/lib/evidence/get-resolved-competitor-mentions";
 import type {
   QaAgentOutput,
   QaVerdict,
@@ -493,7 +493,15 @@ export interface CompetitorClaimGuardInputs {
   evidenceBank: EvidenceBankRow;
   competitors: Competitor[];
   fixBriefs?: FixBriefRow[];
-  probeResults?: ProbeResult[];
+  /**
+   * M3 — source unique: resolved competitor mentions from the M2
+   * canonical entity-resolution layer (lib/evidence/get-resolved-competitor-mentions.ts),
+   * pre-fetched by the DB-aware caller (lib/pipeline/run-qa.ts). Replaces
+   * the legacy `probeResults`/`competitorsMentioned` reading this
+   * function used to do directly — no fallback to that legacy field is
+   * performed here.
+   */
+  resolvedCompetitorMentions?: ResolvedCompetitorMention[];
 }
 
 function escapeRegExp(s: string): string {
@@ -582,12 +590,8 @@ function extractCompetitorNames(input: CompetitorClaimGuardInputs): string[] {
       names.push(piece);
     }
   }
-  for (const pr of input.probeResults ?? []) {
-    if (Array.isArray(pr.competitorsMentioned)) {
-      for (const c of pr.competitorsMentioned as Array<{ name?: unknown }>) {
-        if (typeof c.name === "string") names.push(c.name);
-      }
-    }
+  for (const mention of input.resolvedCompetitorMentions ?? []) {
+    names.push(mention.rawText);
   }
   return uniqueNonEmpty(names);
 }

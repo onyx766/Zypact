@@ -116,6 +116,8 @@ async function ensureCleanAsset(): Promise<{
       prompt: target.prompt,
       platform: answer.platform,
       rawResponse: answer.text,
+      datasetId: "test-fixture-dataset-qa",
+      datasetSourceType: "manual_scan",
       knownCompetitors: [
         "Jira",
         "Asana",

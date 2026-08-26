@@ -79,6 +79,8 @@ async function ensureProject(): Promise<string> {
       prompt: target.prompt,
       platform: answer.platform,
       rawResponse: answer.text,
+      datasetId: "test-fixture-dataset-gap-map",
+      datasetSourceType: "manual_scan",
       knownCompetitors: [
         "Jira",
         "Asana",

@@ -12,6 +12,8 @@
  */
 
 import "dotenv/config";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { runMirrorScan } from "../lib/pipeline/run-mirror-scan";
 import { generateBuyerPrompts } from "../lib/pipeline/generate-buyer-prompts";
 import { analyzeProbeResponse } from "../lib/pipeline/analyze-probe-response";
@@ -67,7 +69,46 @@ function synthesizeCompetitorAnswer(
   ].join(" ");
 }
 
+/**
+ * D-027 (B0.2A-1) — static, network-free preflight: confirms the
+ * validation-failure throw in lib/agents/probe-analysis.ts is bounded
+ * (a parse-error code only) and no longer embeds the raw model output
+ * or the free-text Zod/JSON message. Run before the (live-shaped) smoke
+ * test below so a regression here fails fast without needing an actual
+ * validation failure to occur at runtime.
+ */
+function checkProbeAnalysisBoundedErrorFix(): void {
+  const src = readFileSync(
+    path.join(process.cwd(), "lib/agents/probe-analysis.ts"),
+    "utf8"
+  );
+  const failures: string[] = [];
+  // `rawOutput: initial.content` (a ParseJsonOrRetryInput field name) is
+  // legitimate and expected — only `parsed.rawOutput` (reading it BACK
+  // out of the failure result to embed in a thrown message) is the leak.
+  if (/parsed\.rawOutput/.test(src)) {
+    failures.push("probe-analysis.ts still reads parsed.rawOutput into its thrown error");
+  }
+  if (/parsed\.error/.test(src)) {
+    failures.push("probe-analysis.ts still reads parsed.error (free-text Zod/JSON message) into its thrown error");
+  }
+  if (/Raw output/i.test(src)) {
+    failures.push("probe-analysis.ts still embeds a 'Raw output' label");
+  }
+  if (!/parsed\.code/.test(src)) {
+    failures.push("probe-analysis.ts does not reference the bounded parsed.code");
+  }
+  if (failures.length > 0) {
+    console.error("✗ D-027 bounded-error preflight failed:");
+    for (const f of failures) console.error(`  - ${f}`);
+    process.exit(1);
+  }
+  console.log("✓ D-027 bounded-error preflight: probe-analysis.ts's validation-failure throw is bounded (no rawOutput/body).");
+}
+
 async function main() {
+  checkProbeAnalysisBoundedErrorFix();
+
   const { projectId, selected } = await ensureProjectWithPrompts();
   const db = getDb();
   const mirrorRow = await db.getMirrorProfile(projectId);
@@ -91,6 +132,8 @@ async function main() {
     platform: "perplexity",
     rawResponse,
     knownCompetitors: compArr.length > 0 ? undefined : ["Jira", "Asana", "Trello", "Notion"],
+    datasetId: "test-fixture-dataset-probe-analysis",
+    datasetSourceType: "manual_scan",
   });
 
   if (!result.ok) {

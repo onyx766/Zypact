@@ -428,7 +428,7 @@ function runCleanupSequencePreflight(): void {
   // confirm the checker reports it before trusting it on the real file.
   const PRE = "SEQGATE:PRECLEANUP_CHECK";
   const STOP = "SEQGATE:SUPABASE_STOP";
-  const PLACEHOLDER = " SEQGATE_SELFTEST_PLACEHOLDER ";
+  const PLACEHOLDER = "\u0000SEQGATE_SELFTEST_PLACEHOLDER\u0000";
   const brokenCopy = source.split(PRE).join(PLACEHOLDER).split(STOP).join(PRE).split(PLACEHOLDER).join(STOP);
   const selfTestViolations = checkOrder(brokenCopy);
   if (selfTestViolations.length === 0) {

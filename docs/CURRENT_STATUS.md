@@ -395,7 +395,7 @@ Deliberately not used as a release gate: the legacy full `test-probe-analysis` s
 
 **Still open — the M4 raw-RPC cutover.** The migration that revokes the three raw M4 RPCs (`admit_and_reserve_attempt`, `start_attempt`, `reconcile_attempt`) from `service_role` has not shipped. A search of all 54 migrations in `main` finds no `REVOKE` targeting those three functions. Section 12 attributed this future work to a then-nonexistent `0052`; `0052` now exists and did not perform the cutover, so the cutover remains pending and absent from `main`.
 
-**Still unknown — environment state.** Production, preview, staging and worker deployment state remains unverified by this entry, exactly as stated in sections 1 and 9. Repository content proves nothing about any deployed environment. Any future environment-specific schema work must verify the target environment independently before execution.
+**Still unknown — environment state.** Production, preview, and staging environment states, together with worker deployment state, remain unverified by this entry, exactly as stated in sections 1 and 9. Repository content proves nothing about any deployed environment. Any future environment-specific schema work must verify the target environment independently before execution.
 
 ### 13.5 Superseded local-workstation notes
 

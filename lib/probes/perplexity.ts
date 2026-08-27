@@ -52,9 +52,19 @@ export interface PerplexityProbeResult {
    */
   rawProbeRequestSha256?: string;
   /**
+   * M1-A evidence contract — the exact JSON body sent to Perplexity,
+   * byte-identical to the string handed to `fetch`. Serialized exactly
+   * once: this is the same `requestBodyJson` value that went on the wire
+   * and that `fullRequestBodySha256` hashes, never a re-serialization.
+   * Distinct from `rawProbeRequest` (the buyer prompt only) and from
+   * `rawResponseBody` (the provider's reply). Absent for mock calls.
+   */
+  fullRequestBody?: string;
+  /**
    * M1 evidence contract — SHA-256 of the exact JSON-serialized HTTP
    * request body sent to Perplexity (`model` + `messages` + all other
    * fields), as `JSON.stringify`'d before the call. Absent for mock calls.
+   * Hashes exactly `fullRequestBody` above.
    */
   fullRequestBodySha256?: string;
   /** M1 evidence contract — HTTP status returned by Perplexity. Absent for mock calls. */
@@ -96,6 +106,8 @@ export class PerplexityProbeFailure extends Error {
   readonly latencyMs: number | null;
   readonly providerRequestId: string | null;
   readonly rawProbeRequestSha256: string;
+  /** M1-A — exact JSON body sent on the failed attempt. Same string that went on the wire. */
+  readonly fullRequestBody: string;
   readonly fullRequestBodySha256: string;
 
   constructor(
@@ -108,6 +120,7 @@ export class PerplexityProbeFailure extends Error {
       latencyMs: number | null;
       providerRequestId: string | null;
       rawProbeRequestSha256: string;
+      fullRequestBody: string;
       fullRequestBodySha256: string;
     }
   ) {
@@ -120,6 +133,7 @@ export class PerplexityProbeFailure extends Error {
     this.latencyMs = fields.latencyMs;
     this.providerRequestId = fields.providerRequestId;
     this.rawProbeRequestSha256 = fields.rawProbeRequestSha256;
+    this.fullRequestBody = fields.fullRequestBody;
     this.fullRequestBodySha256 = fields.fullRequestBodySha256;
   }
 }
@@ -215,6 +229,12 @@ export async function runPerplexityProbe(
     return {
       ...input.mockResponse,
       rawProbeRequest: input.mockResponse.rawProbeRequest || buildUserPrompt(input),
+      // M2 — a mock never reaches a provider, so it has no outbound body.
+      // These are forced to undefined even when a fixture supplies them:
+      // a fabricated body/hash pair that happens to be self-consistent
+      // would satisfy the SQL CHECK and pass as captured evidence.
+      fullRequestBody: undefined,
+      fullRequestBodySha256: undefined,
       usedMock: true,
     };
   }
@@ -271,6 +291,7 @@ export async function runPerplexityProbe(
         latencyMs: Date.now() - startedAt,
         providerRequestId: null,
         rawProbeRequestSha256,
+        fullRequestBody: requestBodyJson,
         fullRequestBodySha256,
       }
     );
@@ -289,6 +310,7 @@ export async function runPerplexityProbe(
       latencyMs,
       providerRequestId,
       rawProbeRequestSha256,
+      fullRequestBody: requestBodyJson,
       fullRequestBodySha256,
     });
   }
@@ -298,7 +320,32 @@ export async function runPerplexityProbe(
   // to what Perplexity actually sent, never a second independent read.
   const rawResponseBody = await res.text();
   const rawResponseBodySha256 = sha256Hex(rawResponseBody);
-  const json = JSON.parse(rawResponseBody) as PerplexityApiResponse;
+  // H1 — a 2xx body that is not JSON used to throw a bare SyntaxError,
+  // losing the request body, its hash, the response bytes, the status,
+  // the latency and the provider request id. It now fails through the
+  // same evidence-carrying path as every other failure. The reason stays
+  // within the three values migration 0037 constrains; the message names
+  // the real cause so it is never mistaken for a genuinely empty answer.
+  let json: PerplexityApiResponse;
+  try {
+    json = JSON.parse(rawResponseBody) as PerplexityApiResponse;
+  } catch (parseErr) {
+    const detail = parseErr instanceof Error ? parseErr.message : String(parseErr);
+    throw new PerplexityProbeFailure(
+      "Perplexity returned a non-JSON 2xx body (invalid_json): " + detail,
+      {
+        reason: "empty_answer",
+        httpStatus: res.status,
+        errorBody: rawResponseBody,
+        errorBodySha256: rawResponseBodySha256,
+        latencyMs,
+        providerRequestId,
+        rawProbeRequestSha256,
+        fullRequestBody: requestBodyJson,
+        fullRequestBodySha256,
+      }
+    );
+  }
   const answer = json.choices?.[0]?.message?.content?.trim() ?? "";
   if (!answer) {
     throw new PerplexityProbeFailure("Perplexity returned an empty answer.", {
@@ -309,6 +356,7 @@ export async function runPerplexityProbe(
       latencyMs,
       providerRequestId,
       rawProbeRequestSha256,
+      fullRequestBody: requestBodyJson,
       fullRequestBodySha256,
     });
   }
@@ -332,6 +380,7 @@ export async function runPerplexityProbe(
     rawResponseBody,
     rawResponseBodySha256,
     rawProbeRequestSha256,
+    fullRequestBody: requestBodyJson,
     fullRequestBodySha256,
     httpStatus: res.status,
     latencyMs,

@@ -82,6 +82,8 @@ function alwaysFailingCaller(): ProtocolProbeCaller {
       latencyMs: 12,
       providerRequestId: null,
       rawProbeRequestSha256: "0".repeat(64),
+      // M1-A — a failed attempt carries its exact outbound body too.
+      fullRequestBody: "{}",
       fullRequestBodySha256: "0".repeat(64),
     });
   };

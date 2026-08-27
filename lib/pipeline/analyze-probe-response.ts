@@ -74,6 +74,7 @@ export interface AnalyzeProbeResponseInput {
   rawResponseBody?: string;
   rawResponseBodySha256?: string;
   rawProbeRequestSha256?: string;
+  fullRequestBody?: string;
   fullRequestBodySha256?: string;
   providerHttpStatus?: number;
   providerLatencyMs?: number;
@@ -252,6 +253,7 @@ export async function analyzeProbeResponse(
       rawResponseBody: input.rawResponseBody,
       rawResponseBodySha256: input.rawResponseBodySha256,
       rawProbeRequestSha256: input.rawProbeRequestSha256,
+      fullRequestBody: input.fullRequestBody,
       fullRequestBodySha256: input.fullRequestBodySha256,
       providerHttpStatus: input.providerHttpStatus,
       providerLatencyMs: input.providerLatencyMs,

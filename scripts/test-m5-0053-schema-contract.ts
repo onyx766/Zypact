@@ -16,6 +16,7 @@
 
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 let checks = 0;
 let failures = 0;
@@ -71,17 +72,66 @@ function main(): void {
   // ------------------------------------------------------------------
   // [1] Migration 0054 (D-028) now legitimately exists as an additive,
   //     later migration — this migration (0053) does not itself create
-  //     a cutover migration. 0055 is the new boundary this migration's
+  //     a cutover migration. 0055 is M1-A, additive; this migration's
   //     own scope has never crossed. 0050/0051/0052 are read only for
   //     cross-reference, never written by this migration.
   // ------------------------------------------------------------------
-  console.log("\n[1] 0054 exists (D-028, later and additive); no 0055 — 0050/0051/0052 untouched by this file");
+  console.log("\n[1] 0054 exists (D-028, later and additive); 0050-0054 frozen by SHA-256 — untouched by this file");
 
   check(
-    "a file matching 0054* exists under supabase/migrations (D-028 — additive, does not modify 0050/0051/0052/0053), and no file matching 0055* exists",
-    readdirSync(migrationsDir).some((f) => f.startsWith("0054")) &&
-      !readdirSync(migrationsDir).some((f) => f.startsWith("0055"))
+    "a file matching 0054* exists under supabase/migrations (D-028 — additive, does not modify 0050/0051/0052/0053)",
+    readdirSync(migrationsDir).some((f) => f.startsWith("0054"))
   );
+  // ------------------------------------------------------------------
+  // M1-A boundary ratchet (replaces the former "no 0055 exists" rule).
+  //
+  // The old rule forbade ANY migration after 0054 and assumed 0055 would
+  // necessarily be the M4 raw-RPC cutover. Both parts were wrong as
+  // written: a "nothing may follow me" assertion blocks every future
+  // tranche by construction, and 0055 has since been assigned to M1-A
+  // (exact provider request bodies), ahead of the cutover — which now
+  // takes the next free number. That reassignment neither performs nor
+  // authorizes the cutover.
+  //
+  // What this file actually needs to protect is the byte integrity of
+  // the M5 migrations it describes. That is now asserted directly, by
+  // frozen SHA-256, instead of being inferred from the absence of a
+  // successor. Every other assertion in this contract is unchanged.
+  // ------------------------------------------------------------------
+  const M5_FROZEN: ReadonlyArray<readonly [string, string, string]> = [
+    ["0050", "0050_m5_protocol_execution_jobs_and_external_call_ledger.sql", "2059453114b90bb57e91cf00f1855c606f1d45420736dadf89d8f735665d088f"],
+    ["0051", "0051_m5_protocol_worker_resumption_and_retry_safety.sql", "629004191dc5458cbacf136d229040995e5f6225fd834cee31dafc5e5ada4071"],
+    ["0052", "0052_m5_durable_call_payloads_and_probe_result_replay.sql", "581a3ec1c011887b11690c0c389cc89995c8b5825692f1e9370e87a8047fa7db"],
+    ["0053", "0053_m5_analysis_parse_failure_and_raw_request_body.sql", "69f68ca3400229ad3b7e0200feb5fbd76e5c1792e44fe60a6f1baad7276984d3"],
+    ["0054", "0054_m5_worker_probe_result_and_alert_outbox.sql", "5fdefb520ce2b7effafc9703b1d1498d79a4ae7e2932dc4649a94410835e670f"],
+  ];
+  for (const [num, fileName, wantSha] of M5_FROZEN) {
+    const p = path.join(migrationsDir, fileName);
+    check(
+      `migration ${num} is byte-identical to its frozen SHA-256 (this file edits no M5 migration)`,
+      existsSync(p) && createHash("sha256").update(readFileSync(p)).digest("hex") === wantSha
+    );
+  }
+
+  const path0055 = path.join(migrationsDir, "0055_m1_exact_provider_request_body.sql");
+  if (existsSync(path0055)) {
+    const code0055 = readFileSync(path0055, "utf8");
+    check(
+      "0055, when present, is the M1-A exact-provider-request-body migration",
+      /full_request_body/.test(code0055) && /M1-A/.test(code0055)
+    );
+    check(
+      "0055 performs no M4 cutover: no REVOKE touches an M4 object, and none of the three raw M4 RPCs is named",
+      !/^\s*revoke\b[^;]*(admit_and_reserve_attempt|start_attempt|reconcile_attempt|protocol_)[^;]*;/im.test(code0055) &&
+        !/admit_and_reserve_attempt/.test(code0055) &&
+        !/\bstart_attempt\b/.test(code0055) &&
+        !/reconcile_attempt/.test(code0055)
+    );
+    check(
+      "0055 drops nothing and weakens no constraint",
+      !/drop\s+(function|constraint|table|column|policy|index)/i.test(code0055)
+    );
+  }
   check("0053 file exists at the expected path", existsSync(path0053));
   check(
     "0052's original 15-arg record_analysis_call_receipt_for_job signature is still present verbatim in 0052 (this migration does not edit that file)",

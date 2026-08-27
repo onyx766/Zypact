@@ -332,6 +332,7 @@ export async function runProtocolGatedBaseline(
             rawResponseBody: live.rawResponseBody,
             rawResponseBodySha256: live.rawResponseBodySha256,
             rawProbeRequestSha256: live.rawProbeRequestSha256,
+            fullRequestBody: live.fullRequestBody,
             fullRequestBodySha256: live.fullRequestBodySha256,
             providerHttpStatus: live.httpStatus,
             providerLatencyMs: live.latencyMs,
@@ -362,6 +363,7 @@ export async function runProtocolGatedBaseline(
             providerLatencyMs: err.latencyMs,
             providerRequestId: err.providerRequestId,
             rawProbeRequestSha256: err.rawProbeRequestSha256,
+            fullRequestBody: err.fullRequestBody,
             fullRequestBodySha256: err.fullRequestBodySha256,
             retryCount: retryIndex,
           });

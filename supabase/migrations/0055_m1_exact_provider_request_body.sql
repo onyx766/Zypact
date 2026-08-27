@@ -156,3 +156,29 @@ alter table if exists public.probe_failures
 
 comment on column public.probe_failures.full_request_body_capture is
   'M1-A — derived provenance of the outbound request body on the failure path. GENERATED ALWAYS; same three levels as probe_results.full_request_body_capture.';
+
+-- ---------------------------------------------------------------------
+-- 3. EXECUTE on the hash helper, for the roles that actually need it
+--
+-- The two CHECK constraints above call public._sha256_hex(text). That
+-- helper was defined by 0051 with `revoke all ... from public, anon,
+-- authenticated, service_role`, because 0051's only callers were
+-- SECURITY DEFINER RPCs, which evaluate as the function owner.
+--
+-- probe_results and probe_failures are different: the application writes
+-- them with a DIRECT INSERT as service_role (lib/db/supabase-adapter.ts,
+-- saveProbeResult / recordProbeFailure). Those inserts evaluate the new
+-- CHECKs as service_role, not as the owner. Without an explicit grant,
+-- every probe write -- including the legacy ones that predate M1-A --
+-- risks failing with "permission denied for function _sha256_hex".
+--
+-- The grant is therefore deliberately narrow: service_role only.
+-- PUBLIC, anon and authenticated stay revoked, exactly as 0051 left
+-- them; the statement below re-asserts those revocations rather than
+-- assuming they survived, so this migration is safe to run against a
+-- database where someone widened them by hand.
+-- ---------------------------------------------------------------------
+revoke all on function public._sha256_hex(text) from public;
+revoke all on function public._sha256_hex(text) from anon;
+revoke all on function public._sha256_hex(text) from authenticated;
+grant execute on function public._sha256_hex(text) to service_role;

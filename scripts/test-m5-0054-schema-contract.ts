@@ -139,8 +139,8 @@ function main(): void {
       /full_request_body/.test(code0055) && /M1-A/.test(code0055)
     );
     check(
-      "0055 performs no M4 cutover: no REVOKE statement, and none of the three raw M4 RPCs is named",
-      !/^\s*revoke\s/im.test(code0055) &&
+      "0055 performs no M4 cutover: no REVOKE touches an M4 object, and none of the three raw M4 RPCs is named",
+      !/^\s*revoke\b[^;]*(admit_and_reserve_attempt|start_attempt|reconcile_attempt|protocol_)[^;]*;/im.test(code0055) &&
         !/admit_and_reserve_attempt/.test(code0055) &&
         !/\bstart_attempt\b/.test(code0055) &&
         !/reconcile_attempt/.test(code0055)

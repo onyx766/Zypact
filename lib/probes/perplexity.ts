@@ -229,6 +229,12 @@ export async function runPerplexityProbe(
     return {
       ...input.mockResponse,
       rawProbeRequest: input.mockResponse.rawProbeRequest || buildUserPrompt(input),
+      // M2 — a mock never reaches a provider, so it has no outbound body.
+      // These are forced to undefined even when a fixture supplies them:
+      // a fabricated body/hash pair that happens to be self-consistent
+      // would satisfy the SQL CHECK and pass as captured evidence.
+      fullRequestBody: undefined,
+      fullRequestBodySha256: undefined,
       usedMock: true,
     };
   }
@@ -314,7 +320,32 @@ export async function runPerplexityProbe(
   // to what Perplexity actually sent, never a second independent read.
   const rawResponseBody = await res.text();
   const rawResponseBodySha256 = sha256Hex(rawResponseBody);
-  const json = JSON.parse(rawResponseBody) as PerplexityApiResponse;
+  // H1 — a 2xx body that is not JSON used to throw a bare SyntaxError,
+  // losing the request body, its hash, the response bytes, the status,
+  // the latency and the provider request id. It now fails through the
+  // same evidence-carrying path as every other failure. The reason stays
+  // within the three values migration 0037 constrains; the message names
+  // the real cause so it is never mistaken for a genuinely empty answer.
+  let json: PerplexityApiResponse;
+  try {
+    json = JSON.parse(rawResponseBody) as PerplexityApiResponse;
+  } catch (parseErr) {
+    const detail = parseErr instanceof Error ? parseErr.message : String(parseErr);
+    throw new PerplexityProbeFailure(
+      "Perplexity returned a non-JSON 2xx body (invalid_json): " + detail,
+      {
+        reason: "empty_answer",
+        httpStatus: res.status,
+        errorBody: rawResponseBody,
+        errorBodySha256: rawResponseBodySha256,
+        latencyMs,
+        providerRequestId,
+        rawProbeRequestSha256,
+        fullRequestBody: requestBodyJson,
+        fullRequestBodySha256,
+      }
+    );
+  }
   const answer = json.choices?.[0]?.message?.content?.trim() ?? "";
   if (!answer) {
     throw new PerplexityProbeFailure("Perplexity returned an empty answer.", {

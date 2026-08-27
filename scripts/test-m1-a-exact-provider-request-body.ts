@@ -12,6 +12,7 @@ import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import { runPerplexityProbe, PerplexityProbeFailure } from "@/lib/probes/perplexity";
 import { sha256Hex } from "@/lib/evidence/hash";
+import { memoryAdapter } from "@/lib/db/memory-adapter";
 import {
   analysisCallReceiptRequestFields,
   mockAnalysisCallReceiptRequestFields,
@@ -67,7 +68,18 @@ function fakeHttpError(capture: { body?: string }): typeof fetch {
 }
 
 async function main(): Promise<void> {
+  // L1 — restore the ambient value exactly, including its absence.
+  const priorApiKey = process.env.PERPLEXITY_API_KEY;
   process.env.PERPLEXITY_API_KEY = "test-key-never-persisted";
+  try {
+    await run();
+  } finally {
+    if (priorApiKey === undefined) delete process.env.PERPLEXITY_API_KEY;
+    else process.env.PERPLEXITY_API_KEY = priorApiKey;
+  }
+}
+
+async function run(): Promise<void> {
 
   // ------------------------------------------------------------------
   // 1. Legacy success path — sent === returned, byte for byte
@@ -111,12 +123,15 @@ async function main(): Promise<void> {
     "unicode: hash is computed over UTF-8 bytes, matching a fresh hash of the same string",
     sha256Hex(res.fullRequestBody as string) === res.fullRequestBodySha256
   );
+  // L2 — a direct three-way byte equality: what the fetcher received,
+  // what the adapter returned, and what the persistence layer is handed.
+  // The former assertion here was a disjunction that held either way.
+  const persistedFromSuccess = { fullRequestBody: res.fullRequestBody };
   check(
-    "unicode: re-serializing the parsed object is NOT relied upon for the hash",
-    // Proof of why we carry the string: a re-serialization is a different
-    // object graph and must never be substituted for the captured body.
-    sha256Hex(JSON.stringify(parsed)) !== res.fullRequestBodySha256 ||
-      JSON.stringify(parsed) === res.fullRequestBody
+    "unicode: captured === returned === handed to the adapter, byte for byte",
+    cap.body === res.fullRequestBody &&
+      res.fullRequestBody === persistedFromSuccess.fullRequestBody &&
+      sha256Hex(persistedFromSuccess.fullRequestBody as string) === res.fullRequestBodySha256
   );
 
   // ------------------------------------------------------------------
@@ -243,9 +258,29 @@ async function main(): Promise<void> {
     "sql: historical rows are labelled legacy_hash_only, never reconstructed",
     sql.includes("'legacy_hash_only'") && !/update\s+public\.probe_results\s+set\s+full_request_body/i.test(sql)
   );
+  // The only privilege statements 0055 may contain concern the hash
+  // helper: EXECUTE to service_role, and re-asserted revocations for
+  // PUBLIC/anon/authenticated. Comments are stripped first, so a word
+  // like "grant" in prose can never satisfy or defeat these assertions.
+  const sqlCode = sql
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("--"))
+    .join("\n");
+  const grants = sqlCode.match(/^\s*grant\b[^;]*;/gim) || [];
+  const revokes = sqlCode.match(/^\s*revoke\b[^;]*;/gim) || [];
   check(
-    "sql: no grant, no revoke, no privilege change",
-    !/^\s*grant\s/im.test(sql) && !/^\s*revoke\s/im.test(sql)
+    "sql: every GRANT targets _sha256_hex and only service_role",
+    grants.length === 1 &&
+      /grant execute on function public\._sha256_hex\(text\) to service_role;/.test(grants[0])
+  );
+  check(
+    "sql: every REVOKE targets _sha256_hex and only public/anon/authenticated",
+    revokes.length === 3 &&
+      revokes.every((r) => /_sha256_hex\(text\) from (public|anon|authenticated);/.test(r))
+  );
+  check(
+    "sql: no privilege is widened on any table or M4/M5 object",
+    !grants.some((g) => !/_sha256_hex/.test(g)) && !revokes.some((r) => !/_sha256_hex/.test(r))
   );
   check(
     "sql: no constraint is dropped or weakened",
@@ -255,8 +290,8 @@ async function main(): Promise<void> {
   // 0055 is M1-A, not the M4 cutover. The cutover takes the next free
   // number and is neither performed nor authorized here.
   check(
-    "sql: 0055 performs no M4 cutover — no REVOKE statement",
-    !/^\s*revoke\s/im.test(sql)
+    "sql: 0055 performs no M4 cutover — no REVOKE touches an M4 object",
+    !revokes.some((r) => /admit_and_reserve_attempt|\bstart_attempt\b|reconcile_attempt|protocol_/.test(r))
   );
   check(
     "sql: 0055 names none of the three raw M4 RPCs",
@@ -319,6 +354,126 @@ async function main(): Promise<void> {
     perp.includes("body: requestBodyJson,") &&
       perp.includes("sha256Hex(requestBodyJson)") &&
       perp.includes("fullRequestBody: requestBodyJson,")
+  );
+
+
+  // ------------------------------------------------------------------
+  // 10. H1 — a non-JSON 2xx body fails with evidence, not a SyntaxError
+  // ------------------------------------------------------------------
+  const capBad: { body?: string } = {};
+  const notJson = "<html>upstream proxy error</html>";
+  let badJson: PerplexityProbeFailure | null = null;
+  let rawThrow: unknown = null;
+  try {
+    await runPerplexityProbe({
+      prompt: UNICODE_PROMPT,
+      brandName: "Zypact",
+      fetchImpl: (async (_u: unknown, init: unknown) => {
+        capBad.body = (init as { body: string }).body;
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: (h: string) => (h === "x-request-id" ? "req-42" : null) },
+          text: async () => notJson,
+        } as unknown as Response;
+      }) as unknown as typeof fetch,
+    });
+  } catch (e) {
+    if (e instanceof PerplexityProbeFailure) badJson = e;
+    else rawThrow = e;
+  }
+  check("h1: a non-JSON 2xx body raises PerplexityProbeFailure, not a bare SyntaxError", badJson !== null && rawThrow === null);
+  check("h1: it names invalid_json", (badJson?.message ?? "").includes("invalid_json"));
+  check("h1: the exact request body survives", badJson?.fullRequestBody === capBad.body);
+  check("h1: its hash matches", badJson?.fullRequestBodySha256 === sha256Hex(capBad.body as string));
+  check("h1: the raw response bytes survive", badJson?.errorBody === notJson);
+  check("h1: the response hash matches", badJson?.errorBodySha256 === sha256Hex(notJson));
+  check("h1: status, latency and request id survive", badJson?.httpStatus === 200 && typeof badJson?.latencyMs === "number" && badJson?.providerRequestId === "req-42");
+
+  // H1 — and it reaches the real persistence path, through the memory adapter.
+  {
+    const project = await memoryAdapter.createProject({
+      domain: "m1a.test",
+      companyName: "Zypact",
+      userId: null,
+    });
+    const run = await memoryAdapter.createProbeRun(project.id, "perplexity", "live_perplexity");
+    const row = await memoryAdapter.recordProbeFailure({
+      probeRunId: run.id,
+      projectId: project.id,
+      platform: "perplexity",
+      prompt: UNICODE_PROMPT,
+      failureReason: badJson?.reason ?? "empty_answer",
+      providerHttpStatus: badJson?.httpStatus ?? null,
+      providerErrorBody: badJson?.errorBody ?? null,
+      providerErrorBodySha256: badJson?.errorBodySha256 ?? null,
+      providerLatencyMs: badJson?.latencyMs ?? null,
+      providerRequestId: badJson?.providerRequestId ?? null,
+      rawProbeRequestSha256: badJson?.rawProbeRequestSha256 ?? null,
+      fullRequestBody: badJson?.fullRequestBody ?? null,
+      fullRequestBodySha256: badJson?.fullRequestBodySha256 ?? null,
+      retryCount: 0,
+    });
+    check(
+      "h1: the persisted failure row carries the exact request body",
+      row.fullRequestBody === capBad.body
+    );
+    check(
+      "h1: the persisted hash matches the persisted body",
+      row.fullRequestBodySha256 === sha256Hex(row.fullRequestBody as string)
+    );
+    check(
+      "h1: request evidence and response evidence stay in separate columns",
+      row.fullRequestBody !== row.providerErrorBody
+    );
+  }
+
+  // ------------------------------------------------------------------
+  // 11. M2 — a mock can never fabricate provider evidence
+  // ------------------------------------------------------------------
+  const forged = await runPerplexityProbe({
+    prompt: "peu importe",
+    brandName: "Zypact",
+    mockResponse: {
+      prompt: "peu importe",
+      answer: "réponse simulée",
+      rawResponse: "réponse simulée",
+      citations: [],
+      searchResults: [],
+      sourceCitations: [],
+      model: "mock",
+      usedMock: true,
+      fullRequestBody: '{"forged":true}',
+      fullRequestBodySha256: sha256Hex('{"forged":true}'),
+    },
+  });
+  check("m2: a mock fixture cannot smuggle in a forged request body", forged.fullRequestBody === undefined);
+  check("m2: nor a forged hash", forged.fullRequestBodySha256 === undefined);
+  check("m2: the mock is still marked as one", forged.usedMock === true);
+
+  // ------------------------------------------------------------------
+  // 12. B1 — the migration grants EXECUTE narrowly
+  // ------------------------------------------------------------------
+  check(
+    "b1: _sha256_hex EXECUTE is granted to service_role",
+    /grant execute on function public\._sha256_hex\(text\) to service_role;/.test(sql)
+  );
+  for (const role of ["public", "anon", "authenticated"]) {
+    check(
+      `b1: _sha256_hex stays revoked from ${role}`,
+      new RegExp(`revoke all on function public\\._sha256_hex\\(text\\) from ${role};`).test(sql)
+    );
+    check(
+      `b1: no EXECUTE is granted to ${role}`,
+      // The single GRANT names service_role as its grantee. Matching on
+      // the grantee clause only, so that "public." in the qualified
+      // function name cannot be mistaken for the PUBLIC role.
+      !grants.some((g) => new RegExp("to\\s+" + role + "\\s*;").test(g))
+    );
+  }
+  check(
+    "b1: the SQL hash validation is still present, not traded away for the grant",
+    sql.includes("full_request_body_sha256 = public._sha256_hex(full_request_body)")
   );
 
   console.log("");

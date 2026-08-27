@@ -120,6 +120,67 @@ function selectNumberedMigrations(
   return { ok: true, files };
 }
 
+/**
+ * Reads one scalar out of a TOML file by (section, key), scanning line by
+ * line and tracking the current section header. Deliberately not a general
+ * TOML parser and deliberately not a regex over the whole file: the only
+ * thing that matters here is knowing *which* `enabled =` line we are
+ * looking at, because `config.toml` has more than twenty of them.
+ *
+ * Returns null when the key does not occur inside that exact section.
+ */
+function readTomlScalar(text: string, section: string, key: string): string | null {
+  let current: string | null = null;
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    const header = /^\[([^\]]+)\]$/.exec(line);
+    if (header) {
+      current = header[1];
+      continue;
+    }
+    if (current !== section) continue;
+    const kv = /^([A-Za-z0-9_.-]+)\s*=\s*(.*)$/.exec(line);
+    if (kv && kv[1] === key) return kv[2].trim();
+  }
+  return null;
+}
+
+/**
+ * Sets one key inside one section, and reports how many lines it touched.
+ *
+ * The caller requires that count to be exactly 1. That is the whole point:
+ * the previous version of this harness used
+ * `text.replace(/^enabled = true$/m, ...)`, which silently rewrote the
+ * FIRST `enabled = true` in the file — the one under `[api]` — and so
+ * started every stack with PostgREST disabled while leaving the database
+ * seed enabled. A count is the only thing that makes that class of mistake
+ * impossible to repeat unnoticed.
+ */
+function setTomlScalar(
+  text: string,
+  section: string,
+  key: string,
+  value: string
+): { text: string; replacements: number } {
+  let current: string | null = null;
+  let replacements = 0;
+  const out = text.split("\n").map((raw) => {
+    const line = raw.trim();
+    const header = /^\[([^\]]+)\]$/.exec(line);
+    if (header) {
+      current = header[1];
+      return raw;
+    }
+    if (current !== section) return raw;
+    const kv = /^([A-Za-z0-9_.-]+)\s*=\s*(.*)$/.exec(line);
+    if (!kv || kv[1] !== key) return raw;
+    replacements += 1;
+    const indent = raw.slice(0, raw.length - raw.trimStart().length);
+    return `${indent}${key} = ${value}`;
+  });
+  return { text: out.join("\n"), replacements };
+}
+
 /** Reads `supabase status -o env` without ever printing a value. */
 function serviceRoleKeyFrom(workdir: string): string {
   const out = run("supabase", ["status", "-o", "env", "--workdir", workdir]);
@@ -293,10 +354,31 @@ async function main(): Promise<void> {
   try {
     run("supabase", ["init", "--workdir", workdir, "--yes"]);
     const configPath = path.join(workdir, "supabase", "config.toml");
-    writeFileSync(
-      configPath,
-      readFileSync(configPath, "utf8").replace(/^enabled = true$/m, "enabled = false")
-    );
+    const generated = readFileSync(configPath, "utf8");
+    const edited = setTomlScalar(generated, "db.seed", "enabled", "false");
+    if (edited.replacements !== 1) {
+      throw new Error(
+        `config.toml: expected exactly 1 replacement of [db.seed].enabled, made ${edited.replacements}`
+      );
+    }
+    writeFileSync(configPath, edited.text);
+
+    // Read the file back and refuse the run outright unless BOTH facts hold.
+    // `[api].enabled` is what serves PostgREST; without it Kong answers
+    // every request with "name resolution failed" and the whole harness is
+    // testing nothing.
+    const written = readFileSync(configPath, "utf8");
+    const apiEnabled = readTomlScalar(written, "api", "enabled");
+    const seedEnabled = readTomlScalar(written, "db.seed", "enabled");
+    if (apiEnabled !== "true" || seedEnabled !== "false") {
+      throw new Error(
+        `config.toml refused before start: [api].enabled=${apiEnabled} (want true), ` +
+          `[db.seed].enabled=${seedEnabled} (want false)`
+      );
+    }
+    check("exactly one config.toml line was rewritten", edited.replacements === 1);
+    check("[api].enabled is true — PostgREST will actually serve", apiEnabled === "true");
+    check("[db.seed].enabled is false — no seed runs during db reset", seedEnabled === "false");
     check(
       "the disposable project was never linked to a remote",
       !existsSync(path.join(workdir, "supabase", ".temp", "linked-project.json"))
@@ -488,6 +570,17 @@ async function main(): Promise<void> {
         latencyMs: 7,
         rawResponseBody: PROVIDER_BODY,
       });
+
+      // Read the context while the lease is still valid. No probe_results
+      // row exists yet, so a correct mapping must report null — PostgREST
+      // sends an all-null composite here, not JSON null, and the previous
+      // truthiness test read that as "a result already exists".
+      const ctxNoResult = await db.getProtocolExecutionJobContext(f);
+      check(
+        "context with no probe_results row ⇒ probeResult === null",
+        ctxNoResult.outcome === "OK" && ctxNoResult.probeResult === null,
+        `outcome=${ctxNoResult.outcome} probeResult=${ctxNoResult.probeResult === null ? "null" : "NON-NULL"}`
+      );
       await sleep(2500);
 
       const spy: Spy = { providerFetches: 0, analysisExecutes: 0 };
@@ -502,6 +595,76 @@ async function main(): Promise<void> {
         spy.providerFetches === 0
       );
       check("exactly one analysis call, the one still owed", spy.analysisExecutes === 1);
+
+      // The other half of the mapping contract, on its own job so that
+      // nothing above is disturbed: drive one attempt to a persisted
+      // probe result and read the context while the fence is still live.
+      // No provider call and no model call — every receipt is written
+      // directly through its RPC.
+      const posSeed = await seed("stack-mapping-positive.test");
+      const pc = await db.claimProtocolExecutionJob({ workerId: "w-mapping", leaseSeconds: 300 });
+      if (pc.job?.id !== posSeed.jobId) {
+        throw new Error(`mapping check claimed ${pc.job?.id ?? "nothing"}, expected ${posSeed.jobId}`);
+      }
+      const pf = {
+        jobId: posSeed.jobId,
+        claimToken: must(pc.claimToken, "token"),
+        projectId: posSeed.projectId,
+      };
+      const pad = await db.admitAndReserveAttemptForJob({
+        ...pf,
+        attemptKind: "baseline",
+        idempotencyKey: `${pf.jobId}:baseline:${must(pc.job, "job").nextBaselineOrdinal}`,
+        perplexityReservedCostUsd: 0.02,
+        analysisReservedCostUsd: 0.02,
+      });
+      const pStarted = await db.createProbeRunAndStartAttemptForJob({
+        ...pf,
+        attemptId: must(pad.attempt, "attempt").id,
+        platform: "perplexity",
+        probeMode: "live_perplexity",
+      });
+      const pRun = must(pStarted.probeRun, "probe run").id;
+      const pPerplexity = must(pad.perplexityCall, "perplexity call").id;
+      const pAnalysis = must(pad.analysisCall, "analysis call").id;
+      await db.markExternalCallSentForJob({ ...pf, externalCallId: pPerplexity, probeRunId: pRun });
+      await db.recordProviderCallReceiptForJob({
+        ...pf, externalCallId: pPerplexity, probeRunId: pRun, outcome: "success", httpStatus: 200,
+        providerRequestId: "req-fixture", rawResponseSha256: sha256Hex(PROVIDER_BODY),
+        latencyMs: 7, rawResponseBody: PROVIDER_BODY,
+      });
+      await db.markExternalCallSentForJob({ ...pf, externalCallId: pAnalysis, probeRunId: pRun });
+      await db.recordAnalysisCallReceiptForJob({
+        ...pf, externalCallId: pAnalysis, probeRunId: pRun, outcome: "success", provider: "openai",
+        model: "gpt-4o-mini", usedMock: false, requestSha256: sha256Hex(ANALYSIS_REQUEST_BODY),
+        responseSha256: sha256Hex(M5_CONTENT), latencyMs: 5, rawContent: M5_CONTENT,
+        rawRequestBody: ANALYSIS_REQUEST_BODY,
+      });
+
+      const beforePersist = await db.getProtocolExecutionJobContext(pf);
+      check(
+        "before persist, with a live attempt and no row ⇒ probeResult === null",
+        beforePersist.probeResult === null,
+        beforePersist.probeResult === null ? "null" : "NON-NULL"
+      );
+      const persisted = await db.persistProbeResultForJob({
+        ...pf,
+        content: {
+          productMentioned: true, productPosition: "listed", competitorsMentioned: [],
+          sourcesCited: [{ source: "g2.com/products/example", type: "review_site" }],
+          answerSummary: "fixture", citedAsSource: false, clientSourceCount: 0,
+          platformsReferenced: [], negativeClaimDetected: false,
+        },
+      });
+      check("the probe result really was persisted", persisted.outcome === "PERSISTED", persisted.outcome);
+      const afterPersist = await db.getProtocolExecutionJobContext(pf);
+      check(
+        "context with a real probe_results row ⇒ probeResult is a non-null object with an id",
+        afterPersist.probeResult !== null && typeof afterPersist.probeResult.id === "string" &&
+          afterPersist.probeResult.id.length > 0,
+        afterPersist.probeResult === null ? "null" : `id=${afterPersist.probeResult.id.slice(0, 8)}…`
+      );
+      await db.failProtocolExecutionJob({ ...pf, reason: "mapping_check_teardown" });
     }
 
     // ------------------------------------------------------------- S5
@@ -509,7 +672,23 @@ async function main(): Promise<void> {
     {
       const seeded = await seed("stack-full-loop.test", 2);
       const spy: Spy = { providerFetches: 0, analysisExecutes: 0 };
-      const deps = makeDeps(db, spy);
+
+      // Record every probeResult the worker actually sees. Slot 1 starts
+      // with none and ends with one, so a correct mapping must produce
+      // both a null and a real object across the run.
+      const seen: Array<"null" | "object"> = [];
+      const observed = new Proxy(db, {
+        get(target, prop, recv) {
+          const v = Reflect.get(target, prop, recv);
+          if (prop !== "getProtocolExecutionJobContext" || typeof v !== "function") return v;
+          return async (...args: Parameters<DbAdapter["getProtocolExecutionJobContext"]>) => {
+            const out = await (v as DbAdapter["getProtocolExecutionJobContext"]).apply(target, args);
+            seen.push(out.probeResult === null ? "null" : "object");
+            return out;
+          };
+        },
+      }) as DbAdapter;
+      const deps = makeDeps(observed, spy);
       const health = new WorkerHealth(() => Date.now());
       let completed = false;
       for (let i = 0; i < 4 && !completed; i += 1) {
@@ -520,6 +699,16 @@ async function main(): Promise<void> {
       check("a two-slot job runs both slots and completes", completed);
       check("exactly two provider calls, one per slot", spy.providerFetches === 2, String(spy.providerFetches));
       check("exactly two analysis calls, one per slot", spy.analysisExecutes === 2, String(spy.analysisExecutes));
+      // Every context the worker reads is either before its slot's probe
+      // result exists, or after the completion gate cleared the current
+      // attempt — so `null` throughout is the correct observation here.
+      // The positive half of the mapping contract is proven in S4, on a
+      // fence that is still live at the moment a real row exists.
+      check(
+        "every context the worker read reported probeResult === null",
+        seen.length > 0 && seen.every((x) => x === "null"),
+        seen.join(",")
+      );
     }
 
     // ------------------------------------------------------------- S6

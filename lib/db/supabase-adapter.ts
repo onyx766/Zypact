@@ -1069,6 +1069,39 @@ function mapQaReport(r: QaReportDbRow): QaReportRow {
   };
 }
 
+/**
+ * Maps a `probe_results` composite that may or may not be there.
+ *
+ * PostgREST does not serialize a SQL NULL composite as JSON `null`. It
+ * emits an object whose every field is null — which is truthy in
+ * JavaScript. A bare `row.probe_result ? … : null` therefore reports "a
+ * probe result exists" for a job that has none, and a caller that keys a
+ * decision off that (the M5-A worker skips its analysis leg when a result
+ * is already saved) silently does the wrong thing against the real
+ * database while passing every in-memory test.
+ *
+ * The four cases are deliberately explicit:
+ *   - absent (null/undefined)              → null
+ *   - present but every field null         → null   (the PostgREST shape)
+ *   - present with a real `id`             → mapped
+ *   - present, no `id`, but some field set → throw
+ *
+ * The last one is the important one. A partially populated composite is
+ * not a missing row and not a valid row; treating it as either would be a
+ * guess. It means the RPC's return contract changed under us, and the
+ * caller must hear about that rather than receive a quiet null.
+ */
+function mapProbeResultNullable(r: ProbeResultDbRow | null | undefined): ProbeResult | null {
+  if (r === null || r === undefined) return null;
+  const values = Object.values(r as unknown as Record<string, unknown>);
+  if (values.length === 0 || values.every((v) => v === null)) return null;
+  if (typeof r.id === "string" && r.id.length > 0) return mapProbeResult(r);
+  throw new Error(
+    "mapProbeResultNullable: probe_result composite has no id but is not all-null; " +
+      "refusing to guess whether the row exists."
+  );
+}
+
 function mapProbeResult(r: ProbeResultDbRow): ProbeResult {
   return {
     id: r.id,
@@ -3731,7 +3764,7 @@ export const supabaseAdapter: DbAdapter = {
         .filter((r): r is AnalysisCallReceipt => r !== null),
       probeRun: mapProbeRunNullable(row.probe_run as ProbeRunDbRow | null),
       completedBaselineSlots: (row.completed_baseline_slots as number | null) ?? null,
-      probeResult: row.probe_result ? mapProbeResult(row.probe_result as ProbeResultDbRow) : null,
+      probeResult: mapProbeResultNullable(row.probe_result as ProbeResultDbRow | null),
     };
   },
 

@@ -34,6 +34,7 @@ import {
   parseProbeAnalysisM5Content,
 } from "@/lib/protocol-worker/analysis-m5";
 import type {
+  FailJobWithoutAttemptReason,
   GetProtocolExecutionJobContextResult,
   Protocol,
   ProtocolAttempt,
@@ -61,6 +62,19 @@ export function answerFromRawResponseBody(raw: string | null): string | null {
   return trimmed.length === 0 ? null : trimmed;
 }
 
+/**
+ * Exponential backoff with bounded jitter.
+ *
+ * Deterministic behaviour is a property of the ledger, not of the sleep:
+ * without jitter, workers that started together stay in lockstep and
+ * collide on every retry.
+ */
+export function backoffWithJitter(opts: WorkerOptions, attempt: number): number {
+  const base = Math.min(opts.idleBackoffMs * 2 ** Math.max(0, attempt - 1), opts.maxBackoffMs);
+  const spread = base * Math.max(0, opts.jitterRatio);
+  return Math.min(opts.maxBackoffMs, Math.round(base + spread * Math.random()));
+}
+
 /** One claim, one job, driven to a terminal or a hand-back. */
 export async function runOneIteration(
   deps: WorkerDeps,
@@ -71,6 +85,9 @@ export async function runOneIteration(
     workerId: opts.workerId,
     leaseSeconds: opts.leaseSeconds,
   });
+  // A claim that answered at all proves the database is reachable, even
+  // when the answer is "nothing to do".
+  health.markDbContact();
   if (claimed.outcome !== "CLAIMED" || !claimed.job || !claimed.claimToken) {
     return { outcome: "no_job", jobId: null, detail: claimed.outcome };
   }
@@ -99,7 +116,8 @@ export async function runOneIteration(
   try {
     // Bounded by the plan: one pass per baseline slot, plus one for the
     // completion gate. A runaway loop is a bug, not a retry policy.
-    for (let pass = 0; pass <= opts.maxSlotsPerClaim; pass += 1) {
+    let throttled = 0;
+    for (let pass = 0; pass <= opts.maxSlotsPerClaim + opts.maxThrottledRetries; pass += 1) {
       if (lost) return { outcome: "lost_ownership", jobId: f.jobId, detail: "HEARTBEAT_LOST" };
 
       const ctx = await deps.db.getProtocolExecutionJobContext(f);
@@ -121,10 +139,44 @@ export async function runOneIteration(
       }
 
       const step = await runOneSlot(deps, opts, f, ctx);
+      if (step && step.outcome === "throttled") {
+        // The claim and the heartbeat are HELD. Letting the lease lapse
+        // would consume an attempt_count and could turn a transient cap
+        // into abandoned_exhausted; expiry stays reserved for crashes and
+        // genuine loss of ownership.
+        throttled += 1;
+        if (throttled > opts.maxThrottledRetries) {
+          const closed = await deps.db.failJobWithoutAttemptForJob({
+            jobId: f.jobId,
+            claimToken: f.claimToken,
+            projectId: f.projectId,
+            reason: "throttled_retries_exhausted",
+          });
+          return {
+            outcome: "needs_review_request_evidence",
+            jobId: f.jobId,
+            detail: `${step.detail}:${closed.outcome}`,
+          };
+        }
+        await deps.sleep(backoffWithJitter(opts, throttled));
+        continue;
+      }
       if (step) return step;
       // null ⇒ the gate said NEXT_BASELINE_REQUIRED: re-read and continue.
     }
-    return { outcome: "failed", jobId: f.jobId, detail: "SLOT_BUDGET_EXHAUSTED" };
+    // A ledger that outruns the slot budget is an anomaly, not an ordinary
+    // failure: it is surfaced for review rather than quietly failed.
+    const closed = await deps.db.failJobWithoutAttemptForJob({
+      jobId: f.jobId,
+      claimToken: f.claimToken,
+      projectId: f.projectId,
+      reason: "slot_budget_exhausted",
+    });
+    return {
+      outcome: "needs_review_request_evidence",
+      jobId: f.jobId,
+      detail: `SLOT_BUDGET_EXHAUSTED:${closed.outcome}`,
+    };
   } finally {
     hb.stop();
   }
@@ -161,7 +213,34 @@ async function runOneSlot(
     perplexityReservedCostUsd: opts.perplexityReservedCostUsd,
     analysisReservedCostUsd: opts.analysisReservedCostUsd,
   });
-  if (admitted.outcome === "RUN_CAP_EXCEEDED" || admitted.outcome === "PROTOCOL_NOT_APPROVED") {
+  // Five distinct cap refusals, and they do not mean the same thing.
+  // A durable cap closes the job; a transient one is retried under this
+  // same claim, because letting the lease lapse would burn an attempt.
+  const DURABLE_CAPS = {
+    RUN_CAP_EXCEEDED: "run_cap_exceeded",
+    SPEND_CAP_EXCEEDED: "spend_cap_exceeded",
+    RETRY_CAP_EXCEEDED: "retry_cap_exceeded",
+  } as const;
+  const durable = (DURABLE_CAPS as Record<string, FailJobWithoutAttemptReason | undefined>)[
+    admitted.outcome
+  ];
+  if (durable) {
+    // Admission made zero mutation, so there is no attempt to terminalise.
+    const closed = await deps.db.failJobWithoutAttemptForJob({
+      jobId: f.jobId,
+      claimToken: f.claimToken,
+      projectId: f.projectId,
+      reason: durable,
+    });
+    return { outcome: "capped", jobId: f.jobId, detail: `${admitted.outcome}:${closed.outcome}` };
+  }
+  if (
+    admitted.outcome === "RATE_LIMIT_EXCEEDED" ||
+    admitted.outcome === "CONCURRENCY_LIMIT_EXCEEDED"
+  ) {
+    return { outcome: "throttled", jobId: f.jobId, detail: admitted.outcome };
+  }
+  if (admitted.outcome === "PROTOCOL_NOT_APPROVED") {
     return { outcome: "capped", jobId: f.jobId, detail: admitted.outcome };
   }
   if (
@@ -220,7 +299,24 @@ async function runOneSlot(
       brandName: project.companyName ?? project.domain,
       domain: project.domain,
     });
-    if ("done" in r) return r.done;
+    if ("done" in r) {
+      if (r.done.outcome === "provider_failed") {
+        // Known failure: the analysis leg never left `reserved`, so
+        // reconcile alone could never close this. T3 cancels it, ends the
+        // attempt and closes the job, atomically.
+        const closed = await deps.db.abortAttemptAndFailJobForJob({
+          jobId: f.jobId,
+          claimToken: f.claimToken,
+          projectId: f.projectId,
+          attemptId: attempt.id,
+          attemptStatus: "failed",
+          terminationReason: r.done.detail,
+          failureReason: "provider_error",
+        });
+        return { outcome: "failed", jobId: f.jobId, detail: `${r.done.detail}:${closed.outcome}` };
+      }
+      return r.done;
+    }
     answer = r.probe.answer.trim().length === 0 ? null : r.probe.answer;
   }
   if (answer === null) {
@@ -348,18 +444,18 @@ export async function runWorkerLoop(
   opts: WorkerOptions,
   signal: { aborted: boolean },
   sleep: (ms: number) => Promise<void>,
-  onIteration?: (r: IterationResult) => void
+  onIteration?: (r: IterationResult) => void,
+  health: WorkerHealth = new WorkerHealth(deps.now)
 ): Promise<WorkerHealth> {
-  const health = new WorkerHealth(deps.now);
-  let backoff = opts.idleBackoffMs;
+  let idle = 0;
   while (!signal.aborted) {
     const r = await runOneIteration(deps, opts, health);
     onIteration?.(r);
     if (r.outcome === "no_job") {
-      await sleep(backoff);
-      backoff = Math.min(backoff * 2, opts.maxBackoffMs);
+      idle += 1;
+      await sleep(backoffWithJitter(opts, idle));
     } else {
-      backoff = opts.idleBackoffMs;
+      idle = 0;
     }
   }
   health.markShuttingDown();

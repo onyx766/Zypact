@@ -44,6 +44,8 @@ export interface WorkerDeps {
   realFetch: RealFetch;
   /** Wall clock, injected so tests are deterministic. */
   now: () => number;
+  /** Injected so a test can wait without really waiting. */
+  sleep: (ms: number) => Promise<void>;
   /**
    * The probe mode every started attempt is recorded under. Injected
    * rather than hardcoded so a runtime test can drive the identical code
@@ -73,6 +75,20 @@ export interface WorkerOptions {
    */
   perplexityReservedCostUsd: number;
   analysisReservedCostUsd: number;
+  /**
+   * Backoff jitter, as a fraction of the delay. Without it, N workers that
+   * started together stay in lockstep for ever.
+   */
+  jitterRatio: number;
+  /**
+   * Timed retries allowed under a SINGLE claim when a transient cap
+   * refuses admission. The claim and the heartbeat are held throughout:
+   * letting the lease lapse would burn an attempt_count and could turn a
+   * transient cap into abandoned_exhausted.
+   */
+  maxThrottledRetries: number;
+  /** Cooperative shutdown budget. Must stay below the lease. */
+  graceMs: number;
 }
 
 /**
@@ -82,6 +98,16 @@ export interface WorkerOptions {
 export type IterationOutcome =
   | "no_job"
   | "completed"
+  /** 0056 — the call was already sent once with this exact request. */
+  | "already_sent"
+  /** 0056 — request evidence absent or divergent; the job is under review. */
+  | "needs_review_request_evidence"
+  /** 0056 — a receipt exists whose evidence differs from the one offered. */
+  | "needs_review_receipt_evidence"
+  /** A transient cap held for every retry allowed under one claim. */
+  | "throttled"
+  /** The provider failed definitively; the caller must close with T3. */
+  | "provider_failed"
   | "needs_review_perplexity_unknown"
   | "needs_review_analysis_unknown"
   | "parse_failed"

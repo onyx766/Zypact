@@ -26,11 +26,15 @@ export function startHeartbeat(args: {
   onLost: () => void;
 }): HeartbeatHandle {
   let stillOwned = true;
+  // Single-flight: a tick arriving while a slow renewal is still in the air
+  // is dropped, never queued behind it.
+  let renewing = false;
   const intervalMs = Math.max(1000, Math.floor((args.leaseSeconds * 1000) / 3));
 
   const timer = setInterval(() => {
     void (async () => {
-      if (!stillOwned) return;
+      if (!stillOwned || renewing) return;
+      renewing = true;
       try {
         const r = await args.db.renewProtocolExecutionJobLease({
           jobId: args.jobId,
@@ -38,6 +42,7 @@ export function startHeartbeat(args: {
           projectId: args.projectId,
           leaseSeconds: args.leaseSeconds,
         });
+        args.health.markDbContact();
         if (r.outcome === "RENEWED") {
           args.health.markHeartbeat();
         } else {
@@ -47,6 +52,8 @@ export function startHeartbeat(args: {
       } catch {
         // A transient renewal error is not a loss of ownership; the next
         // tick retries. Only an explicit non-RENEWED outcome is decisive.
+      } finally {
+        renewing = false;
       }
     })();
   }, intervalMs);

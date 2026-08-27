@@ -368,6 +368,7 @@ async function main(): Promise<void> {
       db,
       analysis,
       now: () => 1_700_000_000_000,
+      sleep: async () => {},
       probeMode: "live_perplexity",
       realFetch: (async () => {
         fetchSpy.calls += 1;
@@ -408,6 +409,9 @@ async function main(): Promise<void> {
     maxSlotsPerClaim: 8,
     perplexityReservedCostUsd: 0.02,
     analysisReservedCostUsd: 0.02,
+    jitterRatio: 0,
+    maxThrottledRetries: 3,
+    graceMs: 1000,
   };
 
   // ======================================================================

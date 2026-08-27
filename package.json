@@ -48,7 +48,15 @@
     "test:m5-a-worker-loop": "tsx scripts/test-m5-a-worker-loop.ts",
     "test:m5-a-web-enqueue": "tsx scripts/test-m5-a-web-enqueue.ts",
     "test:m5-a-recovery": "tsx scripts/test-m5-a-recovery.ts",
-    "test:m5-a-stack-runtime": "tsx scripts/test-m5-a-supabase-stack-runtime.ts"
+    "test:m5-a-stack-runtime": "tsx scripts/test-m5-a-supabase-stack-runtime.ts",
+    "test:m5-0056-schema": "tsx scripts/test-m5-0056-schema-contract.ts",
+    "test:m5-0056-runtime": "tsx scripts/test-m5-0056-runtime-contract.ts",
+    "test:m5-a-real-probe-fencing": "tsx scripts/test-m5-a-real-probe-fencing.ts",
+    "test:m5-a-conflict-identity": "tsx scripts/test-m5-a-conflict-identity.ts",
+    "test:m5-a-failure-matrix": "tsx scripts/test-m5-a-failure-matrix.ts",
+    "test:m5-a-abort-and-cancel": "tsx scripts/test-m5-a-abort-and-cancel.ts",
+    "test:m5-a-throttling": "tsx scripts/test-m5-a-throttling.ts",
+    "test:m5-a-lifecycle": "tsx scripts/test-m5-a-lifecycle.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

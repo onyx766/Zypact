@@ -1693,12 +1693,42 @@ export interface CreateProbeRunAndStartAttemptForJobResult {
 }
 
 export type MarkExternalCallSentForJobOutcome =
+  /** The only outcome that authorises a network call. */
   | "SENT"
+  /**
+   * 0056 — the call already left `reserved` and this exact request is on
+   * record. It was sent once; the caller replays from its receipt and
+   * never touches the wire.
+   */
+  | "ALREADY_SENT_SAME_EVIDENCE"
+  /**
+   * 0056 — no evidence where there should be some, or evidence that is
+   * not this request. The job is moved to needs_review with an outbox row
+   * inside the same transaction.
+   */
+  | "REQUEST_EVIDENCE_CONFLICT"
+  | "WRONG_CALL_KIND"
   | "CONFLICT"
   | "NOT_FOUND"
   | "CALL_NOT_OWNED_BY_JOB"
   | "JOB_NOT_FOUND"
   | "JOB_NOT_OWNED";
+
+/**
+ * 0056 — the exact outbound request, recorded before the wire.
+ *
+ * One immutable row per external call. `requestBody` is the body only:
+ * no header, no key, no token ever reaches this table.
+ */
+export interface ExternalCallRequest {
+  id: string;
+  projectId: string;
+  externalCallId: string;
+  callKind: ExternalCallKind;
+  requestBody: string;
+  requestBodySha256: string;
+  recordedAt: string;
+}
 
 export interface MarkExternalCallSentForJobInput {
   jobId: string;
@@ -1706,6 +1736,12 @@ export interface MarkExternalCallSentForJobInput {
   projectId: string;
   externalCallId: string;
   probeRunId: string;
+  /** 0056 — must equal the call's own kind, or WRONG_CALL_KIND. */
+  callKind: ExternalCallKind;
+  /** 0056 — the exact bytes about to go on the wire. Body only. */
+  requestBody: string;
+  /** 0056 — SHA-256 of `requestBody`, verified server-side. */
+  requestBodySha256: string;
 }
 
 export interface MarkExternalCallSentForJobResult {
@@ -1713,7 +1749,19 @@ export interface MarkExternalCallSentForJobResult {
   externalCall: ProtocolExternalCall | null;
 }
 
+/**
+ * 0056 — CONFLICT alone could not say whether the same RPC was replayed
+ * after losing its reply, or whether a second provider call happened. The
+ * identity comparison now covers every evidentiary field, latency and
+ * cost included: a second call cannot reproduce a latency, so it conflicts
+ * rather than passing as a replay. Both new outcomes return the existing
+ * durable receipt, so a replay reads the ledger and never the response in
+ * hand.
+ */
 export type RecordProviderCallReceiptForJobOutcome =
+  | "ALREADY_RECEIPTED_IDENTICAL"
+  | "RECEIPT_EVIDENCE_CONFLICT"
+  | "REQUEST_EVIDENCE_CONFLICT"
   | "RECEIPTED"
   | "CONFLICT"
   | "NOT_FOUND"
@@ -2077,6 +2125,84 @@ export interface GetProtocolExecutionJobContextResult {
   probeResult: ProbeResult | null;
 }
 
+
+/* -------------------------------------------------------------------------- */
+/* 0056 — closed failure transitions.                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * T2 — job-only closure, for refusals that land before any attempt exists.
+ *
+ * The target status is derived server-side from the reason. A caller
+ * never supplies one, so no TypeScript path can invent a destination:
+ *
+ *   run_cap_exceeded / spend_cap_exceeded / retry_cap_exceeded  -> failed
+ *   throttled_retries_exhausted / slot_budget_exhausted         -> needs_review
+ */
+export type FailJobWithoutAttemptReason =
+  | "run_cap_exceeded"
+  | "spend_cap_exceeded"
+  | "retry_cap_exceeded"
+  | "throttled_retries_exhausted"
+  | "slot_budget_exhausted";
+
+export type FailJobWithoutAttemptForJobOutcome =
+  | "CLOSED"
+  /** The whole transition is already on record, reason included. */
+  | "ALREADY_CLOSED"
+  /** Partially applied, or already terminal for another reason. Never completed silently. */
+  | "STATE_CONFLICT"
+  /** An attempt exists; the caller must use T3, which knows how to terminalise it. */
+  | "ATTEMPT_STILL_OPEN"
+  | "JOB_NOT_FOUND"
+  | "JOB_NOT_OWNED";
+
+export interface FailJobWithoutAttemptForJobInput {
+  jobId: string;
+  claimToken: string;
+  projectId: string;
+  reason: FailJobWithoutAttemptReason;
+}
+
+export interface FailJobWithoutAttemptForJobResult {
+  outcome: FailJobWithoutAttemptForJobOutcome;
+  job: ProtocolExecutionJob | null;
+}
+
+/**
+ * T3 — attempt + job closure, for everything after an attempt exists.
+ *
+ * Refuses while any call is still `in_progress`: a sent call must receive
+ * its receipt first, or cancelling it would erase the frontier that stops
+ * a replay from paying twice.
+ */
+export type AbortAttemptAndFailJobForJobOutcome =
+  | "ABORTED"
+  /** Job status, reason, attempt terminal state and cancelled calls all match. */
+  | "ALREADY_ABORTED"
+  /** Any partial application. Surfaced, never completed. */
+  | "STATE_CONFLICT"
+  | "CALL_STILL_IN_PROGRESS"
+  | "ATTEMPT_NOT_OWNED_BY_JOB"
+  | "JOB_NOT_FOUND"
+  | "JOB_NOT_OWNED";
+
+export interface AbortAttemptAndFailJobForJobInput {
+  jobId: string;
+  claimToken: string;
+  projectId: string;
+  attemptId: string;
+  attemptStatus: "failed" | "timed_out" | "cancelled" | "excluded";
+  terminationReason: string | null;
+  failureReason: string;
+}
+
+export interface AbortAttemptAndFailJobForJobResult {
+  outcome: AbortAttemptAndFailJobForJobOutcome;
+  attempt: ProtocolAttempt | null;
+  job: ProtocolExecutionJob | null;
+}
+
 export type MarkProtocolExecutionJobNeedsReviewForAmbiguityOutcome =
   | "NEEDS_REVIEW"
   | "ALREADY_NEEDS_REVIEW"
@@ -2163,6 +2289,14 @@ export type AlertReasonCode =
   | "perplexity_outcome_unknown"
   | "analysis_outcome_unknown"
   | "ambiguous_external_call_sent_without_receipt"
+  /** 0056 — the request on record is not the request in hand. */
+  | "request_evidence_conflict"
+  /** 0056 — a receipt exists whose evidence differs from the one offered. */
+  | "receipt_evidence_conflict"
+  /** 0056 — a transient cap held for every retry allowed under one claim. */
+  | "throttled_retries_exhausted"
+  /** 0056 — the slot budget was exhausted; the ledger is inconsistent. */
+  | "slot_budget_exhausted"
   | "attempts_exhausted";
 
 export type AlertDeliveryStatus =
@@ -2688,6 +2822,14 @@ export interface DbAdapter {
   failProtocolExecutionJob(
     input: FailProtocolExecutionJobInput
   ): Promise<FailProtocolExecutionJobResult>;
+  /** 0056 T2 — closes a job that has no attempt; the server picks the status. */
+  failJobWithoutAttemptForJob(
+    input: FailJobWithoutAttemptForJobInput
+  ): Promise<FailJobWithoutAttemptForJobResult>;
+  /** 0056 T3 — cancels unsent legs, terminalises the attempt, closes the job. */
+  abortAttemptAndFailJobForJob(
+    input: AbortAttemptAndFailJobForJobInput
+  ): Promise<AbortAttemptAndFailJobForJobResult>;
   reactivateAbandonedJob(
     input: ReactivateAbandonedJobInput
   ): Promise<ReactivateAbandonedJobResult>;

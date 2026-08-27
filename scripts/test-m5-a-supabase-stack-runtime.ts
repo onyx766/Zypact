@@ -8,7 +8,7 @@
  * database itself refuses. That is what this file is for.
  *
  * It creates a disposable local Supabase stack under a fresh mktemp
- * directory, applies EXACTLY migrations 0001-0055 byte-identically, and
+ * directory, applies EXACTLY migrations 0001-0056 byte-identically, and
  * then drives `lib/protocol-worker/*` through the REAL Supabase adapter
  * over PostgREST — not psql, because PostgREST is the transport the
  * worker will actually use in production.
@@ -35,6 +35,8 @@
  *   S4 resumption         a crashed job finishes with ZERO new paid calls
  *   S5 full loop          every planned baseline slot runs, then completes
  *   S6 mark failure       a refused mark_sent produces ZERO fetches
+ *   S7 request evidence   the exact body is on record BEFORE the wire
+ *   S8 closed failures    an unknown outcome closes everything at once
  */
 
 import { execFileSync } from "node:child_process";
@@ -53,13 +55,16 @@ import { sha256Hex } from "@/lib/evidence/hash";
 import type { CreateProtocolInput, DbAdapter } from "@/lib/db/types";
 import type { AnalysisTransport, WorkerDeps, WorkerOptions } from "@/lib/protocol-worker/types";
 import type { ProbeAnalysisM5Parsed } from "@/lib/protocol-worker/analysis-m5";
-import type { PerplexityProbeResult } from "@/lib/probes/perplexity";
+import { PerplexityProbeFailure, type PerplexityProbeResult } from "@/lib/probes/perplexity";
 
 const REPO_ROOT = process.cwd();
-const MAX_MIGRATION_VERSION = 55;
+const MAX_MIGRATION_VERSION = 56;
 const REQUIRED_PORTS = [54321, 54322, 54323, 54324];
-const ROSTER = ["S1", "S2", "S3", "S4", "S5", "S6"] as const;
+const ROSTER = ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8"] as const;
 type ScenarioName = (typeof ROSTER)[number];
+
+const MARK_BODY_PERPLEXITY = JSON.stringify({ model: "sonar", messages: [] });
+const MARK_BODY_ANALYSIS = JSON.stringify({ model: "gpt-4o-mini", messages: [] });
 
 let checks = 0;
 let failures = 0;
@@ -244,6 +249,9 @@ function workerOptions(over: Partial<WorkerOptions> = {}): WorkerOptions {
     maxSlotsPerClaim: 8,
     perplexityReservedCostUsd: 0.02,
     analysisReservedCostUsd: 0.02,
+    jitterRatio: 0,
+    maxThrottledRetries: 3,
+    graceMs: 1000,
     ...over,
   };
 }
@@ -281,6 +289,7 @@ function makeDeps(db: DbAdapter, spy: Spy): WorkerDeps {
     db,
     analysis,
     now: () => Date.now(),
+      sleep: async () => {},
     probeMode: "live_perplexity",
     realFetch: (async () => {
       spy.providerFetches += 1;
@@ -391,12 +400,12 @@ async function main(): Promise<void> {
     if (!selection.ok) throw new Error(`migration selection failed: ${selection.reason}`);
     for (const f of selection.files) copyFileSync(path.join(srcDir, f), path.join(dstDir, f));
     check(
-      `migrations 0001-0055 copied byte-identically (${selection.files.length} files)`,
+      `migrations 0001-0056 copied byte-identically (${selection.files.length} files)`,
       selection.files.length === MAX_MIGRATION_VERSION &&
         selection.files.every((f) =>
           readFileSync(path.join(srcDir, f)).equals(readFileSync(path.join(dstDir, f)))
         ) &&
-        selection.files.some((f) => f.startsWith("0055_"))
+        selection.files.some((f) => f.startsWith("0056_"))
     );
 
     console.log("\nStarting the disposable stack (a first run may pull Docker images)...");
@@ -558,7 +567,7 @@ async function main(): Promise<void> {
         probeMode: "live_perplexity",
       });
       const probeRunId = must(started.probeRun, "probe run").id;
-      await db.markExternalCallSentForJob({ ...f, externalCallId: perplexityCall.id, probeRunId });
+      await db.markExternalCallSentForJob({ ...f, externalCallId: perplexityCall.id, probeRunId, callKind: "perplexity", requestBody: MARK_BODY_PERPLEXITY, requestBodySha256: sha256Hex(MARK_BODY_PERPLEXITY) });
       await db.recordProviderCallReceiptForJob({
         ...f,
         externalCallId: perplexityCall.id,
@@ -627,13 +636,13 @@ async function main(): Promise<void> {
       const pRun = must(pStarted.probeRun, "probe run").id;
       const pPerplexity = must(pad.perplexityCall, "perplexity call").id;
       const pAnalysis = must(pad.analysisCall, "analysis call").id;
-      await db.markExternalCallSentForJob({ ...pf, externalCallId: pPerplexity, probeRunId: pRun });
+      await db.markExternalCallSentForJob({ ...pf, externalCallId: pPerplexity, probeRunId: pRun, callKind: "perplexity", requestBody: MARK_BODY_PERPLEXITY, requestBodySha256: sha256Hex(MARK_BODY_PERPLEXITY) });
       await db.recordProviderCallReceiptForJob({
         ...pf, externalCallId: pPerplexity, probeRunId: pRun, outcome: "success", httpStatus: 200,
         providerRequestId: "req-fixture", rawResponseSha256: sha256Hex(PROVIDER_BODY),
         latencyMs: 7, rawResponseBody: PROVIDER_BODY,
       });
-      await db.markExternalCallSentForJob({ ...pf, externalCallId: pAnalysis, probeRunId: pRun });
+      await db.markExternalCallSentForJob({ ...pf, externalCallId: pAnalysis, probeRunId: pRun, callKind: "analysis", requestBody: MARK_BODY_ANALYSIS, requestBodySha256: sha256Hex(MARK_BODY_ANALYSIS) });
       await db.recordAnalysisCallReceiptForJob({
         ...pf, externalCallId: pAnalysis, probeRunId: pRun, outcome: "success", provider: "openai",
         model: "gpt-4o-mini", usedMock: false, requestSha256: sha256Hex(ANALYSIS_REQUEST_BODY),
@@ -735,6 +744,86 @@ async function main(): Promise<void> {
       );
       check("a refused mark stops the iteration", r.outcome === "lost_ownership", `${r.outcome}/${r.detail}`);
       check("ZERO provider calls left the process", spy.providerFetches === 0);
+    }
+
+    // ------------------------------------------------------------- S7
+    sc("S7");
+    {
+      const seeded = await seed("stack-request-evidence.test");
+      const spy: Spy = { providerFetches: 0, analysisExecutes: 0 };
+      const base = makeDeps(db, spy);
+      // Capture what the worker recorded, and what actually went on the wire.
+      const wire: string[] = [];
+      const recorded: Array<{ kind: string; body: string; sha: string }> = [];
+      const observed: WorkerDeps = {
+        ...base,
+        realFetch: (async (_url, init) => {
+          spy.providerFetches += 1;
+          wire.push(typeof init?.body === "string" ? init.body : "");
+          return new Response("{}", { status: 200 });
+        }) as typeof fetch,
+        db: new Proxy(db, {
+          get(t, prop, r) {
+            const v = Reflect.get(t, prop, r);
+            if (prop !== "markExternalCallSentForJob" || typeof v !== "function") return v;
+            return async (input: Parameters<DbAdapter["markExternalCallSentForJob"]>[0]) => {
+              recorded.push({ kind: input.callKind, body: input.requestBody, sha: input.requestBodySha256 });
+              return (v as DbAdapter["markExternalCallSentForJob"]).call(t, input);
+            };
+          },
+        }) as DbAdapter,
+      };
+      const r = await runOneIteration(observed, workerOptions({ workerId: "w-evidence" }), new WorkerHealth(() => Date.now()));
+      check("the job completes", r.outcome === "completed" && r.jobId === seeded.jobId, `${r.outcome}/${r.detail}`);
+      check("both legs recorded their request", recorded.length === 2, String(recorded.length));
+      check(
+        "every recorded hash really covers its recorded body",
+        recorded.every((x) => x.sha === sha256Hex(x.body))
+      );
+      check(
+        "the perplexity evidence is byte-identical to what went on the wire",
+        recorded.some((x) => x.kind === "perplexity" && wire.includes(x.body)),
+        `${wire.length} outbound`
+      );
+      check(
+        "no credential leaked into the evidence",
+        recorded.every((x) => !/authorization|bearer|apikey|sb_secret/i.test(x.body))
+      );
+
+      // A replay of the mark must not authorise a second wire call.
+      const fresh = await db.claimProtocolExecutionJob({ workerId: "w-replay", leaseSeconds: 60 });
+      check("the finished job cannot be re-claimed", fresh.job?.id !== seeded.jobId, fresh.outcome);
+    }
+
+    // ------------------------------------------------------------- S8
+    sc("S8");
+    {
+      const seeded = await seed("stack-unknown-outcome.test");
+      const spy: Spy = { providerFetches: 0, analysisExecutes: 0 };
+      const base = makeDeps(db, spy);
+      const unknown: WorkerDeps = {
+        ...base,
+        runProbe: (async (input: { fetchImpl?: typeof fetch }) => {
+          await (input.fetchImpl ?? fetch)("https://api.perplexity.ai/x", { method: "POST", body: "{}" });
+          throw new PerplexityProbeFailure("network failed", {
+            reason: "network_error", httpStatus: null, errorBody: null, errorBodySha256: null,
+            latencyMs: 11, providerRequestId: null,
+            rawProbeRequestSha256: sha256Hex("p"),
+            fullRequestBody: JSON.stringify({ model: "sonar" }),
+            fullRequestBodySha256: sha256Hex(JSON.stringify({ model: "sonar" })),
+          });
+        }) as WorkerDeps["runProbe"],
+      };
+      const r = await runOneIteration(unknown, workerOptions({ workerId: "w-unknown" }), new WorkerHealth(() => Date.now()));
+      check(
+        "an unknown provider outcome routes to needs_review",
+        r.outcome === "needs_review_perplexity_unknown" && r.jobId === seeded.jobId,
+        `${r.outcome}/${r.detail}`
+      );
+      check("exactly one provider call was made", spy.providerFetches === 1, String(spy.providerFetches));
+      check("no analysis call followed it", spy.analysisExecutes === 0, String(spy.analysisExecutes));
+      const after = await db.claimProtocolExecutionJob({ workerId: "w-after", leaseSeconds: 60 });
+      check("the job is closed — not left claimable for ever", after.job?.id !== seeded.jobId, after.outcome);
     }
 
     globalThis.fetch = realFetch;

@@ -5,6 +5,8 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 // adapter still generates its own, because it has no SQL layer.
 import { snapshotReportWriteMode } from "./snapshot-write-mode";
 import type {
+  AbortAttemptAndFailJobForJobInput,
+  AbortAttemptAndFailJobForJobResult,
   AdmitAndReserveAttemptInput,
   AdmitAndReserveAttemptResult,
   AnalysisLlmCall,
@@ -97,6 +99,8 @@ import type {
   ProtocolExecutionJobStatus,
   ProtocolExternalCall,
   ExternalCallKind,
+  FailJobWithoutAttemptForJobInput,
+  FailJobWithoutAttemptForJobResult,
   ExternalCallStatus,
   CostBasis,
   ProviderCallReceipt,
@@ -3421,6 +3425,9 @@ export const supabaseAdapter: DbAdapter = {
       p_project_id: input.projectId,
       p_external_call_id: input.externalCallId,
       p_probe_run_id: input.probeRunId,
+      p_call_kind: input.callKind,
+      p_request_body: input.requestBody,
+      p_request_body_sha256: input.requestBodySha256,
     });
     if (error) throw error;
     const row = Array.isArray(data) ? data[0] : data;
@@ -3567,6 +3574,54 @@ export const supabaseAdapter: DbAdapter = {
     }
     return {
       outcome: row.status,
+      job: mapProtocolExecutionJobNullable(row.job as ProtocolExecutionJobDbRow | null),
+    };
+  },
+
+  async failJobWithoutAttemptForJob(
+    input: FailJobWithoutAttemptForJobInput
+  ): Promise<FailJobWithoutAttemptForJobResult> {
+    const { data, error } = await getClient().rpc("fail_job_without_attempt_for_job", {
+      p_job_id: input.jobId,
+      p_claim_token: input.claimToken,
+      p_project_id: input.projectId,
+      p_reason: input.reason,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "failJobWithoutAttemptForJob: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      job: mapProtocolExecutionJobNullable(row.job as ProtocolExecutionJobDbRow | null),
+    };
+  },
+
+  async abortAttemptAndFailJobForJob(
+    input: AbortAttemptAndFailJobForJobInput
+  ): Promise<AbortAttemptAndFailJobForJobResult> {
+    const { data, error } = await getClient().rpc("abort_attempt_and_fail_job_for_job", {
+      p_job_id: input.jobId,
+      p_claim_token: input.claimToken,
+      p_project_id: input.projectId,
+      p_attempt_id: input.attemptId,
+      p_attempt_status: input.attemptStatus,
+      p_termination_reason: input.terminationReason,
+      p_failure_reason: input.failureReason,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "abortAttemptAndFailJobForJob: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      attempt: mapProtocolAttemptNullable(row.attempt as ProtocolAttemptDbRow | null),
       job: mapProtocolExecutionJobNullable(row.job as ProtocolExecutionJobDbRow | null),
     };
   },

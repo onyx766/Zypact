@@ -26,6 +26,9 @@ import type { CreateProtocolInput, DbAdapter } from "@/lib/db/types";
 import type { ProbeAnalysisM5Parsed } from "@/lib/protocol-worker/analysis-m5";
 import type { PerplexityProbeResult } from "@/lib/probes/perplexity";
 
+const MARK_BODY_PERPLEXITY = JSON.stringify({ model: "sonar", messages: [] });
+const MARK_BODY_ANALYSIS = JSON.stringify({ model: "gpt-4o-mini", messages: [] });
+
 let checks = 0;
 let failures = 0;
 function check(name: string, cond: boolean, detail = ""): void {
@@ -91,6 +94,9 @@ const OPTS: WorkerOptions = {
   maxSlotsPerClaim: 4,
   perplexityReservedCostUsd: 0.02,
   analysisReservedCostUsd: 0.02,
+    jitterRatio: 0,
+    maxThrottledRetries: 3,
+    graceMs: 1000,
 };
 
 async function main(): Promise<void> {
@@ -130,6 +136,7 @@ async function main(): Promise<void> {
       db,
       analysis,
       now: () => Date.now(),
+      sleep: async () => {},
       probeMode: "live_perplexity",
       realFetch: (async () => {
         spy.providerFetches += 1;
@@ -230,7 +237,7 @@ async function main(): Promise<void> {
     }
     const probeRunId = must(started.probeRun, "probe run").id;
 
-    await db.markExternalCallSentForJob({ ...f, externalCallId: perplexityCall.id, probeRunId });
+    await db.markExternalCallSentForJob({ ...f, externalCallId: perplexityCall.id, probeRunId, callKind: "perplexity", requestBody: MARK_BODY_PERPLEXITY, requestBodySha256: sha256Hex(MARK_BODY_PERPLEXITY) });
     if (frontier !== "provider_sent") {
       await db.recordProviderCallReceiptForJob({
         ...f,
@@ -245,7 +252,7 @@ async function main(): Promise<void> {
       });
     }
     if (frontier === "analysis_sent" || frontier === "analysis_receipted") {
-      await db.markExternalCallSentForJob({ ...f, externalCallId: analysisCall.id, probeRunId });
+      await db.markExternalCallSentForJob({ ...f, externalCallId: analysisCall.id, probeRunId, callKind: "analysis", requestBody: MARK_BODY_ANALYSIS, requestBodySha256: sha256Hex(MARK_BODY_ANALYSIS) });
     }
     if (frontier === "analysis_receipted") {
       await db.recordAnalysisCallReceiptForJob({

@@ -32,6 +32,7 @@
  */
 
 import { PerplexityProbeFailure } from "@/lib/probes/perplexity";
+import { CallModelFailure } from "@/lib/llm/call-model";
 import {
   buildProbeAnalysisM5Call,
   deriveProbeResultContent,
@@ -48,6 +49,7 @@ import type {
 } from "@/lib/db/types";
 import {
   WorkerAbort,
+  type AnalysisTransport,
   type IterationResult,
   type PerplexityProbeRunner,
   type WorkerDeps,
@@ -111,17 +113,27 @@ async function runProviderCall(
   probeRunId: string,
   probeInput: { prompt: string; brandName: string; domain: string | null }
 ): Promise<{ done: IterationResult } | { probe: Awaited<ReturnType<PerplexityProbeRunner>> }> {
-  let marked = false;
+  // `runPerplexityProbe` wraps EVERY throw from its fetcher into a
+  // PerplexityProbeFailure, so a WorkerAbort raised here never survives as
+  // itself. The decision therefore rests on this explicit state, recorded
+  // before anything can throw — never on the exception's type.
+  let markOutcome: string | null = null;
   const fetchImpl: typeof fetch = async (url, init) => {
+    const body = typeof init?.body === "string" ? init.body : "";
     const m = await deps.db.markExternalCallSentForJob({
       jobId: f.jobId,
       claimToken: f.claimToken,
       projectId: f.projectId,
       externalCallId: call.id,
       probeRunId,
+      callKind: "perplexity",
+      // 0056 — the exact bytes, and only the bytes. `init.headers` carries
+      // the API key and is deliberately never read here.
+      requestBody: body,
+      requestBodySha256: sha256Hex(body),
     });
+    markOutcome = m.outcome;
     if (m.outcome !== "SENT") throw new WorkerAbort(m.outcome);
-    marked = true;
     return deps.realFetch(url, init);
   };
 
@@ -150,30 +162,105 @@ async function runProviderCall(
     }
     return { probe: res };
   } catch (e) {
-    if (e instanceof WorkerAbort) {
-      // The mark was refused: nothing was sent, so no receipt is owed.
-      return { done: { outcome: "lost_ownership", jobId: f.jobId, detail: e.rpcOutcome } };
+    if (markOutcome !== "SENT") {
+      // Nothing reached the wire, whatever the exception now claims to be.
+      // ALREADY_SENT_SAME_EVIDENCE is not a failure: the call was sent
+      // once already and the caller must replay from its receipt.
+      const detail = markOutcome ?? (e instanceof WorkerAbort ? e.rpcOutcome : "MARK_NOT_ATTEMPTED");
+      const outcome =
+        markOutcome === "ALREADY_SENT_SAME_EVIDENCE"
+          ? ("already_sent" as const)
+          : markOutcome === "REQUEST_EVIDENCE_CONFLICT"
+            ? ("needs_review_request_evidence" as const)
+            : ("lost_ownership" as const);
+      return { done: { outcome, jobId: f.jobId, detail } };
     }
-    if (e instanceof PerplexityProbeFailure && marked) {
+    if (e instanceof PerplexityProbeFailure) {
       // The request did go out. A receipt is mandatory before any
       // reconciliation — a failed paid attempt is evidence too.
+      //
+      // The distinction that matters is whether the provider's outcome is
+      // KNOWN. An http_error or an empty answer is a definite failure the
+      // caller closes with T3. A network error is not: the request may
+      // have been served and billed, and only the receipt RPC's own T1
+      // may close that, atomically.
+      const known = e.reason === "http_error" || e.reason === "empty_answer";
       const rec = await deps.db.recordProviderCallReceiptForJob({
         jobId: f.jobId,
         claimToken: f.claimToken,
         projectId: f.projectId,
         externalCallId: call.id,
         probeRunId,
-        outcome: "provider_error",
+        outcome: known ? "provider_error" : "provider_outcome_unknown",
         httpStatus: e.httpStatus,
         providerRequestId: e.providerRequestId,
-        rawResponseSha256: e.errorBodySha256,
+        rawResponseSha256: known ? e.errorBodySha256 : null,
         latencyMs: e.latencyMs,
-        rawResponseBody: e.errorBody,
+        rawResponseBody: known ? e.errorBody : null,
       });
-      return { done: { outcome: "failed", jobId: f.jobId, detail: rec.outcome } };
+      const detail = `${e.reason}:${rec.outcome}`;
+      if (!known) {
+        // T1 already cancelled the unsent legs, terminalised the attempt
+        // and moved the job, inside that RPC's transaction.
+        return {
+          done: { outcome: "needs_review_perplexity_unknown", jobId: f.jobId, detail },
+        };
+      }
+      return { done: { outcome: "provider_failed", jobId: f.jobId, detail } };
     }
     throw e;
   }
+}
+
+/**
+ * Turns a failed analysis execution into a receipt.
+ *
+ * The request went out, so evidence is owed whatever happened next. The
+ * distinction that matters is whether the provider's outcome is KNOWN:
+ *
+ *   http_error / malformed_response / empty_content  -> provider_error,
+ *     a definite failure the caller closes with T3;
+ *   network_error / aborted                          -> provider_outcome_unknown,
+ *     which the RPC itself closes through T1 in the same transaction --
+ *     receipt, cancelled legs, terminal attempt, needs_review, outbox.
+ */
+async function recordAnalysisFailure(
+  deps: WorkerDeps,
+  f: Fenced,
+  call: ProtocolExternalCall,
+  probeRunId: string,
+  fields: ReturnType<typeof analysisCallReceiptRequestFields>,
+  error: unknown
+): Promise<IterationResult> {
+  const failure = error instanceof CallModelFailure ? error : null;
+  const known =
+    failure !== null &&
+    (failure.reason === "http_error" ||
+      failure.reason === "malformed_response" ||
+      failure.reason === "empty_content");
+
+  const rec = await deps.db.recordAnalysisCallReceiptForJob({
+    jobId: f.jobId,
+    claimToken: f.claimToken,
+    projectId: f.projectId,
+    externalCallId: call.id,
+    probeRunId,
+    outcome: known ? "provider_error" : "provider_outcome_unknown",
+    provider: null,
+    model: null,
+    usedMock: fields.usedMock,
+    requestSha256: fields.requestSha256,
+    responseSha256: null,
+    latencyMs: failure?.latencyMs ?? null,
+    rawContent: null,
+    rawRequestBody: fields.rawRequestBody,
+  });
+  const detail = `${failure?.reason ?? "unknown_error"}:${rec.outcome}`;
+  if (!known) {
+    // T1 already closed the attempt and the job inside that RPC.
+    return { outcome: "needs_review_analysis_unknown", jobId: f.jobId, detail };
+  }
+  return { outcome: "failed", jobId: f.jobId, detail };
 }
 
 /** Runs the analysis call through the two-phase transport. */
@@ -187,19 +274,36 @@ async function runAnalysisCall(
   const built = buildProbeAnalysisM5Call(agentInput);
   const prepared = deps.analysis.prepare(built);
 
+  const fields = analysisCallReceiptRequestFields(prepared);
+
   const m = await deps.db.markExternalCallSentForJob({
     jobId: f.jobId,
     claimToken: f.claimToken,
     projectId: f.projectId,
     externalCallId: call.id,
     probeRunId,
+    callKind: "analysis",
+    requestBody: prepared.rawRequestBody,
+    requestBodySha256: prepared.requestSha256,
   });
+  if (m.outcome === "ALREADY_SENT_SAME_EVIDENCE") {
+    return { outcome: "already_sent", jobId: f.jobId, detail: m.outcome };
+  }
+  if (m.outcome === "REQUEST_EVIDENCE_CONFLICT") {
+    return { outcome: "needs_review_request_evidence", jobId: f.jobId, detail: m.outcome };
+  }
   if (m.outcome !== "SENT") {
     return { outcome: "lost_ownership", jobId: f.jobId, detail: m.outcome };
   }
 
-  const out = await deps.analysis.execute(prepared);
-  const fields = analysisCallReceiptRequestFields(prepared);
+  let out: Awaited<ReturnType<AnalysisTransport["execute"]>>;
+  try {
+    out = await deps.analysis.execute(prepared);
+  } catch (e) {
+    // The request went out. A receipt is owed whatever happened next, and
+    // an unknown outcome must close the whole attempt in one transaction.
+    return await recordAnalysisFailure(deps, f, call, probeRunId, fields, e);
+  }
 
   const rec = await deps.db.recordAnalysisCallReceiptForJob({
     jobId: f.jobId,

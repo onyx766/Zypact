@@ -43,7 +43,12 @@
     "test:snapshot-worker-fencing-migration-contract": "tsx scripts/test-snapshot-worker-fencing-migration-contract.ts",
     "test:snapshot-worker-dml-revocation-contract": "tsx scripts/test-snapshot-worker-dml-revocation-contract.ts",
     "test:snapshot-adapter-rpc-writes": "tsx scripts/test-snapshot-adapter-rpc-writes.ts",
-    "test:snapshot-artifact-cascade-contract": "tsx scripts/test-snapshot-artifact-cascade-contract.ts"
+    "test:snapshot-artifact-cascade-contract": "tsx scripts/test-snapshot-artifact-cascade-contract.ts",
+    "worker:protocol": "tsx scripts/run-protocol-worker.ts",
+    "test:m5-a-worker-loop": "tsx scripts/test-m5-a-worker-loop.ts",
+    "test:m5-a-web-enqueue": "tsx scripts/test-m5-a-web-enqueue.ts",
+    "test:m5-a-recovery": "tsx scripts/test-m5-a-recovery.ts",
+    "test:m5-a-stack-runtime": "tsx scripts/test-m5-a-supabase-stack-runtime.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

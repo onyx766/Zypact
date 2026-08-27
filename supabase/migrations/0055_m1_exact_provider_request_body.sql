@@ -24,10 +24,12 @@
 -- explicitly labelled as such by a generated column, so a reader can
 -- never mistake "we did not capture this" for "this was captured".
 --
--- Idempotent. Does not touch the auth schema, RLS, or any privilege.
--- Adds no grant and revokes nothing: probe_results (0036) and
--- probe_failures (0037) already have UPDATE/DELETE/TRUNCATE revoked from
--- service_role, and the new column inherits that append-only guarantee.
+-- Idempotent. Does not touch the auth schema or RLS.
+-- It changes one narrowly scoped function privilege: service_role receives
+-- EXECUTE on public._sha256_hex(text), while PUBLIC, anon and authenticated
+-- are explicitly kept revoked. No table DML grant is added:
+-- probe_results (0036) and probe_failures (0037) retain their existing
+-- UPDATE/DELETE/TRUNCATE revocations and append-only guarantee.
 
 -- ---------------------------------------------------------------------
 -- 1. probe_results — exact outbound request body

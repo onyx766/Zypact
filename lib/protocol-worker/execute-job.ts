@@ -47,9 +47,11 @@ import type {
   ProtocolExternalCall,
   ProviderCallReceipt,
 } from "@/lib/db/types";
+import { answerFromRawResponseBody } from "@/lib/protocol-worker/worker";
 import {
   WorkerAbort,
   type AnalysisTransport,
+  type IterationOutcome,
   type IterationResult,
   type PerplexityProbeRunner,
   type WorkerDeps,
@@ -59,6 +61,19 @@ interface Fenced {
   jobId: string;
   claimToken: string;
   projectId: string;
+}
+
+/**
+ * Maps a refused receipt outcome onto the iteration label it deserves.
+ *
+ * `RECEIPT_EVIDENCE_CONFLICT` means a receipt exists whose evidence is not
+ * the one offered — the RPC has already moved the job to needs_review with
+ * an outbox row. `CONFLICT` means the call is no longer `in_progress`, or
+ * its probe run does not match; either way the identity of what we hold
+ * was never demonstrated, so nothing derived from it may be persisted.
+ */
+function conflictOutcome(outcome: string): IterationOutcome {
+  return outcome === "RECEIPT_EVIDENCE_CONFLICT" ? "needs_review_receipt_evidence" : "failed";
 }
 
 /** Splits the ledger the way recovery needs it: per call kind, per receipt. */
@@ -157,10 +172,33 @@ async function runProviderCall(
       latencyMs: res.latencyMs ?? null,
       rawResponseBody: res.rawResponseBody ?? null,
     });
-    if (rec.outcome !== "RECEIPTED" && rec.outcome !== "CONFLICT") {
-      return { done: { outcome: "failed", jobId: f.jobId, detail: rec.outcome } };
+    // Only two outcomes let the run continue, and in BOTH the durable
+    // receipt is the authority — never `res`, the response still in hand.
+    // On a replay the two are identical by construction; if they ever
+    // differ, the ledger wins and the response in hand is discarded.
+    if (rec.outcome !== "RECEIPTED" && rec.outcome !== "ALREADY_RECEIPTED_IDENTICAL") {
+      // CONFLICT and RECEIPT_EVIDENCE_CONFLICT stop here, with no parsing
+      // and no persistence: an identity that was never demonstrated may
+      // not become evidence.
+      return { done: { outcome: conflictOutcome(rec.outcome), jobId: f.jobId, detail: rec.outcome } };
     }
-    return { probe: res };
+    if (!rec.receipt) {
+      // An accepted outcome with no receipt is a broken contract, not a
+      // reason to fall back on the response in hand.
+      return { done: { outcome: "failed", jobId: f.jobId, detail: `${rec.outcome}:NO_RECEIPT` } };
+    }
+    const durableAnswer = answerFromRawResponseBody(rec.receipt.rawResponseBody);
+    if (durableAnswer === null) {
+      return { done: { outcome: "failed", jobId: f.jobId, detail: `${rec.outcome}:EMPTY_DURABLE_ANSWER` } };
+    }
+    return {
+      probe: {
+        ...res,
+        answer: durableAnswer,
+        rawResponseBody: rec.receipt.rawResponseBody ?? undefined,
+        rawResponseBodySha256: rec.receipt.rawResponseSha256 ?? undefined,
+      },
+    };
   } catch (e) {
     if (markOutcome !== "SENT") {
       // Nothing reached the wire, whatever the exception now claims to be.
@@ -320,13 +358,20 @@ async function runAnalysisCall(
     rawContent: out.content,
     rawRequestBody: fields.rawRequestBody,
   });
-  if (rec.outcome !== "RECEIPTED" && rec.outcome !== "CONFLICT") {
-    return { outcome: "failed", jobId: f.jobId, detail: rec.outcome };
+  if (rec.outcome !== "RECEIPTED" && rec.outcome !== "ALREADY_RECEIPTED_IDENTICAL") {
+    return { outcome: conflictOutcome(rec.outcome), jobId: f.jobId, detail: rec.outcome };
+  }
+  if (!rec.receipt) {
+    return { outcome: "failed", jobId: f.jobId, detail: `${rec.outcome}:NO_RECEIPT` };
+  }
+  if (rec.receipt.rawContent === null) {
+    return { outcome: "failed", jobId: f.jobId, detail: `${rec.outcome}:NO_DURABLE_CONTENT` };
   }
 
-  // The receipt exists before any parsing. Parsing is single-shot: a
-  // failure is recorded, never silently retried.
-  const parsed = parseProbeAnalysisM5Content(out.content);
+  // The receipt exists before any parsing, and the receipt is what gets
+  // parsed — never `out.content`. Parsing is single-shot: a failure is
+  // recorded, never silently retried.
+  const parsed = parseProbeAnalysisM5Content(rec.receipt.rawContent);
   if (!parsed.ok) {
     const mk = await deps.db.markAnalysisParseFailedForJob({
       jobId: f.jobId,

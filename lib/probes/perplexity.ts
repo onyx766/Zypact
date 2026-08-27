@@ -52,9 +52,19 @@ export interface PerplexityProbeResult {
    */
   rawProbeRequestSha256?: string;
   /**
+   * M1-A evidence contract — the exact JSON body sent to Perplexity,
+   * byte-identical to the string handed to `fetch`. Serialized exactly
+   * once: this is the same `requestBodyJson` value that went on the wire
+   * and that `fullRequestBodySha256` hashes, never a re-serialization.
+   * Distinct from `rawProbeRequest` (the buyer prompt only) and from
+   * `rawResponseBody` (the provider's reply). Absent for mock calls.
+   */
+  fullRequestBody?: string;
+  /**
    * M1 evidence contract — SHA-256 of the exact JSON-serialized HTTP
    * request body sent to Perplexity (`model` + `messages` + all other
    * fields), as `JSON.stringify`'d before the call. Absent for mock calls.
+   * Hashes exactly `fullRequestBody` above.
    */
   fullRequestBodySha256?: string;
   /** M1 evidence contract — HTTP status returned by Perplexity. Absent for mock calls. */
@@ -96,6 +106,8 @@ export class PerplexityProbeFailure extends Error {
   readonly latencyMs: number | null;
   readonly providerRequestId: string | null;
   readonly rawProbeRequestSha256: string;
+  /** M1-A — exact JSON body sent on the failed attempt. Same string that went on the wire. */
+  readonly fullRequestBody: string;
   readonly fullRequestBodySha256: string;
 
   constructor(
@@ -108,6 +120,7 @@ export class PerplexityProbeFailure extends Error {
       latencyMs: number | null;
       providerRequestId: string | null;
       rawProbeRequestSha256: string;
+      fullRequestBody: string;
       fullRequestBodySha256: string;
     }
   ) {
@@ -120,6 +133,7 @@ export class PerplexityProbeFailure extends Error {
     this.latencyMs = fields.latencyMs;
     this.providerRequestId = fields.providerRequestId;
     this.rawProbeRequestSha256 = fields.rawProbeRequestSha256;
+    this.fullRequestBody = fields.fullRequestBody;
     this.fullRequestBodySha256 = fields.fullRequestBodySha256;
   }
 }
@@ -271,6 +285,7 @@ export async function runPerplexityProbe(
         latencyMs: Date.now() - startedAt,
         providerRequestId: null,
         rawProbeRequestSha256,
+        fullRequestBody: requestBodyJson,
         fullRequestBodySha256,
       }
     );
@@ -289,6 +304,7 @@ export async function runPerplexityProbe(
       latencyMs,
       providerRequestId,
       rawProbeRequestSha256,
+      fullRequestBody: requestBodyJson,
       fullRequestBodySha256,
     });
   }
@@ -309,6 +325,7 @@ export async function runPerplexityProbe(
       latencyMs,
       providerRequestId,
       rawProbeRequestSha256,
+      fullRequestBody: requestBodyJson,
       fullRequestBodySha256,
     });
   }
@@ -332,6 +349,7 @@ export async function runPerplexityProbe(
     rawResponseBody,
     rawResponseBodySha256,
     rawProbeRequestSha256,
+    fullRequestBody: requestBodyJson,
     fullRequestBodySha256,
     httpStatus: res.status,
     latencyMs,

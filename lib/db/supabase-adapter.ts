@@ -430,6 +430,7 @@ interface ProbeResultDbRow {
   raw_response_body?: string | null;
   raw_response_body_sha256?: string | null;
   raw_probe_request_sha256?: string | null;
+  full_request_body?: string | null;
   full_request_body_sha256?: string | null;
   provider_http_status?: number | null;
   provider_latency_ms?: number | null;
@@ -461,6 +462,7 @@ interface ProbeFailureDbRow {
   provider_latency_ms: number | null;
   provider_request_id: string | null;
   raw_probe_request_sha256: string | null;
+  full_request_body: string | null;
   full_request_body_sha256: string | null;
   retry_count: number;
   created_at: string;
@@ -488,6 +490,7 @@ function mapProbeFailure(r: ProbeFailureDbRow): ProbeFailure {
     providerLatencyMs: r.provider_latency_ms,
     providerRequestId: r.provider_request_id,
     rawProbeRequestSha256: r.raw_probe_request_sha256,
+    fullRequestBody: r.full_request_body,
     fullRequestBodySha256: r.full_request_body_sha256,
     retryCount: r.retry_count,
     createdAt: r.created_at,
@@ -1094,6 +1097,7 @@ function mapProbeResult(r: ProbeResultDbRow): ProbeResult {
     rawResponseBody: r.raw_response_body ?? null,
     rawResponseBodySha256: r.raw_response_body_sha256 ?? null,
     rawProbeRequestSha256: r.raw_probe_request_sha256 ?? null,
+    fullRequestBody: r.full_request_body ?? null,
     fullRequestBodySha256: r.full_request_body_sha256 ?? null,
     providerHttpStatus: r.provider_http_status ?? null,
     providerLatencyMs: r.provider_latency_ms ?? null,
@@ -2285,6 +2289,7 @@ export const supabaseAdapter: DbAdapter = {
         raw_response_body: input.rawResponseBody ?? null,
         raw_response_body_sha256: input.rawResponseBodySha256 ?? null,
         raw_probe_request_sha256: input.rawProbeRequestSha256 ?? null,
+        full_request_body: input.fullRequestBody ?? null,
         full_request_body_sha256: input.fullRequestBodySha256 ?? null,
         provider_http_status: input.providerHttpStatus ?? null,
         provider_latency_ms: input.providerLatencyMs ?? null,
@@ -2376,6 +2381,7 @@ export const supabaseAdapter: DbAdapter = {
         provider_latency_ms: input.providerLatencyMs ?? null,
         provider_request_id: input.providerRequestId ?? null,
         raw_probe_request_sha256: input.rawProbeRequestSha256 ?? null,
+        full_request_body: input.fullRequestBody ?? null,
         full_request_body_sha256: input.fullRequestBodySha256 ?? null,
         retry_count: input.retryCount ?? 0,
       })

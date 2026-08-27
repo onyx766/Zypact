@@ -169,6 +169,15 @@ export interface ProbeResult {
    * request body sent to the probe provider. Null for pasted/manual
    * (non-live) answers and for rows saved before this field existed.
    */
+  /**
+   * M1-A evidence contract — the exact UTF-8 JSON body sent to the probe
+   * provider, byte-identical to what went on the wire and to what
+   * fullRequestBodySha256 hashes. Distinct from rawProbeRequest (the
+   * buyer prompt) and rawResponseBody (the reply). Null for pasted or
+   * manual answers, and for rows written before M1-A: a body that was
+   * never captured is never reconstructed from its hash.
+   */
+  fullRequestBody?: string | null;
   fullRequestBodySha256?: string | null;
   /** M1 evidence contract — HTTP status returned by the probe provider. */
   providerHttpStatus?: number | null;
@@ -451,6 +460,15 @@ export interface SaveProbeResultInput {
    * request body sent to the probe provider. Omitted for pasted/manual
    * (non-live) answers, which never had an outbound body.
    */
+  /**
+   * M1-A evidence contract — the exact UTF-8 JSON body sent to the probe
+   * provider, byte-identical to what went on the wire and to what
+   * fullRequestBodySha256 hashes. Distinct from rawProbeRequest (the
+   * buyer prompt) and rawResponseBody (the reply). Null for pasted or
+   * manual answers, and for rows written before M1-A: a body that was
+   * never captured is never reconstructed from its hash.
+   */
+  fullRequestBody?: string | null;
   fullRequestBodySha256?: string | null;
   /** M1 evidence contract — HTTP status returned by the probe provider. */
   providerHttpStatus?: number | null;
@@ -530,6 +548,15 @@ export interface RecordProbeFailureInput {
   providerLatencyMs?: number | null;
   providerRequestId?: string | null;
   rawProbeRequestSha256?: string | null;
+  /**
+   * M1-A evidence contract — the exact UTF-8 JSON body sent to the probe
+   * provider, byte-identical to what went on the wire and to what
+   * fullRequestBodySha256 hashes. Distinct from rawProbeRequest (the
+   * buyer prompt) and rawResponseBody (the reply). Null for pasted or
+   * manual answers, and for rows written before M1-A: a body that was
+   * never captured is never reconstructed from its hash.
+   */
+  fullRequestBody?: string | null;
   fullRequestBodySha256?: string | null;
   retryCount?: number;
 }

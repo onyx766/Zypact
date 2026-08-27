@@ -298,7 +298,10 @@ async function recordAnalysisFailure(
     // T1 already closed the attempt and the job inside that RPC.
     return { outcome: "needs_review_analysis_unknown", jobId: f.jobId, detail };
   }
-  return { outcome: "failed", jobId: f.jobId, detail };
+  // A KNOWN failure leaves the attempt open and — on a fresh run — no leg
+  // reserved but none reconcilable either, because reconcile refuses while
+  // anything is still open. T3 is the only thing that actually closes it.
+  return { outcome: "provider_failed", jobId: f.jobId, detail };
 }
 
 /** Runs the analysis call through the two-phase transport. */
@@ -336,7 +339,7 @@ async function runAnalysisCall(
 
   let out: Awaited<ReturnType<AnalysisTransport["execute"]>>;
   try {
-    out = await deps.analysis.execute(prepared);
+    out = await deps.analysis.execute(prepared, { signal: deps.abortSignal });
   } catch (e) {
     // The request went out. A receipt is owed whatever happened next, and
     // an unknown outcome must close the whole attempt in one transaction.

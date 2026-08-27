@@ -44,13 +44,125 @@ async function main(): Promise<void> {
   console.log("[1] The idle timer keeps the process alive");
   // ======================================================================
   {
+    // Behavioural, not textual: the entrypoint's own `sleep` is imported
+    // and exercised. A regex could only ever describe the code; this
+    // measures what it does.
+    const { __workerLifecycleTestUtils } = await import("@/lib/protocol-worker/lifecycle");
+    const { sleep: entrySleep } = __workerLifecycleTestUtils;
+
+    const t0 = Date.now();
+    await entrySleep(120);
+    const slept = Date.now() - t0;
+    check("an uninterrupted wait really waits", slept >= 100, `${slept}ms`);
+
+    const ac = new AbortController();
+    const t1 = Date.now();
+    const waited = entrySleep(5000, ac.signal);
+    setTimeout(() => ac.abort(), 40);
+    await waited;
+    const cut = Date.now() - t1;
+    check(
+      "an aborted wait is cut short — shutdown never outlasts a backoff",
+      cut < 1000,
+      `${cut}ms instead of 5000ms`
+    );
+
+    const already = new AbortController();
+    already.abort();
+    const t2 = Date.now();
+    await entrySleep(5000, already.signal);
+    check("a wait that starts already aborted returns at once", Date.now() - t2 < 200, `${Date.now() - t2}ms`);
+
     const entry = code("scripts/run-protocol-worker.ts");
-    const sleepDecl = /const sleep = \(ms: number\) => new Promise<void>\(\(resolve\) => setTimeout\(resolve, ms\)\);/.test(entry);
-    check("the backoff timer is NOT unref'd", sleepDecl, "an unref'd timer lets Node exit mid-backoff");
     check(
       "only the health server is unref'd, because it must never hold the process open",
       /healthServer\?\.unref\(\)/.test(entry)
     );
+    check(
+      "the backoff timer is not unref'd anywhere in the entrypoint",
+      !/setTimeout\(resolve, ms\)[\s\S]{0,60}unref/.test(entry)
+    );
+  }
+
+  // ======================================================================
+  console.log("\n[1b] The abort signal reaches BOTH providers");
+  // ======================================================================
+  {
+    const { runOneIteration } = await import("@/lib/protocol-worker/worker");
+    const { memoryAdapter } = await import("@/lib/db/memory-adapter");
+    const { sha256Hex } = await import("@/lib/evidence/hash");
+    const db = memoryAdapter;
+    const A = "11111111-1111-4111-8111-111111111111";
+    const project = await db.createProject({ domain: `abort-${Date.now()}.test`, companyName: "C" });
+    const q = await db.createBuyerQuestion({ projectId: project.id });
+    const v = await db.createBuyerQuestionVersion({
+      buyerQuestionId: q.id, projectId: project.id, versionNumber: 1, promptText: "Q?",
+      promptHash: "a".repeat(64), intentType: "comparison", commercialValue: 3, winnability: 3,
+      priority: 10, rationale: "f", provenance: "founder_supplied",
+    });
+    await db.approveBuyerQuestionVersion({ versionId: v.id, projectId: project.id, approvedBy: A });
+    const proto = await db.createProtocol({
+      projectId: project.id, buyerQuestionVersionId: v.id, provider: "perplexity", surface: "sonar",
+      plannedBaselineRuns: 1, plannedRetestRuns: 0,
+      paraphrasePlan: [{ text: "Q?", hash: "b".repeat(64) }], unitOfAnalysis: "run",
+      primaryMetric: "listed_in_run", samplePlanningMethod: "fixed", runCap: 20, spendCapUsd: 100,
+      timeWindowSeconds: 3600, rateLimitPerHour: 100, concurrencyLimit: 5, retryCap: 2,
+    });
+    await db.approveProtocol({ protocolId: proto.id, projectId: project.id, approvedBy: A });
+    await db.enqueueProtocolExecutionJob({ protocolId: proto.id, projectId: project.id });
+
+    const ac = new AbortController();
+    const seen: { fetch: AbortSignal | null | undefined; analysis: AbortSignal | undefined } =
+      { fetch: undefined, analysis: undefined };
+    const BODY = JSON.stringify({ id: "r", choices: [{ message: { content: "answer" } }] });
+    const REQ = JSON.stringify({ model: "gpt-4o-mini", messages: [] });
+    const CONTENT = JSON.stringify({
+      clientPosition: "absent", competitorsMentioned: [], sourcesCited: [], answerSummary: "",
+    });
+    await runOneIteration(
+      {
+        db,
+        now: () => Date.now(),
+        sleep: async () => {},
+        abortSignal: ac.signal,
+        probeMode: "live_perplexity",
+        realFetch: (async (_u: unknown, init?: { signal?: AbortSignal | null }) => {
+          seen.fetch = init?.signal;
+          return new Response("{}", { status: 200 });
+        }) as unknown as typeof fetch,
+        runProbe: (async (input: { prompt: string; fetchImpl?: typeof fetch }) => {
+          // The real runner forwards whatever signal it was given.
+          await (input.fetchImpl ?? fetch)("https://api.perplexity.ai/x", {
+            method: "POST", body: "{}", signal: ac.signal,
+          });
+          return {
+            prompt: input.prompt, answer: "answer", rawResponse: BODY, citations: [],
+            searchResults: [], sourceCitations: [], model: "sonar", usedMock: false,
+            rawResponseBody: BODY, rawResponseBodySha256: sha256Hex(BODY),
+            httpStatus: 200, latencyMs: 1, providerRequestId: "r",
+          };
+        }) as never,
+        analysis: {
+          prepare: () => ({
+            provider: "openai" as const, model: "gpt-4o-mini",
+            url: "https://api.openai.com/v1/chat/completions",
+            rawRequestBody: REQ, requestSha256: sha256Hex(REQ),
+          }),
+          execute: async (_p, opts) => {
+            seen.analysis = opts?.signal;
+            return {
+              provider: "openai" as const, model: "gpt-4o-mini", content: CONTENT, usedMock: false,
+              latencyMs: 1, requestSha256: sha256Hex(REQ), contentSha256: sha256Hex(CONTENT),
+              providerRequestId: "a", httpStatus: 200,
+            };
+          },
+        },
+      },
+      { ...OPTS, workerId: "abort-probe", maxSlotsPerClaim: 2 },
+      new WorkerHealth(() => Date.now())
+    );
+    check("the analysis call receives the shutdown signal", seen.analysis === ac.signal);
+    check("the provider fetch receives it too", seen.fetch === ac.signal);
   }
 
   // ======================================================================

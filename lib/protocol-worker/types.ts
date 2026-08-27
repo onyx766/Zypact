@@ -31,7 +31,7 @@ export interface AnalysisTransport {
     maxTokens: number;
     mockResponse: string;
   }): PreparedCallModelRequest;
-  execute(prepared: PreparedCallModelRequest): Promise<CallModelResult>;
+  execute(prepared: PreparedCallModelRequest, opts?: { signal?: AbortSignal }): Promise<CallModelResult>;
 }
 
 /** The real outbound transport, injected so tests never touch the network. */
@@ -44,8 +44,17 @@ export interface WorkerDeps {
   realFetch: RealFetch;
   /** Wall clock, injected so tests are deterministic. */
   now: () => number;
-  /** Injected so a test can wait without really waiting. */
-  sleep: (ms: number) => Promise<void>;
+  /**
+   * Injected so a test can wait without really waiting. Must resolve
+   * early when the signal aborts: a shutdown that has to outlast a full
+   * backoff is not a bounded shutdown.
+   */
+  sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /**
+   * Cooperative shutdown. Reaches both providers — the Perplexity fetch
+   * and the analysis call — and cuts the idle wait short.
+   */
+  abortSignal?: AbortSignal;
   /**
    * The probe mode every started attempt is recorded under. Injected
    * rather than hardcoded so a runtime test can drive the identical code

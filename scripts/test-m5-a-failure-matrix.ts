@@ -15,9 +15,12 @@ import { sha256Hex } from "@/lib/evidence/hash";
 import { CallModelFailure } from "@/lib/llm/call-model";
 import { PerplexityProbeFailure } from "@/lib/probes/perplexity";
 import { runOneIteration } from "@/lib/protocol-worker/worker";
+
 import { WorkerHealth } from "@/lib/protocol-worker/health";
 import type { AnalysisTransport, WorkerDeps, WorkerOptions } from "@/lib/protocol-worker/types";
 import type { CreateProtocolInput, DbAdapter } from "@/lib/db/types";
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 let checks = 0;
 let failures = 0;
@@ -39,8 +42,11 @@ const PROTOCOL: Omit<CreateProtocolInput, "projectId" | "buyerQuestionVersionId"
   primaryMetric: "listed_in_run", samplePlanningMethod: "fixed", runCap: 20, spendCapUsd: 100,
   timeWindowSeconds: 3600, rateLimitPerHour: 100, concurrencyLimit: 5, retryCap: 2,
 };
+// A ONE SECOND lease, deliberately. "Not claimable" only proves closure
+// once the lease has lapsed: while it is still held, every job looks
+// unclaimable, closed or not.
 const OPTS: WorkerOptions = {
-  workerId: "matrix", leaseSeconds: 60, idleBackoffMs: 1, maxBackoffMs: 2,
+  workerId: "matrix", leaseSeconds: 1, idleBackoffMs: 1, maxBackoffMs: 2,
   maxSlotsPerClaim: 4, perplexityReservedCostUsd: 0.02, analysisReservedCostUsd: 0.02,
   jitterRatio: 0, maxThrottledRetries: 3, graceMs: 1000,
 };
@@ -64,7 +70,7 @@ async function main(): Promise<void> {
   const db: DbAdapter = memoryAdapter;
   let seq = 0;
 
-  async function seed(): Promise<string> {
+  async function seed(): Promise<{ jobId: string; projectId: string; protocolId: string }> {
     seq += 1;
     const project = await db.createProject({ domain: `matrix-${seq}.test`, companyName: "C" });
     const q = await db.createBuyerQuestion({ projectId: project.id });
@@ -77,7 +83,46 @@ async function main(): Promise<void> {
     const proto = await db.createProtocol({ ...PROTOCOL, projectId: project.id, buyerQuestionVersionId: v.id });
     await db.approveProtocol({ protocolId: proto.id, projectId: project.id, approvedBy: APPROVER });
     const enq = await db.enqueueProtocolExecutionJob({ protocolId: proto.id, projectId: project.id });
-    return enq.job!.id;
+    return { jobId: enq.job!.id, projectId: project.id, protocolId: proto.id };
+  }
+
+  /**
+   * Real proof that a run is closed, not merely unreachable.
+   *
+   * "Not claimable" on its own proves nothing while the lease is still
+   * held — every claimed job looks that way. So the lease is allowed to
+   * lapse first, and the attempt is inspected directly: a closed run has
+   * a terminalised attempt AND stays unclaimable afterwards.
+   */
+  async function assertClosed(
+    label: string,
+    seeded: { jobId: string; projectId: string; protocolId: string }
+  ): Promise<void> {
+    const attempts = await db.getProtocolAttempts(seeded.protocolId, seeded.projectId);
+    check(
+      `${label}: the attempt is terminalised`,
+      attempts.length > 0 && attempts.every((a) => a.terminalizedAt !== null),
+      attempts.map((a) => `${a.status}/${a.terminalizedAt ? "term" : "OPEN"}`).join(",") || "no attempt"
+    );
+    check(
+      `${label}: the attempt carries a terminal status`,
+      attempts.every((a) => ["failed", "timed_out", "cancelled", "excluded", "completed"].includes(a.status)),
+      attempts.map((a) => a.status).join(",")
+    );
+    // Let the lease lapse, then try to take the job back.
+    await sleep(1200);
+    const again = await db.claimProtocolExecutionJob({ workerId: "after-lapse", leaseSeconds: 30 });
+    check(
+      `${label}: still unclaimable AFTER the lease lapsed — genuinely terminal`,
+      again.job?.id !== seeded.jobId,
+      `${again.outcome}/${again.job?.id === seeded.jobId ? "RECLAIMED" : "other"}`
+    );
+    if (again.job) {
+      await db.failProtocolExecutionJob({
+        jobId: again.job.id, claimToken: again.claimToken!, projectId: again.job.projectId,
+        reason: "matrix_teardown",
+      });
+    }
   }
 
   function baseDeps(over: Partial<WorkerDeps>): WorkerDeps {
@@ -114,7 +159,7 @@ async function main(): Promise<void> {
     ["empty_answer", "empty_answer", 200, "failed"],
     ["network_error", "network_error", null, "needs_review_perplexity_unknown"],
   ] as const) {
-    const jobId = await seed();
+    const seeded = await seed();
     const deps = baseDeps({
       runProbe: (async (input: { fetchImpl?: typeof fetch }) => {
         await (input.fetchImpl ?? fetch)("https://api.perplexity.ai/x", { method: "POST", body: "{}" });
@@ -122,9 +167,8 @@ async function main(): Promise<void> {
       }) as WorkerDeps["runProbe"],
     });
     const r = await runOneIteration(deps, OPTS, new WorkerHealth(() => Date.now()));
-    check(`${label} -> ${expected}`, r.outcome === expected && r.jobId === jobId, `${r.outcome}/${r.detail}`);
-    const again = await db.claimProtocolExecutionJob({ workerId: "after", leaseSeconds: 30 });
-    check(`${label}: the job is closed, not left claimable`, again.job?.id !== jobId, again.outcome);
+    check(`${label} -> ${expected}`, r.outcome === expected && r.jobId === seeded.jobId, `${r.outcome}/${r.detail}`);
+    await assertClosed(label, seeded);
   }
 
   console.log("\n[2] Analysis failures");
@@ -135,7 +179,7 @@ async function main(): Promise<void> {
     ["network_error", "network_error", "needs_review_analysis_unknown"],
     ["aborted", "aborted", "needs_review_analysis_unknown"],
   ] as const) {
-    const jobId = await seed();
+    const seeded = await seed();
     const deps = baseDeps({});
     const failing: WorkerDeps = {
       ...deps,
@@ -152,15 +196,13 @@ async function main(): Promise<void> {
       },
     };
     const r = await runOneIteration(failing, OPTS, new WorkerHealth(() => Date.now()));
-    check(`analysis ${label} -> ${expected}`, r.outcome === expected && r.jobId === jobId, `${r.outcome}/${r.detail}`);
-    check(`analysis ${label}: an exception never escapes the iteration`, true);
-    const again = await db.claimProtocolExecutionJob({ workerId: "after", leaseSeconds: 30 });
-    check(`analysis ${label}: the job is closed`, again.job?.id !== jobId, again.outcome);
+    check(`analysis ${label} -> ${expected}`, r.outcome === expected && r.jobId === seeded.jobId, `${r.outcome}/${r.detail}`);
+    await assertClosed(`analysis ${label}`, seeded);
   }
 
   console.log("\n[3] Parse failures — the receipt exists first");
   {
-    const jobId = await seed();
+    const seeded = await seed();
     const deps = baseDeps({});
     const bad: WorkerDeps = {
       ...deps,
@@ -174,10 +216,12 @@ async function main(): Promise<void> {
       },
     };
     const r = await runOneIteration(bad, OPTS, new WorkerHealth(() => Date.now()));
-    check("invalid JSON -> parse_failed", r.outcome === "parse_failed" && r.jobId === jobId, `${r.outcome}/${r.detail}`);
+    check("invalid JSON -> parse_failed", r.outcome === "parse_failed" && r.jobId === seeded.jobId, `${r.outcome}/${r.detail}`);
+    check("…and the attempt is closed, not left open", (r.detail ?? "").includes("CLOSED"), r.detail ?? "");
+    await assertClosed("invalid_json", seeded);
   }
   {
-    const jobId = await seed();
+    const seeded = await seed();
     const deps = baseDeps({});
     const extraKey = JSON.stringify({
       clientPosition: "absent", competitorsMentioned: [], sourcesCited: [],
@@ -197,16 +241,98 @@ async function main(): Promise<void> {
     const r = await runOneIteration(legacy, OPTS, new WorkerHealth(() => Date.now()));
     check(
       "a legacy verdict key -> parse_failed, never silently stripped",
-      r.outcome === "parse_failed" && r.jobId === jobId,
+      r.outcome === "parse_failed" && r.jobId === seeded.jobId,
       `${r.outcome}/${r.detail}`
     );
+    check("…and the attempt is closed", (r.detail ?? "").includes("CLOSED"), r.detail ?? "");
+    await assertClosed("normalization_failed", seeded);
   }
 
   console.log("\n[4] The happy path still ends completed");
   {
-    const jobId = await seed();
+    const seeded = await seed();
     const r = await runOneIteration(baseDeps({}), OPTS, new WorkerHealth(() => Date.now()));
-    check("a clean run completes", r.outcome === "completed" && r.jobId === jobId, `${r.outcome}/${r.detail}`);
+    check("a clean run completes", r.outcome === "completed" && r.jobId === seeded.jobId, `${r.outcome}/${r.detail}`);
+    await assertClosed("clean run", seeded);
+  }
+
+  // ======================================================================
+  console.log("\n[5] Resuming onto a failed receipt buys nothing more");
+  // ======================================================================
+  //
+  // A crash can leave a receipt that records a FAILURE. Resuming must
+  // close the run from that receipt — never call the provider or the
+  // model again to find out what it already says.
+
+  async function crashedWith(
+    kind: "provider" | "analysis"
+  ): Promise<{ seeded: Awaited<ReturnType<typeof seed>>; }> {
+    const seeded = await seed();
+    const c = await db.claimProtocolExecutionJob({ workerId: "crashed", leaseSeconds: 1 });
+    const job = c.job!;
+    const f = { jobId: job.id, claimToken: c.claimToken!, projectId: seeded.projectId };
+    const ad = await db.admitAndReserveAttemptForJob({
+      ...f, attemptKind: "baseline",
+      idempotencyKey: `${job.id}:baseline:${job.nextBaselineOrdinal}`,
+      perplexityReservedCostUsd: 0.02, analysisReservedCostUsd: 0.02,
+    });
+    const st = await db.createProbeRunAndStartAttemptForJob({
+      ...f, attemptId: ad.attempt!.id, platform: "perplexity", probeMode: "live_perplexity",
+    });
+    const probeRunId = st.probeRun!.id;
+    const pReq = JSON.stringify({ model: "sonar", messages: [] });
+    await db.markExternalCallSentForJob({
+      ...f, externalCallId: ad.perplexityCall!.id, probeRunId,
+      callKind: "perplexity", requestBody: pReq, requestBodySha256: sha256Hex(pReq),
+    });
+    await db.recordProviderCallReceiptForJob({
+      ...f, externalCallId: ad.perplexityCall!.id, probeRunId,
+      outcome: kind === "provider" ? "provider_error" : "success",
+      httpStatus: kind === "provider" ? 500 : 200, providerRequestId: "r",
+      rawResponseSha256: sha256Hex(BODY), latencyMs: 5, rawResponseBody: BODY,
+    });
+    if (kind === "analysis") {
+      await db.markExternalCallSentForJob({
+        ...f, externalCallId: ad.analysisCall!.id, probeRunId,
+        callKind: "analysis", requestBody: REQ, requestBodySha256: sha256Hex(REQ),
+      });
+      await db.recordAnalysisCallReceiptForJob({
+        ...f, externalCallId: ad.analysisCall!.id, probeRunId, outcome: "provider_error",
+        provider: "openai", model: "gpt-4o-mini", usedMock: false,
+        requestSha256: sha256Hex(REQ), responseSha256: null, latencyMs: 5,
+        rawContent: null, rawRequestBody: REQ,
+      });
+    }
+    await sleep(1200); // the lease lapses: the worker is gone
+    return { seeded };
+  }
+
+  for (const kind of ["provider", "analysis"] as const) {
+    const { seeded } = await crashedWith(kind);
+    let providerCalls = 0;
+    let analysisCalls = 0;
+    const base = baseDeps({});
+    const counting: WorkerDeps = {
+      ...base,
+      realFetch: (async () => { providerCalls += 1; return new Response("{}", { status: 200 }); }) as typeof fetch,
+      runProbe: (async (input: { fetchImpl?: typeof fetch }) => {
+        await (input.fetchImpl ?? fetch)("https://api.perplexity.ai/x", { method: "POST", body: "{}" });
+        throw new Error("the provider must not be called on resume");
+      }) as WorkerDeps["runProbe"],
+      analysis: {
+        ...base.analysis,
+        execute: async () => { analysisCalls += 1; throw new Error("the model must not be called on resume"); },
+      },
+    };
+    const r = await runOneIteration(counting, OPTS, new WorkerHealth(() => Date.now()));
+    check(
+      `resume onto a ${kind} receipt in error -> failed, closed`,
+      r.outcome === "failed" && r.jobId === seeded.jobId && (r.detail ?? "").includes("ABORTED"),
+      `${r.outcome}/${r.detail}`
+    );
+    check(`resume onto a ${kind} receipt: ZERO new provider calls`, providerCalls === 0, String(providerCalls));
+    check(`resume onto a ${kind} receipt: ZERO new model calls`, analysisCalls === 0, String(analysisCalls));
+    await assertClosed(`resume ${kind}`, seeded);
   }
 
   console.log(

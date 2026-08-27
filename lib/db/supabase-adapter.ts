@@ -7,6 +7,8 @@ import { snapshotReportWriteMode } from "./snapshot-write-mode";
 import type {
   AbortAttemptAndFailJobForJobInput,
   AbortAttemptAndFailJobForJobResult,
+  CloseAttemptForParseFailureForJobInput,
+  CloseAttemptForParseFailureForJobResult,
   AdmitAndReserveAttemptInput,
   AdmitAndReserveAttemptResult,
   AnalysisLlmCall,
@@ -3617,6 +3619,30 @@ export const supabaseAdapter: DbAdapter = {
     if (!row) {
       throw new Error(
         "abortAttemptAndFailJobForJob: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      attempt: mapProtocolAttemptNullable(row.attempt as ProtocolAttemptDbRow | null),
+      job: mapProtocolExecutionJobNullable(row.job as ProtocolExecutionJobDbRow | null),
+    };
+  },
+
+  async closeAttemptForParseFailureForJob(
+    input: CloseAttemptForParseFailureForJobInput
+  ): Promise<CloseAttemptForParseFailureForJobResult> {
+    const { data, error } = await getClient().rpc("close_attempt_for_parse_failure_for_job", {
+      p_job_id: input.jobId,
+      p_claim_token: input.claimToken,
+      p_project_id: input.projectId,
+      p_attempt_id: input.attemptId,
+      p_external_call_id: input.externalCallId,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "closeAttemptForParseFailureForJob: RPC returned no row; the return contract guarantees exactly one."
       );
     }
     return {

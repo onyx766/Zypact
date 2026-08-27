@@ -145,7 +145,8 @@ begin
         'request_evidence_conflict',
         'receipt_evidence_conflict',
         'throttled_retries_exhausted',
-        'slot_budget_exhausted'
+        'slot_budget_exhausted',
+        'analysis_parse_failed'
       ))
       or
       (event_type = 'abandoned_exhausted' and reason_code = 'attempts_exhausted')
@@ -219,12 +220,16 @@ begin
   -- Legs that never went on the wire cost nothing and are cancelled.
   -- A leg still 'in_progress' is deliberately left alone: it was sent,
   -- and only its own receipt may terminalise it.
-  update public.protocol_external_calls
+  -- Aliased on purpose: a function whose RETURNS TABLE declares an output
+  -- column named `status` makes a bare `status` in the WHERE clause
+  -- ambiguous (42702), and the statement then fails at runtime. The alias
+  -- is applied to all three sites so the shape cannot drift back.
+  update public.protocol_external_calls ec
      set status = 'cancelled',
          terminalized_at = now()
-   where protocol_attempt_id = p_attempt_id
-     and project_id = p_project_id
-     and status = 'reserved';
+   where ec.protocol_attempt_id = p_attempt_id
+     and ec.project_id = p_project_id
+     and ec.status = 'reserved';
 
   -- The attempt is inconclusive, not failed: we do not know whether the
   -- provider did the work. 'timed_out' is the honest terminal label.
@@ -236,6 +241,15 @@ begin
    where id = p_attempt_id
      and project_id = p_project_id
      and terminalized_at is null;
+
+  -- A terminalised attempt must stop being the CURRENT one. Leaving the
+  -- pointer set would let a later admission try to resume an attempt that
+  -- can never move again.
+  update public.protocol_execution_jobs j
+     set current_attempt_id = null
+   where j.id = p_job_id
+     and j.project_id = p_project_id
+     and j.current_attempt_id = p_attempt_id;
 
   perform public._move_job_to_needs_review(
     p_job_id, p_project_id, p_reason_code, p_attempt_id, p_external_call_id
@@ -1013,12 +1027,16 @@ begin
     return;
   end if;
 
-  update public.protocol_external_calls
+  -- Aliased on purpose: a function whose RETURNS TABLE declares an output
+  -- column named `status` makes a bare `status` in the WHERE clause
+  -- ambiguous (42702), and the statement then fails at runtime. The alias
+  -- is applied to all three sites so the shape cannot drift back.
+  update public.protocol_external_calls ec
      set status = 'cancelled',
          terminalized_at = now()
-   where protocol_attempt_id = p_attempt_id
-     and project_id = p_project_id
-     and status = 'reserved';
+   where ec.protocol_attempt_id = p_attempt_id
+     and ec.project_id = p_project_id
+     and ec.status = 'reserved';
 
   update public.protocol_attempts
      set status = p_attempt_status,
@@ -1045,4 +1063,177 @@ $$;
 revoke all on function public.abort_attempt_and_fail_job_for_job(uuid, uuid, uuid, uuid, text, text, text)
   from public, anon, authenticated, service_role;
 grant execute on function public.abort_attempt_and_fail_job_for_job(uuid, uuid, uuid, uuid, text, text, text)
+  to service_role;
+
+-- ---------------------------------------------------------------------
+-- 9. Parse failures — keep the durable mark, then close.
+-- ---------------------------------------------------------------------
+
+-- `mark_analysis_parse_failed_for_job` (0053) records that a real,
+-- receipted analysis output failed local parsing. That mark is what
+-- D-027's operator retry keys off, so it must survive — but on its own it
+-- leaves the attempt open and the analysis leg terminal-but-unusable, and
+-- `reconcile_attempt_for_job` can only refuse while any leg is still
+-- `reserved`. The job then sits claimed until its lease lapses, which is
+-- not a closed state.
+--
+-- This transition closes the attempt WITHOUT touching the parse mark:
+-- unsent legs are cancelled, the attempt is terminalised as 'failed' with
+-- the parse code as its reason, and the job moves to needs_review so an
+-- operator can decide. It refuses while a leg is still `in_progress`, for
+-- the same reason T1 and T3 do: a sent call must receive its receipt
+-- first.
+create or replace function
+  public.close_attempt_for_parse_failure_for_job(
+    p_job_id uuid,
+    p_claim_token uuid,
+    p_project_id uuid,
+    p_attempt_id uuid,
+    p_external_call_id uuid
+  )
+returns table (
+  status  text,
+  attempt public.protocol_attempts,
+  job     public.protocol_execution_jobs
+)
+language plpgsql
+security definer
+volatile
+set search_path = public, pg_temp
+as $$
+declare
+  v_job public.protocol_execution_jobs%rowtype;
+  v_attempt public.protocol_attempts%rowtype;
+  v_call public.protocol_external_calls%rowtype;
+  v_in_progress integer;
+  v_open integer;
+begin
+  if p_job_id is null or p_claim_token is null or p_project_id is null
+     or p_attempt_id is null or p_external_call_id is null then
+    raise exception using
+      errcode = '22023',
+      message = 'invalid_close_attempt_for_parse_failure_for_job_args';
+  end if;
+
+  select j.* into v_job
+    from public.protocol_execution_jobs j
+   where j.id = p_job_id and j.project_id = p_project_id
+   for update;
+
+  if not found then
+    return query select 'JOB_NOT_FOUND'::text, null::public.protocol_attempts, null::public.protocol_execution_jobs;
+    return;
+  end if;
+
+  select pa.* into v_attempt
+    from public.protocol_attempts pa
+   where pa.id = p_attempt_id and pa.project_id = p_project_id and pa.job_id = p_job_id
+   for update;
+
+  if not found then
+    return query select 'ATTEMPT_NOT_OWNED_BY_JOB'::text, null::public.protocol_attempts, v_job;
+    return;
+  end if;
+
+  select ec.* into v_call
+    from public.protocol_external_calls ec
+   where ec.id = p_external_call_id and ec.project_id = p_project_id
+     and ec.protocol_attempt_id = p_attempt_id
+   for update;
+
+  if not found then
+    return query select 'CALL_NOT_OWNED_BY_JOB'::text, v_attempt, v_job;
+    return;
+  end if;
+
+  -- The durable mark is the precondition, not a side effect: this
+  -- transition exists to close around it, never to create it.
+  if v_call.parse_failed_at is null or v_call.parse_failure_code is null then
+    return query select 'PARSE_NOT_MARKED'::text, v_attempt, v_job;
+    return;
+  end if;
+
+  select count(*) into v_open
+    from public.protocol_external_calls ec
+   where ec.protocol_attempt_id = p_attempt_id
+     and ec.project_id = p_project_id
+     and ec.status in ('reserved', 'in_progress');
+
+  -- Idempotence before fencing, as everywhere else: a replay after a lost
+  -- commit must not be told JOB_NOT_OWNED because its lease has lapsed.
+  if v_job.status = 'needs_review' or v_attempt.terminalized_at is not null then
+    if v_job.status = 'needs_review'
+       and v_job.needs_review_reason is not distinct from 'analysis_parse_failed'
+       and v_attempt.terminalized_at is not null
+       and v_attempt.status = 'failed'
+       and v_attempt.termination_reason is not distinct from v_call.parse_failure_code
+       and v_job.current_attempt_id is null
+       and v_open = 0 then
+      return query select 'ALREADY_CLOSED'::text, v_attempt, v_job;
+    else
+      return query select 'STATE_CONFLICT'::text, v_attempt, v_job;
+    end if;
+    return;
+  end if;
+
+  if v_job.claim_token is distinct from p_claim_token
+     or v_job.lease_expires_at is null or v_job.lease_expires_at <= now()
+     or v_job.status not in ('claimed', 'running') then
+    return query select 'JOB_NOT_OWNED'::text, v_attempt, v_job;
+    return;
+  end if;
+
+  select count(*) into v_in_progress
+    from public.protocol_external_calls ec
+   where ec.protocol_attempt_id = p_attempt_id
+     and ec.project_id = p_project_id
+     and ec.status = 'in_progress';
+
+  if v_in_progress > 0 then
+    return query select 'CALL_STILL_IN_PROGRESS'::text, v_attempt, v_job;
+    return;
+  end if;
+
+  -- Aliased on purpose: a function whose RETURNS TABLE declares an output
+  -- column named `status` makes a bare `status` in the WHERE clause
+  -- ambiguous (42702), and the statement then fails at runtime. The alias
+  -- is applied to all three sites so the shape cannot drift back.
+  update public.protocol_external_calls ec
+     set status = 'cancelled',
+         terminalized_at = now()
+   where ec.protocol_attempt_id = p_attempt_id
+     and ec.project_id = p_project_id
+     and ec.status = 'reserved';
+
+  update public.protocol_attempts
+     set status = 'failed',
+         termination_reason = v_call.parse_failure_code,
+         terminalized_at = now(),
+         last_activity_at = now()
+   where id = p_attempt_id
+     and project_id = p_project_id
+     and terminalized_at is null
+  returning * into v_attempt;
+
+  update public.protocol_execution_jobs j
+     set current_attempt_id = null
+   where j.id = p_job_id
+     and j.project_id = p_project_id
+     and j.current_attempt_id = p_attempt_id;
+
+  perform public._move_job_to_needs_review(
+    p_job_id, p_project_id, 'analysis_parse_failed', p_attempt_id, p_external_call_id
+  );
+
+  select j.* into v_job
+    from public.protocol_execution_jobs j
+   where j.id = p_job_id and j.project_id = p_project_id;
+
+  return query select 'CLOSED'::text, v_attempt, v_job;
+end;
+$$;
+
+revoke all on function public.close_attempt_for_parse_failure_for_job(uuid, uuid, uuid, uuid, uuid)
+  from public, anon, authenticated, service_role;
+grant execute on function public.close_attempt_for_parse_failure_for_job(uuid, uuid, uuid, uuid, uuid)
   to service_role;

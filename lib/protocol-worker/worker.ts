@@ -158,7 +158,7 @@ export async function runOneIteration(
             detail: `${step.detail}:${closed.outcome}`,
           };
         }
-        await deps.sleep(backoffWithJitter(opts, throttled));
+        await deps.sleep(backoffWithJitter(opts, throttled), deps.abortSignal);
         continue;
       }
       if (step) return step;
@@ -290,7 +290,10 @@ async function runOneSlot(
   if (now.perplexityReceipt) {
     // Rule 2 — already paid for. Replay, never re-send.
     if (now.perplexityReceipt.outcome !== "success") {
-      return await reconcileFailed(deps, f, attempt.id, "provider_error");
+      // Resumed onto a provider receipt that failed. The analysis leg
+      // never left `reserved`, so reconcile can only refuse: T3 cancels it
+      // and closes the attempt in one fenced transition.
+      return await closeAttemptFailed(deps, f, attempt.id, "provider_error");
     }
     answer = answerFromRawResponseBody(now.perplexityReceipt.rawResponseBody);
   } else {
@@ -320,7 +323,7 @@ async function runOneSlot(
     answer = r.probe.answer.trim().length === 0 ? null : r.probe.answer;
   }
   if (answer === null) {
-    return await reconcileFailed(deps, f, attempt.id, "empty_provider_answer");
+    return await closeAttemptFailed(deps, f, attempt.id, "empty_provider_answer");
   }
 
   // --- analysis leg ---------------------------------------------------
@@ -333,10 +336,18 @@ async function runOneSlot(
     };
     if (now.analysisReceipt) {
       // Rule 3 — the model already answered and we were billed for it.
-      const replayed = await replayAnalysisReceipt(deps, f, now, project.domain);
+      const replayed = await replayAnalysisReceipt(deps, f, now, project.domain, attempt.id);
       if (replayed) return replayed;
     } else if (now.analysis) {
       const r = await runAnalysisCall(deps, f, now.analysis, probeRunId, agentInput);
+      if (r?.outcome === "provider_failed") {
+        return await closeAttemptFailed(deps, f, attempt.id, r.detail ?? "analysis_error");
+      }
+      if (r?.outcome === "parse_failed") {
+        // The durable mark stays; only the attempt and the job are closed,
+        // so D-027's operator retry still has something to key off.
+        return await closeAttemptForParseFailure(deps, f, attempt.id, now.analysis.id, r.detail);
+      }
       if (r) return r;
     } else {
       return { outcome: "failed", jobId: f.jobId, detail: "NO_ANALYSIS_CALL" };
@@ -371,13 +382,16 @@ async function replayAnalysisReceipt(
   deps: WorkerDeps,
   f: Fenced,
   now: ClassifiedCalls,
-  domain: string
+  domain: string,
+  attemptId: string
 ): Promise<IterationResult | null> {
   const receipt = now.analysisReceipt;
   const call = now.analysis;
   if (!receipt || !call) return { outcome: "failed", jobId: f.jobId, detail: "NO_ANALYSIS_RECEIPT" };
   if (receipt.outcome !== "success" || receipt.rawContent === null) {
-    return { outcome: "failed", jobId: f.jobId, detail: "ANALYSIS_RECEIPT_NOT_REPLAYABLE" };
+    // Resumed onto an analysis receipt that failed. Nothing is replayable
+    // and nothing more will be bought; the attempt has to close.
+    return await closeAttemptFailed(deps, f, attemptId, "analysis_receipt_not_replayable");
   }
   const parsed = parseProbeAnalysisM5Content(receipt.rawContent);
   if (!parsed.ok) {
@@ -388,7 +402,7 @@ async function replayAnalysisReceipt(
       externalCallId: call.id,
       parseFailureCode: parsed.code,
     });
-    return { outcome: "parse_failed", jobId: f.jobId, detail: mk.outcome };
+    return await closeAttemptForParseFailure(deps, f, attemptId, call.id, `${parsed.code}:${mk.outcome}`);
   }
   const content = deriveProbeResultContent(parsed.data, domain);
   if (content === null) {
@@ -399,7 +413,9 @@ async function replayAnalysisReceipt(
       externalCallId: call.id,
       parseFailureCode: "normalization_failed",
     });
-    return { outcome: "parse_failed", jobId: f.jobId, detail: mk.outcome };
+    return await closeAttemptForParseFailure(
+      deps, f, attemptId, call.id, `normalization_failed:${mk.outcome}`
+    );
   }
   const persisted = await deps.db.persistProbeResultForJob({
     jobId: f.jobId,
@@ -413,21 +429,54 @@ async function replayAnalysisReceipt(
   return null;
 }
 
-async function reconcileFailed(
+/**
+ * Closes an attempt that failed deterministically.
+ *
+ * Always T3, never `reconcileAttemptForJob`: reconcile refuses while any
+ * leg is still `reserved`, and after a provider or analysis error at
+ * least one leg always is. T3 cancels the unsent legs, terminalises the
+ * attempt and closes the job in a single fenced transition.
+ */
+async function closeAttemptFailed(
   deps: WorkerDeps,
   f: Fenced,
   attemptId: string,
   reason: string
 ): Promise<IterationResult> {
-  const rec = await deps.db.reconcileAttemptForJob({
+  const closed = await deps.db.abortAttemptAndFailJobForJob({
     jobId: f.jobId,
     claimToken: f.claimToken,
     projectId: f.projectId,
     attemptId,
-    status: "failed",
+    attemptStatus: "failed",
     terminationReason: reason,
+    failureReason: reason,
   });
-  return { outcome: "failed", jobId: f.jobId, detail: `${reason}:${rec.outcome}` };
+  return { outcome: "failed", jobId: f.jobId, detail: `${reason}:${closed.outcome}` };
+}
+
+/**
+ * Closes an attempt around a durable parse-failure mark.
+ *
+ * The mark is preserved — it is what D-027's operator retry keys off —
+ * and only the attempt and the job move. Without this the job would sit
+ * claimed until its lease lapsed, which is not a closed state.
+ */
+async function closeAttemptForParseFailure(
+  deps: WorkerDeps,
+  f: Fenced,
+  attemptId: string,
+  externalCallId: string,
+  detail: string | null
+): Promise<IterationResult> {
+  const closed = await deps.db.closeAttemptForParseFailureForJob({
+    jobId: f.jobId,
+    claimToken: f.claimToken,
+    projectId: f.projectId,
+    attemptId,
+    externalCallId,
+  });
+  return { outcome: "parse_failed", jobId: f.jobId, detail: `${detail}:${closed.outcome}` };
 }
 
 /** The paraphrase plan is the question identity; a slot never invents one. */
@@ -443,7 +492,7 @@ export async function runWorkerLoop(
   deps: WorkerDeps,
   opts: WorkerOptions,
   signal: { aborted: boolean },
-  sleep: (ms: number) => Promise<void>,
+  sleep: (ms: number, signal?: AbortSignal) => Promise<void>,
   onIteration?: (r: IterationResult) => void,
   health: WorkerHealth = new WorkerHealth(deps.now)
 ): Promise<WorkerHealth> {
@@ -453,7 +502,7 @@ export async function runWorkerLoop(
     onIteration?.(r);
     if (r.outcome === "no_job") {
       idle += 1;
-      await sleep(backoffWithJitter(opts, idle));
+      await sleep(backoffWithJitter(opts, idle), deps.abortSignal);
     } else {
       idle = 0;
     }

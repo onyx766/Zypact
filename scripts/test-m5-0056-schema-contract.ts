@@ -92,6 +92,10 @@ const markBody = SQL.slice(markStart, SQL.indexOf("\n$$;", markStart));
     order.join(">")
   );
   check(
+    "every cancellation is table-qualified, so `status` can never be ambiguous (42702)",
+    !/\n\s+and status = 'reserved'/.test(SQL)
+  );
+  check(
     "no function in this migration ever locks a call before its job",
     bodies.every((b) => {
       const seq = [...b.matchAll(/from public\.(protocol_execution_jobs|protocol_external_calls|protocol_attempts|external_call_requests)[\s\S]{0,120}?for update/g)].map((m) => m[1]);
@@ -134,7 +138,7 @@ const markBody = SQL.slice(markStart, SQL.indexOf("\n$$;", markStart));
 
   console.log("\n[6] T1 — one transaction, inside the receipt RPC");
   check("the helper exists", /create or replace function public\._close_unknown_outcome_core/.test(SQL));
-  check("it cancels unsent legs", /set status = 'cancelled'[\s\S]{0,200}status = 'reserved'/.test(SQL));
+  check("it cancels unsent legs", /set status = 'cancelled'[\s\S]{0,300}(?:ec\.)?status = 'reserved'/.test(SQL));
   check("it terminalises the attempt", /update public\.protocol_attempts[\s\S]{0,200}terminalized_at = now\(\)/.test(SQL));
   check("it moves the job and emits the outbox", /perform public\._move_job_to_needs_review/.test(SQL));
   check(
@@ -158,7 +162,7 @@ const markBody = SQL.slice(markStart, SQL.indexOf("\n$$;", markStart));
   check("T2 refuses while an attempt is open", /'ATTEMPT_STILL_OPEN'::text/.test(SQL));
   check("T3 exists", /create or replace function\s+public\.abort_attempt_and_fail_job_for_job/.test(SQL));
   check("T3 refuses while a call is in flight", /'CALL_STILL_IN_PROGRESS'::text/.test(SQL));
-  check("T3 cancels only unsent legs", /status = 'cancelled'[\s\S]{0,300}and status = 'reserved'/.test(SQL));
+  check("T3 cancels only unsent legs", /status = 'cancelled'[\s\S]{0,300}and (?:ec\.)?status = 'reserved'/.test(SQL));
 
   const t3 = SQL.slice(SQL.indexOf("public.abort_attempt_and_fail_job_for_job("));
   const alreadyIdx = t3.indexOf("'ALREADY_ABORTED'::text");
@@ -170,10 +174,36 @@ const markBody = SQL.slice(markStart, SQL.indexOf("\n$$;", markStart));
   );
   check("a partial state is surfaced, never completed", /'STATE_CONFLICT'::text/.test(t3));
 
+  console.log("\n[7b] Parse-failure closure keeps the durable mark");
+  const t4 = SQL.slice(SQL.indexOf("public.close_attempt_for_parse_failure_for_job("));
+  check("the transition exists", /create or replace function\s+public\.close_attempt_for_parse_failure_for_job/.test(SQL));
+  check(
+    "it refuses unless the parse failure is already marked",
+    /v_call\.parse_failed_at is null or v_call\.parse_failure_code is null/.test(t4) &&
+      /'PARSE_NOT_MARKED'::text/.test(t4)
+  );
+  check(
+    "it never clears the mark it closes around",
+    !/parse_failed_at\s*=\s*null/.test(t4) && !/parse_failure_code\s*=\s*null/.test(t4)
+  );
+  check("it cancels only unsent legs", /status = 'cancelled'[\s\S]{0,300}(?:ec\.)?status = 'reserved'/.test(t4));
+  check("it refuses while a leg is in flight", /'CALL_STILL_IN_PROGRESS'::text/.test(t4));
+  check(
+    "the attempt keeps the parse code as its termination reason",
+    /termination_reason = v_call\.parse_failure_code/.test(t4)
+  );
+  check("the job moves to needs_review with an outbox row", /_move_job_to_needs_review\([\s\S]{0,80}'analysis_parse_failed'/.test(t4));
+  {
+    const a = t4.indexOf("'ALREADY_CLOSED'::text");
+    const f = t4.indexOf("v_job.claim_token is distinct from p_claim_token");
+    check("idempotence is checked before fencing", a > 0 && f > 0 && a < f, `already@${a} < fence@${f}`);
+    check("a partial state is surfaced", /'STATE_CONFLICT'::text/.test(t4));
+  }
+
   console.log("\n[8] Outbox reason codes");
   for (const code of [
     "request_evidence_conflict", "receipt_evidence_conflict",
-    "throttled_retries_exhausted", "slot_budget_exhausted",
+    "throttled_retries_exhausted", "slot_budget_exhausted", "analysis_parse_failed",
   ]) {
     check(`the closed set gains '${code}'`, new RegExp(`'${code}'`).test(SQL));
   }

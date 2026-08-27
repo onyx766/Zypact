@@ -23,6 +23,7 @@ import {
   prepareCallModelRequest,
 } from "@/lib/llm/call-model";
 import { createServer } from "node:http";
+import { sleep } from "@/lib/protocol-worker/lifecycle";
 import { runWorkerLoop } from "@/lib/protocol-worker/worker";
 import { WorkerHealth } from "@/lib/protocol-worker/health";
 import type { AnalysisTransport, IterationResult, WorkerDeps, WorkerOptions } from "@/lib/protocol-worker/types";
@@ -51,7 +52,7 @@ const analysis: AnalysisTransport = {
       maxTokens: call.maxTokens,
       mockResponse: call.mockResponse,
     }),
-  execute: (prepared) => executePreparedCallModelRequest(prepared),
+  execute: (prepared, opts) => executePreparedCallModelRequest(prepared, opts),
 };
 
 /**
@@ -59,10 +60,13 @@ const analysis: AnalysisTransport = {
  * Node exit during a backoff, so a healthy idle worker would simply
  * vanish. Shutdown is cooperative, never accidental.
  */
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 async function main(): Promise<void> {
   const workerId = process.env.WORKER_ID ?? `worker-${process.pid}`;
+
+  // Declared before `deps` so the same signal reaches the probe fetch, the
+  // analysis call and the idle wait.
+  const shutdown = new AbortController();
 
   const deps: WorkerDeps = {
     db: getDb(),
@@ -72,6 +76,7 @@ async function main(): Promise<void> {
       fetch(url, { ...init, signal: init?.signal ?? shutdown.signal })) as typeof fetch,
     now: () => Date.now(),
     sleep,
+    abortSignal: shutdown.signal,
     probeMode: "live_perplexity",
   };
 
@@ -93,7 +98,6 @@ async function main(): Promise<void> {
   // lease: the current iteration finishes its fenced RPC sequence, and if
   // it overruns, in-flight provider calls are aborted rather than left to
   // outlive a lease we can no longer renew.
-  const shutdown = new AbortController();
   const stop = (sig: string) => {
     if (signal.aborted) return;
     signal.aborted = true;

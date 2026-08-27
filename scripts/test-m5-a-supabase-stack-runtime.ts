@@ -37,6 +37,8 @@
  *   S6 mark failure       a refused mark_sent produces ZERO fetches
  *   S7 request evidence   the exact body is on record BEFORE the wire
  *   S8 closed failures    an unknown outcome closes everything at once
+ *   S9 deterministic ends every known failure really closes, in SQL
+ *   S10 parse failures    the durable mark survives its own closure
  */
 
 import { execFileSync } from "node:child_process";
@@ -52,6 +54,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { sha256Hex } from "@/lib/evidence/hash";
+import { CallModelFailure } from "@/lib/llm/call-model";
 import type { CreateProtocolInput, DbAdapter } from "@/lib/db/types";
 import type { AnalysisTransport, WorkerDeps, WorkerOptions } from "@/lib/protocol-worker/types";
 import type { ProbeAnalysisM5Parsed } from "@/lib/protocol-worker/analysis-m5";
@@ -60,7 +63,7 @@ import { PerplexityProbeFailure, type PerplexityProbeResult } from "@/lib/probes
 const REPO_ROOT = process.cwd();
 const MAX_MIGRATION_VERSION = 56;
 const REQUIRED_PORTS = [54321, 54322, 54323, 54324];
-const ROSTER = ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8"] as const;
+const ROSTER = ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10"] as const;
 type ScenarioName = (typeof ROSTER)[number];
 
 const MARK_BODY_PERPLEXITY = JSON.stringify({ model: "sonar", messages: [] });
@@ -824,6 +827,168 @@ async function main(): Promise<void> {
       check("no analysis call followed it", spy.analysisExecutes === 0, String(spy.analysisExecutes));
       const after = await db.claimProtocolExecutionJob({ workerId: "w-after", leaseSeconds: 60 });
       check("the job is closed — not left claimable for ever", after.job?.id !== seeded.jobId, after.outcome);
+      {
+        const dbc = run("docker", ["ps", "--format", "{{.Names}}"]).split("\n").find((n) => n.startsWith("supabase_db_"))!;
+        const q = (sql: string) =>
+          execFileSync("docker", ["exec", dbc, "psql", "-U", "postgres", "-d", "postgres", "-tAc", sql],
+            { encoding: "utf8" }).trim();
+        const st = q(`select j.status||'|'||coalesce(j.current_attempt_id::text,'NULL')
+                        from public.protocol_execution_jobs j
+                        join public.projects p on p.id=j.project_id where p.domain='stack-unknown-outcome.test';`);
+        check("T1 also releases the current attempt slot", st === "needs_review|NULL", st);
+        const att = q(`select coalesce(string_agg(a.status||':'||(a.terminalized_at is not null)::text, ','), 'none')
+                         from public.protocol_attempts a
+                         join public.projects p on p.id=a.project_id where p.domain='stack-unknown-outcome.test';`);
+        check("T1 terminalises the attempt", att === "timed_out:true", att);
+        const calls = q(`select coalesce(string_agg(c.call_kind||':'||c.status, ',' order by c.call_kind), 'none')
+                           from public.protocol_external_calls c
+                           join public.projects p on p.id=c.project_id where p.domain='stack-unknown-outcome.test';`);
+        check("T1 leaves no leg reserved or in flight", !/:(reserved|in_progress)/.test(calls), calls);
+      }
+    }
+
+    // ------------------------------------------------------------- S9
+    sc("S9");
+    {
+      // Read the ledger directly: "unclaimable" proves nothing, terminal
+      // rows do. `psql` is the authority here, not the adapter.
+      const dbc = run("docker", ["ps", "--format", "{{.Names}}"]).split("\n").find((n) => n.startsWith("supabase_db_"))!;
+      const q = (sql: string) =>
+        execFileSync("docker", ["exec", dbc, "psql", "-U", "postgres", "-d", "postgres", "-tAc", sql],
+          { encoding: "utf8" }).trim();
+
+      const closedState = (domain: string) => ({
+        job: q(`select j.status||'|'||coalesce(j.current_attempt_id::text,'NULL')
+                  from public.protocol_execution_jobs j
+                  join public.projects p on p.id=j.project_id where p.domain='${domain}';`),
+        attempts: q(`select coalesce(string_agg(a.status||':'||(a.terminalized_at is not null)::text, ','), 'none')
+                       from public.protocol_attempts a
+                       join public.projects p on p.id=a.project_id where p.domain='${domain}';`),
+        calls: q(`select coalesce(string_agg(c.call_kind||':'||c.status, ',' order by c.call_kind), 'none')
+                    from public.protocol_external_calls c
+                    join public.projects p on p.id=c.project_id where p.domain='${domain}';`),
+      });
+
+      for (const [label, mutate] of [
+        ["analysis http_error", (d: WorkerDeps): WorkerDeps => ({
+          ...d,
+          analysis: {
+            ...d.analysis,
+            execute: async () => {
+              throw new CallModelFailure("http_error", {
+                httpStatus: 503, providerRequestId: null, latencyMs: 4,
+                requestSha256: sha256Hex(ANALYSIS_REQUEST_BODY),
+              });
+            },
+          },
+        })],
+        ["analysis empty_content", (d: WorkerDeps): WorkerDeps => ({
+          ...d,
+          analysis: {
+            ...d.analysis,
+            execute: async () => {
+              throw new CallModelFailure("empty_content", {
+                httpStatus: null, providerRequestId: null, latencyMs: 4,
+                requestSha256: sha256Hex(ANALYSIS_REQUEST_BODY),
+              });
+            },
+          },
+        })],
+        ["perplexity http_error", (d: WorkerDeps): WorkerDeps => ({
+          ...d,
+          runProbe: (async (input: { fetchImpl?: typeof fetch }) => {
+            await (input.fetchImpl ?? fetch)("https://api.perplexity.ai/x", { method: "POST", body: "{}" });
+            throw new PerplexityProbeFailure("boom", {
+              reason: "http_error", httpStatus: 500, errorBody: PROVIDER_BODY,
+              errorBodySha256: sha256Hex(PROVIDER_BODY), latencyMs: 3, providerRequestId: null,
+              rawProbeRequestSha256: sha256Hex("p"),
+              fullRequestBody: JSON.stringify({ model: "sonar" }),
+              fullRequestBodySha256: sha256Hex(JSON.stringify({ model: "sonar" })),
+            });
+          }) as WorkerDeps["runProbe"],
+        })],
+      ] as const) {
+        const domain = `s9-${label.replace(/[^a-z]+/g, "-")}.test`;
+        const seeded = await seed(domain);
+        const spy: Spy = { providerFetches: 0, analysisExecutes: 0 };
+        const r = await runOneIteration(
+          mutate(makeDeps(db, spy)),
+          workerOptions({ workerId: `w-${domain}` }),
+          new WorkerHealth(() => Date.now())
+        );
+        check(`${label}: the iteration reports failed`, r.outcome === "failed" && r.jobId === seeded.jobId, `${r.outcome}/${r.detail}`);
+        const st = closedState(domain);
+        check(`${label}: the job is terminal with no current attempt`, st.job === "failed|NULL", st.job);
+        check(`${label}: the attempt is terminalised`, /^failed:true$/.test(st.attempts), st.attempts);
+        check(
+          `${label}: every leg is terminal — none left reserved or in flight`,
+          !/:(reserved|in_progress)/.test(st.calls),
+          st.calls
+        );
+      }
+    }
+
+    // ------------------------------------------------------------- S10
+    sc("S10");
+    {
+      const dbc = run("docker", ["ps", "--format", "{{.Names}}"]).split("\n").find((n) => n.startsWith("supabase_db_"))!;
+      const q = (sql: string) =>
+        execFileSync("docker", ["exec", dbc, "psql", "-U", "postgres", "-d", "postgres", "-tAc", sql],
+          { encoding: "utf8" }).trim();
+
+      for (const [label, content] of [
+        ["invalid_json", "not json at all {{{"],
+        ["schema_validation_failed", JSON.stringify({ clientPosition: "nope" })],
+        ["normalization_failed", JSON.stringify({
+          clientPosition: "absent", competitorsMentioned: [], sourcesCited: [],
+          answerSummary: "", verdict: "won",
+        })],
+      ] as const) {
+        const domain = `s10-${label.replace(/_/g, "-")}.test`;
+        const seeded = await seed(domain);
+        const spy: Spy = { providerFetches: 0, analysisExecutes: 0 };
+        const base = makeDeps(db, spy);
+        const bad: WorkerDeps = {
+          ...base,
+          analysis: {
+            ...base.analysis,
+            execute: async () => ({
+              provider: "openai" as const, model: "gpt-4o-mini", content, usedMock: false,
+              latencyMs: 5, requestSha256: sha256Hex(ANALYSIS_REQUEST_BODY),
+              contentSha256: sha256Hex(content), providerRequestId: "ana", httpStatus: 200,
+            }),
+          },
+        };
+        const r = await runOneIteration(bad, workerOptions({ workerId: `w-${domain}` }), new WorkerHealth(() => Date.now()));
+        check(`${label}: reported as parse_failed`, r.outcome === "parse_failed" && r.jobId === seeded.jobId, `${r.outcome}/${r.detail}`);
+        check(`${label}: the attempt was closed`, (r.detail ?? "").includes("CLOSED"), r.detail ?? "");
+
+        const mark = q(`select coalesce(string_agg(c.parse_failure_code||':'||(c.parse_failed_at is not null)::text, ','), 'none')
+                          from public.protocol_external_calls c
+                          join public.projects p on p.id=c.project_id
+                         where p.domain='${domain}' and c.parse_failure_code is not null;`);
+        check(`${label}: the durable parse mark SURVIVES its own closure (D-027 retry)`, mark.startsWith(label), mark);
+
+        const job = q(`select j.status||'|'||coalesce(j.needs_review_reason,'NULL')||'|'||coalesce(j.current_attempt_id::text,'NULL')
+                         from public.protocol_execution_jobs j
+                         join public.projects p on p.id=j.project_id where p.domain='${domain}';`);
+        check(`${label}: the job is needs_review with its reason`, job === "needs_review|analysis_parse_failed|NULL", job);
+
+        const att = q(`select coalesce(string_agg(a.status||':'||(a.terminalized_at is not null)::text||':'||coalesce(a.termination_reason,'NULL'), ','), 'none')
+                         from public.protocol_attempts a
+                         join public.projects p on p.id=a.project_id where p.domain='${domain}';`);
+        check(`${label}: the attempt is terminal, carrying the parse code`, att === `failed:true:${label}`, att);
+
+        const calls = q(`select coalesce(string_agg(c.call_kind||':'||c.status, ',' order by c.call_kind), 'none')
+                           from public.protocol_external_calls c
+                           join public.projects p on p.id=c.project_id where p.domain='${domain}';`);
+        check(`${label}: no leg left reserved or in flight`, !/:(reserved|in_progress)/.test(calls), calls);
+
+        const alert = q(`select coalesce(string_agg(al.reason_code, ','), 'none')
+                           from public.protocol_execution_job_alerts al
+                           join public.projects p on p.id=al.project_id where p.domain='${domain}';`);
+        check(`${label}: an outbox row was written`, alert === "analysis_parse_failed", alert);
+      }
     }
 
     globalThis.fetch = realFetch;

@@ -227,6 +227,81 @@ async function main(): Promise<void> {
     );
   }
 
+  // ======================================================================
+  console.log("\n[5] empty_answer: the durable body and its hash cover the same bytes");
+  // ======================================================================
+  //
+  // The body used to be truncated to 500 characters while the hash still
+  // covered the whole thing, so the pair could never verify — and 0052's
+  // CHECK, which hashes the stored text, rejects exactly that.
+  {
+    const { PerplexityProbeFailure } = await import("@/lib/probes/perplexity");
+    // A 2xx body with no answer, deliberately far past 500 characters.
+    const filler = "x".repeat(2000);
+    const longBody = JSON.stringify({
+      id: "long", choices: [{ message: { content: "   " } }], note: filler,
+    });
+    check("the fixture body really exceeds 500 characters", longBody.length > 500, `${longBody.length}`);
+
+    let caught: InstanceType<typeof PerplexityProbeFailure> | null = null;
+    try {
+      await runPerplexityProbe({
+        prompt: "Which vendors handle X best?",
+        brandName: "Example Client",
+        domain: "example-client.test",
+        // Injected transport: no network, and the body is returned verbatim.
+        fetchImpl: (async () =>
+          new Response(longBody, { status: 200, headers: { "content-type": "application/json" } })
+        ) as typeof fetch,
+      });
+    } catch (e) {
+      if (e instanceof PerplexityProbeFailure) caught = e;
+      else throw e;
+    }
+    check("the real runner raises empty_answer", caught?.reason === "empty_answer", caught?.reason ?? "none");
+    check(
+      "the durable body is the WHOLE body, not a 500-character slice",
+      caught?.errorBody === longBody,
+      `${caught?.errorBody?.length ?? 0} vs ${longBody.length}`
+    );
+    check(
+      "the hash really covers the stored body",
+      caught?.errorBodySha256 === sha256Hex(caught?.errorBody ?? ""),
+      caught?.errorBodySha256?.slice(0, 12) ?? "none"
+    );
+
+    // And the same pairing survives the ledger, which verifies it.
+    const jobId = await seed("empty-answer-long.test");
+    const spy = { transports: 0 };
+    const failing: WorkerDeps = {
+      ...deps(db, spy),
+      runProbe: (async (input: { fetchImpl?: typeof fetch }) =>
+        runPerplexityProbe({
+          prompt: "Which vendors handle X best?",
+          brandName: "Example Client",
+          domain: "example-client.test",
+          fetchImpl: input.fetchImpl,
+        })
+      ) as WorkerDeps["runProbe"],
+      realFetch: (async () => {
+        spy.transports += 1;
+        return new Response(longBody, { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof fetch,
+    };
+    const r = await runOneIteration(failing, OPTS, new WorkerHealth(() => Date.now()));
+    check(
+      "the run closes rather than throwing on the oversized body",
+      r.jobId === jobId && (r.outcome === "failed" || r.outcome === "needs_review_perplexity_unknown"),
+      `${r.outcome}/${r.detail}`
+    );
+    check("exactly one transport", spy.transports === 1, String(spy.transports));
+    check(
+      "the ledger accepted the receipt — body and hash agreed",
+      !(r.detail ?? "").includes("does not match"),
+      r.detail ?? ""
+    );
+  }
+
   console.log(
     `\n${checks - failures}/${checks} checks passed. ` +
       (failures === 0 ? "M5-A real-probe fencing PASSED." : "M5-A real-probe fencing FAILED.")

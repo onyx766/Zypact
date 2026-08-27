@@ -177,6 +177,7 @@ async function main(): Promise<void> {
       ["abort_attempt_and_fail_job_for_job", true],
       ["_close_unknown_outcome_core", false],
       ["_move_job_to_needs_review", false],
+      ["close_attempt_for_parse_failure_for_job", true],
     ] as const) {
       check(`${fn} exists`, q(`select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='${fn}';`) === "1");
       const canExec = q(
@@ -191,7 +192,7 @@ async function main(): Promise<void> {
     }
 
     console.log("\n[5] The outbox reason set really grew");
-    for (const code of ["request_evidence_conflict", "receipt_evidence_conflict", "throttled_retries_exhausted", "slot_budget_exhausted"]) {
+    for (const code of ["request_evidence_conflict", "receipt_evidence_conflict", "throttled_retries_exhausted", "slot_budget_exhausted", "analysis_parse_failed"]) {
       check(
         `'${code}' is accepted by the CHECK`,
         q(`select pg_get_constraintdef(oid) like '%${code}%' from pg_constraint where conname='protocol_execution_job_alerts_reason_code_check';`) === "t"

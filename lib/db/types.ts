@@ -2197,6 +2197,41 @@ export interface AbortAttemptAndFailJobForJobInput {
   failureReason: string;
 }
 
+/**
+ * 0056 — closes an attempt around a durable parse-failure mark.
+ *
+ * The mark itself is the precondition and is never touched: D-027's
+ * operator retry keys off it. This only cancels the unsent legs,
+ * terminalises the attempt and moves the job to needs_review, so the run
+ * stops in a state someone can act on instead of sitting claimed until
+ * its lease lapses.
+ */
+export type CloseAttemptForParseFailureForJobOutcome =
+  | "CLOSED"
+  | "ALREADY_CLOSED"
+  | "STATE_CONFLICT"
+  /** The parse failure was never marked; there is nothing to close around. */
+  | "PARSE_NOT_MARKED"
+  | "CALL_STILL_IN_PROGRESS"
+  | "CALL_NOT_OWNED_BY_JOB"
+  | "ATTEMPT_NOT_OWNED_BY_JOB"
+  | "JOB_NOT_FOUND"
+  | "JOB_NOT_OWNED";
+
+export interface CloseAttemptForParseFailureForJobInput {
+  jobId: string;
+  claimToken: string;
+  projectId: string;
+  attemptId: string;
+  externalCallId: string;
+}
+
+export interface CloseAttemptForParseFailureForJobResult {
+  outcome: CloseAttemptForParseFailureForJobOutcome;
+  attempt: ProtocolAttempt | null;
+  job: ProtocolExecutionJob | null;
+}
+
 export interface AbortAttemptAndFailJobForJobResult {
   outcome: AbortAttemptAndFailJobForJobOutcome;
   attempt: ProtocolAttempt | null;
@@ -2297,6 +2332,8 @@ export type AlertReasonCode =
   | "throttled_retries_exhausted"
   /** 0056 — the slot budget was exhausted; the ledger is inconsistent. */
   | "slot_budget_exhausted"
+  /** 0056 — a receipted analysis output failed local parsing (D-027). */
+  | "analysis_parse_failed"
   | "attempts_exhausted";
 
 export type AlertDeliveryStatus =
@@ -2830,6 +2867,10 @@ export interface DbAdapter {
   abortAttemptAndFailJobForJob(
     input: AbortAttemptAndFailJobForJobInput
   ): Promise<AbortAttemptAndFailJobForJobResult>;
+  /** 0056 — closes an attempt around a durable parse-failure mark. */
+  closeAttemptForParseFailureForJob(
+    input: CloseAttemptForParseFailureForJobInput
+  ): Promise<CloseAttemptForParseFailureForJobResult>;
   reactivateAbandonedJob(
     input: ReactivateAbandonedJobInput
   ): Promise<ReactivateAbandonedJobResult>;

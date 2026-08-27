@@ -111,6 +111,8 @@ import type {
   FailJobWithoutAttemptForJobResult,
   AbortAttemptAndFailJobForJobInput,
   AbortAttemptAndFailJobForJobResult,
+  CloseAttemptForParseFailureForJobInput,
+  CloseAttemptForParseFailureForJobResult,
   ReactivateAbandonedJobInput,
   ReactivateAbandonedJobResult,
   ReactivateAbandonedJobOutcome,
@@ -657,6 +659,47 @@ function jobFencingOk(
  * real transition, plus its corresponding 'pending' delivery row,
  * created together -- never a delivery-less event.
  */
+/**
+ * 0056 — mirrors `public._close_unknown_outcome_core`.
+ *
+ * An unknown provider outcome used to move the job and stop there, which
+ * left the attempt open and the unsent legs `reserved` — a state
+ * `reconcileAttemptForJob` can only ever refuse. The SQL closes all of it
+ * in the receipt RPC's own transaction, so the in-memory adapter must do
+ * exactly the same or the two layers disagree about what "closed" means.
+ */
+function closeUnknownOutcomeCore(
+  store: MemoryStore,
+  job: ProtocolExecutionJob,
+  attemptId: string,
+  externalCallId: string,
+  reasonCode: AlertReasonCode
+): void {
+  for (const c of store.protocolExternalCalls.values()) {
+    if (c.protocolAttemptId === attemptId && c.projectId === job.projectId && c.status === "reserved") {
+      store.protocolExternalCalls.set(c.id, { ...c, status: "cancelled", terminalizedAt: nowIso() });
+    }
+  }
+  const attempt = store.protocolAttempts.get(attemptId);
+  if (attempt && attempt.terminalizedAt === null) {
+    // Inconclusive, not failed: we do not know whether the provider did
+    // the work. 'timed_out' is the honest terminal label.
+    store.protocolAttempts.set(attempt.id, {
+      ...attempt,
+      status: "timed_out",
+      terminationReason: reasonCode,
+      terminalizedAt: nowIso(),
+      lastActivityAt: nowIso(),
+    });
+  }
+  // A terminalised attempt must stop being the current one.
+  const live = store.protocolExecutionJobs.get(job.id);
+  if (live && live.currentAttemptId === attemptId) {
+    store.protocolExecutionJobs.set(live.id, { ...live, currentAttemptId: null });
+  }
+  moveJobToNeedsReview(store, store.protocolExecutionJobs.get(job.id) ?? job, reasonCode, attemptId, externalCallId);
+}
+
 /**
  * 0056 — mirrors `public._move_job_to_needs_review`: the job transitions
  * and one alert lands, only for a job that was actually live.
@@ -3847,21 +3890,10 @@ export const memoryAdapter: DbAdapter = {
     };
     store.protocolExternalCalls.set(updatedCall.id, updatedCall);
 
-    if (input.outcome === "provider_outcome_unknown" && (job.status === "claimed" || job.status === "running")) {
-      store.protocolExecutionJobs.set(job.id, {
-        ...job,
-        status: "needs_review",
-        needsReviewReason: "perplexity_outcome_unknown",
-        updatedAt: now,
-      });
-      recordAlertEvent(store, {
-        projectId: job.projectId,
-        jobId: job.id,
-        eventType: "needs_review",
-        reasonCode: "perplexity_outcome_unknown",
-        sourceAttemptId: call.protocolAttemptId,
-        sourceExternalCallId: input.externalCallId,
-      });
+    if (input.outcome === "provider_outcome_unknown") {
+      closeUnknownOutcomeCore(
+        store, job, call.protocolAttemptId, input.externalCallId, "perplexity_outcome_unknown"
+      );
     }
 
     return { outcome: "RECEIPTED", externalCall: { ...updatedCall }, receipt: { ...receipt } };
@@ -4027,21 +4059,10 @@ export const memoryAdapter: DbAdapter = {
     };
     store.protocolExternalCalls.set(updatedCall.id, updatedCall);
 
-    if (input.outcome === "provider_outcome_unknown" && (job.status === "claimed" || job.status === "running")) {
-      store.protocolExecutionJobs.set(job.id, {
-        ...job,
-        status: "needs_review",
-        needsReviewReason: "analysis_outcome_unknown",
-        updatedAt: now,
-      });
-      recordAlertEvent(store, {
-        projectId: job.projectId,
-        jobId: job.id,
-        eventType: "needs_review",
-        reasonCode: "analysis_outcome_unknown",
-        sourceAttemptId: call.protocolAttemptId,
-        sourceExternalCallId: input.externalCallId,
-      });
+    if (input.outcome === "provider_outcome_unknown") {
+      closeUnknownOutcomeCore(
+        store, job, call.protocolAttemptId, input.externalCallId, "analysis_outcome_unknown"
+      );
     }
 
     return { outcome: "RECEIPTED", externalCall: { ...updatedCall }, receipt: { ...receipt } };
@@ -4337,6 +4358,78 @@ export const memoryAdapter: DbAdapter = {
     };
     store.protocolExecutionJobs.set(closed.id, closed);
     return { outcome: "ABORTED", attempt: { ...terminal }, job: { ...closed } };
+  },
+
+  async closeAttemptForParseFailureForJob(
+    input: CloseAttemptForParseFailureForJobInput
+  ): Promise<CloseAttemptForParseFailureForJobResult> {
+    const store = getStore();
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) {
+      return { outcome: "JOB_NOT_FOUND", attempt: null, job: null };
+    }
+    const attempt = store.protocolAttempts.get(input.attemptId);
+    if (!attempt || attempt.jobId !== job.id || attempt.projectId !== input.projectId) {
+      return { outcome: "ATTEMPT_NOT_OWNED_BY_JOB", attempt: null, job: { ...job } };
+    }
+    const call = store.protocolExternalCalls.get(input.externalCallId);
+    if (!call || call.projectId !== input.projectId || call.protocolAttemptId !== input.attemptId) {
+      return { outcome: "CALL_NOT_OWNED_BY_JOB", attempt: { ...attempt }, job: { ...job } };
+    }
+    // The durable mark is the precondition, never a side effect.
+    if (call.parseFailedAt === null || call.parseFailureCode === null) {
+      return { outcome: "PARSE_NOT_MARKED", attempt: { ...attempt }, job: { ...job } };
+    }
+
+    const callsOf = (statuses: readonly string[]) =>
+      [...store.protocolExternalCalls.values()].filter(
+        (c) =>
+          c.protocolAttemptId === input.attemptId &&
+          c.projectId === input.projectId &&
+          statuses.includes(c.status)
+      );
+
+    if (job.status === "needs_review" || attempt.terminalizedAt !== null) {
+      const whole =
+        job.status === "needs_review" &&
+        job.needsReviewReason === "analysis_parse_failed" &&
+        attempt.terminalizedAt !== null &&
+        attempt.status === "failed" &&
+        attempt.terminationReason === call.parseFailureCode &&
+        job.currentAttemptId === null &&
+        callsOf(["reserved", "in_progress"]).length === 0;
+      return {
+        outcome: whole ? "ALREADY_CLOSED" : "STATE_CONFLICT",
+        attempt: { ...attempt },
+        job: { ...job },
+      };
+    }
+    if (!jobFencingOk(job, input.claimToken)) {
+      return { outcome: "JOB_NOT_OWNED", attempt: { ...attempt }, job: { ...job } };
+    }
+    if (callsOf(["in_progress"]).length > 0) {
+      return { outcome: "CALL_STILL_IN_PROGRESS", attempt: { ...attempt }, job: { ...job } };
+    }
+
+    for (const c of callsOf(["reserved"])) {
+      store.protocolExternalCalls.set(c.id, { ...c, status: "cancelled", terminalizedAt: nowIso() });
+    }
+    const terminal = {
+      ...attempt,
+      status: "failed" as const,
+      terminationReason: call.parseFailureCode,
+      terminalizedAt: nowIso(),
+      lastActivityAt: nowIso(),
+    };
+    store.protocolAttempts.set(terminal.id, terminal);
+    const cleared = { ...job, currentAttemptId: null };
+    store.protocolExecutionJobs.set(cleared.id, cleared);
+    moveJobToNeedsReview(store, cleared, "analysis_parse_failed", input.attemptId, input.externalCallId);
+    return {
+      outcome: "CLOSED",
+      attempt: { ...terminal },
+      job: { ...store.protocolExecutionJobs.get(job.id)! },
+    };
   },
 
   async failProtocolExecutionJob(

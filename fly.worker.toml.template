@@ -22,8 +22,8 @@
 
 kill_signal = "SIGTERM"
 # Seconds. The entrypoint's cooperative shutdown is budgeted by
-# WORKER_GRACE_MS, whose default is 10000 ms; 30 leaves room for an
-# in-flight iteration to finish and stays far below Fly's 300 s ceiling.
+# WORKER_GRACE_MS, set explicitly below; 30 leaves room for an in-flight
+# iteration to finish and stays far below Fly's 300 s ceiling.
 kill_timeout = 30
 
 [build]
@@ -37,6 +37,12 @@ kill_timeout = 30
   # Required for the top-level check below to reach the process at all.
   WORKER_HEALTH_HOST = "0.0.0.0"
   WORKER_HEALTH_PORT = "8080"
+  # Stated rather than inherited. The worker's cooperative shutdown is
+  # budgeted by this value, and Fly kills the machine at kill_timeout: the
+  # budget must stay strictly inside that window or the stop is no longer
+  # cooperative. 10000 ms against 30 s leaves the invariant with room, and
+  # the contract now checks it numerically instead of trusting a default.
+  WORKER_GRACE_MS = "10000"
 
 # Top-level check, not an `http_service` check: this app serves no public
 # traffic, so there is no service to hang a check on. Fly's prober reaches

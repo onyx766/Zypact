@@ -7,7 +7,6 @@
 !package.json
 !package-lock.json
 !tsconfig.json
-!tsconfig.*.json
 !lib/
 !scripts/run-protocol-worker.ts
 

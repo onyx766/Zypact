@@ -60,9 +60,30 @@ function code(src: string, comment: string): string[] {
   assert("exactly two build stages", froms.length === 2, froms.join(" | "));
   assert("both stages pin the same exact base image",
     froms.every((l) => l.includes(BASE)), froms.join(" | "));
-  assert("no floating tag anywhere",
-    !/FROM\s+node:(latest|\d+(\.\d+)?)(\s|-|$)/i.test(src)
-      || froms.every((l) => l.includes(BASE)), froms.join(" | "));
+
+  // A tag is mutable: `node:24.19.0-bookworm-slim` can be repushed, and a
+  // build whose base moved is a build whose earlier proofs no longer
+  // describe it. Both stages must be pinned by digest, and by the SAME one,
+  // or the runtime image could inherit node_modules built against another
+  // base entirely.
+  const digests = froms.map((l) => (l.match(/@(sha256:[0-9a-f]{64})/) ?? [])[1]);
+  assert("both stages are pinned by digest",
+    digests.every((d) => typeof d === "string"), froms.join(" | "));
+  assert("both stages pin the SAME digest",
+    digests[0] !== undefined && digests[0] === digests[1],
+    digests.join(" vs "));
+  assert("each FROM keeps the human-readable tag alongside its digest",
+    froms.every((l) => new RegExp(`${BASE}@sha256:[0-9a-f]{64}`).test(l)),
+    froms.join(" | "));
+  // Negative proof: an unpinned FROM would fail the check above.
+  const unpinned = src.replace(/@sha256:[0-9a-f]{64}/g, "");
+  assert("an unpinned FROM would fail the digest check",
+    (unpinned.match(/@sha256:[0-9a-f]{64}/g) ?? []).length === 0);
+  // Negative proof: two different digests must not pass.
+  const mixed = [`FROM ${BASE}@sha256:${"a".repeat(64)}`, `FROM ${BASE}@sha256:${"b".repeat(64)}`]
+    .map((l) => (l.match(/@(sha256:[0-9a-f]{64})/) ?? [])[1]);
+  assert("two different digests would fail the same-digest check",
+    mixed[0] !== mixed[1]);
 
   // The production install lives in its own stage, so the runtime image
   // inherits node_modules without the npm cache or the build metadata.
@@ -145,8 +166,11 @@ function code(src: string, comment: string): string[] {
     lines[0] === "*", lines[0] ?? "empty");
 
   const allowed = lines.filter((l) => l.startsWith("!")).map((l) => l.slice(1));
+  // Exactly the paths the image needs. `tsconfig.*.json` was admitted for a
+  // file that does not exist; an allow-list entry with nothing behind it is
+  // a claim the repository does not support, so it is gone.
   const EXPECTED = [
-    "package.json", "package-lock.json", "tsconfig.json", "tsconfig.*.json",
+    "package.json", "package-lock.json", "tsconfig.json",
     "lib/", "scripts/run-protocol-worker.ts",
   ];
   assert("the allow-list is exactly the files the image needs",
@@ -185,6 +209,38 @@ function code(src: string, comment: string): string[] {
   assert("kill_timeout is 30",
     lines.some((l) => /^kill_timeout\s*=\s*30$/.test(l)));
 
+  // The invariant, checked as ARITHMETIC rather than as prose. Fly kills the
+  // machine kill_timeout seconds after the signal; the worker's cooperative
+  // shutdown is budgeted by WORKER_GRACE_MS. If the budget reaches or passes
+  // the window, the stop stops being cooperative — the process is killed
+  // mid-iteration and the final event never lands. Both numbers are read
+  // from this file, so neither can drift without the other being re-checked.
+  const killTimeoutS = Number.parseInt(
+    (lines.find((l) => /^kill_timeout\s*=/.test(l)) ?? "").split("=")[1] ?? "", 10);
+  const graceLine = lines.find((l) => /^WORKER_GRACE_MS\s*=/.test(l));
+  const graceMs = Number.parseInt(
+    ((graceLine ?? "").match(/"(\d+)"/) ?? [])[1] ?? "", 10);
+  assert("[env] states WORKER_GRACE_MS explicitly, as a quoted integer",
+    graceLine !== undefined && Number.isSafeInteger(graceMs) && graceMs > 0,
+    graceLine ?? "absent");
+  assert("kill_timeout parses as a positive integer number of seconds",
+    Number.isSafeInteger(killTimeoutS) && killTimeoutS > 0, String(killTimeoutS));
+  assert("WORKER_GRACE_MS is strictly inside kill_timeout x 1000",
+    graceMs < killTimeoutS * 1000,
+    `${graceMs} ms vs ${killTimeoutS * 1000} ms`);
+  // Negative proofs: equality and overrun must both fail, and a missing
+  // value must not be read as zero.
+  assert("a grace equal to the window would fail", !(killTimeoutS * 1000 < killTimeoutS * 1000));
+  assert("a grace above the window would fail", !(killTimeoutS * 1000 + 1 < killTimeoutS * 1000));
+  // A template with no WORKER_GRACE_MS line must not be read as zero, which
+  // would satisfy `< kill_timeout * 1000` while proving nothing.
+  const withoutGrace = lines.filter((l) => !/^WORKER_GRACE_MS\s*=/.test(l));
+  const absentGraceMs = Number.parseInt(
+    ((withoutGrace.find((l) => /^WORKER_GRACE_MS\s*=/.test(l)) ?? "").match(/"(\d+)"/) ?? [])[1] ?? "",
+    10);
+  assert("a missing WORKER_GRACE_MS parses as NaN, never as zero",
+    Number.isNaN(absentGraceMs), String(absentGraceMs));
+
   assert("the build uses Dockerfile.worker",
     lines.includes("[build]") && lines.some((l) => /^dockerfile\s*=\s*"Dockerfile\.worker"$/.test(l)));
 
@@ -193,6 +249,7 @@ function code(src: string, comment: string): string[] {
     ['WORKER_EXECUTION_MODE', 'disabled'],
     ['WORKER_HEALTH_HOST', '0.0.0.0'],
     ['WORKER_HEALTH_PORT', '8080'],
+    ['WORKER_GRACE_MS', '10000'],
   ] as const;
   assert("[env] exists", lines.includes("[env]"));
   for (const [k, v] of ENV) {
@@ -295,15 +352,44 @@ function code(src: string, comment: string): string[] {
   }
   assert("CI runs this contract's static half",
     wf.includes("npm run test:m0-worker-hosting-contract"));
-  // The CI step must NOT opt into Docker: the runner builds no image here.
-  // Read the YAML, not its comments — the step comment says exactly that the
-  // variable stays unset, and that sentence is worth keeping.
-  const wfCode = code(wf, "#").join("\n");
-  assert("CI never sets the Docker opt-in variable",
-    !wfCode.includes("ZYPACT_M0_HOSTING_DOCKER_TEST"),
-    wfCode.split("\n").filter((l) => l.includes("ZYPACT")).join(" | "));
-  assert("CI runs no docker command",
-    !/^\s*(run:|-)\s*.*\bdocker\b/m.test(wfCode), "docker referenced in a step");
+  // CI now runs the Docker half — on a natively amd64 runner, which is the
+  // architecture Fly uses. What must be pinned is WHERE the opt-in lives.
+  // Read the raw YAML lines here, not the comment-stripped join: indentation
+  // is the whole point, and `code()` trims it away.
+  const wfLines = wf.split("\n").filter((l) => l.trim() !== "" && !l.trim().startsWith("#"));
+  const optIns = wfLines.filter((l) => l.includes("ZYPACT_M0_HOSTING_DOCKER_TEST"));
+  assert("the Docker opt-in appears exactly once in the YAML",
+    optIns.length === 1, optIns.join(" | ") || "absent");
+  assert("it sets the variable to 1",
+    /^\s*ZYPACT_M0_HOSTING_DOCKER_TEST:\s*"1"\s*$/.test(optIns[0] ?? ""), optIns[0] ?? "absent");
+
+  // Step-level env is indented deeper than a job key; workflow-level `env:`
+  // sits at column 0 and job-level `env:` at four spaces. Anything shallower
+  // than a step's own keys would leak the opt-in into every other step.
+  const indent = (l: string): number => l.length - l.trimStart().length;
+  assert("the opt-in is indented as a step-level env entry, not job or workflow level",
+    indent(optIns[0] ?? "") >= 10, `indent=${indent(optIns[0] ?? "")}`);
+  const optIdx = wfLines.indexOf(optIns[0]);
+  const envHeader = [...wfLines.slice(0, optIdx)].reverse().find((l) => /^\s*env:\s*$/.test(l));
+  assert("its `env:` header is a step key, at eight spaces",
+    envHeader !== undefined && indent(envHeader) === 8, envHeader ?? "no env: header above it");
+  // The nearest preceding `- name:` must be the hosting contract step.
+  const owner = [...wfLines.slice(0, optIdx)].reverse().find((l) => /^\s*- name:/.test(l));
+  assert("it belongs to the hosting artefacts step and no other",
+    (owner ?? "").includes("Run the hosting artefacts contract"), owner ?? "no step above it");
+
+  // Neither the workflow-level nor a job-level `env:` may carry it.
+  const topEnvIdx = wfLines.findIndex((l) => /^env:\s*$/.test(l));
+  const topEnvBlock = topEnvIdx === -1 ? [] :
+    wfLines.slice(topEnvIdx + 1).filter((l, i, a) => a.slice(0, i + 1).every((x) => indent(x) >= 2));
+  assert("the workflow-level env block does not carry the opt-in",
+    !topEnvBlock.some((l) => l.includes("ZYPACT_M0_HOSTING_DOCKER_TEST")),
+    topEnvBlock.join(" | "));
+  assert("no job-level env block carries it",
+    !wfLines.some((l, i) => /^    env:\s*$/.test(l)
+      && wfLines.slice(i + 1, i + 8).some((n) => n.includes("ZYPACT_M0_HOSTING_DOCKER_TEST"))));
+  assert("CI still runs no docker command of its own",
+    !wfLines.some((l) => /^\s*run:.*\bdocker\b/.test(l)), "docker in a run: line");
 }
 
 // ═══════════════════════════════════════════════ 5. the Docker half

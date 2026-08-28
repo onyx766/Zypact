@@ -14,7 +14,15 @@
 # ----------------------------------------------------------------- deps
 # A separate stage, so the production install is resolved once and the final
 # image inherits node_modules without the npm cache or the build metadata.
-FROM node:24.19.0-bookworm-slim AS deps
+#
+# Both stages pin the SAME digest, and it is the multi-architecture OCI index
+# rather than one platform's manifest: `--platform` still selects, but the
+# tag can no longer move underneath the build. A tag is mutable — the same
+# `node:24.19.0-bookworm-slim` can be repushed — and a build that silently
+# changes base is a build whose earlier proofs no longer describe it. The
+# digest also freezes the base image's own `docker-entrypoint.sh`, which the
+# `ENTRYPOINT []` reset below already neutralises.
+FROM node:24.19.0-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 # --omit=dev, deliberately: `tsx` is a runtime dependency precisely so that
@@ -22,7 +30,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 # -------------------------------------------------------------- runtime
-FROM node:24.19.0-bookworm-slim AS runtime
+FROM node:24.19.0-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df AS runtime
 WORKDIR /app
 
 # Defaults that make the image inert on its own. A host that forgets every

@@ -25,6 +25,10 @@ on:
       - "lib/protocol-worker/**"
       - "scripts/run-protocol-worker.ts"
       - "scripts/test-m0-worker-execution-gate.ts"
+      - "Dockerfile.worker"
+      - ".dockerignore"
+      - "fly.worker.toml.template"
+      - "scripts/test-m0-worker-hosting-contract.ts"
   workflow_dispatch:
 
 permissions:
@@ -70,6 +74,11 @@ jobs:
 
       - name: Run the execution gate contract
         run: npm run test:m0-worker-execution-gate
+
+      # Static half only. The runner builds no image, starts no container
+      # and contacts no registry: ZYPACT_M0_HOSTING_DOCKER_TEST stays unset.
+      - name: Run the hosting artefacts contract
+        run: npm run test:m0-worker-hosting-contract
 
       - name: Typecheck
         run: npm run typecheck

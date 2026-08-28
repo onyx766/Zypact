@@ -1,0 +1,27 @@
+# Strict allow-list: deny the whole context, then re-admit only what the
+# worker image needs. A file that is not named below cannot reach the build,
+# which is what keeps `.env*`, `.git`, backups and Supabase state out of the
+# image by construction rather than by vigilance.
+*
+
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.*.json
+!lib/
+!scripts/run-protocol-worker.ts
+
+# Re-denied explicitly, even though `*` already excludes them. These are the
+# paths whose accidental inclusion would matter most, and an explicit line
+# survives a future edit to the allow-list above.
+.git/
+.github/
+.env
+.env.*
+.next/
+node_modules/
+supabase/
+*.bak
+*.backup
+*.sql
+*.log

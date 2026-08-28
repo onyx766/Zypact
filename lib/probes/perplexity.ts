@@ -351,7 +351,11 @@ export async function runPerplexityProbe(
     throw new PerplexityProbeFailure("Perplexity returned an empty answer.", {
       reason: "empty_answer",
       httpStatus: res.status,
-      errorBody: rawResponseBody.slice(0, 500),
+      // The hash covers the WHOLE body, so the body stored beside it must
+      // be the whole body too. Truncating to 500 characters produced a
+      // pair that could never verify — and a CHECK that verifies the hash
+      // against the stored text rejects it outright.
+      errorBody: rawResponseBody,
       errorBodySha256: rawResponseBodySha256,
       latencyMs,
       providerRequestId,

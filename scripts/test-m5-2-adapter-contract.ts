@@ -35,6 +35,9 @@ import type {
   DbAdapter,
 } from "@/lib/db/types";
 
+const MARK_BODY_PERPLEXITY = JSON.stringify({ model: "sonar", messages: [] });
+const MARK_BODY_ANALYSIS = JSON.stringify({ model: "gpt-4o-mini", messages: [] });
+
 let checks = 0;
 let failures = 0;
 function check(name: string, cond: boolean, detail = ""): void {
@@ -308,8 +311,7 @@ async function main(): Promise<void> {
     claimToken,
     projectId: project.id,
     externalCallId: perplexityCallId,
-    probeRunId,
-  });
+    probeRunId, callKind: "perplexity", requestBody: MARK_BODY_PERPLEXITY, requestBodySha256: sha256Hex(MARK_BODY_PERPLEXITY) });
   check(
     "sent: perplexity call marked sent before any provider call",
     sentP.outcome === "SENT" && sentP.externalCall?.requestSentAt !== null
@@ -341,16 +343,15 @@ async function main(): Promise<void> {
       receiptP.receipt?.rawResponseSha256 === sha256Hex(perplexityAnswerText)
   );
 
+  const analysisRequestText = JSON.stringify({ model: "gpt-4o-mini", prompt: "fixture analysis request" });
   const sentA = await db.markExternalCallSentForJob({
     jobId,
     claimToken,
     projectId: project.id,
     externalCallId: analysisCallId,
-    probeRunId,
-  });
+    probeRunId, callKind: "analysis", requestBody: analysisRequestText, requestBodySha256: sha256Hex(analysisRequestText) });
   check("sent: analysis call marked sent", sentA.outcome === "SENT");
   const analysisOutputText = JSON.stringify({ verdict: "won", clientMentioned: true });
-  const analysisRequestText = JSON.stringify({ model: "gpt-4o-mini", prompt: "fixture analysis request" });
   const receiptA = await db.recordAnalysisCallReceiptForJob({
     jobId,
     claimToken,
@@ -639,8 +640,7 @@ async function main(): Promise<void> {
     claimToken: fullRetryToken,
     projectId: fullRetryProjectId,
     externalCallId: must(admit1.perplexityCall, "part B perplexity call").id,
-    probeRunId,
-  });
+    probeRunId, callKind: "perplexity", requestBody: MARK_BODY_PERPLEXITY, requestBodySha256: sha256Hex(MARK_BODY_PERPLEXITY) });
   check(
     "scoping: an external call belonging to a DIFFERENT job is refused -> CALL_NOT_OWNED_BY_JOB or NOT_FOUND, never SENT",
     crossJobExternalCall.outcome === "CALL_NOT_OWNED_BY_JOB" || crossJobExternalCall.outcome === "NOT_FOUND"
@@ -754,14 +754,14 @@ async function main(): Promise<void> {
     const probeRunId = must(start.probeRun, "probe run").id;
     const answerText = `Fixture Perplexity answer for attempt ${attemptId}.`;
     const outputText = JSON.stringify({ verdict: "won", attemptId });
-    await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: perplexityCallId, probeRunId });
+    await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: perplexityCallId, probeRunId, callKind: "perplexity", requestBody: MARK_BODY_PERPLEXITY, requestBodySha256: sha256Hex(MARK_BODY_PERPLEXITY) });
     await db.recordProviderCallReceiptForJob({
       jobId, claimToken, projectId, externalCallId: perplexityCallId, probeRunId, outcome: "success",
       httpStatus: 200, providerRequestId: "req-x", rawResponseSha256: sha256Hex(answerText), latencyMs: 400,
       rawResponseBody: answerText,
     });
-    await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: analysisCallId, probeRunId });
     const requestText = `Fixture analysis request for attempt ${attemptId}.`;
+    await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: analysisCallId, probeRunId, callKind: "analysis", requestBody: requestText, requestBodySha256: sha256Hex(requestText) });
     await db.recordAnalysisCallReceiptForJob({
       jobId, claimToken, projectId, externalCallId: analysisCallId, probeRunId, outcome: "success",
       provider: "openai", model: "gpt-4o-mini", usedMock: false,
@@ -955,10 +955,10 @@ async function main(): Promise<void> {
     const frProbeRunId = must(frStart.probeRun, "full-retry-slot probe run").id;
     const frPerplexityCallId = must(frAdmit.perplexityCall, "full-retry-slot perplexity call").id;
     const frAnalysisCallId = must(frAdmit.analysisCall, "full-retry-slot analysis call").id;
-    await db.markExternalCallSentForJob({ jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id, externalCallId: frPerplexityCallId, probeRunId: frProbeRunId });
+    await db.markExternalCallSentForJob({ jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id, externalCallId: frPerplexityCallId, probeRunId: frProbeRunId, callKind: "perplexity", requestBody: MARK_BODY_PERPLEXITY, requestBodySha256: sha256Hex(MARK_BODY_PERPLEXITY) });
     await db.recordProviderCallReceiptForJob({ jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id, externalCallId: frPerplexityCallId, probeRunId: frProbeRunId, outcome: "provider_error" });
-    await db.markExternalCallSentForJob({ jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id, externalCallId: frAnalysisCallId, probeRunId: frProbeRunId });
     const frRequestText = "Fixture analysis request for the full-retry-slot's own analysis leg.";
+    await db.markExternalCallSentForJob({ jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id, externalCallId: frAnalysisCallId, probeRunId: frProbeRunId, callKind: "analysis", requestBody: frRequestText, requestBodySha256: sha256Hex(frRequestText) });
     await db.recordAnalysisCallReceiptForJob({
       jobId: frJobId, claimToken: frClaimToken, projectId: frProject.id, externalCallId: frAnalysisCallId, probeRunId: frProbeRunId, outcome: "provider_error",
       requestSha256: sha256Hex(frRequestText), rawRequestBody: frRequestText,
@@ -1048,12 +1048,10 @@ async function main(): Promise<void> {
     const d26ProbeRunId = must(d26Start.probeRun, "d026-violations probe run").id;
     await db.markExternalCallSentForJob({
       jobId: d26JobId, claimToken: d26ClaimToken, projectId: d26ProjectId,
-      externalCallId: d26PerplexityCallId, probeRunId: d26ProbeRunId,
-    });
+      externalCallId: d26PerplexityCallId, probeRunId: d26ProbeRunId, callKind: "perplexity", requestBody: MARK_BODY_PERPLEXITY, requestBodySha256: sha256Hex(MARK_BODY_PERPLEXITY) });
     await db.markExternalCallSentForJob({
       jobId: d26JobId, claimToken: d26ClaimToken, projectId: d26ProjectId,
-      externalCallId: d26AnalysisCallId, probeRunId: d26ProbeRunId,
-    });
+      externalCallId: d26AnalysisCallId, probeRunId: d26ProbeRunId, callKind: "analysis", requestBody: MARK_BODY_ANALYSIS, requestBodySha256: sha256Hex(MARK_BODY_ANALYSIS) });
 
     let pairingThrew = false;
     try {
@@ -1406,10 +1404,10 @@ async function main(): Promise<void> {
     const dsPerplexityCall1Id = must(dsAdmit1.perplexityCall, "slot 1 perplexity call").id;
     const dsAnalysisCall1Id = must(dsAdmit1.analysisCall, "slot 1 analysis call").id;
     const dsProbeRun1Id = must(dsStart1.probeRun, "slot 1 probe run").id;
-    await db.markExternalCallSentForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsPerplexityCall1Id, probeRunId: dsProbeRun1Id });
+    await db.markExternalCallSentForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsPerplexityCall1Id, probeRunId: dsProbeRun1Id, callKind: "perplexity", requestBody: MARK_BODY_PERPLEXITY, requestBodySha256: sha256Hex(MARK_BODY_PERPLEXITY) });
     await db.recordProviderCallReceiptForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsPerplexityCall1Id, probeRunId: dsProbeRun1Id, outcome: "provider_error" });
-    await db.markExternalCallSentForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsAnalysisCall1Id, probeRunId: dsProbeRun1Id });
     const dsRequestText1 = "Fixture analysis request for d026-same-batch slot 1.";
+    await db.markExternalCallSentForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsAnalysisCall1Id, probeRunId: dsProbeRun1Id, callKind: "analysis", requestBody: dsRequestText1, requestBodySha256: sha256Hex(dsRequestText1) });
     await db.recordAnalysisCallReceiptForJob({
       jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsAnalysisCall1Id, probeRunId: dsProbeRun1Id, outcome: "provider_error",
       requestSha256: sha256Hex(dsRequestText1), rawRequestBody: dsRequestText1,
@@ -1496,13 +1494,13 @@ async function main(): Promise<void> {
     const dsPerplexityCall2Id = must(dsAdmit2.perplexityCall, "slot 2 perplexity call").id;
     const dsAnalysisCall2Id = must(dsAdmit2.analysisCall, "slot 2 analysis call").id;
     const dsProbeRun2Id = must(dsStart2.probeRun, "slot 2 probe run").id;
-    await db.markExternalCallSentForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsPerplexityCall2Id, probeRunId: dsProbeRun2Id });
+    await db.markExternalCallSentForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsPerplexityCall2Id, probeRunId: dsProbeRun2Id, callKind: "perplexity", requestBody: MARK_BODY_PERPLEXITY, requestBodySha256: sha256Hex(MARK_BODY_PERPLEXITY) });
     await db.recordProviderCallReceiptForJob({
       jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsPerplexityCall2Id, probeRunId: dsProbeRun2Id, outcome: "success",
       rawResponseSha256: sha256Hex("d026-same-batch-answer"), rawResponseBody: "d026-same-batch-answer",
     });
-    await db.markExternalCallSentForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsAnalysisCall2Id, probeRunId: dsProbeRun2Id });
     const dsRequestText2 = "Fixture analysis request for d026-same-batch slot 2.";
+    await db.markExternalCallSentForJob({ jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsAnalysisCall2Id, probeRunId: dsProbeRun2Id, callKind: "analysis", requestBody: dsRequestText2, requestBodySha256: sha256Hex(dsRequestText2) });
     await db.recordAnalysisCallReceiptForJob({
       jobId: dsJob.id, claimToken: dsClaimTokenBox, projectId: dsProject.id, externalCallId: dsAnalysisCall2Id, probeRunId: dsProbeRun2Id, outcome: "provider_error",
       requestSha256: sha256Hex(dsRequestText2), rawRequestBody: dsRequestText2,
@@ -1595,7 +1593,8 @@ async function main(): Promise<void> {
       })).outcome === "NOT_ELIGIBLE"
     );
 
-    await db.markExternalCallSentForJob({ jobId: mpJobId, claimToken: mpClaimToken, projectId: mpProjectId, externalCallId: mpAnalysisCallId, probeRunId: mpProbeRunId });
+    const mpRequestText = "Fixture analysis request for d027-mark-parse-failed.";
+    await db.markExternalCallSentForJob({ jobId: mpJobId, claimToken: mpClaimToken, projectId: mpProjectId, externalCallId: mpAnalysisCallId, probeRunId: mpProbeRunId, callKind: "analysis", requestBody: mpRequestText, requestBodySha256: sha256Hex(mpRequestText) });
     check(
       "NOT_ELIGIBLE: the analysis call is 'in_progress' (sent, no receipt yet)",
       (await db.markAnalysisParseFailedForJob({
@@ -1604,7 +1603,6 @@ async function main(): Promise<void> {
       })).outcome === "NOT_ELIGIBLE"
     );
 
-    const mpRequestText = "Fixture analysis request for d027-mark-parse-failed.";
     const mpOutputText = "not valid json for the schema -- this is the parse-failure scenario";
     await db.recordAnalysisCallReceiptForJob({
       jobId: mpJobId, claimToken: mpClaimToken, projectId: mpProjectId, externalCallId: mpAnalysisCallId, probeRunId: mpProbeRunId,
@@ -1653,8 +1651,8 @@ async function main(): Promise<void> {
       platform: "perplexity", probeMode: "simulated",
     });
     const prProbeRunId = must(prStart.probeRun, "d027-pr probe run").id;
-    await db.markExternalCallSentForJob({ jobId: prJobId, claimToken: prClaimToken, projectId: prProjectId, externalCallId: prAnalysisCallId, probeRunId: prProbeRunId });
     const prRequestText = "Fixture analysis request for d027-probe-result-exists.";
+    await db.markExternalCallSentForJob({ jobId: prJobId, claimToken: prClaimToken, projectId: prProjectId, externalCallId: prAnalysisCallId, probeRunId: prProbeRunId, callKind: "analysis", requestBody: prRequestText, requestBodySha256: sha256Hex(prRequestText) });
     const prOutputText = "invalid json output";
     await db.recordAnalysisCallReceiptForJob({
       jobId: prJobId, claimToken: prClaimToken, projectId: prProjectId, externalCallId: prAnalysisCallId, probeRunId: prProbeRunId,
@@ -1700,13 +1698,13 @@ async function main(): Promise<void> {
     // requires the Perplexity leg completed+receipted before it will ever
     // look at the analysis leg's own eligibility -- completed here first,
     // exactly as every other retry-analysis fixture in this file already does.
-    await db.markExternalCallSentForJob({ jobId: rpJobId, claimToken: rpClaimToken, projectId: rpProjectId, externalCallId: rpPerplexityCallId, probeRunId: rpProbeRunId });
+    await db.markExternalCallSentForJob({ jobId: rpJobId, claimToken: rpClaimToken, projectId: rpProjectId, externalCallId: rpPerplexityCallId, probeRunId: rpProbeRunId, callKind: "perplexity", requestBody: MARK_BODY_PERPLEXITY, requestBodySha256: sha256Hex(MARK_BODY_PERPLEXITY) });
     await db.recordProviderCallReceiptForJob({
       jobId: rpJobId, claimToken: rpClaimToken, projectId: rpProjectId, externalCallId: rpPerplexityCallId, probeRunId: rpProbeRunId,
       outcome: "success", rawResponseSha256: sha256Hex("d027-retry-perplexity-answer"), rawResponseBody: "d027-retry-perplexity-answer",
     });
-    await db.markExternalCallSentForJob({ jobId: rpJobId, claimToken: rpClaimToken, projectId: rpProjectId, externalCallId: rpAnalysisCallId, probeRunId: rpProbeRunId });
     const rpRequestText = "Fixture analysis request for d027-retry-parse-repair.";
+    await db.markExternalCallSentForJob({ jobId: rpJobId, claimToken: rpClaimToken, projectId: rpProjectId, externalCallId: rpAnalysisCallId, probeRunId: rpProbeRunId, callKind: "analysis", requestBody: rpRequestText, requestBodySha256: sha256Hex(rpRequestText) });
     const rpOutputText = "not valid json";
     await db.recordAnalysisCallReceiptForJob({
       jobId: rpJobId, claimToken: rpClaimToken, projectId: rpProjectId, externalCallId: rpAnalysisCallId, probeRunId: rpProbeRunId,
@@ -1771,13 +1769,13 @@ async function main(): Promise<void> {
       platform: "perplexity", probeMode: "simulated",
     });
     const rp2ProbeRunId = must(rp2Start.probeRun, "d027-retry2 probe run").id;
-    await db.markExternalCallSentForJob({ jobId: rp2JobId, claimToken: rp2ClaimToken, projectId: rp2ProjectId, externalCallId: rp2PerplexityCallId, probeRunId: rp2ProbeRunId });
+    await db.markExternalCallSentForJob({ jobId: rp2JobId, claimToken: rp2ClaimToken, projectId: rp2ProjectId, externalCallId: rp2PerplexityCallId, probeRunId: rp2ProbeRunId, callKind: "perplexity", requestBody: MARK_BODY_PERPLEXITY, requestBodySha256: sha256Hex(MARK_BODY_PERPLEXITY) });
     await db.recordProviderCallReceiptForJob({
       jobId: rp2JobId, claimToken: rp2ClaimToken, projectId: rp2ProjectId, externalCallId: rp2PerplexityCallId, probeRunId: rp2ProbeRunId,
       outcome: "success", rawResponseSha256: sha256Hex("d027-retry2-perplexity-answer"), rawResponseBody: "d027-retry2-perplexity-answer",
     });
-    await db.markExternalCallSentForJob({ jobId: rp2JobId, claimToken: rp2ClaimToken, projectId: rp2ProjectId, externalCallId: rp2AnalysisCallId, probeRunId: rp2ProbeRunId });
     const rp2RequestText = "Fixture analysis request for d027-retry-probe-result-exists.";
+    await db.markExternalCallSentForJob({ jobId: rp2JobId, claimToken: rp2ClaimToken, projectId: rp2ProjectId, externalCallId: rp2AnalysisCallId, probeRunId: rp2ProbeRunId, callKind: "analysis", requestBody: rp2RequestText, requestBodySha256: sha256Hex(rp2RequestText) });
     const rp2OutputText = "still not valid json";
     await db.recordAnalysisCallReceiptForJob({
       jobId: rp2JobId, claimToken: rp2ClaimToken, projectId: rp2ProjectId, externalCallId: rp2AnalysisCallId, probeRunId: rp2ProbeRunId,
@@ -1827,7 +1825,7 @@ async function main(): Promise<void> {
       platform: "perplexity", probeMode: "simulated",
     });
     const mkProbeRunId = must(mkStart.probeRun, "d027-mock probe run").id;
-    await db.markExternalCallSentForJob({ jobId: mkJobId, claimToken: mkClaimToken, projectId: mkProjectId, externalCallId: mkAnalysisCallId, probeRunId: mkProbeRunId });
+    await db.markExternalCallSentForJob({ jobId: mkJobId, claimToken: mkClaimToken, projectId: mkProjectId, externalCallId: mkAnalysisCallId, probeRunId: mkProbeRunId, callKind: "analysis", requestBody: MARK_BODY_ANALYSIS, requestBodySha256: sha256Hex(MARK_BODY_ANALYSIS) });
 
     let usedMockFalseNoRequestThrew = false;
     try {
@@ -2355,8 +2353,7 @@ async function main(): Promise<void> {
   rpcCalls = [];
   nextRpcResponse = { data: { status: "SENT", external_call: { ...CALL_ROW("perplexity"), status: "in_progress", request_sent_at: "2026-01-01T00:00:01.000Z", probe_run_id: "run1" } }, error: null };
   await supabaseAdapter.markExternalCallSentForJob({
-    jobId: "j1", claimToken: "tok", projectId: "p1", externalCallId: "call-perplexity", probeRunId: "run1",
-  });
+    jobId: "j1", claimToken: "tok", projectId: "p1", externalCallId: "call-perplexity", probeRunId: "run1", callKind: "perplexity", requestBody: MARK_BODY_PERPLEXITY, requestBodySha256: sha256Hex(MARK_BODY_PERPLEXITY) });
   check(
     "Supabase markExternalCallSentForJob: correct RPC name and params",
     rpcCalls[0]!.fn === "mark_external_call_sent_for_job" &&
@@ -2781,11 +2778,11 @@ async function buildFailedAttemptFixture(
     platform: "perplexity", probeMode: "simulated",
   });
   const probeRunId = must(start.probeRun, `${tag} probe run`).id;
-  await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: perplexityCall.id, probeRunId });
+  await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: perplexityCall.id, probeRunId, callKind: "perplexity", requestBody: MARK_BODY_PERPLEXITY, requestBodySha256: sha256Hex(MARK_BODY_PERPLEXITY) });
   await db.recordProviderCallReceiptForJob({
     jobId, claimToken, projectId, externalCallId: perplexityCall.id, probeRunId, outcome: "provider_error",
   });
-  await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: analysisCall.id, probeRunId });
+  await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: analysisCall.id, probeRunId, callKind: "analysis", requestBody: `${tag}-analysis-request`, requestBodySha256: sha256Hex(`${tag}-analysis-request`) });
   await db.recordAnalysisCallReceiptForJob({
     jobId, claimToken, projectId, externalCallId: analysisCall.id, probeRunId, outcome: "provider_error",
     requestSha256: sha256Hex(`${tag}-analysis-request`), rawRequestBody: `${tag}-analysis-request`,
@@ -2813,12 +2810,12 @@ async function buildAnalysisRetryFixture(
     platform: "perplexity", probeMode: "simulated",
   });
   const probeRunId = must(start.probeRun, `${tag} probe run`).id;
-  await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: perplexityCall.id, probeRunId });
+  await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: perplexityCall.id, probeRunId, callKind: "perplexity", requestBody: MARK_BODY_PERPLEXITY, requestBodySha256: sha256Hex(MARK_BODY_PERPLEXITY) });
   await db.recordProviderCallReceiptForJob({
     jobId, claimToken, projectId, externalCallId: perplexityCall.id, probeRunId, outcome: "success",
     rawResponseSha256: sha256Hex(`${tag}-perplexity-answer`), rawResponseBody: `${tag}-perplexity-answer`,
   });
-  await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: analysisCall.id, probeRunId });
+  await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: analysisCall.id, probeRunId, callKind: "analysis", requestBody: `${tag}-analysis-request`, requestBodySha256: sha256Hex(`${tag}-analysis-request`) });
   await db.recordAnalysisCallReceiptForJob({
     jobId, claimToken, projectId, externalCallId: analysisCall.id, probeRunId, outcome: "provider_error",
     requestSha256: sha256Hex(`${tag}-analysis-request`), rawRequestBody: `${tag}-analysis-request`,
@@ -2852,12 +2849,12 @@ async function buildCompletedAnalysisFixture(
     platform: "perplexity", probeMode: "simulated",
   });
   const probeRunId = must(start.probeRun, `${tag} probe run`).id;
-  await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: perplexityCall.id, probeRunId });
+  await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: perplexityCall.id, probeRunId, callKind: "perplexity", requestBody: MARK_BODY_PERPLEXITY, requestBodySha256: sha256Hex(MARK_BODY_PERPLEXITY) });
   await db.recordProviderCallReceiptForJob({
     jobId, claimToken, projectId, externalCallId: perplexityCall.id, probeRunId, outcome: "success",
     rawResponseSha256: sha256Hex(`${tag}-perplexity-answer`), rawResponseBody: `${tag}-perplexity-answer`,
   });
-  await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: analysisCall.id, probeRunId });
+  await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: analysisCall.id, probeRunId, callKind: "analysis", requestBody: `${tag}-analysis-request`, requestBodySha256: sha256Hex(`${tag}-analysis-request`) });
   await db.recordAnalysisCallReceiptForJob({
     jobId, claimToken, projectId, externalCallId: analysisCall.id, probeRunId, outcome: "success",
     requestSha256: sha256Hex(`${tag}-analysis-request`), rawRequestBody: `${tag}-analysis-request`,
@@ -2884,7 +2881,7 @@ async function buildNeedsReviewFixture(
     platform: "perplexity", probeMode: "simulated",
   });
   const probeRunId = must(start.probeRun, `${tag} probe run`).id;
-  await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: perplexityCall.id, probeRunId });
+  await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: perplexityCall.id, probeRunId, callKind: "perplexity", requestBody: MARK_BODY_PERPLEXITY, requestBodySha256: sha256Hex(MARK_BODY_PERPLEXITY) });
   await db.recordProviderCallReceiptForJob({
     jobId, claimToken, projectId, externalCallId: perplexityCall.id, probeRunId, outcome: "provider_outcome_unknown",
   });
@@ -2911,7 +2908,7 @@ async function buildAmbiguousFixture(
   });
   const probeRunId = must(start.probeRun, `${tag} probe run`).id;
   // Sent, then never receipted -- exactly the crash/reclaim shape.
-  await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: perplexityCall.id, probeRunId });
+  await db.markExternalCallSentForJob({ jobId, claimToken, projectId, externalCallId: perplexityCall.id, probeRunId, callKind: "perplexity", requestBody: MARK_BODY_PERPLEXITY, requestBodySha256: sha256Hex(MARK_BODY_PERPLEXITY) });
   return { jobId, claimToken, projectId };
 }
 

@@ -5,6 +5,10 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 // adapter still generates its own, because it has no SQL layer.
 import { snapshotReportWriteMode } from "./snapshot-write-mode";
 import type {
+  AbortAttemptAndFailJobForJobInput,
+  AbortAttemptAndFailJobForJobResult,
+  CloseAttemptForParseFailureForJobInput,
+  CloseAttemptForParseFailureForJobResult,
   AdmitAndReserveAttemptInput,
   AdmitAndReserveAttemptResult,
   AnalysisLlmCall,
@@ -97,6 +101,8 @@ import type {
   ProtocolExecutionJobStatus,
   ProtocolExternalCall,
   ExternalCallKind,
+  FailJobWithoutAttemptForJobInput,
+  FailJobWithoutAttemptForJobResult,
   ExternalCallStatus,
   CostBasis,
   ProviderCallReceipt,
@@ -1067,6 +1073,39 @@ function mapQaReport(r: QaReportDbRow): QaReportRow {
     overallNotes: r.overall_notes,
     createdAt: r.created_at,
   };
+}
+
+/**
+ * Maps a `probe_results` composite that may or may not be there.
+ *
+ * PostgREST does not serialize a SQL NULL composite as JSON `null`. It
+ * emits an object whose every field is null — which is truthy in
+ * JavaScript. A bare `row.probe_result ? … : null` therefore reports "a
+ * probe result exists" for a job that has none, and a caller that keys a
+ * decision off that (the M5-A worker skips its analysis leg when a result
+ * is already saved) silently does the wrong thing against the real
+ * database while passing every in-memory test.
+ *
+ * The four cases are deliberately explicit:
+ *   - absent (null/undefined)              → null
+ *   - present but every field null         → null   (the PostgREST shape)
+ *   - present with a real `id`             → mapped
+ *   - present, no `id`, but some field set → throw
+ *
+ * The last one is the important one. A partially populated composite is
+ * not a missing row and not a valid row; treating it as either would be a
+ * guess. It means the RPC's return contract changed under us, and the
+ * caller must hear about that rather than receive a quiet null.
+ */
+function mapProbeResultNullable(r: ProbeResultDbRow | null | undefined): ProbeResult | null {
+  if (r === null || r === undefined) return null;
+  const values = Object.values(r as unknown as Record<string, unknown>);
+  if (values.length === 0 || values.every((v) => v === null)) return null;
+  if (typeof r.id === "string" && r.id.length > 0) return mapProbeResult(r);
+  throw new Error(
+    "mapProbeResultNullable: probe_result composite has no id but is not all-null; " +
+      "refusing to guess whether the row exists."
+  );
 }
 
 function mapProbeResult(r: ProbeResultDbRow): ProbeResult {
@@ -3388,6 +3427,9 @@ export const supabaseAdapter: DbAdapter = {
       p_project_id: input.projectId,
       p_external_call_id: input.externalCallId,
       p_probe_run_id: input.probeRunId,
+      p_call_kind: input.callKind,
+      p_request_body: input.requestBody,
+      p_request_body_sha256: input.requestBodySha256,
     });
     if (error) throw error;
     const row = Array.isArray(data) ? data[0] : data;
@@ -3534,6 +3576,78 @@ export const supabaseAdapter: DbAdapter = {
     }
     return {
       outcome: row.status,
+      job: mapProtocolExecutionJobNullable(row.job as ProtocolExecutionJobDbRow | null),
+    };
+  },
+
+  async failJobWithoutAttemptForJob(
+    input: FailJobWithoutAttemptForJobInput
+  ): Promise<FailJobWithoutAttemptForJobResult> {
+    const { data, error } = await getClient().rpc("fail_job_without_attempt_for_job", {
+      p_job_id: input.jobId,
+      p_claim_token: input.claimToken,
+      p_project_id: input.projectId,
+      p_reason: input.reason,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "failJobWithoutAttemptForJob: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      job: mapProtocolExecutionJobNullable(row.job as ProtocolExecutionJobDbRow | null),
+    };
+  },
+
+  async abortAttemptAndFailJobForJob(
+    input: AbortAttemptAndFailJobForJobInput
+  ): Promise<AbortAttemptAndFailJobForJobResult> {
+    const { data, error } = await getClient().rpc("abort_attempt_and_fail_job_for_job", {
+      p_job_id: input.jobId,
+      p_claim_token: input.claimToken,
+      p_project_id: input.projectId,
+      p_attempt_id: input.attemptId,
+      p_attempt_status: input.attemptStatus,
+      p_termination_reason: input.terminationReason,
+      p_failure_reason: input.failureReason,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "abortAttemptAndFailJobForJob: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      attempt: mapProtocolAttemptNullable(row.attempt as ProtocolAttemptDbRow | null),
+      job: mapProtocolExecutionJobNullable(row.job as ProtocolExecutionJobDbRow | null),
+    };
+  },
+
+  async closeAttemptForParseFailureForJob(
+    input: CloseAttemptForParseFailureForJobInput
+  ): Promise<CloseAttemptForParseFailureForJobResult> {
+    const { data, error } = await getClient().rpc("close_attempt_for_parse_failure_for_job", {
+      p_job_id: input.jobId,
+      p_claim_token: input.claimToken,
+      p_project_id: input.projectId,
+      p_attempt_id: input.attemptId,
+      p_external_call_id: input.externalCallId,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new Error(
+        "closeAttemptForParseFailureForJob: RPC returned no row; the return contract guarantees exactly one."
+      );
+    }
+    return {
+      outcome: row.status,
+      attempt: mapProtocolAttemptNullable(row.attempt as ProtocolAttemptDbRow | null),
       job: mapProtocolExecutionJobNullable(row.job as ProtocolExecutionJobDbRow | null),
     };
   },
@@ -3731,7 +3845,7 @@ export const supabaseAdapter: DbAdapter = {
         .filter((r): r is AnalysisCallReceipt => r !== null),
       probeRun: mapProbeRunNullable(row.probe_run as ProbeRunDbRow | null),
       completedBaselineSlots: (row.completed_baseline_slots as number | null) ?? null,
-      probeResult: row.probe_result ? mapProbeResult(row.probe_result as ProbeResultDbRow) : null,
+      probeResult: mapProbeResultNullable(row.probe_result as ProbeResultDbRow | null),
     };
   },
 

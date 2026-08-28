@@ -1,0 +1,60 @@
+# M0 — protocol worker image.
+#
+# Inert by construction. The image carries no credential, no `.env` file and
+# no Supabase, Perplexity, OpenAI or Anthropic value. `WORKER_EXECUTION_MODE`
+# defaults to `disabled` here as well as in the code, so an image started with
+# no environment at all is a worker that stays up, answers nothing but its own
+# health surface, and spends nothing.
+#
+# The container is a WORKER, not a service: it publishes no port of its own
+# and exposes nothing. The health surface exists for a supervisor, and the
+# address it binds is decided by WORKER_HEALTH_HOST at run time — the default
+# stays on the loopback.
+
+# ----------------------------------------------------------------- deps
+# A separate stage, so the production install is resolved once and the final
+# image inherits node_modules without the npm cache or the build metadata.
+FROM node:24.19.0-bookworm-slim AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+# --omit=dev, deliberately: `tsx` is a runtime dependency precisely so that
+# this install keeps it. typescript, tailwind, postcss and @types/* stay out.
+RUN npm ci --omit=dev
+
+# -------------------------------------------------------------- runtime
+FROM node:24.19.0-bookworm-slim AS runtime
+WORKDIR /app
+
+# Defaults that make the image inert on its own. A host that forgets every
+# variable gets the disabled worker with no health server at all; the Fly
+# template is what turns the health port on.
+ENV NODE_ENV=production \
+    WORKER_EXECUTION_MODE=disabled \
+    WORKER_HEALTH_PORT=0
+
+COPY --from=deps --chown=node:node /app/node_modules ./node_modules
+# Exactly what the entrypoint needs: the manifests, the tsconfig that carries
+# the `@/*` path mapping, the self-contained lib tree, and the entrypoint.
+COPY --chown=node:node package.json package-lock.json tsconfig.json ./
+COPY --chown=node:node lib ./lib
+COPY --chown=node:node scripts/run-protocol-worker.ts ./scripts/run-protocol-worker.ts
+
+# Non-root. The base image ships `node` (uid 1000); nothing here needs more.
+USER node
+
+# Fly sends the configured signal to the process started by CMD. SIGTERM is
+# what the entrypoint installs a cooperative handler for.
+STOPSIGNAL SIGTERM
+
+# The base image declares ENTRYPOINT ["docker-entrypoint.sh"], and an image
+# inherits it. That script happens to end in `exec "$@"`, so today node still
+# becomes PID 1 — but only because of a branch inside a file this repository
+# does not control. Resetting it removes the dependency rather than relying
+# on it: only the last ENTRYPOINT in the chain is effective, and an empty one
+# clears the inherited value.
+ENTRYPOINT []
+
+# PID 1 is the Node process itself, in exec form. No npm, no shell wrapper,
+# no ENTRYPOINT: the `tsx` CLI forks a child that never receives the signal,
+# and a shell would swallow it. One process is what a supervisor can signal.
+CMD ["node", "--import", "tsx", "scripts/run-protocol-worker.ts"]

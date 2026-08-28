@@ -1,0 +1,73 @@
+# M0 — Fly machine for the protocol worker. TEMPLATE, deliberately NOT
+# deployable.
+#
+# `app` and `primary_region` are ABSENT ON PURPOSE. `fly deploy` and
+# `fly launch` both refuse to run without them, so this file cannot create,
+# name or start anything as it stands. They will be added only under an
+# explicit authorisation that names the application and the region. The
+# region must be chosen after the Supabase staging project's own region has
+# been read, so that the worker sits close to the database it polls: every
+# claim, heartbeat and fenced write pays that round trip.
+#
+# Nothing here is a secret. Every value below is public configuration. The
+# Supabase URL, the service-role key, the Perplexity key and the analysis
+# provider key are NOT set here and never will be: they belong in
+# `fly secrets`, which stores them encrypted and refuses to read them back.
+#
+# This machine is a WORKER. It has no `http_service`, no `[[services]]`, no
+# public port, no allocated IP address and no volume. The only surface it
+# opens is the health endpoint, reachable from Fly's own prober on the
+# private network, which is why WORKER_HEALTH_HOST is 0.0.0.0 here: a
+# loopback bind would be unreachable by the check below.
+
+kill_signal = "SIGTERM"
+# Seconds. The entrypoint's cooperative shutdown is budgeted by
+# WORKER_GRACE_MS, whose default is 10000 ms; 30 leaves room for an
+# in-flight iteration to finish and stays far below Fly's 300 s ceiling.
+kill_timeout = 30
+
+[build]
+  dockerfile = "Dockerfile.worker"
+
+[env]
+  NODE_ENV = "production"
+  # Inert until an explicit authorisation flips it. The image defaults to
+  # `disabled` too, so this line states the intent rather than creating it.
+  WORKER_EXECUTION_MODE = "disabled"
+  # Required for the top-level check below to reach the process at all.
+  WORKER_HEALTH_HOST = "0.0.0.0"
+  WORKER_HEALTH_PORT = "8080"
+
+# Top-level check, not an `http_service` check: this app serves no public
+# traffic, so there is no service to hang a check on. Fly's prober reaches
+# the port directly over the private network.
+#
+# It probes /readyz, not /healthz. Both answer 200 while the worker is
+# inert, but they diverge the moment execution is enabled: /healthz reports
+# that the process is alive, while /readyz answers 503 as soon as the
+# worker has stopped making progress — no claim, no heartbeat, no database
+# contact inside WORKER_READY_STALE_MS. A live worker wedged in that state
+# is exactly what a check must catch, and /healthz would keep saying 200.
+[checks]
+  [checks.readiness]
+    type = "http"
+    port = 8080
+    method = "GET"
+    path = "/readyz"
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "10s"
+
+# A worker that dies must come back. `always` covers a clean exit too: the
+# entrypoint exits 0 on SIGTERM, and outside a deliberate stop that is still
+# a worker that is no longer working.
+[[restart]]
+  policy = "always"
+
+# Indicative sizing. 512 MB is the prudent tier for the live path; the inert
+# worker needs a fraction of it.
+[[vm]]
+  size = "shared-cpu-1x"
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512

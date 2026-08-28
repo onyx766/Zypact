@@ -75,9 +75,19 @@ jobs:
       - name: Run the execution gate contract
         run: npm run test:m0-worker-execution-gate
 
-      # Static half only. The runner builds no image, starts no container
-      # and contacts no registry: ZYPACT_M0_HOSTING_DOCKER_TEST stays unset.
+      # The Docker half runs here, and ONLY here. The opt-in is a STEP-level
+      # env entry on purpose: at job or workflow level it would silently
+      # apply to every other step, and a variable that turns on image builds
+      # should have exactly one place it can act. The runner is natively
+      # amd64, so the image is built and exercised on the architecture Fly
+      # actually runs — no emulation between the artefact and its proof.
+      #
+      # Still no secret, no registry push, no Fly, no Supabase: the contract
+      # builds locally, runs one container on the loopback, and removes both
+      # the container and the image it created.
       - name: Run the hosting artefacts contract
+        env:
+          ZYPACT_M0_HOSTING_DOCKER_TEST: "1"
         run: npm run test:m0-worker-hosting-contract
 
       - name: Typecheck

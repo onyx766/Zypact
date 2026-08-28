@@ -164,6 +164,19 @@ try {
 
   assert("dangerous matrix is empty for all three roles",
     dangerAfter === "", `${dangerAfter.split("\n").filter(Boolean).length} entries remain`);
+
+  // MAINTAIN travels through the version-guarded DO block, not a flat
+  // statement, so assert its removal on its own: a guard that silently
+  // failed to fire would otherwise hide inside the aggregate above.
+  const maintainBefore = dangerBefore.split("\n").filter((l) => l.endsWith("|MAINTAIN")).length;
+  const maintainAfter = dangerAfter.split("\n").filter((l) => l.endsWith("|MAINTAIN")).length;
+  assert("PG17 guard fired: MAINTAIN was present before 0057",
+    maintainBefore > 0, `${maintainBefore} entries`);
+  assert("PG17 guard fired: MAINTAIN revoked everywhere after 0057",
+    maintainAfter === 0, `${maintainAfter} entries remain`);
+  assert("the fixture really is PostgreSQL 17 or later",
+    Number(psql("select current_setting('server_version_num')")) >= 170000,
+    psql("select current_setting('server_version_num')"));
   assert("DML matrix byte-identical before and after",
     dmlAfter === dmlBefore,
     `${dmlBefore.split("\n").filter(Boolean).length} -> ${dmlAfter.split("\n").filter(Boolean).length}`);

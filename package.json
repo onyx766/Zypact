@@ -53,6 +53,7 @@
     "test:m5-0056-runtime": "tsx scripts/test-m5-0056-runtime-contract.ts",
     "test:m0-0057-schema": "tsx scripts/test-m0-0057-schema-contract.ts",
     "test:m0-0057-runtime": "tsx scripts/test-m0-0057-runtime-contract.ts",
+    "test:snapshot-worker-postgres-level2": "bash scripts/run-snapshot-worker-postgres-level2-local.sh",
     "test:m5-a-real-probe-fencing": "tsx scripts/test-m5-a-real-probe-fencing.ts",
     "test:m5-a-conflict-identity": "tsx scripts/test-m5-a-conflict-identity.ts",
     "test:m5-a-failure-matrix": "tsx scripts/test-m5-a-failure-matrix.ts",

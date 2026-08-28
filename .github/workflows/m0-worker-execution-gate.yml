@@ -10,7 +10,7 @@ name: M0 Worker Execution Gate
 #
 # No repository secret is used. No Docker, Supabase, provider, Vercel or
 # payment credential is referenced. The contract it runs opens no socket
-# other than 127.0.0.1 and reads no environment file. Nothing is deployed.
+# other than explicit loopback/wildcard probes; it reads no env file or deploys.
 
 on:
   pull_request:

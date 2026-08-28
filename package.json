@@ -45,6 +45,7 @@
     "test:snapshot-adapter-rpc-writes": "tsx scripts/test-snapshot-adapter-rpc-writes.ts",
     "test:snapshot-artifact-cascade-contract": "tsx scripts/test-snapshot-artifact-cascade-contract.ts",
     "worker:protocol": "tsx scripts/run-protocol-worker.ts",
+    "test:m0-worker-execution-gate": "tsx scripts/test-m0-worker-execution-gate.ts",
     "test:m5-a-worker-loop": "tsx scripts/test-m5-a-worker-loop.ts",
     "test:m5-a-web-enqueue": "tsx scripts/test-m5-a-web-enqueue.ts",
     "test:m5-a-recovery": "tsx scripts/test-m5-a-recovery.ts",

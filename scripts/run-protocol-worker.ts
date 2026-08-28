@@ -6,67 +6,146 @@
  * + heartbeat only means anything inside a process that outlives a single
  * HTTP request.
  *
- * Everything the loop touches is injected here and nowhere else — the db
- * adapter, the real Perplexity probe, the two-phase analysis transport,
- * `fetch`, and the clock. That is what lets the tests drive the identical
- * code path with fakes and zero network access.
+ * M0 — the execution gate.
  *
- * Shutdown is cooperative: SIGINT/SIGTERM set the abort flag, the current
- * iteration finishes its fenced RPC sequence, and the lease is simply
- * allowed to lapse. Nothing is force-killed mid-write.
+ * `WORKER_EXECUTION_MODE` decides, before anything else happens, whether
+ * this process is inert or spending. Absent or empty means `disabled`, so
+ * a host that forgets the variable gets the inert worker.
+ *
+ * The branch is structural, not a flag threaded through the loop. The db
+ * adapter, the Perplexity probe, the analysis transport and the loop
+ * itself are imported DYNAMICALLY, inside the live branch only. In
+ * `disabled` those modules are never evaluated, so no db client is
+ * constructed, no provider transport is built, no credential is read and
+ * no `fetch` reference is created — not merely unused, absent.
+ *
+ * Everything the loop touches is still injected in one place, which is what
+ * lets the tests drive the identical code path with fakes and zero network.
+ *
+ * Shutdown is cooperative in both modes: SIGINT/SIGTERM set the abort flag,
+ * the current iteration finishes its fenced RPC sequence, and the lease is
+ * simply allowed to lapse. Nothing is force-killed mid-write.
  */
 
-import { getDb } from "@/lib/db";
-import { runPerplexityProbe } from "@/lib/probes/perplexity";
-import {
-  executePreparedCallModelRequest,
-  prepareCallModelRequest,
-} from "@/lib/llm/call-model";
-import { createServer } from "node:http";
-import { sleep } from "@/lib/protocol-worker/lifecycle";
-import { runWorkerLoop } from "@/lib/protocol-worker/worker";
-import { WorkerHealth } from "@/lib/protocol-worker/health";
+import { createServer, type Server } from "node:http";
+import { resolveExecutionPlan, WorkerConfigError } from "@/lib/protocol-worker/execution-mode";
+import type { ExecutionPlan, LiveWorkerConfig } from "@/lib/protocol-worker/execution-mode";
+// Type-only: erased at compile time, so it creates no runtime dependency
+// and the disabled path still never evaluates the worker modules.
 import type { AnalysisTransport, IterationResult, WorkerDeps, WorkerOptions } from "@/lib/protocol-worker/types";
 
-function intFromEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (typeof raw !== "string" || raw.trim() === "") return fallback;
-  const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
+function log(event: string, fields: Record<string, unknown>): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), level: "info", event, ...fields }));
 }
-
-function floatFromEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (typeof raw !== "string" || raw.trim() === "") return fallback;
-  const n = Number.parseFloat(raw);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
-}
-
-const analysis: AnalysisTransport = {
-  prepare: (call) =>
-    prepareCallModelRequest({
-      system: call.system,
-      user: call.user,
-      jsonMode: call.jsonMode,
-      temperature: call.temperature,
-      maxTokens: call.maxTokens,
-      mockResponse: call.mockResponse,
-    }),
-  execute: (prepared, opts) => executePreparedCallModelRequest(prepared, opts),
-};
 
 /**
- * The idle timer is deliberately NOT unref'd: an unreferenced timer lets
- * Node exit during a backoff, so a healthy idle worker would simply
- * vanish. Shutdown is cooperative, never accidental.
+ * Local-only health surface. Bound to the loopback address on purpose:
+ * this is for a supervisor on the same host, never a public endpoint.
+ * `payload` yields closed scalars only — no job id, project id, prompt,
+ * body or token may reach it.
  */
+function startHealthServer(
+  healthPort: number,
+  payload: () => { healthz: unknown; readyz: unknown; readyStatus: number },
+): Server | null {
+  if (healthPort <= 0) return null;
+  const healthServer = createServer((req, res) => {
+    const p = payload();
+    if (req.url === "/healthz") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(p.healthz));
+      return;
+    }
+    if (req.url === "/readyz") {
+      res.writeHead(p.readyStatus, { "content-type": "application/json" });
+      res.end(JSON.stringify(p.readyz));
+      return;
+    }
+    res.writeHead(404).end();
+  });
+  healthServer.listen(healthPort, "127.0.0.1");
+  // Unref'd on purpose: the health surface must never be the only thing
+  // holding the process open. In disabled mode a referenced keep-alive
+  // handle does that job; in live mode the loop's own timers do.
+  healthServer?.unref();
+  return healthServer;
+}
 
-async function main(): Promise<void> {
-  const workerId = process.env.WORKER_ID ?? `worker-${process.pid}`;
+/**
+ * Inert mode. Stays up so a supervisor sees a healthy process, answers the
+ * local health surface, and does nothing else. It requires no Supabase,
+ * Perplexity, OpenAI or Anthropic credential, because it never reaches any
+ * code that would read one.
+ */
+async function runDisabled(healthPort: number): Promise<void> {
+  log("worker_execution_disabled", { executionEnabled: false, healthPort });
 
+  const server = startHealthServer(healthPort, () => ({
+    healthz: { ready: true, executionEnabled: false },
+    readyz: { ready: true, executionEnabled: false },
+    readyStatus: 200,
+  }));
+
+  // A REFERENCED handle, on purpose. `startHealthServer` unrefs its server
+  // so it can never be the only thing holding the process open, and a
+  // signal handler alone does not keep Node's event loop alive. Without
+  // this the inert worker printed its one line and exited straight away —
+  // a supervisor would see a process that will not stay up, which is the
+  // opposite of an idle worker waiting for work to be enabled.
+  const keepAlive = setInterval(() => {}, 60_000);
+
+  const signalName = await new Promise<string>((resolve) => {
+    process.once("SIGINT", () => resolve("SIGINT"));
+    process.once("SIGTERM", () => resolve("SIGTERM"));
+  });
+
+  clearInterval(keepAlive);
+  await new Promise<void>((resolve) => {
+    if (!server) { resolve(); return; }
+    server.close(() => resolve());
+  });
+
+  // The positive proof of a cooperative stop, emitted only after the
+  // keep-alive handle is released and the health server has actually
+  // closed. A process that was killed by the default signal disposition,
+  // or that never installed a handler, cannot print this line — which is
+  // what lets the contract tell a clean shutdown from a plain kill.
+  log("worker_execution_disabled_stopped", {
+    signal: signalName, executionEnabled: false, healthServerClosed: server !== null,
+  });
+}
+
+/**
+ * Live mode. Every dependency that can spend money or touch the database is
+ * imported here, after `resolveExecutionPlan` has already accepted the
+ * configuration.
+ */
+async function runLive(cfg: LiveWorkerConfig): Promise<void> {
+  const [{ getDb }, { runPerplexityProbe }, callModel, { sleep }, { runWorkerLoop }, { WorkerHealth }] =
+    await Promise.all([
+      import("@/lib/db"),
+      import("@/lib/probes/perplexity"),
+      import("@/lib/llm/call-model"),
+      import("@/lib/protocol-worker/lifecycle"),
+      import("@/lib/protocol-worker/worker"),
+      import("@/lib/protocol-worker/health"),
+    ]);
   // Declared before `deps` so the same signal reaches the probe fetch, the
   // analysis call and the idle wait.
   const shutdown = new AbortController();
+
+  const analysis: AnalysisTransport = {
+    prepare: (call) =>
+      callModel.prepareCallModelRequest({
+        system: call.system,
+        user: call.user,
+        jsonMode: call.jsonMode,
+        temperature: call.temperature,
+        maxTokens: call.maxTokens,
+        mockResponse: call.mockResponse,
+      }),
+    execute: (prepared, opts) => callModel.executePreparedCallModelRequest(prepared, opts),
+  };
 
   const deps: WorkerDeps = {
     db: getDb(),
@@ -81,16 +160,16 @@ async function main(): Promise<void> {
   };
 
   const opts: WorkerOptions = {
-    workerId,
-    leaseSeconds: intFromEnv("WORKER_LEASE_SECONDS", 60),
-    idleBackoffMs: intFromEnv("WORKER_IDLE_BACKOFF_MS", 2000),
-    maxBackoffMs: intFromEnv("WORKER_MAX_BACKOFF_MS", 30000),
-    maxSlotsPerClaim: intFromEnv("WORKER_MAX_SLOTS_PER_CLAIM", 32),
-    jitterRatio: floatFromEnv("WORKER_JITTER_RATIO", 0.5),
-    maxThrottledRetries: intFromEnv("WORKER_MAX_THROTTLED_RETRIES", 3),
-    graceMs: intFromEnv("WORKER_GRACE_MS", 10000),
-    perplexityReservedCostUsd: floatFromEnv("WORKER_PERPLEXITY_RESERVED_USD", 0.02),
-    analysisReservedCostUsd: floatFromEnv("WORKER_ANALYSIS_RESERVED_USD", 0.02),
+    workerId: cfg.workerId,
+    leaseSeconds: cfg.leaseSeconds,
+    idleBackoffMs: cfg.idleBackoffMs,
+    maxBackoffMs: cfg.maxBackoffMs,
+    maxSlotsPerClaim: cfg.maxSlotsPerClaim,
+    jitterRatio: cfg.jitterRatio,
+    maxThrottledRetries: cfg.maxThrottledRetries,
+    graceMs: cfg.graceMs,
+    perplexityReservedCostUsd: cfg.perplexityReservedCostUsd,
+    analysisReservedCostUsd: cfg.analysisReservedCostUsd,
   };
 
   const signal = { aborted: false };
@@ -98,7 +177,7 @@ async function main(): Promise<void> {
   // lease: the current iteration finishes its fenced RPC sequence, and if
   // it overruns, in-flight provider calls are aborted rather than left to
   // outlive a lease we can no longer renew.
-  const stop = (sig: string) => {
+  const stop = (sig: string): void => {
     if (signal.aborted) return;
     signal.aborted = true;
     log("shutdown_requested", { signal: sig, graceMs: opts.graceMs });
@@ -109,63 +188,67 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => stop("SIGTERM"));
 
   log("worker_started", {
-    workerId,
-    leaseSeconds: opts.leaseSeconds,
+    workerId: cfg.workerId,
+    leaseSeconds: cfg.leaseSeconds,
     probeMode: deps.probeMode,
+    executionEnabled: true,
   });
 
-  // Local-only health surface. Bound to the loopback address on purpose:
-  // this is for a supervisor on the same host, never a public endpoint.
-  const healthPort = intFromEnv("WORKER_HEALTH_PORT", 0);
-  const readyStaleMs = Math.max(opts.maxBackoffMs * 2, intFromEnv("WORKER_READY_STALE_MS", 60000));
-  const healthRef: WorkerHealth = new WorkerHealth(deps.now);
-  const healthServer =
-    healthPort > 0
-      ? createServer((req, res) => {
-          const snap = healthRef.snapshot();
-          if (req.url === "/healthz") {
-            // Six closed scalars and one timestamp. No job id, no project
-            // id, no claim token, no prompt, no body — nothing that could
-            // identify a customer or authorise anything.
-            res.writeHead(200, { "content-type": "application/json" });
-            res.end(JSON.stringify(snap));
-            return;
-          }
-          if (req.url === "/readyz") {
-            const ready = healthRef.isReady(readyStaleMs);
-            res.writeHead(ready ? 200 : 503, { "content-type": "application/json" });
-            res.end(JSON.stringify({ ready }));
-            return;
-          }
-          res.writeHead(404).end();
-        })
-      : null;
-  healthServer?.listen(healthPort, "127.0.0.1");
-  healthServer?.unref();
+  const healthRef = new WorkerHealth(deps.now);
+  const server = startHealthServer(cfg.healthPort, () => {
+    const ready = healthRef.isReady(cfg.readyStaleMs);
+    return {
+      // Closed scalars and one timestamp. No job id, no project id, no
+      // claim token, no prompt, no body.
+      healthz: healthRef.snapshot(),
+      readyz: { ready },
+      readyStatus: ready ? 200 : 503,
+    };
+  });
 
+  /**
+   * The idle timer is deliberately NOT unref'd inside the loop: an
+   * unreferenced timer lets Node exit during a backoff, so a healthy idle
+   * worker would simply vanish. Shutdown is cooperative, never accidental.
+   */
   const health = await runWorkerLoop(deps, opts, signal, sleep, (r: IterationResult) => {
     if (r.outcome === "no_job") return;
     // Closed labels only: an RPC outcome, a job id, never a prompt or a token.
     log("iteration", { outcome: r.outcome, jobId: r.jobId, detail: r.detail });
   }, healthRef);
 
-  healthServer?.close();
+  server?.close();
   log("worker_stopped", { ...health.snapshot() });
 }
 
-function log(event: string, fields: Record<string, unknown>): void {
-  console.log(JSON.stringify({ ts: new Date().toISOString(), level: "info", event, ...fields }));
+async function main(): Promise<void> {
+  let plan: ExecutionPlan;
+  try {
+    plan = resolveExecutionPlan(process.env);
+  } catch (err) {
+    if (err instanceof WorkerConfigError) {
+      // Variable names only. Never a value, a length, a prefix or a hash.
+      console.error(JSON.stringify({
+        ts: new Date().toISOString(), level: "error",
+        event: "worker_configuration_rejected",
+        reason: err.message, variables: err.variables,
+      }));
+      process.exit(78); // EX_CONFIG
+    }
+    throw err;
+  }
+
+  if (plan.mode === "disabled") {
+    await runDisabled(plan.healthPort);
+    return;
+  }
+  await runLive(plan.config);
 }
 
 main().catch((err) => {
-  console.error(
-    JSON.stringify({
-      ts: new Date().toISOString(),
-      level: "error",
-      event: "worker_crashed",
-      // The message only; a stack could carry a URL or a body fragment.
-      reason: err instanceof Error ? err.name : "unknown",
-    })
-  );
-  process.exitCode = 1;
+  console.error(JSON.stringify({
+    ts: new Date().toISOString(), level: "error", event: "worker_crashed",
+    message: err instanceof Error ? err.message : String(err),
+  }));
+  process.exit(1);
 });

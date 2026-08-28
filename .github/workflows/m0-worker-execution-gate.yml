@@ -1,0 +1,80 @@
+name: M0 Worker Execution Gate
+
+# Proves that the protocol worker stays inert unless it is explicitly and
+# validly switched to live.
+#
+# The Level 2 workflow guards migrations and the snapshot-worker harness;
+# its path filters do not cover the execution gate, so a change to the
+# gate's own logic could previously merge with no CI at all. This workflow
+# closes that hole and nothing else.
+#
+# No repository secret is used. No Docker, Supabase, provider, Vercel or
+# payment credential is referenced. The contract it runs opens no socket
+# other than 127.0.0.1 and reads no environment file. Nothing is deployed.
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/m0-worker-execution-gate.yml"
+      - ".env.example"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig*.json"
+      - "lib/protocol-worker/**"
+      - "scripts/run-protocol-worker.ts"
+      - "scripts/test-m0-worker-execution-gate.ts"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run per ref. A superseded push cancels its predecessor rather than
+# leaving two jobs racing for the same answer.
+concurrency:
+  group: m0-worker-execution-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  gate:
+    name: Fail-closed execution gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v6
+        with:
+          # The pull_request diff check below needs both endpoints of the
+          # range, so the full history is required.
+          fetch-depth: 0
+          # No step here pushes, and `git diff --check A...B` reads only
+          # local objects — both endpoints are present once the history is
+          # fetched. Leaving the token in .git/config would expose it to
+          # every dependency lifecycle script `npm ci` runs, for no gain.
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run the execution gate contract
+        run: npm run test:m0-worker-execution-gate
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Check the diff for whitespace damage
+        if: github.event_name == 'pull_request'
+        run: |
+          git diff --check "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}"

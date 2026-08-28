@@ -289,8 +289,8 @@ async function main(): Promise<void> {
     check("an AbortController is wired into the real transport", /shutdown\.signal/.test(entry));
     check("SIGTERM and SIGINT are both handled", /SIGTERM/.test(entry) && /SIGINT/.test(entry));
     check(
-      "the health server binds the loopback only",
-      /listen\(healthPort, "127\.0\.0\.1"\)/.test(entry)
+      "the health server binds the validated configured host",
+      /listen\(healthPort, healthHost\)/.test(entry)
     );
     check("both endpoints exist", /\/healthz/.test(entry) && /\/readyz/.test(entry));
   }

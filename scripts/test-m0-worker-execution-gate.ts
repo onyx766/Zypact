@@ -44,6 +44,7 @@ const failures: string[] = [];
 const MANDATORY_CHECKPOINTS = [
   "signal:SIGTERM", "signal:SIGINT", "retry:collision-then-success",
   "retry:exhausted-fails", "mutation:handler-less",
+  "health:default-loopback", "health:explicit-wildcard",
 ] as const;
 const reached = new Set<string>();
 function checkpoint(name: (typeof MANDATORY_CHECKPOINTS)[number]): void {
@@ -122,14 +123,55 @@ function rejects(label: string, env: Record<string, string | undefined>, variabl
 // ═════════════════════════════════ 2. disabled needs no credential at all
 {
   const plan = resolveExecutionPlan({ WORKER_EXECUTION_MODE: "disabled" });
-  assert("disabled plan carries only a health port",
-    plan.mode === "disabled" && Object.keys(plan).sort().join(",") === "healthPort,mode",
+  assert("disabled plan carries only the health surface settings",
+    plan.mode === "disabled" && Object.keys(plan).sort().join(",") === "healthHost,healthPort,mode",
     Object.keys(plan).join(","));
   const withPort = resolveExecutionPlan({ WORKER_EXECUTION_MODE: "disabled", WORKER_HEALTH_PORT: "8123" });
   assert("disabled honours WORKER_HEALTH_PORT",
     withPort.mode === "disabled" && withPort.healthPort === 8123);
   rejects("disabled refuses an invalid health port",
     { WORKER_EXECUTION_MODE: "disabled", WORKER_HEALTH_PORT: "abc" }, "WORKER_HEALTH_PORT");
+
+  // ---------------------------------------------------- WORKER_HEALTH_HOST
+  // A closed allow-list of two literals. The default is the one that
+  // cannot be reached from off-box, so a host that says nothing about the
+  // bind address never accidentally publishes the health surface.
+  assert("absent WORKER_HEALTH_HOST binds the loopback",
+    plan.mode === "disabled" && plan.healthHost === "127.0.0.1",
+    plan.mode === "disabled" ? plan.healthHost : plan.mode);
+  for (const good of ["127.0.0.1", "0.0.0.0"] as const) {
+    const p = resolveExecutionPlan({ WORKER_EXECUTION_MODE: "disabled", WORKER_HEALTH_HOST: good });
+    assert(`WORKER_HEALTH_HOST=${good} is carried through verbatim`,
+      p.mode === "disabled" && p.healthHost === good, p.mode === "disabled" ? p.healthHost : p.mode);
+  }
+  // Empty, whitespace, either loopback spelling that needs DNS or IPv6,
+  // any other IPv4, any hostname, and any value that would only pass after
+  // trimming or case folding. There is no normalisation step to forgive
+  // them: the comparison is exact.
+  for (const bad of [
+    "", " ", "  ", "\t", "\n",
+    "localhost", "LOCALHOST", "Localhost",
+    "::", "::1", "[::]", "[::1]", "0:0:0:0:0:0:0:0", "::ffff:127.0.0.1",
+    "0.0.0.1", "127.0.0.2", "127.1", "192.168.1.10", "10.0.0.1", "169.254.169.254",
+    "example.com", "worker.internal", "host.docker.internal",
+    " 127.0.0.1", "127.0.0.1 ", "0.0.0.0 ", " 0.0.0.0", "127.0.0.1\n",
+    "127.0.0.1:8080", "0.0.0.0:0", "*", "0", "all", "any",
+  ]) {
+    rejects(`WORKER_HEALTH_HOST=${JSON.stringify(bad)} refused`,
+      { WORKER_EXECUTION_MODE: "disabled", WORKER_HEALTH_HOST: bad }, "WORKER_HEALTH_HOST");
+  }
+  // The same allow-list governs live, and it is applied by the same call
+  // that the entrypoint makes before it is allowed to import anything.
+  rejects("live refuses an invalid WORKER_HEALTH_HOST too",
+    liveEnv({ WORKER_HEALTH_HOST: "localhost" }), "WORKER_HEALTH_HOST");
+  const liveHost = resolveExecutionPlan(liveEnv({ WORKER_HEALTH_HOST: "0.0.0.0" }));
+  assert("live config carries the bind host",
+    liveHost.mode === "live" && liveHost.config.healthHost === "0.0.0.0",
+    liveHost.mode === "live" ? liveHost.config.healthHost : liveHost.mode);
+  const liveDefault = resolveExecutionPlan(liveEnv());
+  assert("live defaults to the loopback bind host",
+    liveDefault.mode === "live" && liveDefault.config.healthHost === "127.0.0.1",
+    liveDefault.mode === "live" ? liveDefault.config.healthHost : liveDefault.mode);
 }
 
 // ═══════════════════════════════════════════════ 3. live: required inputs
@@ -369,6 +411,24 @@ function rejects(label: string, env: Record<string, string | undefined>, variabl
     assert(`removing \`${token}\` from the live path would fail its check`,
       !mutated.includes(token), token);
   }
+
+  // The bind address is the validated plan value, never a literal in the
+  // entrypoint. Both call sites — inert and live — must hand it through.
+  assert("the health server binds the validated configured host",
+    /listen\(healthPort, healthHost\)/.test(src));
+  assert("no call site pins a bind address literal",
+    !/listen\(healthPort, "/.test(src));
+  assert("both call sites pass the host through",
+    (src.match(/startHealthServer\((?:healthPort, healthHost|cfg\.healthPort, cfg\.healthHost)/g) ?? []).length === 2,
+    (src.match(/startHealthServer\([^,]+, [^,]+,/g) ?? []).join(" | "));
+  // Negative proof, in memory: an entrypoint that pinned the loopback
+  // again would fail the check above, so it is not vacuous.
+  const pinned = src.split("listen(healthPort, healthHost)").join('listen(healthPort, "127.0.0.1")');
+  assert("an entrypoint that pinned the bind address would fail that check",
+    !/listen\(healthPort, healthHost\)/.test(pinned));
+  // Port 0 still means no server, whatever the host says.
+  assert("a non-positive health port still returns no server at all",
+    /if \(healthPort <= 0\) return null;/.test(src));
 }
 
 // ═══════════════════ 10. the real process, disabled, with zero credentials
@@ -387,8 +447,14 @@ function bareEnv(over: Record<string, string> = {}): NodeJS.ProcessEnv {
   };
 }
 
-/** Single-process TypeScript execution: no CLI wrapper between us and it. */
-const TSX_LOADER = ["--import", "./node_modules/tsx/dist/loader.mjs"];
+/**
+ * Single-process TypeScript execution, through the package's own declared
+ * root export: no CLI wrapper between us and the entrypoint, and no path
+ * into the package's build output either. This is the same loader the
+ * production `worker:protocol` script uses, so what is proved here is the
+ * command a host will actually run.
+ */
+const TSX_LOADER = ["--import", "tsx"];
 
 interface RunResult {
   code: number | null;
@@ -510,13 +576,20 @@ async function proveSignal(
   allocate: () => Promise<number>,
   recorder: (message: string) => void,
   afterFirstCollision?: () => void,
+  // Absent means the variable is not set at all, which is how the default
+  // is proved: nothing in the environment mentions the bind address.
+  healthHost?: "127.0.0.1" | "0.0.0.0",
 ): Promise<SignalOutcome> {
+  const expectedHost = healthHost ?? "127.0.0.1";
   for (let attempt = 1; attempt <= MAX_PORT_ATTEMPTS; attempt += 1) {
     const port = await allocate();
     interface Probe { status: number; body: string }
     const probes: { healthz?: Probe; readyz?: Probe; notFound?: number } = {};
     const run = await spawnWorker(
-      bareEnv({ WORKER_EXECUTION_MODE: "disabled", WORKER_HEALTH_PORT: String(port) }),
+      bareEnv({
+        WORKER_EXECUTION_MODE: "disabled", WORKER_HEALTH_PORT: String(port),
+        ...(healthHost === undefined ? {} : { WORKER_HEALTH_HOST: healthHost }),
+      }),
       async (kill) => {
         probes.healthz = await get(port, "/healthz");
         probes.readyz = await get(port, "/readyz");
@@ -557,6 +630,15 @@ async function proveSignal(
       new RegExp(`"signal":"${sig}"`).test(run.stdout)) && ok;
     ok = fail("the stop event reports the health server closed",
       /"healthServerClosed":true/.test(run.stdout)) && ok;
+    // The RESOLVED value, reported by the process itself. With no variable
+    // set this is the proof that the default is the loopback; with the
+    // variable set it is the proof that the explicit value took effect.
+    ok = fail("the start event reports the resolved bind host",
+      new RegExp(`"healthHost":"${expectedHost.replace(/\./g, "\\.")}"`).test(run.stdout),
+      run.stdout.replace(/\s+/g, " ").slice(0, 160)) && ok;
+    ok = fail("the start event reports no other bind host",
+      (run.stdout.match(/"healthHost":"[^"]*"/g) ?? []).length === 1,
+      (run.stdout.match(/"healthHost":"[^"]*"/g) ?? []).join(",")) && ok;
     ok = fail("the start event precedes the stop event",
       run.stdout.indexOf('worker_execution_disabled"')
         < run.stdout.indexOf("worker_execution_disabled_stopped")) && ok;
@@ -593,6 +675,70 @@ async function proveSignal(
   return { status: "infrastructure", attempts: MAX_PORT_ATTEMPTS };
 }
 
+// ═══════════════ 9b. the production entry command is one public process
+/**
+ * BL-2. `npm run worker:protocol` used to be `tsx <entrypoint>`, and the
+ * `tsx` CLI forks: the parent takes SIGTERM and dies at 143 while the
+ * child is torn down before its handler runs. The cooperative stop the
+ * whole M0 contract rests on was therefore unobservable on any host that
+ * signals the process it started.
+ *
+ * The fix is one process, reached through the package's own public root
+ * export. This section pins that: the exact command, the public specifier,
+ * the runtime dependency that makes it survive `npm ci --omit=dev`, and
+ * the absence of any path into the package's build output.
+ */
+{
+  const pkgRaw = readFileSync(path.join(process.cwd(), "package.json"), "utf8");
+  const pkg = JSON.parse(pkgRaw) as {
+    scripts?: Record<string, string>;
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  };
+  const WORKER_COMMAND = "node --import tsx scripts/run-protocol-worker.ts";
+  assert("`worker:protocol` is exactly the single-process public command",
+    pkg.scripts?.["worker:protocol"] === WORKER_COMMAND,
+    pkg.scripts?.["worker:protocol"] ?? "absent");
+
+  // Without this, `npm ci --omit=dev` on a host omits the loader and the
+  // command above cannot start at all.
+  assert("tsx is a runtime dependency, so a production install keeps it",
+    typeof pkg.dependencies?.tsx === "string" && pkg.devDependencies?.tsx === undefined,
+    `dependencies=${pkg.dependencies?.tsx ?? "absent"} `
+      + `devDependencies=${pkg.devDependencies?.tsx ?? "absent"}`);
+
+  // Needles assembled at runtime: written literally they would appear in
+  // this file and make the "no occurrence" assertions match themselves.
+  const internalLoader = ["tsx", "dist", "loader.mjs"].join("/");
+  const esmSubpath = ["tsx", "esm"].join("/");
+  const entrySrc = readFileSync(path.join(process.cwd(), "scripts/run-protocol-worker.ts"), "utf8");
+  const selfSrc = readFileSync(path.join(process.cwd(), "scripts/test-m0-worker-execution-gate.ts"), "utf8");
+  for (const [where, text] of [
+    ["package.json", pkgRaw], ["the entrypoint", entrySrc], ["this contract", selfSrc],
+  ] as const) {
+    assert(`${where} carries no path into the tsx build output`,
+      !text.includes(internalLoader), where);
+    assert(`${where} uses no tsx subpath export`, !text.includes(esmSubpath), where);
+  }
+
+  // `--import tsx` is a public entry only if the package declares a root
+  // export. Read from the installed package, not assumed.
+  const tsxPkg = JSON.parse(
+    readFileSync(path.join(process.cwd(), "node_modules/tsx/package.json"), "utf8"),
+  ) as { version?: string; exports?: Record<string, unknown> };
+  assert("`tsx` declares a root export, so `--import tsx` is a public entry",
+    typeof tsxPkg.exports === "object" && tsxPkg.exports !== null && "." in tsxPkg.exports,
+    Object.keys(tsxPkg.exports ?? {}).join(","));
+
+  // Checked on the runtime value, not on the source text: a textual check
+  // for this declaration would match the assertion that states it.
+  assert("this contract spawns the worker through that same public loader",
+    TSX_LOADER.length === 2 && TSX_LOADER[0] === "--import" && TSX_LOADER[1] === "tsx",
+    TSX_LOADER.join(" "));
+  assert("the entrypoint documents the command a container must exec",
+    entrySrc.includes(WORKER_COMMAND));
+}
+
 async function processChecks(): Promise<void> {
   // -------------------------------------------------- unknown mode fails
   const bad = await spawnWorker(bareEnv({ WORKER_EXECUTION_MODE: "enabled" }));
@@ -625,6 +771,59 @@ async function processChecks(): Promise<void> {
   assert("both signals were exercised, not merely attempted",
     completedSignals.size === 2 && completedSignals.has("SIGTERM") && completedSignals.has("SIGINT"),
     [...completedSignals].join(",") || "none");
+
+  // ------------------------------ the bind host, on the real process
+  //
+  // The two scenarios above set no WORKER_HEALTH_HOST at all, and each of
+  // them asserted that the process reported `healthHost` 127.0.0.1 and
+  // that the loopback endpoints answered. That is the default proof, and
+  // it is only claimed here once those scenarios actually completed.
+  if (completedSignals.has("SIGTERM") && completedSignals.has("SIGINT")) {
+    checkpoint("health:default-loopback");
+  }
+  {
+    // The wildcard, and only after an explicit value. Same ephemeral-port
+    // lifecycle, same endpoints, same payload, same cooperative stop —
+    // widening the bind must change the address and nothing else.
+    const outcome = await proveSignal("SIGTERM", freePort, record, undefined, "0.0.0.0");
+    assert(`WORKER_HEALTH_HOST=0.0.0.0: the scenario ran to completion within ${MAX_PORT_ATTEMPTS} attempts`,
+      outcome.status === "proved", `${outcome.status} after ${outcome.attempts} attempt(s)`);
+    if (outcome.status === "proved") checkpoint("health:explicit-wildcard");
+  }
+  {
+    // Port 0 still means no server at all, whatever the host is set to.
+    const run = await spawnWorker(
+      bareEnv({
+        WORKER_EXECUTION_MODE: "disabled", WORKER_HEALTH_PORT: "0", WORKER_HEALTH_HOST: "0.0.0.0",
+      }),
+      async (kill) => { kill("SIGTERM"); },
+    );
+    assert("port 0 with an explicit host still starts no server",
+      /"healthPort":0/.test(run.stdout) && /"healthServerClosed":false/.test(run.stdout),
+      run.stdout.replace(/\s+/g, " ").slice(0, 160));
+    assert("port 0 still reports the resolved host",
+      /"healthHost":"0\.0\.0\.0"/.test(run.stdout));
+    assert("port 0 still stops cooperatively and exits 0",
+      /worker_execution_disabled_stopped/.test(run.stdout) && run.code === 0 && run.signal === null,
+      `code=${run.code} signal=${run.signal}`);
+    assert("port 0 writes nothing to stderr", run.stderr.trim() === "", run.stderr.slice(0, 160));
+  }
+  {
+    // An invalid bind address is refused by the same call that guards the
+    // live branch, so the inert worker refuses it too — before anything
+    // could have been imported, opened or read.
+    const run = await spawnWorker(
+      bareEnv({ WORKER_EXECUTION_MODE: "disabled", WORKER_HEALTH_HOST: "localhost" }),
+    );
+    assert("an invalid bind host exits EX_CONFIG", run.code === 78, `code=${run.code}`);
+    assert("an invalid bind host names the variable",
+      /worker_configuration_rejected/.test(run.stderr) && /WORKER_HEALTH_HOST/.test(run.stderr),
+      run.stderr.slice(0, 160));
+    assert("an invalid bind host never echoes the value it refused",
+      !/localhost/.test(run.stderr), run.stderr.slice(0, 160));
+    assert("an invalid bind host starts nothing",
+      !/worker_execution_disabled/.test(run.stdout), run.stdout.slice(0, 160));
+  }
 
   // ------------------------------------------- the retry path, for real
   //

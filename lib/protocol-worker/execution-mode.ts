@@ -23,6 +23,19 @@ export type WorkerExecutionMode = "disabled" | "live";
 /** Providers the analysis leg may use. `mock` and `auto` are not live modes. */
 export type LiveAnalysisProvider = "openai" | "anthropic";
 
+/**
+ * The only two addresses the health server may bind. `127.0.0.1` keeps the
+ * surface on the host that runs the worker; `0.0.0.0` exposes it to the
+ * orchestrator's health prober and is therefore never a default — a host
+ * has to ask for it in writing.
+ *
+ * There is no third option on purpose. A hostname would need DNS, and a
+ * DNS answer is a runtime input: `localhost` can resolve to `::1`, and an
+ * arbitrary name can resolve anywhere at all. Binding a health surface is
+ * not a place to accept an answer that may change between two restarts.
+ */
+export type HealthHost = "127.0.0.1" | "0.0.0.0";
+
 export interface LiveWorkerConfig {
   readonly workerId: string;
   readonly supabaseUrl: string;
@@ -38,11 +51,12 @@ export interface LiveWorkerConfig {
   readonly perplexityReservedCostUsd: number;
   readonly analysisReservedCostUsd: number;
   readonly healthPort: number;
+  readonly healthHost: HealthHost;
   readonly readyStaleMs: number;
 }
 
 export type ExecutionPlan =
-  | { readonly mode: "disabled"; readonly healthPort: number }
+  | { readonly mode: "disabled"; readonly healthPort: number; readonly healthHost: HealthHost }
   | { readonly mode: "live"; readonly config: LiveWorkerConfig };
 
 /**
@@ -94,6 +108,9 @@ const PROJECT_REF = /^[a-z]{20}$/;
  * token or smuggle a newline into a log line.
  */
 const WORKER_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/;
+
+/** Closed allow-list. Order is display order in the error message. */
+const HEALTH_HOSTS: readonly HealthHost[] = ["127.0.0.1", "0.0.0.0"];
 
 function raw(env: Env, name: string): string | undefined {
   const v = env[name];
@@ -174,6 +191,29 @@ function floatOrThrow(
 }
 
 /**
+ * The health bind address. Absent means loopback: a host that says nothing
+ * gets the address that cannot be reached from off-box.
+ *
+ * Read with `exact`, NOT `raw`, so nothing is normalised away. A defined
+ * but empty value, a single space, ` 0.0.0.0` with a stray leading space —
+ * each of those is a host that meant something and got it wrong, and each
+ * of them is refused rather than silently trimmed into acceptance or
+ * silently dropped back to the default. No trimming, no case folding, no
+ * DNS lookup, no hostname, no IPv6 form.
+ */
+function healthHostOrThrow(env: Env): HealthHost {
+  const v = exact(env, "WORKER_HEALTH_HOST");
+  if (v === undefined) return "127.0.0.1";
+  for (const allowed of HEALTH_HOSTS) {
+    if (v === allowed) return allowed;
+  }
+  throw new WorkerConfigError(
+    `WORKER_HEALTH_HOST must be exactly one of: ${HEALTH_HOSTS.join(", ")}.`,
+    ["WORKER_HEALTH_HOST"],
+  );
+}
+
+/**
  * Resolves the execution plan, or throws. Absent or empty mode is
  * `disabled`: a host that forgets the variable gets the inert worker, never
  * the spending one.
@@ -193,8 +233,13 @@ export function resolveExecutionPlan(env: Env): ExecutionPlan {
   // validated the same way, so a bad value fails rather than disabling the
   // health surface without saying so.
   const healthPort = intOrThrow(env, "WORKER_HEALTH_PORT", 0, 0, MAX_PORT);
+  // Validated in BOTH modes, and here — before the disabled branch returns
+  // and long before `runLive` is allowed to import anything. A host that
+  // mistypes the bind address is told so by the inert worker too, rather
+  // than discovering it the first time execution is switched on.
+  const healthHost = healthHostOrThrow(env);
 
-  if (mode === "disabled") return { mode: "disabled", healthPort };
+  if (mode === "disabled") return { mode: "disabled", healthPort, healthHost };
 
   // ---------------------------------------------------------------- live
   // Order matters: the cheapest, most categorical refusals first, so a
@@ -348,6 +393,7 @@ export function resolveExecutionPlan(env: Env): ExecutionPlan {
       analysisReservedCostUsd:
         floatOrThrow(env, "WORKER_ANALYSIS_RESERVED_USD", 0.02, 0, true, MAX_RESERVED_USD),
       healthPort,
+      healthHost,
       readyStaleMs: Math.max(
         maxBackoffMs * 2, intOrThrow(env, "WORKER_READY_STALE_MS", 60000, 1, MAX_DURATION_MS),
       ),

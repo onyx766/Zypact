@@ -1,10 +1,19 @@
 /**
  * M5-A — protocol execution worker entrypoint.
  *
- * A plain long-running Node process: `npm run worker:protocol`. It is not
- * a Next.js route and not a serverless function, because a claim + lease
- * + heartbeat only means anything inside a process that outlives a single
+ * A plain long-running Node process: `npm run worker:protocol`, which is
+ * exactly `node --import tsx scripts/run-protocol-worker.ts`. It is not a
+ * Next.js route and not a serverless function, because a claim + lease +
+ * heartbeat only means anything inside a process that outlives a single
  * HTTP request.
+ *
+ * That command shape is load-bearing, not cosmetic. The `tsx` CLI forks a
+ * child and the parent dies on SIGTERM before the child can run its
+ * handler, so the cooperative stop below is never reached and the process
+ * reports 143. `node --import tsx` is one process, and one process is what
+ * a supervisor can actually signal. A container must therefore exec this
+ * command directly in exec form; `npm` must not be PID 1, because npm's
+ * own signal forwarding is not part of this contract.
  *
  * M0 — the execution gate.
  *
@@ -29,7 +38,7 @@
 
 import { createServer, type Server } from "node:http";
 import { resolveExecutionPlan, WorkerConfigError } from "@/lib/protocol-worker/execution-mode";
-import type { ExecutionPlan, LiveWorkerConfig } from "@/lib/protocol-worker/execution-mode";
+import type { ExecutionPlan, HealthHost, LiveWorkerConfig } from "@/lib/protocol-worker/execution-mode";
 // Type-only: erased at compile time, so it creates no runtime dependency
 // and the disabled path still never evaluates the worker modules.
 import type { AnalysisTransport, IterationResult, WorkerDeps, WorkerOptions } from "@/lib/protocol-worker/types";
@@ -39,13 +48,19 @@ function log(event: string, fields: Record<string, unknown>): void {
 }
 
 /**
- * Local-only health surface. Bound to the loopback address on purpose:
- * this is for a supervisor on the same host, never a public endpoint.
+ * Health surface, bound to the address the configuration validated and
+ * nothing else. `127.0.0.1` — the default — keeps it on the host, which is
+ * what a supervisor sharing that host needs. `0.0.0.0` is reachable by an
+ * orchestrator's health prober off-box, and is therefore only ever the
+ * result of `WORKER_HEALTH_HOST` being set to it explicitly.
+ *
  * `payload` yields closed scalars only — no job id, project id, prompt,
- * body or token may reach it.
+ * body or token may reach it. That holds identically on both addresses:
+ * widening the bind must never widen what is disclosed.
  */
 function startHealthServer(
   healthPort: number,
+  healthHost: HealthHost,
   payload: () => { healthz: unknown; readyz: unknown; readyStatus: number },
 ): Server | null {
   if (healthPort <= 0) return null;
@@ -63,7 +78,7 @@ function startHealthServer(
     }
     res.writeHead(404).end();
   });
-  healthServer.listen(healthPort, "127.0.0.1");
+  healthServer.listen(healthPort, healthHost);
   // Unref'd on purpose: the health surface must never be the only thing
   // holding the process open. In disabled mode a referenced keep-alive
   // handle does that job; in live mode the loop's own timers do.
@@ -77,10 +92,10 @@ function startHealthServer(
  * Perplexity, OpenAI or Anthropic credential, because it never reaches any
  * code that would read one.
  */
-async function runDisabled(healthPort: number): Promise<void> {
-  log("worker_execution_disabled", { executionEnabled: false, healthPort });
+async function runDisabled(healthPort: number, healthHost: HealthHost): Promise<void> {
+  log("worker_execution_disabled", { executionEnabled: false, healthPort, healthHost });
 
-  const server = startHealthServer(healthPort, () => ({
+  const server = startHealthServer(healthPort, healthHost, () => ({
     healthz: { ready: true, executionEnabled: false },
     readyz: { ready: true, executionEnabled: false },
     readyStatus: 200,
@@ -195,7 +210,7 @@ async function runLive(cfg: LiveWorkerConfig): Promise<void> {
   });
 
   const healthRef = new WorkerHealth(deps.now);
-  const server = startHealthServer(cfg.healthPort, () => {
+  const server = startHealthServer(cfg.healthPort, cfg.healthHost, () => {
     const ready = healthRef.isReady(cfg.readyStaleMs);
     return {
       // Closed scalars and one timestamp. No job id, no project id, no
@@ -239,7 +254,7 @@ async function main(): Promise<void> {
   }
 
   if (plan.mode === "disabled") {
-    await runDisabled(plan.healthPort);
+    await runDisabled(plan.healthPort, plan.healthHost);
     return;
   }
   await runLive(plan.config);

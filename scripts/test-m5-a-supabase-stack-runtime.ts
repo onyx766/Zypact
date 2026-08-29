@@ -280,6 +280,7 @@ function makeDeps(db: DbAdapter, spy: Spy): WorkerDeps {
         model: "gpt-4o-mini",
         content: M5_CONTENT,
         usedMock: false,
+        modelReturned: null,
         latencyMs: 5,
         requestSha256: sha256Hex(ANALYSIS_REQUEST_BODY),
         contentSha256: sha256Hex(M5_CONTENT),
@@ -954,6 +955,7 @@ async function main(): Promise<void> {
             ...base.analysis,
             execute: async () => ({
               provider: "openai" as const, model: "gpt-4o-mini", content, usedMock: false,
+              modelReturned: null,
               latencyMs: 5, requestSha256: sha256Hex(ANALYSIS_REQUEST_BODY),
               contentSha256: sha256Hex(content), providerRequestId: "ana", httpStatus: 200,
             }),

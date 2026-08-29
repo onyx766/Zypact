@@ -321,6 +321,7 @@ async function main(): Promise<void> {
       execute: async () => ({
         provider: "openai" as const, model: "gpt-4o-mini", content: IN_HAND_CONTENT,
         usedMock: false, latencyMs: 5, requestSha256: sha256Hex(ANALYSIS_REQ),
+        modelReturned: null,
         contentSha256: sha256Hex(IN_HAND_CONTENT), providerRequestId: "ana", httpStatus: 200,
       }),
     };

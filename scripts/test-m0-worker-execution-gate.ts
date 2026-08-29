@@ -77,6 +77,9 @@ function liveEnv(over: Record<string, string | undefined> = {}): Record<string, 
     WORKER_EXPECTED_SUPABASE_PROJECT_REF: REF,
     WORKER_LIVE_CONFIRM: `LIVE:${REF}`,
     LLM_PROVIDER: "openai",
+    // TK-R-5 — live now demands a dated model snapshot. This is the exact
+    // value the repository is configured with today.
+    OPENAI_MODEL: "gpt-4o-mini-2024-07-18",
     ...SECRETS,
     ...over,
   };
@@ -187,10 +190,25 @@ function rejects(label: string, env: Record<string, string | undefined>, variabl
     assert("live defaults: reserved costs 0.02",
       plan.config.perplexityReservedCostUsd === 0.02 && plan.config.analysisReservedCostUsd === 0.02);
   }
-  const anth = resolveExecutionPlan(liveEnv({ LLM_PROVIDER: "anthropic" }));
-  assert("a complete Anthropic configuration resolves to live", anth.mode === "live");
-  if (anth.mode === "live") {
-    assert("Anthropic provider recorded", anth.config.analysisProvider === "anthropic");
+  // TK-R-5 — Anthropic is fail-closed in live. The repository's only
+  // Anthropic default is `claude-3-5-sonnet-latest`, a floating alias, and
+  // no dated Anthropic snapshot has been decided. Rather than invent one,
+  // live refuses the provider outright; mock and disabled are unaffected.
+  rejects("Anthropic is refused in live until a dated snapshot is decided",
+    liveEnv({ LLM_PROVIDER: "anthropic" }), "LLM_PROVIDER");
+
+  // TK-R-5 — the model rule itself, at the gate.
+  rejects("OPENAI_MODEL absent refused", liveEnv({ OPENAI_MODEL: undefined }), "OPENAI_MODEL");
+  rejects("OPENAI_MODEL empty refused", liveEnv({ OPENAI_MODEL: "" }), "OPENAI_MODEL");
+  for (const floating of ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "gpt-4.1-mini"]) {
+    rejects(`floating alias refused: ${floating}`, liveEnv({ OPENAI_MODEL: floating }), "OPENAI_MODEL");
+  }
+  rejects("a `latest` tag is refused", liveEnv({ OPENAI_MODEL: "gpt-4o-latest" }), "OPENAI_MODEL");
+  rejects("an undated snapshot is refused",
+    liveEnv({ OPENAI_MODEL: "claude-3-5-sonnet-20241022" }), "OPENAI_MODEL");
+  for (const dated of ["gpt-4o-mini-2024-07-18", "gpt-4o-2024-08-06", "gpt-4.1-mini-2025-04-14"]) {
+    assert(`a dated snapshot is accepted: ${dated}`,
+      resolveExecutionPlan(liveEnv({ OPENAI_MODEL: dated })).mode === "live");
   }
 
   rejects("NODE_ENV must be production", liveEnv({ NODE_ENV: "development" }), "NODE_ENV");

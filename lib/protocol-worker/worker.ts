@@ -81,16 +81,31 @@ export async function runOneIteration(
   opts: WorkerOptions,
   health: WorkerHealth
 ): Promise<IterationResult> {
-  const claimed = await deps.db.claimProtocolExecutionJob({
-    workerId: opts.workerId,
-    leaseSeconds: opts.leaseSeconds,
-  });
+  let claimed;
+  try {
+    claimed = await deps.db.claimProtocolExecutionJob({
+      workerId: opts.workerId,
+      leaseSeconds: opts.leaseSeconds,
+    });
+  } catch (err) {
+    // TK-R-0 — a claim that threw never answered, so it is not an idle
+    // cycle: the streak breaks. The error still propagates exactly as it
+    // did before; this block adds bookkeeping and changes no control flow.
+    health.resetNoJobStreak();
+    throw err;
+  }
   // A claim that answered at all proves the database is reachable, even
   // when the answer is "nothing to do".
   health.markDbContact();
   if (claimed.outcome !== "CLAIMED" || !claimed.job || !claimed.claimToken) {
+    // TK-R-0 — the one place an idle cycle is provable. Counted before the
+    // return, so no idle claim can escape the record.
+    health.markNoJob();
     return { outcome: "no_job", jobId: null, detail: claimed.outcome };
   }
+  // TK-R-0 — a claimed job ends any idle streak. `markIteration` below is
+  // untouched and still means exactly "a job was claimed".
+  health.resetNoJobStreak();
   health.markClaim();
   health.markIteration();
 

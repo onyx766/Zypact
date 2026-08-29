@@ -25,6 +25,19 @@ on:
       - "lib/protocol-worker/**"
       - "scripts/run-protocol-worker.ts"
       - "scripts/test-m0-worker-execution-gate.ts"
+      # TK-R-0..R-5. The transport evidence contract spans the analysis
+      # receipt end to end, so its trigger has to span the same ground:
+      # the two adapters and the type that binds them, the provider
+      # transport that measures the four values, the migration that makes
+      # them durable, and the contract itself.
+      - "lib/db/**"
+      - "lib/llm/**"
+      - "supabase/migrations/**"
+      - "scripts/test-m5-tk-r-transport-evidence.ts"
+      # The M5-A fixtures share the CallModelResult shape the contract
+      # asserts on; a change to one of them that does not compile must
+      # not be able to reach main without the typecheck below running.
+      - "scripts/test-m5-*.ts"
       - "Dockerfile.worker"
       - ".dockerignore"
       - "fly.worker.toml.template"
@@ -75,6 +88,13 @@ jobs:
 
       - name: Run the execution gate contract
         run: npm run test:m0-worker-execution-gate
+
+      # TK-R-0..R-5, network-free: memory adapter, injected transports, no
+      # provider key, no Supabase, no migration applied. Placed before the
+      # Docker half so a contract failure is reported without first paying
+      # for an image build.
+      - name: Run the TK-R transport evidence contract
+        run: npm run test:m5-tk-r
 
       # The Docker half runs here, and ONLY here. The opt-in is a STEP-level
       # env entry on purpose: at job or workflow level it would silently

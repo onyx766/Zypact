@@ -136,7 +136,7 @@ async function runDisabled(healthPort: number, healthHost: HealthHost): Promise<
  * configuration.
  */
 async function runLive(cfg: LiveWorkerConfig): Promise<void> {
-  const [{ getDb }, { runPerplexityProbe }, callModel, { sleep }, { runWorkerLoop }, { WorkerHealth }] =
+  const [{ getDb }, { runPerplexityProbe }, callModel, { sleep }, { runWorkerLoop }, { WorkerHealth, idleProofEvent }] =
     await Promise.all([
       import("@/lib/db"),
       import("@/lib/probes/perplexity"),
@@ -227,7 +227,16 @@ async function runLive(cfg: LiveWorkerConfig): Promise<void> {
    * worker would simply vanish. Shutdown is cooperative, never accidental.
    */
   const health = await runWorkerLoop(deps, opts, signal, sleep, (r: IterationResult) => {
-    if (r.outcome === "no_job") return;
+    if (r.outcome === "no_job") {
+      // TK-R-0 — idle cycles are still NOT logged one by one: a worker on
+      // an empty queue would otherwise fill the log with nothing. The
+      // threshold decision lives in `idleProofEvent` so that the test can
+      // execute this exact rule instead of restating it; here there is
+      // only the wiring.
+      const proof = idleProofEvent(healthRef.snapshot());
+      if (proof) log("worker_idle_proof", { ...proof, executionEnabled: true });
+      return;
+    }
     // Closed labels only: an RPC outcome, a job id, never a prompt or a token.
     log("iteration", { outcome: r.outcome, jobId: r.jobId, detail: r.detail });
   }, healthRef);

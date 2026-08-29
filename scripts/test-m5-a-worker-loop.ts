@@ -357,6 +357,7 @@ async function main(): Promise<void> {
         model: "gpt-4o-mini",
         content: JSON.stringify(M5_OUTPUT),
         usedMock: false,
+        modelReturned: null,
         latencyMs: 5,
         requestSha256: sha256Hex(ANALYSIS_REQUEST_BODY),
         contentSha256: sha256Hex(JSON.stringify(M5_OUTPUT)),

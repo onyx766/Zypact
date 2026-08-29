@@ -61,7 +61,8 @@
     "test:m5-a-failure-matrix": "tsx scripts/test-m5-a-failure-matrix.ts",
     "test:m5-a-abort-and-cancel": "tsx scripts/test-m5-a-abort-and-cancel.ts",
     "test:m5-a-throttling": "tsx scripts/test-m5-a-throttling.ts",
-    "test:m5-a-lifecycle": "tsx scripts/test-m5-a-lifecycle.ts"
+    "test:m5-a-lifecycle": "tsx scripts/test-m5-a-lifecycle.ts",
+    "test:m5-tk-r": "tsx scripts/test-m5-tk-r-transport-evidence.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

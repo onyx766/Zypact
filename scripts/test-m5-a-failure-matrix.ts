@@ -134,6 +134,7 @@ async function main(): Promise<void> {
       }),
       execute: async () => ({
         provider: "openai" as const, model: "gpt-4o-mini", content: M5, usedMock: false,
+        modelReturned: null,
         latencyMs: 5, requestSha256: sha256Hex(REQ), contentSha256: sha256Hex(M5),
         providerRequestId: "ana", httpStatus: 200,
       }),
@@ -211,6 +212,7 @@ async function main(): Promise<void> {
         execute: async () => ({
           provider: "openai" as const, model: "gpt-4o-mini", content: "not json at all {{{",
           usedMock: false, latencyMs: 5, requestSha256: sha256Hex(REQ),
+          modelReturned: null,
           contentSha256: sha256Hex("not json at all {{{"), providerRequestId: "ana", httpStatus: 200,
         }),
       },
@@ -233,6 +235,7 @@ async function main(): Promise<void> {
         ...deps.analysis,
         execute: async () => ({
           provider: "openai" as const, model: "gpt-4o-mini", content: extraKey, usedMock: false,
+          modelReturned: null,
           latencyMs: 5, requestSha256: sha256Hex(REQ), contentSha256: sha256Hex(extraKey),
           providerRequestId: "ana", httpStatus: 200,
         }),

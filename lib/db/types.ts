@@ -1503,6 +1503,12 @@ export interface AnalysisCallReceipt {
   requestSha256: string | null;
   responseSha256: string | null;
   latencyMs: number | null;
+  /** TK-R-2 — provider-assigned request id; null for historical rows and for mock. */
+  providerRequestId: string | null;
+  /** TK-R-3 — HTTP status of the provider response; null for historical rows and when none was received. */
+  httpStatus: number | null;
+  /** TK-R-1 — model the provider reported serving; null for historical rows, for mock, and when absent. */
+  modelReturned: string | null;
   receivedAt: string;
   createdAt: string;
   /**
@@ -1814,6 +1820,24 @@ export interface RecordAnalysisCallReceiptForJobInput {
   requestSha256?: string | null;
   responseSha256?: string | null;
   latencyMs?: number | null;
+  /**
+   * TK-R-2 — the provider-assigned request id, exactly as the response
+   * header carried it. Null when the provider sent none, or when the call
+   * never reached a provider. Never fabricated.
+   */
+  providerRequestId?: string | null;
+  /**
+   * TK-R-3 — the HTTP status of the provider response. Null when no HTTP
+   * response was received at all (network error, abort). Never synthesised
+   * from an outcome label.
+   */
+  httpStatus?: number | null;
+  /**
+   * TK-R-1 — the model the provider says it served, read from the response
+   * body. Distinct from `model`, which stays what was requested. Null when
+   * the response named none.
+   */
+  modelReturned?: string | null;
   /** D-023 §3 — populate only when a real cost is known; leave both this and costBasis unset otherwise. */
   actualCostUsd?: number | null;
   costBasis?: CostBasis | null;

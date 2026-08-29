@@ -102,6 +102,14 @@ export interface CallModelResult {
   providerRequestId: string | null;
   /** D-027 (B0.2A-1) — HTTP status of the successful response. Null for mock. */
   httpStatus: number | null;
+  /**
+   * TK-R-1 — the model the PROVIDER says it served, read from the response
+   * body. Distinct from `model` above, which is what we ASKED for and keeps
+   * its original meaning untouched. Null when the provider returns no such
+   * field, and for mock. The two are never merged: a divergence between
+   * them is exactly the signal this field exists to preserve.
+   */
+  modelReturned: string | null;
 }
 
 function resolveMockMode(): "on" | "off" | "auto" {
@@ -362,6 +370,17 @@ function extractProviderRequestId(provider: "openai" | "anthropic", res: Respons
   return res.headers.get("request-id");
 }
 
+/**
+ * TK-R-1 — the model named by the response itself. Both OpenAI's Chat
+ * Completions and Anthropic's Messages responses carry a top-level
+ * `model`. Anything else, including a non-string, is treated as absent
+ * rather than coerced: a fabricated value would be worse than a null.
+ */
+function extractReturnedModel(json: unknown): string | null {
+  const typed = json as { model?: unknown };
+  return typeof typed?.model === "string" && typed.model !== "" ? typed.model : null;
+}
+
 function extractOpenAiContent(json: unknown): string {
   const typed = json as { choices?: Array<{ message?: { content?: string } }> };
   return typed?.choices?.[0]?.message?.content ?? "";
@@ -474,6 +493,7 @@ export async function executePreparedCallModelRequest(
     contentSha256: sha256Hex(content), // exact UTF-8 bytes of the untrimmed content above
     providerRequestId,
     httpStatus: res.status,
+    modelReturned: extractReturnedModel(json),
   };
 }
 
@@ -497,6 +517,9 @@ export async function callModel(input: CallModelInput): Promise<CallModelResult>
       contentSha256: null,
       providerRequestId: null,
       httpStatus: null,
+      // TK-R-1 — a mock never spoke to a provider, so no provider named a
+      // model. Null, never the requested string echoed back.
+      modelReturned: null,
     };
   }
 

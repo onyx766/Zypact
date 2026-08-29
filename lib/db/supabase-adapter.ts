@@ -1468,6 +1468,12 @@ interface AnalysisCallReceiptDbRow {
   latency_ms: number | null;
   received_at: string;
   created_at: string;
+  /** TK-R-2 (migration 0058) — absent on rows returned by RPCs that predate this column; normalized to null. */
+  provider_request_id?: string | null;
+  /** TK-R-3 (migration 0058) — absent on rows returned by RPCs that predate this column; normalized to null. */
+  http_status?: number | null;
+  /** TK-R-1 (migration 0058) — absent on rows returned by RPCs that predate this column; normalized to null. */
+  model_returned?: string | null;
   /** D-026 (migration 0052) — absent (undefined) on rows returned by RPCs that predate this column; normalized to null. */
   raw_content?: string | null;
   /** D-027 (migration 0053) — absent (undefined) on rows returned by RPCs that predate this column; normalized to null. */
@@ -1490,6 +1496,12 @@ function mapAnalysisCallReceiptNullable(
     requestSha256: r.request_sha256,
     responseSha256: r.response_sha256,
     latencyMs: r.latency_ms,
+    // TK-R-1/2/3 — the four historical staging rows predate these columns
+    // and legitimately carry null. `?? null` normalises "column absent
+    // from the RPC result" to the same null, never to a fabricated value.
+    providerRequestId: r.provider_request_id ?? null,
+    httpStatus: r.http_status ?? null,
+    modelReturned: r.model_returned ?? null,
     receivedAt: r.received_at,
     createdAt: r.created_at,
     rawContent: r.raw_content ?? null,
@@ -3518,6 +3530,10 @@ export const supabaseAdapter: DbAdapter = {
       p_cost_basis: rpcCostBasis,
       p_raw_content: input.rawContent ?? null,
       p_raw_request_body: input.rawRequestBody ?? null,
+      // TK-R-2 / TK-R-3 / TK-R-1 — migration 0058.
+      p_provider_request_id: input.providerRequestId ?? null,
+      p_http_status: input.httpStatus ?? null,
+      p_model_returned: input.modelReturned ?? null,
     });
     if (error) throw error;
     const row = Array.isArray(data) ? data[0] : data;

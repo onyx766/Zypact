@@ -152,6 +152,7 @@ async function main(): Promise<void> {
             seen.analysis = opts?.signal;
             return {
               provider: "openai" as const, model: "gpt-4o-mini", content: CONTENT, usedMock: false,
+              modelReturned: null,
               latencyMs: 1, requestSha256: sha256Hex(REQ), contentSha256: sha256Hex(CONTENT),
               providerRequestId: "a", httpStatus: 200,
             };
@@ -199,7 +200,7 @@ async function main(): Promise<void> {
     const keys = Object.keys(snap).sort();
     check(
       "the snapshot is a closed set of scalars",
-      keys.join(",") === "alive,iterations,lastClaimAtMs,lastDbContactAtMs,lastHeartbeatAtMs,shuttingDown,startedAtMs",
+      keys.join(",") === "alive,consecutiveNoJobCycles,iterations,lastClaimAtMs,lastDbContactAtMs,lastHeartbeatAtMs,lastNoJobAtMs,maxConsecutiveNoJobCycles,noJobCycles,shuttingDown,startedAtMs",
       keys.join(",")
     );
     check(

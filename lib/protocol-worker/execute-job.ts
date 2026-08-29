@@ -290,6 +290,14 @@ async function recordAnalysisFailure(
     requestSha256: fields.requestSha256,
     responseSha256: null,
     latencyMs: failure?.latencyMs ?? null,
+    // TK-R-2 / TK-R-3 — the transport already measured these; they were
+    // simply never persisted. Null stays null: a network error that never
+    // reached the provider has no request id and no HTTP status, and
+    // nothing here fabricates one.
+    providerRequestId: failure?.providerRequestId ?? null,
+    httpStatus: failure?.httpStatus ?? null,
+    // TK-R-1 — a failed call names no served model.
+    modelReturned: null,
     rawContent: null,
     rawRequestBody: fields.rawRequestBody,
   });
@@ -358,6 +366,15 @@ async function runAnalysisCall(
     usedMock: fields.usedMock,
     requestSha256: fields.requestSha256,
     responseSha256: sha256Hex(out.content),
+    // TK-R-4 — the success path measured a latency and then dropped it on
+    // the floor, so every successful analysis receipt carried a null.
+    latencyMs: out.latencyMs,
+    // TK-R-2 / TK-R-3 — same values, same reason.
+    providerRequestId: out.providerRequestId,
+    httpStatus: out.httpStatus,
+    // TK-R-1 — what the provider says it served, never overwriting `model`
+    // above, which stays what we asked for.
+    modelReturned: out.modelReturned,
     rawContent: out.content,
     rawRequestBody: fields.rawRequestBody,
   });

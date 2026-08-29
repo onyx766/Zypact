@@ -3939,6 +3939,12 @@ export const memoryAdapter: DbAdapter = {
         (existingAnalysis.responseSha256 ?? null) === (input.responseSha256 ?? null) &&
         (existingAnalysis.rawContent ?? null) === (input.rawContent ?? null) &&
         (existingAnalysis.latencyMs ?? null) === (input.latencyMs ?? null) &&
+        // TK-R-1/2/3 — part of the receipt's identity: a replay that names
+        // a different served model, request id or HTTP status is a
+        // contradiction, not an idempotent repeat.
+        (existingAnalysis.providerRequestId ?? null) === (input.providerRequestId ?? null) &&
+        (existingAnalysis.httpStatus ?? null) === (input.httpStatus ?? null) &&
+        (existingAnalysis.modelReturned ?? null) === (input.modelReturned ?? null) &&
         (call.actualCostUsd ?? null) === (input.actualCostUsd ?? null) &&
         (call.costBasis ?? null) === (input.costBasis ?? null);
       if (identical) {
@@ -4043,6 +4049,10 @@ export const memoryAdapter: DbAdapter = {
       requestSha256,
       responseSha256,
       latencyMs: input.latencyMs ?? null,
+      // TK-R-2 / TK-R-3 / TK-R-1 — carried, never invented.
+      providerRequestId: input.providerRequestId ?? null,
+      httpStatus: input.httpStatus ?? null,
+      modelReturned: input.modelReturned ?? null,
       receivedAt: now,
       createdAt: now,
       rawContent,

@@ -109,6 +109,33 @@ const PROJECT_REF = /^[a-z]{20}$/;
  */
 const WORKER_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/;
 
+/**
+ * TK-R-5 — a live analysis model must be a DATED, immutable snapshot.
+ *
+ * The receipt records which model was asked for. When that string is a
+ * floating alias the record is worthless: `gpt-4o-mini` resolved to one
+ * snapshot last month and may resolve to another tomorrow, and nothing in
+ * the evidence would show the difference. OpenAI publishes dated snapshots
+ * exactly for this — `gpt-4o-mini-2024-07-18` — so live requires that
+ * shape and refuses everything else BEFORE any transport is built.
+ *
+ * The rule is deliberately narrow: a trailing `-YYYY-MM-DD`. It admits the
+ * configuration this repository already validated and rejects every alias,
+ * dated or not, that does not carry its own snapshot date.
+ */
+const DATED_MODEL = /^[a-z0-9](?:[a-z0-9.]|-(?!-))*-\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Aliases known to float. `latest` is caught by its own rule; these are the
+ * bare family names that silently track a moving target.
+ */
+const FLOATING_MODEL_ALIASES: readonly string[] = [
+  "gpt-4o-mini", "gpt-4o", "gpt-4", "gpt-4-turbo", "gpt-3.5-turbo",
+  "gpt-4.1", "gpt-4.1-mini", "o1", "o1-mini", "o3", "o3-mini",
+  "claude-3-5-sonnet", "claude-3-5-haiku", "claude-3-opus",
+  "claude-sonnet-4", "claude-opus-4",
+];
+
 /** Closed allow-list. Order is display order in the error message. */
 const HEALTH_HOSTS: readonly HealthHost[] = ["127.0.0.1", "0.0.0.0"];
 
@@ -211,6 +238,67 @@ function healthHostOrThrow(env: Env): HealthHost {
     `WORKER_HEALTH_HOST must be exactly one of: ${HEALTH_HOSTS.join(", ")}.`,
     ["WORKER_HEALTH_HOST"],
   );
+}
+
+/**
+ * TK-R-5 — the versioned-model rule, in ONE place.
+ *
+ * Returns null when the model is an acceptable dated snapshot, or a closed
+ * label saying why it was refused. The exported predicate and the live gate
+ * both delegate here, so the rule the tests exercise and the rule
+ * production enforces cannot drift apart.
+ *
+ * An absent or empty value never reaches this function in the live path —
+ * `required()` refuses it first, naming the variable. Passed directly, an
+ * empty string falls through to `not_dated`, which is the same refusal.
+ */
+type AnalysisModelRefusal = "floating_alias" | "latest_tag" | "not_dated";
+
+function classifyAnalysisModel(model: string): AnalysisModelRefusal | null {
+  if (FLOATING_MODEL_ALIASES.includes(model)) return "floating_alias";
+  if (model.endsWith("latest")) return "latest_tag";
+  if (!DATED_MODEL.test(model)) return "not_dated";
+  return null;
+}
+
+/** Each refusal names the variable and never its value. */
+const ANALYSIS_MODEL_REFUSAL_MESSAGE: Record<AnalysisModelRefusal, (name: string) => string> = {
+  floating_alias: (name) =>
+    `${name} is a floating alias; live execution requires a dated model snapshot.`,
+  latest_tag: (name) =>
+    `${name} ends in "latest"; live execution requires a dated model snapshot.`,
+  not_dated: (name) =>
+    `${name} must be a dated model snapshot ending in -YYYY-MM-DD.`,
+};
+
+/**
+ * TK-R-5 — the versioned-model rule, as a pure predicate.
+ *
+ * Exported so the rule can be exercised value-by-value without
+ * assembling a whole live environment: the reason a model is refused is
+ * the thing under test, and it must not depend on which of the other
+ * eleven live preconditions happens to fail first. It is a thin view over
+ * `classifyAnalysisModel`, never a second implementation.
+ */
+export function isDatedAnalysisModel(model: string): boolean {
+  return classifyAnalysisModel(model) === null;
+}
+
+/**
+ * TK-R-5 — the live analysis model gate.
+ *
+ * Refuses, in this order: an absent or empty value, a known floating
+ * alias, anything ending in `latest`, and anything that is not a dated
+ * snapshot. Every refusal names the variable and never its value, in
+ * keeping with the rest of this module.
+ */
+function requireDatedAnalysisModel(env: Env, name: string): string {
+  const model = required(env, name);
+  const refusal = classifyAnalysisModel(model);
+  if (refusal !== null) {
+    throw new WorkerConfigError(ANALYSIS_MODEL_REFUSAL_MESSAGE[refusal](name), [name]);
+  }
+  return model;
 }
 
 /**
@@ -359,6 +447,23 @@ export function resolveExecutionPlan(env: Env): ExecutionPlan {
     );
   }
   required(env, provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY");
+
+  // TK-R-5 — refuse a floating model before anything can be sent.
+  //
+  // Anthropic is fail-closed on purpose. No dated Anthropic snapshot has
+  // been decided and verified against the provider's own documentation for
+  // this repository, and inventing one would put an unverified string into
+  // durable evidence. Until such a model is chosen in writing, live
+  // execution accepts OpenAI only; the Anthropic transport itself is
+  // untouched and stays available to mock and non-live paths.
+  if (provider === "anthropic") {
+    throw new WorkerConfigError(
+      "LLM_PROVIDER=anthropic is not permitted in live execution until a dated "
+        + "Anthropic model snapshot is decided; use openai.",
+      ["LLM_PROVIDER", "ANTHROPIC_MODEL"],
+    );
+  }
+  requireDatedAnalysisModel(env, "OPENAI_MODEL");
 
   const leaseSeconds = intOrThrow(env, "WORKER_LEASE_SECONDS", 60, 1, MAX_LEASE_SECONDS);
   const graceMs = intOrThrow(env, "WORKER_GRACE_MS", 10000, 0, MAX_DURATION_MS);

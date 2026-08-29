@@ -28,6 +28,7 @@ on:
       - "Dockerfile.worker"
       - ".dockerignore"
       - "fly.worker.toml.template"
+      - "fly.worker.staging.toml"
       - "scripts/test-m0-worker-hosting-contract.ts"
   workflow_dispatch:
 

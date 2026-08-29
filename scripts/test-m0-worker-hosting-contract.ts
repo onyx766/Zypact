@@ -1,7 +1,7 @@
 /**
  * M0 — worker hosting artefacts contract.
  *
- * The worker is now runnable by a host. These three files are what a host
+ * The worker is now runnable by a host. These four files are what a host
  * would read, and each of them can silently undo an invariant the execution
  * gate spent 471 checks establishing:
  *
@@ -14,6 +14,9 @@
  *   fly.worker.toml.template  an `app` line makes an inert template
  *                             deployable; an `http_service` block turns a
  *                             private worker into a public endpoint.
+ *   fly.worker.staging.toml   a wrong app, region or execution mode can
+ *                             deploy the worker to the wrong place or let
+ *                             it spend before live execution is authorised.
  *
  * The static half runs everywhere and reads only these files. The Docker
  * half is OPT-IN — `ZYPACT_M0_HOSTING_DOCKER_TEST=1` — and, once asked for,
@@ -335,7 +338,42 @@ function code(src: string, comment: string): string[] {
       && lines.some((l) => /^memory_mb\s*=\s*512$/.test(l)));
 }
 
-// ═══════════════════════════════════════ 4. the repository wires it in
+// ═══════════════════════════════════════ 4. the staging deployment config
+{
+  const templateSrc = read("fly.worker.toml.template");
+  const stagingSrc = read("fly.worker.staging.toml");
+  const templateLines = code(templateSrc, "#");
+  const stagingLines = code(stagingSrc, "#");
+
+  const appLines = stagingLines.filter((l) => /^app\s*=/.test(l));
+  const regionLines = stagingLines.filter((l) => /^primary_region\s*=/.test(l));
+  assert("staging names exactly the authorised Fly application",
+    appLines.length === 1 && appLines[0] === 'app = "zypact-protocol-worker-staging"',
+    appLines.join(" | ") || "absent");
+  assert("staging names exactly the authorised Fly region",
+    regionLines.length === 1 && regionLines[0] === 'primary_region = "iad"',
+    regionLines.join(" | ") || "absent");
+  assert("the app and region are the first two semantic lines, at top level",
+    stagingLines[0] === appLines[0] && stagingLines[1] === regionLines[0],
+    stagingLines.slice(0, 4).join(" | "));
+
+  const withoutIdentity = stagingLines.filter(
+    (l) => !/^app\s*=/.test(l) && !/^primary_region\s*=/.test(l),
+  );
+  assert("staging differs semantically from the inert template only by app and region",
+    withoutIdentity.join("\n") === templateLines.join("\n"),
+    `${withoutIdentity.length} staging lines vs ${templateLines.length} template lines`);
+  assert("staging remains explicitly execution-disabled",
+    stagingLines.filter((l) => l === 'WORKER_EXECUTION_MODE = "disabled"').length === 1);
+
+  const body = stagingLines.join("\n");
+  assert("staging carries no credential-shaped key",
+    !/(SERVICE_ROLE|API_KEY|_TOKEN|_SECRET|PERPLEXITY|OPENAI|ANTHROPIC|SUPABASE)/i.test(body));
+  assert("staging contains no stale claim that it is non-deployable",
+    !/deliberately\s+NOT\s+deployable|ABSENT ON PURPOSE|refuse to run|cannot create/i.test(stagingSrc));
+}
+
+// ═══════════════════════════════════════ 5. the repository wires it in
 {
   const pkg = JSON.parse(read("package.json")) as { scripts?: Record<string, string> };
   assert("package.json registers this contract",
@@ -345,7 +383,7 @@ function code(src: string, comment: string): string[] {
 
   const wf = read(".github/workflows/m0-worker-execution-gate.yml");
   for (const p of [
-    "Dockerfile.worker", ".dockerignore", "fly.worker.toml.template",
+    "Dockerfile.worker", ".dockerignore", "fly.worker.toml.template", "fly.worker.staging.toml",
     "scripts/test-m0-worker-hosting-contract.ts",
   ]) {
     assert(`CI filters on \`${p}\``, wf.includes(`"${p}"`), p);
@@ -392,7 +430,7 @@ function code(src: string, comment: string): string[] {
     !wfLines.some((l) => /^\s*run:.*\bdocker\b/.test(l)), "docker in a run: line");
 }
 
-// ═══════════════════════════════════════════════ 5. the Docker half
+// ═══════════════════════════════════════════════ 6. the Docker half
 /**
  * Opt-in, and unforgiving once opted into. Everything it creates carries a
  * unique name, and it removes exactly those two objects — never a prune,

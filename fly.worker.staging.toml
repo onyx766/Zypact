@@ -1,0 +1,52 @@
+# M0 — Fly configuration for the protocol worker in staging.
+#
+# This file names the existing empty Fly application and the region chosen
+# next to the Supabase staging project. It is deployable, but deliberately
+# inert: WORKER_EXECUTION_MODE remains `disabled`, so starting this image
+# cannot claim a job, contact Supabase or call a paid provider.
+#
+# Nothing here is a secret. The Supabase URL, service-role key, Perplexity
+# key and analysis-provider key are absent. They may be introduced only in
+# a later, separately authorised live-execution tranche through Fly secrets.
+#
+# This machine is a WORKER. It has no `http_service`, no `[[services]]`, no
+# public port, no allocated IP address and no volume. The health endpoint is
+# reachable only by Fly's private health prober.
+
+app = "zypact-protocol-worker-staging"
+primary_region = "iad"
+
+kill_signal = "SIGTERM"
+# Seconds. WORKER_GRACE_MS stays strictly inside this shutdown window.
+kill_timeout = 30
+
+[build]
+  dockerfile = "Dockerfile.worker"
+
+[env]
+  NODE_ENV = "production"
+  # Inert until a later authorisation explicitly enables live execution.
+  WORKER_EXECUTION_MODE = "disabled"
+  # Required for Fly's private health prober to reach the process.
+  WORKER_HEALTH_HOST = "0.0.0.0"
+  WORKER_HEALTH_PORT = "8080"
+  WORKER_GRACE_MS = "10000"
+
+[checks]
+  [checks.readiness]
+    type = "http"
+    port = 8080
+    method = "GET"
+    path = "/readyz"
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "10s"
+
+[[restart]]
+  policy = "always"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512

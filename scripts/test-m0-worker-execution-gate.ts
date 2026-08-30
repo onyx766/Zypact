@@ -80,6 +80,9 @@ function liveEnv(over: Record<string, string | undefined> = {}): Record<string, 
     // TK-R-5 — live now demands a dated model snapshot. This is the exact
     // value the repository is configured with today.
     OPENAI_MODEL: "gpt-4o-mini-2024-07-18",
+    // B1/B2 — both are required in live and have no default.
+    WORKER_EXIT_AFTER_CLAIMED_JOB: "false",
+    WORKER_PROVIDER_TIMEOUT_MS: "45000",
     ...SECRETS,
     ...over,
   };
@@ -316,8 +319,14 @@ function rejects(label: string, env: Record<string, string | undefined>, variabl
     liveEnv({ WORKER_LEASE_SECONDS: "10", WORKER_GRACE_MS: "10000" }), "WORKER_GRACE_MS");
   rejects("grace greater than the lease refused",
     liveEnv({ WORKER_LEASE_SECONDS: "10", WORKER_GRACE_MS: "10001" }), "WORKER_GRACE_MS");
+  // B2 tightened this: the provider ceiling must ALSO fit inside the lease
+  // alongside the grace, so a grace sitting 1 ms below a 10 s lease can no
+  // longer be accepted whatever the timeout. The case keeps its meaning —
+  // grace below the lease is accepted — on a lease with room for both.
   assert("grace below the lease accepted",
-    resolveExecutionPlan(liveEnv({ WORKER_LEASE_SECONDS: "10", WORKER_GRACE_MS: "9999" })).mode === "live");
+    resolveExecutionPlan(liveEnv({
+      WORKER_LEASE_SECONDS: "60", WORKER_GRACE_MS: "9999", WORKER_PROVIDER_TIMEOUT_MS: "1000",
+    })).mode === "live");
 
   // An explicitly supplied invalid number is an error, never a silent
   // return to the documented default.

@@ -55,6 +55,7 @@ import {
   type IterationResult,
   type PerplexityProbeRunner,
   type WorkerDeps,
+  type WorkerOptions,
 } from "@/lib/protocol-worker/types";
 
 interface Fenced {
@@ -121,8 +122,58 @@ export function classifyCalls(ctx: GetProtocolExecutionJobContextResult): Classi
  * mark provably prevents the outbound request. `init.body` is never
  * logged, inspected or copied here.
  */
+/**
+ * B2 — one deadline per provider leg.
+ *
+ * The timer is NOT started here: `arm()` is called immediately before the
+ * wire, after `markExternalCallSentForJob` has answered SENT, so a refused
+ * mark never starts a clock. The signal composes with the worker's global
+ * shutdown signal — whichever fires first aborts the call — and covers the
+ * whole exchange, body read included, because it is the signal handed to
+ * `fetch` itself.
+ *
+ * A leg that expires surfaces as an ordinary abort, which both transports
+ * already map to an UNKNOWN provider outcome: the durable receipt is written
+ * with `provider_outcome_unknown`, never silently dropped, and nothing
+ * retries the wire.
+ */
+interface LegDeadline {
+  readonly signal: AbortSignal;
+  arm(): void;
+  dispose(): void;
+}
+
+function createLegDeadline(deps: WorkerDeps, timeoutMs: number): LegDeadline {
+  const ac = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const outer = deps.abortSignal;
+  const onOuter = (): void => ac.abort();
+  if (outer) {
+    if (outer.aborted) ac.abort();
+    else outer.addEventListener("abort", onOuter, { once: true });
+  }
+  return {
+    signal: ac.signal,
+    arm(): void {
+      // Exactly one timer per leg. A retried fetch inside a transport must
+      // not silently reset the ceiling.
+      if (timer !== null) return;
+      timer = setTimeout(() => ac.abort(), timeoutMs);
+      (timer as unknown as { unref?: () => void }).unref?.();
+    },
+    dispose(): void {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      outer?.removeEventListener("abort", onOuter);
+    },
+  };
+}
+
 async function runProviderCall(
   deps: WorkerDeps,
+  opts: WorkerOptions,
   f: Fenced,
   call: ProtocolExternalCall,
   probeRunId: string,
@@ -133,6 +184,7 @@ async function runProviderCall(
   // itself. The decision therefore rests on this explicit state, recorded
   // before anything can throw — never on the exception's type.
   let markOutcome: string | null = null;
+  const deadline = createLegDeadline(deps, opts.providerTimeoutMs);
   const fetchImpl: typeof fetch = async (url, init) => {
     const body = typeof init?.body === "string" ? init.body : "";
     const m = await deps.db.markExternalCallSentForJob({
@@ -149,16 +201,30 @@ async function runProviderCall(
     });
     markOutcome = m.outcome;
     if (m.outcome !== "SENT") throw new WorkerAbort(m.outcome);
-    return deps.realFetch(url, init);
+    // The clock starts here and nowhere earlier: the mark is accepted, the
+    // request is about to leave.
+    deadline.arm();
+    return deps.realFetch(url, { ...init, signal: deadline.signal });
   };
 
   try {
-    const res = await deps.runProbe({
-      prompt: probeInput.prompt,
-      brandName: probeInput.brandName,
-      domain: probeInput.domain,
-      fetchImpl,
-    });
+    let res: Awaited<ReturnType<PerplexityProbeRunner>>;
+    try {
+      res = await deps.runProbe({
+        prompt: probeInput.prompt,
+        brandName: probeInput.brandName,
+        domain: probeInput.domain,
+        fetchImpl,
+      });
+    } finally {
+      // B2 — the ceiling covers the wire and the body read, and stops there.
+      // `runPerplexityProbe` has fully resolved or rejected by now, so the
+      // timer is released BEFORE the receipt RPC and every durable write that
+      // follows: a database round-trip must never sit under a provider clock.
+      // In `finally`, so it runs on success, timeout, shutdown, http error,
+      // empty answer and any transport throw alike.
+      deadline.dispose();
+    }
     const rec = await deps.db.recordProviderCallReceiptForJob({
       jobId: f.jobId,
       claimToken: f.claimToken,
@@ -315,6 +381,7 @@ async function recordAnalysisFailure(
 /** Runs the analysis call through the two-phase transport. */
 async function runAnalysisCall(
   deps: WorkerDeps,
+  opts: WorkerOptions,
   f: Fenced,
   call: ProtocolExternalCall,
   probeRunId: string,
@@ -346,12 +413,17 @@ async function runAnalysisCall(
   }
 
   let out: Awaited<ReturnType<AnalysisTransport["execute"]>>;
+  const deadline = createLegDeadline(deps, opts.providerTimeoutMs);
   try {
-    out = await deps.analysis.execute(prepared, { signal: deps.abortSignal });
+    // Armed after the mark was accepted, immediately before the transport.
+    deadline.arm();
+    out = await deps.analysis.execute(prepared, { signal: deadline.signal });
   } catch (e) {
     // The request went out. A receipt is owed whatever happened next, and
     // an unknown outcome must close the whole attempt in one transaction.
     return await recordAnalysisFailure(deps, f, call, probeRunId, fields, e);
+  } finally {
+    deadline.dispose();
   }
 
   const rec = await deps.db.recordAnalysisCallReceiptForJob({

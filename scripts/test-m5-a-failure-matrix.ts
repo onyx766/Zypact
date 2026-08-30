@@ -49,6 +49,7 @@ const OPTS: WorkerOptions = {
   workerId: "matrix", leaseSeconds: 1, idleBackoffMs: 1, maxBackoffMs: 2,
   maxSlotsPerClaim: 4, perplexityReservedCostUsd: 0.02, analysisReservedCostUsd: 0.02,
   jitterRatio: 0, maxThrottledRetries: 3, graceMs: 1000,
+  exitAfterClaimedJob: false, providerTimeoutMs: 45000,
 };
 
 function probeFailure(reason: "network_error" | "http_error" | "empty_answer", status: number | null) {

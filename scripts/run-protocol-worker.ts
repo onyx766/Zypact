@@ -183,6 +183,8 @@ async function runLive(cfg: LiveWorkerConfig): Promise<void> {
     jitterRatio: cfg.jitterRatio,
     maxThrottledRetries: cfg.maxThrottledRetries,
     graceMs: cfg.graceMs,
+    exitAfterClaimedJob: cfg.exitAfterClaimedJob,
+    providerTimeoutMs: cfg.providerTimeoutMs,
     perplexityReservedCostUsd: cfg.perplexityReservedCostUsd,
     analysisReservedCostUsd: cfg.analysisReservedCostUsd,
   };

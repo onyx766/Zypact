@@ -97,6 +97,7 @@ const OPTS: WorkerOptions = {
     jitterRatio: 0,
     maxThrottledRetries: 3,
     graceMs: 1000,
+    exitAfterClaimedJob: false, providerTimeoutMs: 45000,
 };
 
 async function main(): Promise<void> {

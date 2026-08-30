@@ -44,6 +44,7 @@ const OPTS: WorkerOptions = {
   workerId: "throttle", leaseSeconds: 60, idleBackoffMs: 1, maxBackoffMs: 8,
   maxSlotsPerClaim: 4, perplexityReservedCostUsd: 0.02, analysisReservedCostUsd: 0.02,
   jitterRatio: 0.5, maxThrottledRetries: 3, graceMs: 1000,
+  exitAfterClaimedJob: false, providerTimeoutMs: 45000,
 };
 
 async function main(): Promise<void> {

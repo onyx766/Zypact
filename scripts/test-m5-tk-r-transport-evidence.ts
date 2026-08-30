@@ -119,6 +119,7 @@ const OPTS: WorkerOptions = {
   jitterRatio: 0,
   maxThrottledRetries: 3,
   graceMs: 1000,
+  exitAfterClaimedJob: false, providerTimeoutMs: 45000,
 };
 
 /** The four TK-R-0 counters, read straight off the health snapshot. */

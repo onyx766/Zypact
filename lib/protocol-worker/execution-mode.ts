@@ -48,6 +48,20 @@ export interface LiveWorkerConfig {
   readonly jitterRatio: number;
   readonly maxThrottledRetries: number;
   readonly graceMs: number;
+  /**
+   * B1 — structural single-job mode. When true the loop exits after the
+   * FIRST iteration that actually claimed a job, whatever its outcome, and
+   * never issues a second claim. Required in live so the choice is always
+   * deliberate; never read on the disabled path.
+   */
+  readonly exitAfterClaimedJob: boolean;
+  /**
+   * B2 — per-provider-call ceiling, in ms. Applied separately to each leg,
+   * started immediately before the wire and covering the whole response
+   * including the body read. Must leave room for the grace budget inside
+   * the lease. Required in live; never read on the disabled path.
+   */
+  readonly providerTimeoutMs: number;
   readonly perplexityReservedCostUsd: number;
   readonly analysisReservedCostUsd: number;
   readonly healthPort: number;
@@ -173,6 +187,38 @@ function required(env: Env, name: string): string {
  * error, never a silent return to the default. A host that sets
  * WORKER_LEASE_SECONDS=0 by accident must be told, not quietly given 60.
  */
+/**
+ * B1 — a strictly literal boolean. Absent, empty or anything other than
+ * `true`/`false` is refused, naming only the variable. There is no default:
+ * a live worker must state whether it stops after one job.
+ */
+function strictBoolOrThrow(env: Env, name: string): boolean {
+  const v = raw(env, name);
+  if (v === undefined) {
+    throw new WorkerConfigError(`${name} is required in live execution.`, [name]);
+  }
+  if (v !== "true" && v !== "false") {
+    throw new WorkerConfigError(`${name} must be exactly "true" or "false".`, [name]);
+  }
+  return v === "true";
+}
+
+/** B2 — a required integer with no default, bounded by [min, max]. */
+function requiredIntOrThrow(env: Env, name: string, min: number, max: number): number {
+  const v = raw(env, name);
+  if (v === undefined) {
+    throw new WorkerConfigError(`${name} is required in live execution.`, [name]);
+  }
+  if (!/^-?\d+$/.test(v)) {
+    throw new WorkerConfigError(`${name} must be an integer.`, [name]);
+  }
+  const n = Number.parseInt(v, 10);
+  if (!Number.isSafeInteger(n) || n < min || n > max) {
+    throw new WorkerConfigError(`${name} must be an integer between ${min} and ${max}.`, [name]);
+  }
+  return n;
+}
+
 function intOrThrow(
   env: Env, name: string, fallback: number, min: number, max: number,
 ): number {
@@ -474,6 +520,19 @@ export function resolveExecutionPlan(env: Env): ExecutionPlan {
     );
   }
 
+  const exitAfterClaimedJob = strictBoolOrThrow(env, "WORKER_EXIT_AFTER_CLAIMED_JOB");
+  const providerTimeoutMs = requiredIntOrThrow(env, "WORKER_PROVIDER_TIMEOUT_MS", 1000, MAX_DURATION_MS);
+  // A provider call that may run to its ceiling, plus the shutdown grace it
+  // would then consume, must still finish inside the lease. Otherwise the
+  // worker can be mid-call on a lease it can no longer renew.
+  if (providerTimeoutMs + graceMs >= leaseSeconds * 1000) {
+    throw new WorkerConfigError(
+      "WORKER_PROVIDER_TIMEOUT_MS + WORKER_GRACE_MS must be strictly less than "
+        + "WORKER_LEASE_SECONDS in milliseconds.",
+      ["WORKER_PROVIDER_TIMEOUT_MS"],
+    );
+  }
+
   const idleBackoffMs = intOrThrow(env, "WORKER_IDLE_BACKOFF_MS", 2000, 1, MAX_DURATION_MS);
   const maxBackoffMs = intOrThrow(env, "WORKER_MAX_BACKOFF_MS", 30000, 1, MAX_DURATION_MS);
 
@@ -491,6 +550,8 @@ export function resolveExecutionPlan(env: Env): ExecutionPlan {
       jitterRatio: floatOrThrow(env, "WORKER_JITTER_RATIO", 0.5, 0, false, MAX_JITTER),
       maxThrottledRetries: intOrThrow(env, "WORKER_MAX_THROTTLED_RETRIES", 3, 0, MAX_SMALL_INT),
       graceMs,
+      exitAfterClaimedJob,
+      providerTimeoutMs,
       // Strictly positive: a zero reservation would let admission control
       // admit an attempt it has not actually budgeted for.
       perplexityReservedCostUsd:

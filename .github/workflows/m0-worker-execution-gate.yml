@@ -96,6 +96,11 @@ jobs:
       - name: Run the TK-R transport evidence contract
         run: npm run test:m5-tk-r
 
+      # B1/B2/B3 — Phase 3D hard bounds. Network-free: the suite replaces the
+      # global fetch with a throwing stub and asserts it was never called.
+      - name: Run the Phase 3D hard bounds contract
+        run: npm run test:m5-phase3d-bounds
+
       # The Docker half runs here, and ONLY here. The opt-in is a STEP-level
       # env entry on purpose: at job or workflow level it would silently
       # apply to every other step, and a variable that turns on image builds

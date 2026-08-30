@@ -255,6 +255,7 @@ function workerOptions(over: Partial<WorkerOptions> = {}): WorkerOptions {
     jitterRatio: 0,
     maxThrottledRetries: 3,
     graceMs: 1000,
+    exitAfterClaimedJob: false, providerTimeoutMs: 45000,
     ...over,
   };
 }

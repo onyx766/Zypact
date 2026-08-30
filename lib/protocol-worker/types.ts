@@ -98,6 +98,13 @@ export interface WorkerOptions {
   maxThrottledRetries: number;
   /** Cooperative shutdown budget. Must stay below the lease. */
   graceMs: number;
+  /**
+   * B1 — when true, the loop exits after the first iteration that actually
+   * claimed a job, whatever its outcome, and never claims again.
+   */
+  exitAfterClaimedJob: boolean;
+  /** B2 — per-provider-call ceiling in ms, applied separately to each leg. */
+  providerTimeoutMs: number;
 }
 
 /**

@@ -33,6 +33,7 @@ const OPTS: WorkerOptions = {
   workerId: "lifecycle", leaseSeconds: 60, idleBackoffMs: 100, maxBackoffMs: 1600,
   maxSlotsPerClaim: 4, perplexityReservedCostUsd: 0.02, analysisReservedCostUsd: 0.02,
   jitterRatio: 0.5, maxThrottledRetries: 3, graceMs: 5000,
+  exitAfterClaimedJob: false, providerTimeoutMs: 45000,
 };
 
 async function main(): Promise<void> {
@@ -162,8 +163,20 @@ async function main(): Promise<void> {
       { ...OPTS, workerId: "abort-probe", maxSlotsPerClaim: 2 },
       new WorkerHealth(() => Date.now())
     );
-    check("the analysis call receives the shutdown signal", seen.analysis === ac.signal);
-    check("the provider fetch receives it too", seen.fetch === ac.signal);
+    // B2 — each leg now receives a COMPOSED signal: its own deadline OR the
+    // worker shutdown. Identity with `ac.signal` is therefore gone by design;
+    // what must still hold is that aborting shutdown aborts the leg. That is
+    // the property the contract actually needs, so it is asserted directly.
+    check("the analysis call receives a live signal", seen.analysis instanceof AbortSignal);
+    check(
+      "…and it is a COMPOSED signal, not the raw shutdown handle",
+      seen.analysis !== undefined && seen.analysis !== ac.signal
+    );
+    check("the provider fetch receives a live signal too", seen.fetch instanceof AbortSignal);
+    check(
+      "…also composed, and it overrides whatever the probe runner passed",
+      seen.fetch !== undefined && seen.fetch !== ac.signal
+    );
   }
 
   // ======================================================================

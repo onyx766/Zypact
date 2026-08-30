@@ -129,10 +129,18 @@ export async function runOneIteration(
   });
 
   try {
-    // Bounded by the plan: one pass per baseline slot, plus one for the
-    // completion gate. A runaway loop is a bug, not a retry policy.
+    // B3 — two independent budgets, never one sum.
+    //
+    // The old bound was `pass <= maxSlotsPerClaim + maxThrottledRetries`,
+    // which let an UNUSED retry become an extra slot: with a budget of one
+    // slot and zero retries it still granted two passes, so a second
+    // baseline slot — and a second pair of paid provider calls — could run.
+    // `slotsUsed` counts only slots actually driven to a gate answer;
+    // `throttled` counts only transient refusals, which consume no slot.
+    let slotsUsed = 0;
     let throttled = 0;
-    for (let pass = 0; pass <= opts.maxSlotsPerClaim + opts.maxThrottledRetries; pass += 1) {
+    for (;;) {
+      if (slotsUsed >= opts.maxSlotsPerClaim) break;
       if (lost) return { outcome: "lost_ownership", jobId: f.jobId, detail: "HEARTBEAT_LOST" };
 
       const ctx = await deps.db.getProtocolExecutionJobContext(f);
@@ -177,7 +185,10 @@ export async function runOneIteration(
         continue;
       }
       if (step) return step;
-      // null ⇒ the gate said NEXT_BASELINE_REQUIRED: re-read and continue.
+      // null ⇒ the gate said NEXT_BASELINE_REQUIRED. That slot WAS driven,
+      // so it is charged here and only here — a throttled pass above never
+      // reaches this line.
+      slotsUsed += 1;
     }
     // A ledger that outruns the slot budget is an anomaly, not an ordinary
     // failure: it is surfaced for review rather than quietly failed.
@@ -312,7 +323,7 @@ async function runOneSlot(
     }
     answer = answerFromRawResponseBody(now.perplexityReceipt.rawResponseBody);
   } else {
-    const r = await runProviderCall(deps, f, now.perplexity, probeRunId, {
+    const r = await runProviderCall(deps, opts, f, now.perplexity, probeRunId, {
       prompt,
       brandName: project.companyName ?? project.domain,
       domain: project.domain,
@@ -354,7 +365,7 @@ async function runOneSlot(
       const replayed = await replayAnalysisReceipt(deps, f, now, project.domain, attempt.id);
       if (replayed) return replayed;
     } else if (now.analysis) {
-      const r = await runAnalysisCall(deps, f, now.analysis, probeRunId, agentInput);
+      const r = await runAnalysisCall(deps, opts, f, now.analysis, probeRunId, agentInput);
       if (r?.outcome === "provider_failed") {
         return await closeAttemptFailed(deps, f, attempt.id, r.detail ?? "analysis_error");
       }
@@ -513,14 +524,24 @@ export async function runWorkerLoop(
 ): Promise<WorkerHealth> {
   let idle = 0;
   while (!signal.aborted) {
+    // B1 — no try/catch here on purpose. An unhandled throw during the first
+    // job propagates out of this loop and ends the process; it can never
+    // fall through to a second claim.
     const r = await runOneIteration(deps, opts, health);
     onIteration?.(r);
     if (r.outcome === "no_job") {
       idle += 1;
+      // Still waits on an empty queue: single-job mode bounds JOBS, not
+      // patience.
       await sleep(backoffWithJitter(opts, idle), deps.abortSignal);
-    } else {
-      idle = 0;
+      continue;
     }
+    idle = 0;
+    // Any outcome other than no_job means a job WAS claimed — completed,
+    // failed, capped, parse_failed, needs_review, lost_ownership alike. In
+    // single-job mode that is the whole mandate: break before the loop can
+    // issue a second claim.
+    if (opts.exitAfterClaimedJob) break;
   }
   health.markShuttingDown();
   return health;

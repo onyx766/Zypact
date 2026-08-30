@@ -273,6 +273,7 @@ async function main(): Promise<void> {
     workerId: "conflict", leaseSeconds: 60, idleBackoffMs: 1, maxBackoffMs: 2,
     maxSlotsPerClaim: 4, perplexityReservedCostUsd: 0.02, analysisReservedCostUsd: 0.02,
     jitterRatio: 0, maxThrottledRetries: 3, graceMs: 1000,
+    exitAfterClaimedJob: false, providerTimeoutMs: 45000,
   };
   // What the transports return: "absent". What the receipts carry: "primary".
   const IN_HAND_ANSWER = "the response still in hand";

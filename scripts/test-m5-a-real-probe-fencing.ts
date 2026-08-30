@@ -62,6 +62,7 @@ const OPTS: WorkerOptions = {
   workerId: "real-probe", leaseSeconds: 60, idleBackoffMs: 1, maxBackoffMs: 2,
   maxSlotsPerClaim: 4, perplexityReservedCostUsd: 0.02, analysisReservedCostUsd: 0.02,
   jitterRatio: 0, maxThrottledRetries: 3, graceMs: 1000,
+  exitAfterClaimedJob: false, providerTimeoutMs: 45000,
 };
 
 async function main(): Promise<void> {

@@ -286,9 +286,10 @@ function code(src: string, comment: string): string[] {
     lines.filter((l) => /^\[checks\.[^\]]+\]$/.test(l)).length === 1,
     lines.filter((l) => l.startsWith("[checks.")).join(" | "));
 
-  // A worker that dies must come back.
-  assert("[[restart]] declares policy = \"always\"",
-    lines.includes("[[restart]]") && lines.some((l) => /^policy\s*=\s*"always"$/.test(l)),
+  // The bounded worker may exit intentionally after one claimed job.
+  // Automatic restart would defeat the one-job and total-runtime bounds.
+  assert("[[restart]] declares policy = \"no\"",
+    lines.includes("[[restart]]") && lines.some((l) => /^policy\s*=\s*"no"$/.test(l)),
     lines.filter((l) => l.startsWith("policy")).join(" | ") || "no policy");
   assert("no other restart policy is declared",
     lines.filter((l) => /^policy\s*=/.test(l)).length === 1);

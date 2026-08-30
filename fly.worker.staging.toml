@@ -43,7 +43,7 @@ kill_timeout = 30
     grace_period = "10s"
 
 [[restart]]
-  policy = "always"
+  policy = "no"
 
 [[vm]]
   size = "shared-cpu-1x"

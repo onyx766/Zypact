@@ -17,6 +17,7 @@ import path from "node:path";
 import { WorkerHealth } from "@/lib/protocol-worker/health";
 import { startHeartbeat } from "@/lib/protocol-worker/heartbeat";
 import { backoffWithJitter } from "@/lib/protocol-worker/worker";
+import { createCooperativeStop, type RuntimeTimers } from "@/lib/protocol-worker/runtime-bound";
 import type { DbAdapter } from "@/lib/db/types";
 import type { WorkerOptions } from "@/lib/protocol-worker/types";
 
@@ -29,11 +30,20 @@ function check(name: string, cond: boolean, detail = ""): void {
 }
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+/**
+ * B3-intrinsic test double. `runtimeBound` is a REQUIRED worker option, so
+ * a suite that is not about the total runtime ceiling has to state that it
+ * wants no ceiling — deliberately, in its own file. `lib/` exports no such
+ * helper on purpose: an unbounded worker must never be one import away.
+ */
+const ALWAYS_ALLOWS = { allowsNewClaim: (): boolean => true };
+
 const OPTS: WorkerOptions = {
   workerId: "lifecycle", leaseSeconds: 60, idleBackoffMs: 100, maxBackoffMs: 1600,
   maxSlotsPerClaim: 4, perplexityReservedCostUsd: 0.02, analysisReservedCostUsd: 0.02,
   jitterRatio: 0.5, maxThrottledRetries: 3, graceMs: 5000,
   exitAfterClaimedJob: false, providerTimeoutMs: 45000,
+  runtimeBound: ALWAYS_ALLOWS,
 };
 
 async function main(): Promise<void> {
@@ -296,9 +306,28 @@ async function main(): Promise<void> {
   // ======================================================================
   {
     const entry = code("scripts/run-protocol-worker.ts");
+    // B3-intrinsic moved this mechanism out of the entrypoint and into
+    // `runtime-bound.ts`, so the rule is now EXERCISED rather than matched
+    // as a source string. That is strictly stronger: the old regex would
+    // have passed on an expression that was never evaluated.
+    const armedDelays: number[] = [];
+    const recordingTimers: RuntimeTimers = {
+      set(_fn, ms) { armedDelays.push(ms); return { ms }; },
+      clear() {},
+    };
+    const stopDelay = (graceMs: number, leaseSeconds: number): number => {
+      armedDelays.length = 0;
+      const stopper = createCooperativeStop({
+        graceMs, leaseSeconds, signal: { aborted: false },
+        abort: () => {}, timers: recordingTimers, onRequested: () => {},
+      });
+      stopper.request("SIGTERM");
+      return armedDelays[0] ?? -1;
+    };
     check(
       "shutdown aborts in-flight calls after a grace bounded by the lease",
-      /Math\.min\(opts\.graceMs, opts\.leaseSeconds \* 1000 - 1\)/.test(entry)
+      stopDelay(5000, 60) === 5000 && stopDelay(999_000, 60) === 59_999,
+      `${stopDelay(5000, 60)} / ${stopDelay(999_000, 60)}`
     );
     check("an AbortController is wired into the real transport", /shutdown\.signal/.test(entry));
     check("SIGTERM and SIGINT are both handled", /SIGTERM/.test(entry) && /SIGINT/.test(entry));

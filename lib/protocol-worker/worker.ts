@@ -524,6 +524,16 @@ export async function runWorkerLoop(
 ): Promise<WorkerHealth> {
   let idle = 0;
   while (!signal.aborted) {
+    // B3-intrinsic — asked BEFORE the claim, on every pass, and never
+    // after. A claim is a lease plus, in short order, money, so the bound
+    // reserves the two provider windows and the shutdown grace before one
+    // is issued. That reservation is not a promise the claim will finish:
+    // the RPCs, the parsing and the writes are outside it.
+    //
+    // No optional chaining and no fallback. The bound is a required
+    // option, so there is no "absent" case to be lenient about, and a
+    // reader cannot mistake this line for one that tolerates its absence.
+    if (!opts.runtimeBound.allowsNewClaim()) break;
     // B1 — no try/catch here on purpose. An unhandled throw during the first
     // job propagates out of this loop and ends the process; it can never
     // fall through to a second claim.

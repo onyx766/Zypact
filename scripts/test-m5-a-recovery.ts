@@ -86,6 +86,14 @@ const PROTOCOL_FIXTURE: Omit<CreateProtocolInput, "projectId" | "buyerQuestionVe
   retryCap: 2,
 };
 
+/**
+ * B3-intrinsic test double. `runtimeBound` is a REQUIRED worker option, so
+ * a suite that is not about the total runtime ceiling has to state that it
+ * wants no ceiling — deliberately, in its own file. `lib/` exports no such
+ * helper on purpose: an unbounded worker must never be one import away.
+ */
+const ALWAYS_ALLOWS = { allowsNewClaim: (): boolean => true };
+
 const OPTS: WorkerOptions = {
   workerId: "recovery-worker",
   leaseSeconds: 60,
@@ -98,6 +106,7 @@ const OPTS: WorkerOptions = {
     maxThrottledRetries: 3,
     graceMs: 1000,
     exitAfterClaimedJob: false, providerTimeoutMs: 45000,
+    runtimeBound: ALWAYS_ALLOWS,
 };
 
 async function main(): Promise<void> {

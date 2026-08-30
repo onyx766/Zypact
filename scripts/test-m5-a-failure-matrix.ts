@@ -45,11 +45,20 @@ const PROTOCOL: Omit<CreateProtocolInput, "projectId" | "buyerQuestionVersionId"
 // A ONE SECOND lease, deliberately. "Not claimable" only proves closure
 // once the lease has lapsed: while it is still held, every job looks
 // unclaimable, closed or not.
+/**
+ * B3-intrinsic test double. `runtimeBound` is a REQUIRED worker option, so
+ * a suite that is not about the total runtime ceiling has to state that it
+ * wants no ceiling — deliberately, in its own file. `lib/` exports no such
+ * helper on purpose: an unbounded worker must never be one import away.
+ */
+const ALWAYS_ALLOWS = { allowsNewClaim: (): boolean => true };
+
 const OPTS: WorkerOptions = {
   workerId: "matrix", leaseSeconds: 1, idleBackoffMs: 1, maxBackoffMs: 2,
   maxSlotsPerClaim: 4, perplexityReservedCostUsd: 0.02, analysisReservedCostUsd: 0.02,
   jitterRatio: 0, maxThrottledRetries: 3, graceMs: 1000,
   exitAfterClaimedJob: false, providerTimeoutMs: 45000,
+  runtimeBound: ALWAYS_ALLOWS,
 };
 
 function probeFailure(reason: "network_error" | "http_error" | "empty_answer", status: number | null) {

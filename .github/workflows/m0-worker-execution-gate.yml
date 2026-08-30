@@ -101,6 +101,12 @@ jobs:
       - name: Run the Phase 3D hard bounds contract
         run: npm run test:m5-phase3d-bounds
 
+      # B3-intrinsic — the total runtime bound. Also network-free, and
+      # driven entirely on a virtual clock: a 120-second ceiling is proved
+      # in microseconds, so this step cannot become the slow one.
+      - name: Run the total runtime bound contract
+        run: npm run test:m5-b3-max-runtime
+
       # The Docker half runs here, and ONLY here. The opt-in is a STEP-level
       # env entry on purpose: at job or workflow level it would silently
       # apply to every other step, and a variable that turns on image builds

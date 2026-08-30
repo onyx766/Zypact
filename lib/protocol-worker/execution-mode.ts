@@ -69,6 +69,13 @@ export interface LiveWorkerConfig {
    * disabled path.
    */
   readonly maxRuntimeSeconds: number;
+  /**
+   * B3-intrinsic — the runtime a single canary claim can still need, in
+   * ms. Computed ONCE here by `claimBudgetMs` and carried on the config,
+   * so the validation that refuses an impossible ceiling and the loop that
+   * declines a claim use the same number and cannot drift apart.
+   */
+  readonly claimBudgetMs: number;
   readonly perplexityReservedCostUsd: number;
   readonly analysisReservedCostUsd: number;
   readonly healthPort: number;
@@ -336,6 +343,28 @@ const ANALYSIS_MODEL_REFUSAL_MESSAGE: Record<AnalysisModelRefusal, (name: string
 };
 
 /**
+ * B3-intrinsic — what one claim can still need, in milliseconds.
+ *
+ * TWO provider legs, not one. A single baseline slot calls Perplexity and
+ * then the analysis model, sequentially, and `providerTimeoutMs` bounds
+ * EACH of them separately. Budgeting one leg plus the grace was wrong by a
+ * whole provider call: a claim admitted with 55 s left could still be
+ * mid-analysis when the absolute deadline cut the process off, having
+ * already paid for the probe.
+ *
+ * Scoped to the first canary, which runs `WORKER_MAX_SLOTS_PER_CLAIM=1`.
+ * A claim allowed to drive N slots would need `2 * N * providerTimeoutMs`,
+ * and generalising that is deliberately NOT part of this changeset — the
+ * canary constraint is documented in `.env.example` instead.
+ *
+ * Exported so the rule is exercised value-by-value, and used by both the
+ * configuration gate and the runtime bound. There is one implementation.
+ */
+export function claimBudgetMs(providerTimeoutMs: number, graceMs: number): number {
+  return 2 * providerTimeoutMs + graceMs;
+}
+
+/**
  * TK-R-5 — the versioned-model rule, as a pure predicate.
  *
  * Exported so the rule can be exercised value-by-value without
@@ -562,15 +591,17 @@ export function resolveExecutionPlan(env: Env): ExecutionPlan {
   const maxRuntimeSeconds = requiredIntOrThrow(
     env, "WORKER_MAX_RUNTIME_SECONDS", 1, MAX_RUNTIME_SECONDS,
   );
-  // A run whose whole budget cannot absorb one provider call plus the
-  // wind-down after it could never issue a single claim: the worker would
-  // start, decline its first claim and stop. That is a misconfiguration,
-  // not a very short run, and it is refused at startup rather than
-  // discovered from an empty log.
-  if (providerTimeoutMs + graceMs >= maxRuntimeSeconds * 1000) {
+  // A run whose whole budget cannot absorb ONE CLAIM — both provider legs
+  // plus the wind-down after them — could never issue a single claim: the
+  // worker would start, decline its first claim and stop. That is a
+  // misconfiguration, not a very short run, and it is refused at startup
+  // rather than discovered from an empty log.
+  const claimBudget = claimBudgetMs(providerTimeoutMs, graceMs);
+  if (claimBudget >= maxRuntimeSeconds * 1000) {
     throw new WorkerConfigError(
-      "WORKER_PROVIDER_TIMEOUT_MS + WORKER_GRACE_MS must be strictly less than "
-        + "WORKER_MAX_RUNTIME_SECONDS in milliseconds.",
+      "2 x WORKER_PROVIDER_TIMEOUT_MS + WORKER_GRACE_MS must be strictly less than "
+        + "WORKER_MAX_RUNTIME_SECONDS in milliseconds: one baseline slot makes two "
+        + "provider calls, each bounded separately.",
       ["WORKER_MAX_RUNTIME_SECONDS", "WORKER_PROVIDER_TIMEOUT_MS", "WORKER_GRACE_MS"],
     );
   }
@@ -595,6 +626,7 @@ export function resolveExecutionPlan(env: Env): ExecutionPlan {
       exitAfterClaimedJob,
       providerTimeoutMs,
       maxRuntimeSeconds,
+      claimBudgetMs: claimBudget,
       // Strictly positive: a zero reservation would let admission control
       // admit an attempt it has not actually budgeted for.
       perplexityReservedCostUsd:

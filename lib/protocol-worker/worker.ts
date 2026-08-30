@@ -525,9 +525,10 @@ export async function runWorkerLoop(
   let idle = 0;
   while (!signal.aborted) {
     // B3-intrinsic — asked BEFORE the claim, on every pass, and never
-    // after. A claim is a lease plus, in short order, money: taking one
-    // with too little runtime left to finish it would strand a job under
-    // a lease this process will not be alive to renew.
+    // after. A claim is a lease plus, in short order, money, so the bound
+    // reserves the two provider windows and the shutdown grace before one
+    // is issued. That reservation is not a promise the claim will finish:
+    // the RPCs, the parsing and the writes are outside it.
     //
     // No optional chaining and no fallback. The bound is a required
     // option, so there is no "absent" case to be lenient about, and a

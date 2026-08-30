@@ -21,9 +21,12 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { runWorkerLoop } from "@/lib/protocol-worker/worker";
+import { runOneIteration, runWorkerLoop } from "@/lib/protocol-worker/worker";
+import { sha256Hex } from "@/lib/evidence/hash";
 import { WorkerHealth } from "@/lib/protocol-worker/health";
-import { resolveExecutionPlan, WorkerConfigError } from "@/lib/protocol-worker/execution-mode";
+import {
+  claimBudgetMs, resolveExecutionPlan, WorkerConfigError,
+} from "@/lib/protocol-worker/execution-mode";
 import {
   createCooperativeStop,
   runLiveBootstrap,
@@ -33,7 +36,8 @@ import {
   type RuntimeTimers,
 } from "@/lib/protocol-worker/runtime-bound";
 import type { AnalysisTransport, WorkerDeps, WorkerOptions } from "@/lib/protocol-worker/types";
-import type { DbAdapter } from "@/lib/db/types";
+import type { CreateProtocolInput, DbAdapter } from "@/lib/db/types";
+import type { PerplexityProbeResult } from "@/lib/probes/perplexity";
 
 /**
  * Mechanical network guard: every leg here is injected, so one real call
@@ -286,7 +290,7 @@ function harness(clock: VirtualClock, over: Partial<typeof CANARY> & { startedAt
   const bound = startRuntimeBound({
     startedAtMs: over.startedAtMs ?? clock.ms,
     maxRuntimeSeconds: cfg.maxRuntimeSeconds,
-    providerTimeoutMs: cfg.providerTimeoutMs,
+    requiredMsForNewClaim: claimBudgetMs(cfg.providerTimeoutMs, cfg.graceMs),
     graceMs: cfg.graceMs,
     now: clock.now,
     timers: clock.timers,
@@ -406,20 +410,23 @@ async function main(): Promise<void> {
       edge.mode === "live" && edge.config.maxRuntimeSeconds === 2_147_483);
     check("[B] 2147483000 ms tient dans le délai maximal de setTimeout",
       2_147_483 * 1000 <= 2_147_483_647);
-    // The smallest ACCEPTED ceiling is not 1: the smallest provider timeout
-    // this repository allows is already 1000 ms, and the relation is
-    // strict, so one second of total budget cannot contain one call.
-    // 1 passes the form check and is then refused by the relation — which
-    // is the honest outcome, not a hole.
-    const oneSecond = live({
+    // The smallest ACCEPTED ceiling is not 1, and not 2 either: one slot
+    // makes TWO provider calls, so the floor is 2 x the minimum timeout
+    // plus the grace. With a 1000 ms timeout and no grace that is 2000 ms,
+    // and the relation is strict — so 2 s is refused and 3 s is the first
+    // ceiling that fits.
+    const tiny = live({
       WORKER_MAX_RUNTIME_SECONDS: "1", WORKER_PROVIDER_TIMEOUT_MS: "1000",
-      WORKER_GRACE_MS: "0", WORKER_LEASE_SECONDS: "2",
+      WORKER_GRACE_MS: "0", WORKER_LEASE_SECONDS: "3",
     });
-    check("[B] 1 s: forme valide, mais refusé par la relation — un appel " +
-      "minimal ne tient pas dans une seconde",
-      refusal(oneSecond)?.variables.includes("WORKER_MAX_RUNTIME_SECONDS") === true);
-    check("[B] 2 s accepté: le plus petit plafond qui contienne un appel minimal",
-      resolveExecutionPlan({ ...oneSecond, WORKER_MAX_RUNTIME_SECONDS: "2" }).mode === "live");
+    check("[B] 1 s: forme valide, refusé par la relation",
+      refusal(tiny)?.variables.includes("WORKER_MAX_RUNTIME_SECONDS") === true);
+    check("[B] 2 s refusé aussi: deux jambes de 1000 ms ne tiennent pas dans " +
+      "2000 ms, la relation étant stricte",
+      refusal({ ...tiny, WORKER_MAX_RUNTIME_SECONDS: "2" })
+        ?.variables.includes("WORKER_MAX_RUNTIME_SECONDS") === true);
+    check("[B] 3 s accepté: le plus petit plafond qui contienne un slot complet",
+      resolveExecutionPlan({ ...tiny, WORKER_MAX_RUNTIME_SECONDS: "3" }).mode === "live");
 
     // House style, stated rather than assumed: surrounding whitespace is
     // trimmed for EVERY integer variable in this module, so it is trimmed
@@ -474,8 +481,10 @@ async function main(): Promise<void> {
       check("[C] providerTimeoutMs = 45000 inchangé", p.config.providerTimeoutMs === 45_000);
       check("[C] graceMs = 10000 inchangé", p.config.graceMs === 10_000);
       check("[C] exitAfterClaimedJob = true inchangé", p.config.exitAfterClaimedJob === true);
-      check("[C] 45000 + 10000 strictement sous 120 x 1000",
-        p.config.providerTimeoutMs + p.config.graceMs < p.config.maxRuntimeSeconds * 1000);
+      check("[C] le budget d'un claim est porté par la configuration: 100000 ms",
+        p.config.claimBudgetMs === 100_000, String(p.config.claimBudgetMs));
+      check("[C] 2 x 45000 + 10000 strictement sous 120 x 1000",
+        p.config.claimBudgetMs < p.config.maxRuntimeSeconds * 1000);
     }
   }
 
@@ -483,10 +492,17 @@ async function main(): Promise<void> {
   console.log("\n[D] la relation temporelle invalide est refusée");
   // ====================================================================
   {
-    const eq = refusal(live({ WORKER_MAX_RUNTIME_SECONDS: "55" }));
-    check("[D] 45000 + 10000 = 55 x 1000 refusé — la relation est stricte",
+    const eq = refusal(live({ WORKER_MAX_RUNTIME_SECONDS: "100" }));
+    check("[D] 2 x 45000 + 10000 = 100 x 1000 refusé — la relation est stricte",
       eq !== null && eq.variables.includes("WORKER_MAX_RUNTIME_SECONDS"),
       eq === null ? "accepted" : eq.variables.join(","));
+    // MUTATION DETECTOR. Under the old one-leg rule the budget was 55000,
+    // and 100 s would have been ACCEPTED. This single check is what fails
+    // if anyone restores `providerTimeoutMs + graceMs`.
+    check("[D] …et 55000 ms ne suffit plus: la règle à une seule jambe est morte",
+      claimBudgetMs(45_000, 10_000) === 100_000
+      && claimBudgetMs(45_000, 10_000) !== 45_000 + 10_000,
+      String(claimBudgetMs(45_000, 10_000)));
     const under = refusal(live({ WORKER_MAX_RUNTIME_SECONDS: "10" }));
     check("[D] un plafond total sous une seule fenêtre d'appel refusé",
       under !== null && under.variables.includes("WORKER_MAX_RUNTIME_SECONDS"));
@@ -495,8 +511,11 @@ async function main(): Promise<void> {
       && eq.variables.includes("WORKER_PROVIDER_TIMEOUT_MS")
       && eq.variables.includes("WORKER_GRACE_MS"),
       eq === null ? "accepted" : eq.variables.join(","));
-    check("[D] 56 s accepté: un millier de millisecondes de marge suffit",
-      resolveExecutionPlan(live({ WORKER_MAX_RUNTIME_SECONDS: "56" })).mode === "live");
+    check("[D] 101 s accepté: un millier de millisecondes de marge suffit",
+      resolveExecutionPlan(live({ WORKER_MAX_RUNTIME_SECONDS: "101" })).mode === "live");
+    check("[D] …et 101 s porte bien le budget de 100000 ms",
+      (() => { const p = resolveExecutionPlan(live({ WORKER_MAX_RUNTIME_SECONDS: "101" }));
+        return p.mode === "live" && p.config.claimBudgetMs === 100_000; })());
     check("[D] la relation du bail reste prioritaire et inchangée",
       refusal(live({ WORKER_PROVIDER_TIMEOUT_MS: "55000" }))?.variables[0]
       === "WORKER_PROVIDER_TIMEOUT_MS");
@@ -522,7 +541,9 @@ async function main(): Promise<void> {
       "complet plus la grâce",
       h.bound.remainingMs() < h.bound.requiredMsForNewClaim,
       `reste ${h.bound.remainingMs()} < ${h.bound.requiredMsForNewClaim}`);
-    check("[E] nombre de claims fini et déterministe", claims === 6, `claims=${claims}`);
+    // Quatre, et non six: le budget requis a doublé d'une jambe, donc la
+    // boucle décline plus tôt. Le nombre reste déterministe.
+    check("[E] nombre de claims fini et déterministe", claims === 4, `claims=${claims}`);
     check("[E] ZÉRO job réclamé: la file était vide de bout en bout",
       health.snapshot().iterations === 0, `iterations=${health.snapshot().iterations}`);
     check("[E] …et chacun de ces claims a bien été compté comme cycle à vide",
@@ -565,7 +586,7 @@ async function main(): Promise<void> {
     clock.ms = 70_000; // 70 s already spent; 50 s left, 55 s needed.
     const h = harness(clock, { startedAtMs: 0 });
     check("[F] le budget restant est bien inférieur au minimum requis",
-      h.bound.remainingMs() === 50_000 && h.bound.requiredMsForNewClaim === 55_000,
+      h.bound.remainingMs() === 50_000 && h.bound.requiredMsForNewClaim === 100_000,
       `${h.bound.remainingMs()} < ${h.bound.requiredMsForNewClaim}`);
     const calls: string[] = [];
     const deps = scriptedDeps({ hardCap: 0 }, calls, clock);
@@ -576,7 +597,7 @@ async function main(): Promise<void> {
     check("[F] …donc aucune dépense possible", health.snapshot().iterations === 0);
     check("[F] l'épuisement a été rapporté une fois, avec le reste et le requis",
       h.events.length === 1 && h.events[0].event === "worker_runtime_budget_exhausted"
-      && h.events[0].remainingMs === 50_000 && h.events[0].requiredMs === 55_000,
+      && h.events[0].remainingMs === 50_000 && h.events[0].requiredMs === 100_000,
       JSON.stringify(h.events));
     check("[F] la sortie est propre: pas d'abort, pas de terminaison forcée",
       h.aborts() === 0 && h.forced() === 0 && h.signal.aborted === false);
@@ -1240,6 +1261,147 @@ async function main(): Promise<void> {
       check("[T] sans demande d'arrêt, dispose du stop ne trouve rien et ne lève pas",
         c2.armed() === 0);
     }
+  }
+
+  // ====================================================================
+  console.log("\n[U] un slot = DEUX jambes fournisseur, séquentielles");
+  // ====================================================================
+  {
+    // Le vrai chemin de production — `runOneIteration` sur l'adaptateur
+    // mémoire — parce que la question « combien d'appels payants un claim
+    // peut-il encore devoir » ne se répond pas par une lecture de code.
+    const { memoryAdapter } = await import("@/lib/db/memory-adapter");
+    const db: DbAdapter = memoryAdapter;
+    const APPROVER = "11111111-1111-4111-8111-111111111111";
+    const PERPLEXITY_REQ = JSON.stringify({ model: "sonar", messages: [] });
+    const ANALYSIS_REQ = JSON.stringify({ model: "gpt-4o-mini-2024-07-18", messages: [] });
+    const M5_CONTENT = JSON.stringify({
+      clientPosition: "absent", competitorsMentioned: [], sourcesCited: [], answerSummary: "",
+    });
+    const PROBE_BODY = JSON.stringify({ id: "p", choices: [{ message: { content: "answer" } }] });
+
+    const project = await db.createProject({ domain: "two-leg.test", companyName: "C" });
+    const q = await db.createBuyerQuestion({ projectId: project.id });
+    const v = await db.createBuyerQuestionVersion({
+      buyerQuestionId: q.id, projectId: project.id, versionNumber: 1, promptText: "Q?",
+      promptHash: "a".repeat(64), intentType: "comparison", commercialValue: 3, winnability: 3,
+      priority: 10, rationale: "f", provenance: "founder_supplied",
+    });
+    await db.approveBuyerQuestionVersion({ versionId: v.id, projectId: project.id, approvedBy: APPROVER });
+    const protoInput: Omit<CreateProtocolInput, "projectId" | "buyerQuestionVersionId"> = {
+      provider: "perplexity", surface: "sonar", plannedBaselineRuns: 1, plannedRetestRuns: 0,
+      paraphrasePlan: [{ text: "Q?", hash: "b".repeat(64) }], unitOfAnalysis: "run",
+      primaryMetric: "listed_in_run", samplePlanningMethod: "fixed", runCap: 20, spendCapUsd: 100,
+      timeWindowSeconds: 3600, rateLimitPerHour: 100, concurrencyLimit: 5, retryCap: 2,
+    };
+    const proto = await db.createProtocol({
+      ...protoInput, projectId: project.id, buyerQuestionVersionId: v.id,
+    });
+    await db.approveProtocol({ protocolId: proto.id, projectId: project.id, approvedBy: APPROVER });
+    await db.enqueueProtocolExecutionJob({ protocolId: proto.id, projectId: project.id });
+
+    // Un compteur logique, pas une horloge: il ordonne les bornes des deux
+    // jambes sans dépendre du temps réel.
+    let tick = 0;
+    const marks: Array<[string, number]> = [];
+    const deps: WorkerDeps = {
+      db,
+      runProbe: (async (input: { prompt: string; fetchImpl?: typeof fetch }) => {
+        marks.push(["perplexity:start", (tick += 1)]);
+        // The real runner writes through the injected `fetchImpl`, which is
+        // what marks the external call SENT with its request evidence. A
+        // fixture that skipped it would never reach the receipt.
+        await (input.fetchImpl ?? fetch)("https://api.perplexity.ai/chat/completions",
+          { method: "POST", body: PERPLEXITY_REQ });
+        marks.push(["perplexity:end", (tick += 1)]);
+        return {
+          prompt: input.prompt, answer: "answer", rawResponse: PROBE_BODY, citations: [],
+          searchResults: [], sourceCitations: [], model: "sonar", usedMock: false,
+          rawResponseBody: PROBE_BODY, rawResponseBodySha256: sha256Hex(PROBE_BODY),
+          httpStatus: 200, latencyMs: 5, providerRequestId: "p-1",
+        } satisfies PerplexityProbeResult;
+      }) as unknown as WorkerDeps["runProbe"],
+      analysis: {
+        prepare: () => ({
+          provider: "openai" as const, model: "gpt-4o-mini-2024-07-18",
+          url: "https://api.openai.com/v1/chat/completions",
+          rawRequestBody: ANALYSIS_REQ, requestSha256: sha256Hex(ANALYSIS_REQ),
+        }),
+        execute: async () => {
+          marks.push(["analysis:start", (tick += 1)]);
+          await Promise.resolve();
+          marks.push(["analysis:end", (tick += 1)]);
+          return {
+            provider: "openai" as const, model: "gpt-4o-mini-2024-07-18", content: M5_CONTENT,
+            usedMock: false, modelReturned: "gpt-4o-mini-2024-07-18", latencyMs: 7,
+            requestSha256: sha256Hex(ANALYSIS_REQ), contentSha256: sha256Hex(M5_CONTENT),
+            providerRequestId: "a-1", httpStatus: 200,
+          };
+        },
+      } as unknown as AnalysisTransport,
+      realFetch: (async () => new Response(PROBE_BODY, { status: 200 })) as unknown as WorkerDeps["realFetch"],
+      now: () => Date.now(),
+      sleep: async () => undefined,
+      probeMode: "live_perplexity",
+    };
+
+    const r = await runOneIteration(deps, {
+      ...BASE_OPTS, maxSlotsPerClaim: 1, exitAfterClaimedJob: true, jitterRatio: 0,
+    }, new WorkerHealth(() => Date.now()));
+
+    const order = marks.map((m) => m[0]).join(",");
+    check("[U] le job a été mené à son terme", r.outcome === "completed", `${r.outcome}:${r.detail}`);
+    check("[U] UN slot a émis DEUX appels fournisseur, pas un",
+      marks.filter((m) => m[0].endsWith(":start")).length === 2, order);
+    check("[U] dans l'ordre Perplexity puis analyse",
+      order === "perplexity:start,perplexity:end,analysis:start,analysis:end", order);
+    const pEnd = marks.find((m) => m[0] === "perplexity:end")?.[1] ?? -1;
+    const aStart = marks.find((m) => m[0] === "analysis:start")?.[1] ?? -1;
+    check("[U] SÉQUENTIELLES: l'analyse commence après la fin de la sonde",
+      pEnd > 0 && aStart > 0 && pEnd < aStart,
+      `probe:end=${pEnd} < analysis:start=${aStart}`);
+    check("[U] donc le budget d'un claim doit couvrir DEUX fenêtres de timeout",
+      claimBudgetMs(45_000, 10_000) === 2 * 45_000 + 10_000);
+    check("[U] …ce que porte exactement requiredMsForNewClaim",
+      harness(new VirtualClock()).bound.requiredMsForNewClaim === 100_000);
+  }
+
+  // ====================================================================
+  console.log("\n[V] un logger qui lève n'annule pas l'arrêt");
+  // ====================================================================
+  {
+    const clock = new VirtualClock();
+    let grace = 0; let forced = 0; let thrown = 0;
+    const stopper = createCooperativeStop({
+      graceMs: CANARY.graceMs, leaseSeconds: 60, signal: { aborted: false },
+      abort: () => {}, timers: clock.timers, onRequested: () => {},
+    });
+    const bound = startRuntimeBound({
+      startedAtMs: 0, maxRuntimeSeconds: CANARY.maxRuntimeSeconds,
+      requiredMsForNewClaim: claimBudgetMs(CANARY.providerTimeoutMs, CANARY.graceMs),
+      graceMs: CANARY.graceMs, now: clock.now, timers: clock.timers,
+      onGrace: () => { grace += 1; },
+      onForced: () => { forced += 1; },
+      onEvent: () => { thrown += 1; throw new Error("LOGGER_BOOM"); },
+    });
+    let graceThrew: unknown = null;
+    try { clock.advance(110_000); } catch (e) { graceThrew = e; }
+    check("[V] la fenêtre de grâce: onGrace s'exécute malgré le logger qui lève",
+      grace === 1 && thrown === 1, `grace=${grace} thrown=${thrown}`);
+    check("[V] …et l'erreur du logger n'est pas avalée",
+      graceThrew instanceof Error && graceThrew.message === "LOGGER_BOOM");
+    let forcedThrew: unknown = null;
+    try { clock.advance(10_000); } catch (e) { forcedThrew = e; }
+    check("[V] l'échéance absolue: onForced s'exécute malgré le logger qui lève",
+      forced === 1 && thrown === 2, `forced=${forced} thrown=${thrown}`);
+    check("[V] …et là aussi l'erreur remonte", forcedThrew instanceof Error);
+    check("[V] le try/finally est bien dans le module de production",
+      /try \{\s*input\.onEvent\([\s\S]{0,400}?\} finally \{\s*input\.onGrace\(\);/
+        .test(code("lib/protocol-worker/runtime-bound.ts"))
+      && /try \{\s*input\.onEvent\([\s\S]{0,400}?\} finally \{\s*input\.onForced\(\);/
+        .test(code("lib/protocol-worker/runtime-bound.ts")));
+    bound.dispose(); stopper.dispose();
+    check("[V] et tous les timers sont rendus", clock.armed() === 0);
   }
 
   console.log(`\n${realFetchCalls === 0 ? "✓" : "✗"} aucun accès réseau réel n'a été ` +

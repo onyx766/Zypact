@@ -21,11 +21,24 @@
  *                            triggers the ORDINARY cooperative stop — the
  *                            same one SIGTERM triggers, not a second
  *                            shutdown path.
- *   requiredMsForNewClaim    providerTimeoutMs + graceMs. A claim is only
- *                            issued when the remaining budget still covers
- *                            a full provider call AND the wind-down after
- *                            it. Claiming with less would mean paying for
- *                            a call the worker cannot see through.
+ *   requiredMsForNewClaim    a RESERVATION, computed by `claimBudgetMs` in
+ *                            `execution-mode.ts` and passed in here. It
+ *                            reserves TWO provider ceilings plus the
+ *                            grace, because one baseline slot calls
+ *                            Perplexity and then the analysis model and
+ *                            the timeout bounds each separately. It is
+ *                            scoped to a single-slot claim
+ *                            (WORKER_MAX_SLOTS_PER_CLAIM=1).
+ *
+ *                            What it does NOT cover: the job-scoped RPCs,
+ *                            the parsing, the derivation and the writes. A
+ *                            claim is declined once the remaining runtime
+ *                            drops below this reservation; it is not a
+ *                            promise that the claim will finish. Admission
+ *                            is `remaining >= required`, so at equality a
+ *                            claim is issued with zero modelled margin
+ *                            beyond the two provider windows and the
+ *                            grace.
  *
  * Three refusals, three distinct events, never one blurred "timeout":
  * declining a claim, winding down, and being cut off are three different
@@ -87,7 +100,14 @@ export interface RuntimeBoundInput {
   /** T0 — captured before the dynamic imports, never inside the loop. */
   readonly startedAtMs: number;
   readonly maxRuntimeSeconds: number;
-  readonly providerTimeoutMs: number;
+  /**
+   * What one claim can still need, in ms. Computed ONCE by
+   * `claimBudgetMs` in `execution-mode.ts` and passed in, so this module
+   * holds no second copy of the rule — and stays free of imports, which is
+   * what lets the entrypoint load it statically without touching the
+   * disabled path.
+   */
+  readonly requiredMsForNewClaim: number;
   readonly graceMs: number;
   readonly now: () => number;
   readonly timers?: RuntimeTimers;
@@ -117,7 +137,7 @@ export function startRuntimeBound(input: RuntimeBoundInput): RuntimeBound {
   const startedAtMs = input.startedAtMs;
   const deadlineMs = startedAtMs + input.maxRuntimeSeconds * 1000;
   const graceAtMs = deadlineMs - input.graceMs;
-  const requiredMsForNewClaim = input.providerTimeoutMs + input.graceMs;
+  const requiredMsForNewClaim = input.requiredMsForNewClaim;
 
   let graceTimer: RuntimeTimerHandle | null = null;
   let forcedTimer: RuntimeTimerHandle | null = null;
@@ -148,13 +168,19 @@ export function startRuntimeBound(input: RuntimeBoundInput): RuntimeBound {
     graceTimer = null;
     if (graceFired) return;
     graceFired = true;
-    input.onEvent({
-      event: "worker_runtime_deadline_grace",
-      elapsedMs: input.now() - startedAtMs,
-      graceMs: input.graceMs,
-      maxRuntimeSeconds: input.maxRuntimeSeconds,
-    });
-    input.onGrace();
+    // try/finally, not a plain sequence: the wind-down must happen even if
+    // the logger throws. An event line is worth reporting; it is not worth
+    // silently skipping the stop it was announcing.
+    try {
+      input.onEvent({
+        event: "worker_runtime_deadline_grace",
+        elapsedMs: input.now() - startedAtMs,
+        graceMs: input.graceMs,
+        maxRuntimeSeconds: input.maxRuntimeSeconds,
+      });
+    } finally {
+      input.onGrace();
+    }
   }, Math.max(0, graceAtMs - input.now()));
 
   forcedTimer = timers.set(() => {
@@ -164,12 +190,17 @@ export function startRuntimeBound(input: RuntimeBoundInput): RuntimeBound {
     // The grace timer is released first: if the process is about to be cut
     // off, a cooperative stop scheduled behind it has nothing left to do.
     clearGrace();
-    input.onEvent({
-      event: "worker_runtime_deadline_forced",
-      elapsedMs: input.now() - startedAtMs,
-      maxRuntimeSeconds: input.maxRuntimeSeconds,
-    });
-    input.onForced();
+    // Same reasoning, and it matters more here: a logger that throws must
+    // not be what keeps a process alive past its absolute deadline.
+    try {
+      input.onEvent({
+        event: "worker_runtime_deadline_forced",
+        elapsedMs: input.now() - startedAtMs,
+        maxRuntimeSeconds: input.maxRuntimeSeconds,
+      });
+    } finally {
+      input.onForced();
+    }
   }, Math.max(0, deadlineMs - input.now()));
 
   return {

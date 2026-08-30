@@ -187,7 +187,9 @@ async function runLive(cfg: LiveWorkerConfig): Promise<void> {
   const bound = startRuntimeBound({
     startedAtMs,
     maxRuntimeSeconds: cfg.maxRuntimeSeconds,
-    providerTimeoutMs: cfg.providerTimeoutMs,
+    // Computed once, by the configuration gate that already refused an
+    // impossible ceiling with this exact number.
+    requiredMsForNewClaim: cfg.claimBudgetMs,
     graceMs: cfg.graceMs,
     now: () => Date.now(),
     onGrace: () => stopper.request("runtime_deadline"),

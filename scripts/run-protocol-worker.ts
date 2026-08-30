@@ -34,10 +34,26 @@
  * Shutdown is cooperative in both modes: SIGINT/SIGTERM set the abort flag,
  * the current iteration finishes its fenced RPC sequence, and the lease is
  * simply allowed to lapse. Nothing is force-killed mid-write.
+ *
+ * B3-intrinsic — live mode is also bounded in total. `WORKER_MAX_RUNTIME_
+ * SECONDS` starts a clock at T0, BEFORE the dynamic imports, so module
+ * evaluation and client construction are inside the budget rather than
+ * free. The loop declines a claim it could not finish, the grace window
+ * enters the ordinary cooperative stop, and the absolute deadline
+ * terminates the process even if the wind-down itself is stuck. Nothing
+ * about the disabled path changes: the variable is never read there.
  */
 
 import { createServer, type Server } from "node:http";
 import { resolveExecutionPlan, WorkerConfigError } from "@/lib/protocol-worker/execution-mode";
+// STATIC, and deliberately so. The ceiling has to be armed before the
+// first await, so the primitive that arms it cannot itself arrive through
+// one. `runtime-bound` is pure: it imports nothing, constructs no client,
+// opens no socket, arms no timer at module scope and has no top-level
+// await — the disabled path may evaluate it and remain exactly as inert.
+import {
+  createCooperativeStop, runLiveBootstrap, startRuntimeBound,
+} from "@/lib/protocol-worker/runtime-bound";
 import type { ExecutionPlan, HealthHost, LiveWorkerConfig } from "@/lib/protocol-worker/execution-mode";
 // Type-only: erased at compile time, so it creates no runtime dependency
 // and the disabled path still never evaluates the worker modules.
@@ -136,115 +152,199 @@ async function runDisabled(healthPort: number, healthHost: HealthHost): Promise<
  * configuration.
  */
 async function runLive(cfg: LiveWorkerConfig): Promise<void> {
-  const [{ getDb }, { runPerplexityProbe }, callModel, { sleep }, { runWorkerLoop }, { WorkerHealth, idleProofEvent }] =
-    await Promise.all([
-      import("@/lib/db"),
-      import("@/lib/probes/perplexity"),
-      import("@/lib/llm/call-model"),
-      import("@/lib/protocol-worker/lifecycle"),
-      import("@/lib/protocol-worker/worker"),
-      import("@/lib/protocol-worker/health"),
-    ]);
-  // Declared before `deps` so the same signal reaches the probe fetch, the
-  // analysis call and the idle wait.
+  // ── T0 ────────────────────────────────────────────────────────────────
+  // Every statement between this line and `startRuntimeBound` below is
+  // synchronous and allocation-only: no await, no dynamic import, no
+  // client, no socket or server, no remote read, no user callback that
+  // could block. That restriction is the whole point of the ordering. A
+  // ceiling armed after the module graph has loaded does not cover the
+  // module graph loading, and an import that never resolves would leave
+  // the process running with a clock that started and a timer that never
+  // did.
+  const startedAtMs = Date.now();
+
   const shutdown = new AbortController();
-
-  const analysis: AnalysisTransport = {
-    prepare: (call) =>
-      callModel.prepareCallModelRequest({
-        system: call.system,
-        user: call.user,
-        jsonMode: call.jsonMode,
-        temperature: call.temperature,
-        maxTokens: call.maxTokens,
-        mockResponse: call.mockResponse,
-      }),
-    execute: (prepared, opts) => callModel.executePreparedCallModelRequest(prepared, opts),
-  };
-
-  const deps: WorkerDeps = {
-    db: getDb(),
-    runProbe: runPerplexityProbe,
-    analysis,
-    realFetch: ((url, init) =>
-      fetch(url, { ...init, signal: init?.signal ?? shutdown.signal })) as typeof fetch,
-    now: () => Date.now(),
-    sleep,
-    abortSignal: shutdown.signal,
-    probeMode: "live_perplexity",
-  };
-
-  const opts: WorkerOptions = {
-    workerId: cfg.workerId,
-    leaseSeconds: cfg.leaseSeconds,
-    idleBackoffMs: cfg.idleBackoffMs,
-    maxBackoffMs: cfg.maxBackoffMs,
-    maxSlotsPerClaim: cfg.maxSlotsPerClaim,
-    jitterRatio: cfg.jitterRatio,
-    maxThrottledRetries: cfg.maxThrottledRetries,
-    graceMs: cfg.graceMs,
-    exitAfterClaimedJob: cfg.exitAfterClaimedJob,
-    providerTimeoutMs: cfg.providerTimeoutMs,
-    perplexityReservedCostUsd: cfg.perplexityReservedCostUsd,
-    analysisReservedCostUsd: cfg.analysisReservedCostUsd,
-  };
-
   const signal = { aborted: false };
+
   // Cooperative shutdown, bounded by a grace budget that stays BELOW the
   // lease: the current iteration finishes its fenced RPC sequence, and if
   // it overruns, in-flight provider calls are aborted rather than left to
   // outlive a lease we can no longer renew.
-  const stop = (sig: string): void => {
-    if (signal.aborted) return;
-    signal.aborted = true;
-    log("shutdown_requested", { signal: sig, graceMs: opts.graceMs });
-    const t = setTimeout(() => shutdown.abort(), Math.min(opts.graceMs, opts.leaseSeconds * 1000 - 1));
-    t.unref();
-  };
-  process.on("SIGINT", () => stop("SIGINT"));
-  process.on("SIGTERM", () => stop("SIGTERM"));
-
-  log("worker_started", {
-    workerId: cfg.workerId,
+  //
+  // One stop, three doors — SIGINT, SIGTERM and the runtime grace deadline
+  // all arrive here, and only the first of them does anything.
+  const stopper = createCooperativeStop({
+    graceMs: cfg.graceMs,
     leaseSeconds: cfg.leaseSeconds,
-    probeMode: deps.probeMode,
-    executionEnabled: true,
+    signal,
+    abort: () => shutdown.abort(),
+    // A closed reason label. Never an environment value.
+    onRequested: (reason) => log("shutdown_requested", { reason, graceMs: cfg.graceMs }),
+  });
+  // Installed here, before anything can block, so a SIGTERM that arrives
+  // during initialisation is handled rather than queued behind it.
+  // B3-intrinsic — the ceiling, armed from T0 and before the first await.
+  const bound = startRuntimeBound({
+    startedAtMs,
+    maxRuntimeSeconds: cfg.maxRuntimeSeconds,
+    providerTimeoutMs: cfg.providerTimeoutMs,
+    graceMs: cfg.graceMs,
+    now: () => Date.now(),
+    onGrace: () => stopper.request("runtime_deadline"),
+    onForced: () => {
+      // The absolute deadline, and deliberately not a graceful path: we
+      // are only ever here because the whole grace window passed and
+      // something did not wind down — an import, a client constructor, a
+      // provider call or the wind-down itself. Awaiting anything could
+      // block on that same thing, so the process ends. 75 is EX_TEMPFAIL:
+      // the run hit its ceiling while still busy, which is retryable, not
+      // a bad configuration.
+      process.exit(75);
+    },
+    // Closed scalars: three durations and one configured integer. No
+    // environment, no job id, no credential. Destructured rather than
+    // spread whole: `log` spreads its fields AFTER the event name, so a
+    // surviving `event` key would overwrite the very name being logged.
+    onEvent: ({ event, ...fields }) => log(event, { ...fields, executionEnabled: true }),
   });
 
-  const healthRef = new WorkerHealth(deps.now);
-  const server = startHealthServer(cfg.healthPort, cfg.healthHost, () => {
-    const ready = healthRef.isReady(cfg.readyStaleMs);
-    return {
-      // Closed scalars and one timestamp. No job id, no project id, no
-      // claim token, no prompt, no body.
-      healthz: healthRef.snapshot(),
-      readyz: { ready },
-      readyStatus: ready ? 200 : 503,
-    };
-  });
+  // The exact references the finally will remove. Named, not inline: an
+  // anonymous arrow passed to `on` cannot be passed to `off`.
+  const onSigint = (): void => stopper.request("SIGINT");
+  const onSigterm = (): void => stopper.request("SIGTERM");
 
-  /**
-   * The idle timer is deliberately NOT unref'd inside the loop: an
-   * unreferenced timer lets Node exit during a backoff, so a healthy idle
-   * worker would simply vanish. Shutdown is cooperative, never accidental.
-   */
-  const health = await runWorkerLoop(deps, opts, signal, sleep, (r: IterationResult) => {
-    if (r.outcome === "no_job") {
-      // TK-R-0 — idle cycles are still NOT logged one by one: a worker on
-      // an empty queue would otherwise fill the log with nothing. The
-      // threshold decision lives in `idleProofEvent` so that the test can
-      // execute this exact rule instead of restating it; here there is
-      // only the wiring.
-      const proof = idleProofEvent(healthRef.snapshot());
-      if (proof) log("worker_idle_proof", { ...proof, executionEnabled: true });
-      return;
-    }
-    // Closed labels only: an RPC outcome, a job id, never a prompt or a token.
-    log("iteration", { outcome: r.outcome, jobId: r.jobId, detail: r.detail });
-  }, healthRef);
+  // ── everything below is inside the ceiling ────────────────────────────
+  // `runLiveBootstrap` installs the two handlers as its first act — inside
+  // this try — and removes them in its own finally, before either dispose
+  // below runs. It also owns the health server and the post-await stop
+  // check, so all three are exercised by tests instead of being properties
+  // of this file's indentation.
+  //
+  // The two disposes are ordered and they belong here, not there: the
+  // handlers go first so a late signal can no longer reach the stop, the
+  // cooperative stop next, and the ceiling LAST — so the absolute deadline
+  // still covers the server close and the handler removal, which is
+  // exactly where a stuck run tends to end up.
+  try {
+    await runLiveBootstrap({
+    signal,
+    host: process,
+    handlers: [["SIGINT", onSigint], ["SIGTERM", onSigterm]],
+    onAbandoned: (stage) =>
+      log("worker_initialisation_abandoned", { stage, executionEnabled: true }),
+    // Closed label only: an error name, never a message or a path.
+    onCloseFailed: (detail) =>
+      log("worker_health_server_close_failed", { detail, executionEnabled: true }),
+    // Awaited: `close` is asynchronous, and a bootstrap that returned
+    // before the socket was actually released would be reporting a
+    // shutdown it had not finished.
+    closeServer: (server: Server) =>
+      new Promise<void>((resolve) => { server.close(() => resolve()); }),
+    load: () =>
+      Promise.all([
+        import("@/lib/db"),
+        import("@/lib/probes/perplexity"),
+        import("@/lib/llm/call-model"),
+        import("@/lib/protocol-worker/lifecycle"),
+        import("@/lib/protocol-worker/worker"),
+        import("@/lib/protocol-worker/health"),
+      ]),
+    run: async ([
+      { getDb }, { runPerplexityProbe }, callModel, { sleep }, { runWorkerLoop },
+      { WorkerHealth, idleProofEvent },
+    ], adopt) => {
+      const analysis: AnalysisTransport = {
+        prepare: (call) =>
+          callModel.prepareCallModelRequest({
+            system: call.system,
+            user: call.user,
+            jsonMode: call.jsonMode,
+            temperature: call.temperature,
+            maxTokens: call.maxTokens,
+            mockResponse: call.mockResponse,
+          }),
+        execute: (prepared, opts) => callModel.executePreparedCallModelRequest(prepared, opts),
+      };
 
-  server?.close();
-  log("worker_stopped", { ...health.snapshot() });
+      const deps: WorkerDeps = {
+        db: getDb(),
+        runProbe: runPerplexityProbe,
+        analysis,
+        realFetch: ((url, init) =>
+          fetch(url, { ...init, signal: init?.signal ?? shutdown.signal })) as typeof fetch,
+        now: () => Date.now(),
+        sleep,
+        abortSignal: shutdown.signal,
+        probeMode: "live_perplexity",
+      };
+
+      const opts: WorkerOptions = {
+        workerId: cfg.workerId,
+        leaseSeconds: cfg.leaseSeconds,
+        idleBackoffMs: cfg.idleBackoffMs,
+        maxBackoffMs: cfg.maxBackoffMs,
+        maxSlotsPerClaim: cfg.maxSlotsPerClaim,
+        jitterRatio: cfg.jitterRatio,
+        maxThrottledRetries: cfg.maxThrottledRetries,
+        graceMs: cfg.graceMs,
+        exitAfterClaimedJob: cfg.exitAfterClaimedJob,
+        providerTimeoutMs: cfg.providerTimeoutMs,
+        perplexityReservedCostUsd: cfg.perplexityReservedCostUsd,
+        analysisReservedCostUsd: cfg.analysisReservedCostUsd,
+        runtimeBound: bound,
+      };
+
+      log("worker_started", {
+        workerId: cfg.workerId,
+        leaseSeconds: cfg.leaseSeconds,
+        probeMode: deps.probeMode,
+        maxRuntimeSeconds: cfg.maxRuntimeSeconds,
+        executionEnabled: true,
+      });
+
+      const healthRef = new WorkerHealth(deps.now);
+      const server = startHealthServer(cfg.healthPort, cfg.healthHost, () => {
+        const ready = healthRef.isReady(cfg.readyStaleMs);
+        return {
+          // Closed scalars and one timestamp. No job id, no project id, no
+          // claim token, no prompt, no body.
+          healthz: healthRef.snapshot(),
+          readyz: { ready },
+          readyStatus: ready ? 200 : 503,
+        };
+      });
+      // Adopted the moment it is bound. From here the bootstrap closes it
+      // exactly once, whatever happens below — including a throw.
+      if (server) adopt(server);
+
+      /**
+       * The idle timer is deliberately NOT unref'd inside the loop: an
+       * unreferenced timer lets Node exit during a backoff, so a healthy
+       * idle worker would simply vanish. Shutdown is cooperative, never
+       * accidental.
+       */
+      const health = await runWorkerLoop(deps, opts, signal, sleep, (r: IterationResult) => {
+        if (r.outcome === "no_job") {
+          // TK-R-0 — idle cycles are still NOT logged one by one: a worker
+          // on an empty queue would otherwise fill the log with nothing.
+          // The threshold decision lives in `idleProofEvent` so that the
+          // test can execute this exact rule instead of restating it; here
+          // there is only the wiring.
+          const proof = idleProofEvent(healthRef.snapshot());
+          if (proof) log("worker_idle_proof", { ...proof, executionEnabled: true });
+          return;
+        }
+        // Closed labels only: an RPC outcome, a job id, never a prompt or a token.
+        log("iteration", { outcome: r.outcome, jobId: r.jobId, detail: r.detail });
+      }, healthRef);
+
+      log("worker_stopped", { ...health.snapshot() });
+    },
+    });
+  } finally {
+    stopper.dispose();
+    bound.dispose();
+  }
 }
 
 async function main(): Promise<void> {

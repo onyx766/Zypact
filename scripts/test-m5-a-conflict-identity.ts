@@ -269,11 +269,20 @@ async function main(): Promise<void> {
   // made deliberately DIFFERENT from the receipt returned, so whichever
   // one ends up persisted says which is authoritative.
 
+  /**
+   * B3-intrinsic test double. `runtimeBound` is a REQUIRED worker option, so
+   * a suite that is not about the total runtime ceiling has to state that it
+   * wants no ceiling — deliberately, in its own file. `lib/` exports no such
+   * helper on purpose: an unbounded worker must never be one import away.
+   */
+  const ALWAYS_ALLOWS = { allowsNewClaim: (): boolean => true };
+
   const WORKER_OPTS: WorkerOptions = {
     workerId: "conflict", leaseSeconds: 60, idleBackoffMs: 1, maxBackoffMs: 2,
     maxSlotsPerClaim: 4, perplexityReservedCostUsd: 0.02, analysisReservedCostUsd: 0.02,
     jitterRatio: 0, maxThrottledRetries: 3, graceMs: 1000,
     exitAfterClaimedJob: false, providerTimeoutMs: 45000,
+    runtimeBound: ALWAYS_ALLOWS,
   };
   // What the transports return: "absent". What the receipts carry: "primary".
   const IN_HAND_ANSWER = "the response still in hand";

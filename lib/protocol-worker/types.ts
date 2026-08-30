@@ -105,6 +105,26 @@ export interface WorkerOptions {
   exitAfterClaimedJob: boolean;
   /** B2 — per-provider-call ceiling in ms, applied separately to each leg. */
   providerTimeoutMs: number;
+  /**
+   * B3-intrinsic — the total runtime bound, as the single question the
+   * loop needs to ask it: is there still room to claim?
+   *
+   * Structural, not a number, so the loop cannot re-derive the rule and
+   * drift from it — `lib/protocol-worker/runtime-bound.ts` owns the
+   * arithmetic and the events.
+   *
+   * REQUIRED, and it was optional for one review cycle. Optional meant the
+   * loop had to read it as `runtimeBound && …`, which is `?? true` spelled
+   * differently: absent bound, unbounded run. Nothing then stood between a
+   * live path and an open-ended one except a single line of object
+   * literal. Required moves that guarantee into the compiler, where a
+   * future caller cannot forget it.
+   *
+   * A suite that is not about the ceiling declares its own always-allowing
+   * double, in its own file. `lib/` exports no such helper on purpose: an
+   * unbounded worker must never be one import away.
+   */
+  runtimeBound: { allowsNewClaim(): boolean };
 }
 
 /**

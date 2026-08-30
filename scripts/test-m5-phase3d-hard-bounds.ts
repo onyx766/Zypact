@@ -70,6 +70,14 @@ const M5_CONTENT = JSON.stringify({
 });
 const PROBE_BODY = JSON.stringify({ id: "p", choices: [{ message: { content: "answer" } }] });
 
+/**
+ * B3-intrinsic test double. `runtimeBound` is a REQUIRED worker option, so
+ * a suite that is not about the total runtime ceiling has to state that it
+ * wants no ceiling — deliberately, in its own file. `lib/` exports no such
+ * helper on purpose: an unbounded worker must never be one import away.
+ */
+const ALWAYS_ALLOWS = { allowsNewClaim: (): boolean => true };
+
 const BASE_OPTS: WorkerOptions = {
   workerId: "hard-bounds",
   leaseSeconds: 60,
@@ -83,6 +91,7 @@ const BASE_OPTS: WorkerOptions = {
   graceMs: 1000,
   exitAfterClaimedJob: true,
   providerTimeoutMs: 45000,
+  runtimeBound: ALWAYS_ALLOWS,
 };
 
 /** A db that answers a scripted claim sequence and nothing else. */
@@ -494,7 +503,9 @@ async function main(): Promise<void> {
       OPENAI_API_KEY: "k", PERPLEXITY_API_KEY: "k", SUPABASE_SERVICE_ROLE_KEY: "k",
       SUPABASE_URL: `https://${REF}.supabase.co`,
       WORKER_EXIT_AFTER_CLAIMED_JOB: "true", WORKER_PROVIDER_TIMEOUT_MS: "45000",
-      WORKER_LEASE_SECONDS: "60", WORKER_GRACE_MS: "10000", ...over,
+      WORKER_LEASE_SECONDS: "60", WORKER_GRACE_MS: "10000",
+      // B3-intrinsic — also required in live, and with no default.
+      WORKER_MAX_RUNTIME_SECONDS: "120", ...over,
     });
     const refuses = (label: string, env: Record<string, string | undefined>, variable: string): void => {
       try {

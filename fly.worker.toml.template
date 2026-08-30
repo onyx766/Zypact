@@ -64,11 +64,12 @@ kill_timeout = 30
     timeout = "5s"
     grace_period = "10s"
 
-# A worker that dies must come back. `always` covers a clean exit too: the
-# entrypoint exits 0 on SIGTERM, and outside a deliberate stop that is still
-# a worker that is no longer working.
+# A bounded worker must never be relaunched automatically. A clean mono-job
+# exit and the intrinsic runtime deadline are both terminal by design;
+# `always` would turn either bound into a new paid-claim opportunity.
+# Operators start a new run only under a separate, explicit authorisation.
 [[restart]]
-  policy = "always"
+  policy = "no"
 
 # Indicative sizing. 512 MB is the prudent tier for the live path; the inert
 # worker needs a fraction of it.

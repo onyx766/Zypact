@@ -286,9 +286,10 @@ function code(src: string, comment: string): string[] {
     lines.filter((l) => /^\[checks\.[^\]]+\]$/.test(l)).length === 1,
     lines.filter((l) => l.startsWith("[checks.")).join(" | "));
 
-  // A worker that dies must come back.
-  assert("[[restart]] declares policy = \"always\"",
-    lines.includes("[[restart]]") && lines.some((l) => /^policy\s*=\s*"always"$/.test(l)),
+  // A bounded worker must remain stopped after every terminal exit. This
+  // preserves both the intrinsic runtime deadline and the mono-job exit.
+  assert("[[restart]] declares policy = \"no\"",
+    lines.includes("[[restart]]") && lines.some((l) => /^policy\s*=\s*"no"$/.test(l)),
     lines.filter((l) => l.startsWith("policy")).join(" | ") || "no policy");
   assert("no other restart policy is declared",
     lines.filter((l) => /^policy\s*=/.test(l)).length === 1);

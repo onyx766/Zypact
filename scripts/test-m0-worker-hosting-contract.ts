@@ -250,6 +250,11 @@ function code(src: string, comment: string): string[] {
   const ENV = [
     ['NODE_ENV', 'production'],
     ['WORKER_EXECUTION_MODE', 'disabled'],
+    ['WORKER_MAX_SLOTS_PER_CLAIM', '1'],
+    ['WORKER_MAX_RUNTIME_SECONDS', '120'],
+    ['WORKER_PROVIDER_TIMEOUT_MS', '45000'],
+    ['WORKER_EXIT_AFTER_CLAIMED_JOB', 'true'],
+    ['WORKER_MAX_THROTTLED_RETRIES', '0'],
     ['WORKER_HEALTH_HOST', '0.0.0.0'],
     ['WORKER_HEALTH_PORT', '8080'],
     ['WORKER_GRACE_MS', '10000'],
@@ -261,7 +266,7 @@ function code(src: string, comment: string): string[] {
   }
   // Whatever else [env] holds, it must not hold a credential.
   const envBlock = body.slice(body.indexOf("[env]"), body.indexOf("[checks]"));
-  assert("[env] carries exactly the four non-secret values, and nothing else",
+  assert("[env] carries exactly the declared non-secret values, and nothing else",
     envBlock.split("\n").filter((l) => l.includes("=")).length === ENV.length,
     envBlock.replace(/\n/g, " | "));
   assert("no credential-shaped key anywhere in the template",

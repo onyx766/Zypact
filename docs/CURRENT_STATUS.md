@@ -400,3 +400,27 @@ Deliberately not used as a release gate: the legacy full `test-probe-analysis` s
 ### 13.5 Superseded local-workstation notes
 
 Section 12 records that `package.json` and `package-lock.json` carried pre-existing local modifications, and that `npm run typecheck` produced exactly one error in `scripts/verify-anon-hardened.ts`. Both were observations of a developer workstation at that date, not facts about the canonical tree. Typecheck passes on the validated head, and PR #12 introduced no effective `package.json`, `package-lock.json`, `tsconfig.json` or `next.config` change relative to `main`.
+
+## 14. M5 Phase 3C — empty-queue live smoke on staging (demonstrated privately)
+
+**Label:** Demonstrated privately. The evidence is founder-supplied terminal output; nothing from the run is committed as raw evidence.
+
+On 2026-08-31, the successful `v6` harness run switched staging Machine `e826322a695098` from `disabled` to `live`, started it once, observed the worker on an empty queue, stopped it once, and restored the Machine to `disabled/stopped` on the baseline configuration. No job was enqueued and no provider call was made.
+
+- Supabase staging project: `bfqpkfqsonixdnfiodwk`
+- image digest: `sha256:51a1a20f20692c4c60f07552ae7753254c8e5f0c973534f66f1a23adecf630e6`
+- worker source commit: `16a85cba0f9765b6864ca52f8d50dc47bb47a8aa`
+- harness: `zypact_phase3c_manual_smoke_v6.sh`
+- harness SHA-256: `c5fbc17088a1a04005570d6e22c8d02f495b8ec3e54737e3acb6165f957444e0` (kept outside the repository)
+- exit code: `0`
+
+```text
+FLY=STOPPED_DISABLED_BASELINE_RESTORED
+DATABASE=UNCHANGED_EMPTY_QUEUE
+OBSERVATION=READINESS_WORKER_STARTED_IDLE_PROOF_ITERATIONS_ZERO_WORKER_STOPPED
+M5_B3_PHASE_3C_EMPTY_QUEUE_LIVE_SMOKE_COMPLETE_RETURNED_DISABLED_STOPPED
+```
+
+This entry records only the successful `v6` validation. Earlier harness revisions produced diagnostic, fail-closed results and are not counted as successful Phase 3C evidence.
+
+**What this does not claim.** Phase 3C exercised the deployed worker against an empty queue only. It establishes readiness, execution-enabled worker start, idle proof over three consecutive no-job cycles, zero iterations, graceful stop, and versioned return to `disabled`. It does not establish job claiming, provider execution, receipt durability, browser-disconnect survival, anti-double-payment behavior, abandoned-job recovery, or structured error/alert handling. Those M5 acceptance requirements remain open. This evidence does not close M5.

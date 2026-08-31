@@ -27,6 +27,11 @@ kill_timeout = 30
   NODE_ENV = "production"
   # Inert until a later authorisation explicitly enables live execution.
   WORKER_EXECUTION_MODE = "disabled"
+  WORKER_MAX_SLOTS_PER_CLAIM = "1"
+  WORKER_MAX_RUNTIME_SECONDS = "120"
+  WORKER_PROVIDER_TIMEOUT_MS = "45000"
+  WORKER_EXIT_AFTER_CLAIMED_JOB = "true"
+  WORKER_MAX_THROTTLED_RETRIES = "0"
   # Required for Fly's private health prober to reach the process.
   WORKER_HEALTH_HOST = "0.0.0.0"
   WORKER_HEALTH_PORT = "8080"

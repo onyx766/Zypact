@@ -34,6 +34,11 @@ kill_timeout = 30
   # Inert until an explicit authorisation flips it. The image defaults to
   # `disabled` too, so this line states the intent rather than creating it.
   WORKER_EXECUTION_MODE = "disabled"
+  WORKER_MAX_SLOTS_PER_CLAIM = "1"
+  WORKER_MAX_RUNTIME_SECONDS = "120"
+  WORKER_PROVIDER_TIMEOUT_MS = "45000"
+  WORKER_EXIT_AFTER_CLAIMED_JOB = "true"
+  WORKER_MAX_THROTTLED_RETRIES = "0"
   # Required for the top-level check below to reach the process at all.
   WORKER_HEALTH_HOST = "0.0.0.0"
   WORKER_HEALTH_PORT = "8080"

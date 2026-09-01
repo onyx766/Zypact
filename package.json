@@ -67,7 +67,8 @@
     "test:m5-b3-max-runtime": "tsx scripts/test-m5-b3-max-runtime.ts",
     "test:m5-phase3d-evidence": "tsx scripts/test-m5-phase3d-evidence.ts",
     "test:m5-0059-schema": "tsx scripts/test-m5-0059-schema-contract.ts",
-    "test:m5-0059-runtime": "tsx scripts/test-m5-0059-runtime-contract.ts"
+    "test:m5-0059-runtime": "tsx scripts/test-m5-0059-runtime-contract.ts",
+    "test:m5-2-adapter": "tsx scripts/test-m5-2-adapter-contract.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

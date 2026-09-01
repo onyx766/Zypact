@@ -110,6 +110,8 @@ import type {
   AnalysisCallReceiptProvider,
   EnqueueProtocolExecutionJobInput,
   EnqueueProtocolExecutionJobResult,
+  ClaimProtocolExecutionJobByIdInput,
+  ClaimProtocolExecutionJobByIdResult,
   ClaimProtocolExecutionJobInput,
   ClaimProtocolExecutionJobResult,
   RenewProtocolExecutionJobLeaseInput,
@@ -3342,6 +3344,98 @@ export const supabaseAdapter: DbAdapter = {
       job: mapProtocolExecutionJobNullable(row.job as ProtocolExecutionJobDbRow | null),
       claimToken: row.claim_token ?? null,
     };
+  },
+
+  /**
+   * D-031 — the targeted claim. Exactly one RPC, four parameters, and a
+   * reply that is closed structurally before any of it is believed.
+   *
+   * The outcome is read from `row.outcome`, never from `row.status`: the
+   * returned row also carries the job's own `status` column, and confusing
+   * the two would let a job status be mistaken for a claim outcome. 0059
+   * names the column `outcome` for exactly that reason.
+   *
+   * Every rejection raises the same closed, value-free error. A malformed
+   * reply must not become a side channel for an identifier, a token or any
+   * other value the server sent: what is rejected is never echoed. Absence
+   * is likewise never silently promoted to `null` — a missing `job` or
+   * `claim_token` property is a malformed reply, not a null payload.
+   */
+  async claimProtocolExecutionJobById(
+    input: ClaimProtocolExecutionJobByIdInput
+  ): Promise<ClaimProtocolExecutionJobByIdResult> {
+    const { data, error } = await getClient().rpc("claim_protocol_execution_job_by_id", {
+      p_worker_id: input.workerId,
+      p_lease_seconds: input.leaseSeconds,
+      p_job_id: input.jobId,
+      p_project_id: input.projectId,
+    });
+    if (error) throw error;
+
+    const REJECT =
+      "claimProtocolExecutionJobById: the RPC reply did not satisfy the closed D-031 contract.";
+
+    const rows = Array.isArray(data) ? data : data === null || data === undefined ? [] : [data];
+    if (rows.length !== 1) throw new Error(REJECT);
+
+    const row: unknown = rows[0];
+    if (typeof row !== "object" || row === null || Array.isArray(row)) throw new Error(REJECT);
+    const reply = row as Record<string, unknown>;
+
+    // Own properties, present. `undefined` is absence, and absence is not null.
+    for (const key of ["outcome", "job", "claim_token"] as const) {
+      if (!Object.prototype.hasOwnProperty.call(reply, key)) throw new Error(REJECT);
+      if (reply[key] === undefined) throw new Error(REJECT);
+    }
+
+    const outcome = reply.outcome;
+    if (
+      outcome !== "CLAIMED"
+      && outcome !== "JOB_NOT_FOUND"
+      && outcome !== "JOB_NOT_ELIGIBLE"
+      && outcome !== "JOB_LOCKED"
+    ) {
+      throw new Error(REJECT);
+    }
+
+    const rawJob = reply.job;
+    if (rawJob !== null && (typeof rawJob !== "object" || Array.isArray(rawJob))) {
+      throw new Error(REJECT);
+    }
+    const rawToken = reply.claim_token;
+    if (rawToken !== null && (typeof rawToken !== "string" || rawToken.length === 0)) {
+      throw new Error(REJECT);
+    }
+
+    if (outcome !== "CLAIMED") {
+      if (rawJob !== null || rawToken !== null) throw new Error(REJECT);
+      return { outcome, job: null, claimToken: null };
+    }
+
+    if (rawJob === null || rawToken === null) throw new Error(REJECT);
+    const job = mapProtocolExecutionJobNullable(rawJob as ProtocolExecutionJobDbRow);
+    if (job === null) throw new Error(REJECT);
+    const claimToken: string = rawToken;
+
+    const leaseIsValidDate =
+      typeof job.leaseExpiresAt === "string"
+      && job.leaseExpiresAt.length > 0
+      && Number.isFinite(Date.parse(job.leaseExpiresAt));
+
+    if (
+      job.id !== input.jobId
+      || job.projectId !== input.projectId
+      || job.status !== "claimed"
+      || job.workerId !== input.workerId
+      || job.attemptCount !== 1
+      || job.maxAttempts !== 1
+      || !leaseIsValidDate
+      || job.claimToken !== claimToken
+    ) {
+      throw new Error(REJECT);
+    }
+
+    return { outcome, job, claimToken };
   },
 
   async renewProtocolExecutionJobLease(

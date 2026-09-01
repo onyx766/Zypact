@@ -85,6 +85,8 @@ import type {
   ProtocolOperatorAction,
   EnqueueProtocolExecutionJobInput,
   EnqueueProtocolExecutionJobResult,
+  ClaimProtocolExecutionJobByIdInput,
+  ClaimProtocolExecutionJobByIdResult,
   ClaimProtocolExecutionJobInput,
   ClaimProtocolExecutionJobResult,
   RenewProtocolExecutionJobLeaseInput,
@@ -3490,6 +3492,61 @@ export const memoryAdapter: DbAdapter = {
       leaseExpiresAt: new Date(nowMs + input.leaseSeconds * 1000).toISOString(),
       attemptCount: candidate.attemptCount + 1,
       updatedAt: now,
+    };
+    store.protocolExecutionJobs.set(claimed.id, claimed);
+    return { outcome: "CLAIMED", job: { ...claimed }, claimToken };
+  },
+
+  /**
+   * D-031 — the deterministic mirror of migration 0059. It addresses exactly
+   * one job, by its (jobId, projectId) pair: no abandoned-job sweep, no
+   * candidate search, no ordering, and never a fallback to the global claim.
+   * A job that cannot be claimed yields a closed outcome with a null payload
+   * and leaves the store untouched.
+   *
+   * `JOB_LOCKED` is deliberately not simulated here. It is the observable
+   * effect of a real `FOR UPDATE NOWAIT` meeting a concurrent holder, and it
+   * is proved where it can be proved: the 0059 runtime contract, against a
+   * live PostgreSQL with two distinct connections. An in-memory imitation of
+   * a lock would assert nothing about the lock.
+   */
+  async claimProtocolExecutionJobById(
+    input: ClaimProtocolExecutionJobByIdInput
+  ): Promise<ClaimProtocolExecutionJobByIdResult> {
+    const store = getStore();
+    // The same guards, and the same message, as the global claim.
+    if (!input.workerId.trim() || input.leaseSeconds <= 0) {
+      throw new Error("invalid_claim_protocol_execution_job_args");
+    }
+
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) {
+      return { outcome: "JOB_NOT_FOUND", job: null, claimToken: null };
+    }
+
+    // All six conditions, together. Any one of them failing is the same
+    // answer: this candidate is not claimable, and nothing else is tried.
+    const eligible =
+      job.status === "queued" &&
+      job.attemptCount === 0 &&
+      job.maxAttempts === 1 &&
+      job.workerId === null &&
+      job.claimToken === null &&
+      job.leaseExpiresAt === null;
+    if (!eligible) {
+      return { outcome: "JOB_NOT_ELIGIBLE", job: null, claimToken: null };
+    }
+
+    const claimToken = randomUUID();
+    const nowMs = Date.now();
+    const claimed: ProtocolExecutionJob = {
+      ...job,
+      status: "claimed",
+      workerId: input.workerId,
+      claimToken,
+      leaseExpiresAt: new Date(nowMs + input.leaseSeconds * 1000).toISOString(),
+      attemptCount: job.attemptCount + 1,
+      updatedAt: nowIso(),
     };
     store.protocolExecutionJobs.set(claimed.id, claimed);
     return { outcome: "CLAIMED", job: { ...claimed }, claimToken };

@@ -33,6 +33,7 @@ import type {
   CreateProbeRunAndStartAttemptForJobInput,
   CreateProtocolInput,
   DbAdapter,
+  ProtocolExecutionJob,
 } from "@/lib/db/types";
 
 const MARK_BODY_PERPLEXITY = JSON.stringify({ model: "sonar", messages: [] });
@@ -158,6 +159,58 @@ async function main(): Promise<void> {
       /"start_attempt"/.test(supabaseSrc) &&
       /"reconcile_attempt"/.test(supabaseSrc) &&
       !/"admit_and_reserve_attempt_for_job"[\s\S]*"admit_and_reserve_attempt"/.test("")
+  );
+
+  // -- D-031 targeted claim: static shape -------------------------------
+  check(
+    "D-031: claim_protocol_execution_job_by_id appears exactly once as a Supabase .rpc(...) call site",
+    (supabaseSrc.match(/"claim_protocol_execution_job_by_id"/g) ?? []).length === 1
+  );
+  check(
+    "D-031: the global claim RPC is still called exactly once, with its own two parameters and row.status",
+    (supabaseSrc.match(/"claim_protocol_execution_job"/g) ?? []).length === 1 &&
+      /rpc\("claim_protocol_execution_job", \{\s*p_worker_id: input\.workerId,\s*p_lease_seconds: input\.leaseSeconds,\s*\}\)/.test(supabaseSrc) &&
+      /outcome: row\.status,/.test(supabaseSrc)
+  );
+  check(
+    "D-031: the targeted RPC is called with exactly p_worker_id/p_lease_seconds/p_job_id/p_project_id",
+    /rpc\("claim_protocol_execution_job_by_id", \{\s*p_worker_id: input\.workerId,\s*p_lease_seconds: input\.leaseSeconds,\s*p_job_id: input\.jobId,\s*p_project_id: input\.projectId,\s*\}\)/.test(supabaseSrc)
+  );
+  check(
+    "D-031: neither adapter performs direct DML on protocol_execution_jobs",
+    !/\.from\(\s*["'`]protocol_execution_jobs["'`]\s*\)/.test(supabaseSrc) &&
+      !/\.from\(\s*["'`]protocol_execution_jobs["'`]\s*\)/.test(memorySrc)
+  );
+  check(
+    "D-031: claimProtocolExecutionJobById exists in the types and in both adapters",
+    /claimProtocolExecutionJobById\(/.test(typesSrc) &&
+      /async claimProtocolExecutionJobById\(/.test(memorySrc) &&
+      /async claimProtocolExecutionJobById\(/.test(supabaseSrc)
+  );
+  // The union is read out of the type block and compared as a list: a fifth
+  // literal added before, between or after the four would change the list,
+  // where a prefix match would happily ignore it.
+  const outcomeBlock = /export type ClaimProtocolExecutionJobByIdOutcome\s*=([\s\S]*?);/
+    .exec(typesSrc);
+  const outcomeLiterals = outcomeBlock
+    ? [...outcomeBlock[1]!.matchAll(/"([A-Za-z0-9_]+)"/g)].map((m) => m[1]!)
+    : [];
+  check(
+    "D-031: the outcome union holds exactly the four literals, in order, and nothing else",
+    JSON.stringify(outcomeLiterals) ===
+      JSON.stringify(["CLAIMED", "JOB_NOT_FOUND", "JOB_NOT_ELIGIBLE", "JOB_LOCKED"]),
+    outcomeLiterals.join("|")
+  );
+  check(
+    "D-031: the MemoryAdapter mirror requires all six eligibility conditions together",
+    ["job.status === \"queued\"", "job.attemptCount === 0", "job.maxAttempts === 1",
+     "job.workerId === null", "job.claimToken === null", "job.leaseExpiresAt === null"]
+      .every((c) => memorySrc.includes(c))
+  );
+  check(
+    "D-031: the MemoryAdapter mirror sweeps nothing and never falls back to the global claim",
+    !/claimProtocolExecutionJobById[\s\S]{0,2600}?abandoned_exhausted/.test(memorySrc) &&
+      !/claimProtocolExecutionJobById[\s\S]{0,2600}?claimProtocolExecutionJob\(/.test(memorySrc)
   );
 
   // ========================================================================
@@ -2208,6 +2261,247 @@ async function main(): Promise<void> {
   }
 
   // ========================================================================
+  // Part P — MemoryAdapter: D-031 targeted claim by (jobId, projectId).
+  //
+  // Reads go straight to the in-memory store, never through another adapter
+  // method: using `enqueueProtocolExecutionJob` to "read" a job would call a
+  // mutating RPC to prove that nothing mutated.
+  //
+  // Six of the fixtures below are deliberately inconsistent — a queued job
+  // that already carries a worker, a never-attempted job with attemptCount 1,
+  // and so on. They exist only to isolate one predicate at a time; none of
+  // them represents a state ordinary operation could produce, and none is
+  // reachable through the public adapter surface, which moves those fields
+  // together. JOB_LOCKED is not simulated: it belongs to a real
+  // FOR UPDATE NOWAIT and is proved by the 0059 runtime contract.
+  // ========================================================================
+  console.log("\n[P] MemoryAdapter — D-031 targeted claim");
+
+  {
+    interface D031Store {
+      protocolExecutionJobs: Map<string, ProtocolExecutionJob>;
+      protocolExecutionJobAlerts: Map<string, unknown>;
+      protocolExecutionJobAlertDeliveries: Map<string, unknown>;
+      protocolExecutionJobAlertDeliveryAttempts: Map<string, unknown>;
+      alertTransitionSeqCounter: number;
+    }
+    const memStore = (): D031Store =>
+      (globalThis as unknown as Record<string, D031Store>)["__zypact_memory_store__"]!;
+
+    const readJobRow = (jobId: string): ProtocolExecutionJob =>
+      must(memStore().protocolExecutionJobs.get(jobId), `store row for job ${jobId}`);
+
+    /** Key-sorted, so two structurally equal states serialise identically. */
+    const canon = (v: unknown): unknown =>
+      v === null || typeof v !== "object"
+        ? v
+        : Array.isArray(v)
+          ? v.map(canon)
+          : Object.fromEntries(
+              Object.keys(v as Record<string, unknown>).sort()
+                .map((k) => [k, canon((v as Record<string, unknown>)[k])])
+            );
+
+    const sortedEntries = (m: Map<string, unknown>): [string, unknown][] =>
+      [...m.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+
+    /**
+     * Every D-031-relevant element of the store: all job rows sorted by key,
+     * the three alert registries, and the transition counter. `exceptJobId`
+     * lifts out exactly one row, so a successful claim can be asserted to
+     * have changed that row and nothing else.
+     */
+    const digest = (exceptJobId?: string): string => {
+      const st = memStore();
+      return JSON.stringify(canon({
+        jobs: sortedEntries(st.protocolExecutionJobs as Map<string, unknown>)
+          .filter(([id]) => id !== exceptJobId),
+        alerts: sortedEntries(st.protocolExecutionJobAlerts),
+        deliveries: sortedEntries(st.protocolExecutionJobAlertDeliveries),
+        attempts: sortedEntries(st.protocolExecutionJobAlertDeliveryAttempts),
+        seq: st.alertTransitionSeqCounter,
+      }));
+    };
+
+    const freshJob = async (tag: string, maxAttempts = 1): Promise<{ jobId: string; projectId: string }> => {
+      const fx = await setupProjectProtocol(db, `d031-${tag}`);
+      const enq = await db.enqueueProtocolExecutionJob({
+        protocolId: fx.protocolId, projectId: fx.projectId, maxAttempts,
+      });
+      return { jobId: must(enq.job, `d031 ${tag} job`).id, projectId: fx.projectId };
+    };
+
+    /** Writes one field directly, which the public surface cannot do alone. */
+    const forceField = <K extends keyof ProtocolExecutionJob>(
+      jobId: string, key: K, value: ProtocolExecutionJob[K]
+    ): void => {
+      const st = memStore();
+      st.protocolExecutionJobs.set(jobId, { ...readJobRow(jobId), [key]: value });
+    };
+
+    // -- argument guards ---------------------------------------------------
+    const guarded = await freshJob("guards");
+    const beforeGuards = digest();
+    for (const [label, bad] of [
+      ["an empty workerId", { workerId: "", leaseSeconds: 60 }],
+      ["a whitespace workerId", { workerId: "   ", leaseSeconds: 60 }],
+      ["a zero lease", { workerId: "w", leaseSeconds: 0 }],
+      ["a negative lease", { workerId: "w", leaseSeconds: -1 }],
+    ] as const) {
+      let message = "";
+      try {
+        await db.claimProtocolExecutionJobById({
+          ...bad, jobId: guarded.jobId, projectId: guarded.projectId,
+        });
+      } catch (e) { message = (e as Error).message; }
+      check(
+        `D-031 memory: ${label} is refused with the canonical global-claim message`,
+        message === "invalid_claim_protocol_execution_job_args", message
+      );
+    }
+    check(
+      "D-031 memory: the four refused calls left every job row and alert registry byte-identical",
+      digest() === beforeGuards
+    );
+
+    // -- addressing failures ----------------------------------------------
+    const addressed = await freshJob("addressing");
+    const foreign = await freshJob("foreign");
+    const beforeMisses = digest();
+    const absent = await db.claimProtocolExecutionJobById({
+      workerId: "w", leaseSeconds: 60,
+      jobId: "00000000-0000-4000-8000-000000000000", projectId: addressed.projectId,
+    });
+    check(
+      "D-031 memory: an unknown jobId returns JOB_NOT_FOUND with a null job and a null token",
+      absent.outcome === "JOB_NOT_FOUND" && absent.job === null && absent.claimToken === null
+    );
+    const wrongProject = await db.claimProtocolExecutionJobById({
+      workerId: "w", leaseSeconds: 60, jobId: addressed.jobId, projectId: foreign.projectId,
+    });
+    check(
+      "D-031 memory: the right job under another project is JOB_NOT_FOUND, with a null payload",
+      wrongProject.outcome === "JOB_NOT_FOUND" && wrongProject.job === null &&
+        wrongProject.claimToken === null
+    );
+    check(
+      "D-031 memory: neither addressing failure changed any row or registry",
+      digest() === beforeMisses
+    );
+
+    // -- the six eligibility conditions, one at a time ----------------------
+    const eligibleShape = (j: ProtocolExecutionJob) => ({
+      queued: j.status === "queued",
+      neverAttempted: j.attemptCount === 0,
+      singleAttempt: j.maxAttempts === 1,
+      unowned: j.workerId === null,
+      untokened: j.claimToken === null,
+      unleased: j.leaseExpiresAt === null,
+    });
+
+    const CONDITIONS = [
+      { tag: "status", broken: "queued" as const,
+        apply: (id: string) => forceField(id, "status", "running") },
+      { tag: "attemptCount", broken: "neverAttempted" as const,
+        apply: (id: string) => forceField(id, "attemptCount", 1) },
+      { tag: "maxAttempts", broken: "singleAttempt" as const,
+        apply: (id: string) => forceField(id, "maxAttempts", 2) },
+      { tag: "workerId", broken: "unowned" as const,
+        apply: (id: string) => forceField(id, "workerId", "w-stale") },
+      { tag: "claimToken", broken: "untokened" as const,
+        apply: (id: string) => forceField(id, "claimToken", "11111111-1111-4111-8111-111111111111") },
+      { tag: "leaseExpiresAt", broken: "unleased" as const,
+        apply: (id: string) => forceField(id, "leaseExpiresAt", "2030-01-01T00:00:00.000Z") },
+    ];
+
+    for (const cond of CONDITIONS) {
+      const fx = await freshJob(`cond-${cond.tag}`);
+      cond.apply(fx.jobId);
+      const shape = eligibleShape(readJobRow(fx.jobId));
+      const others = Object.entries(shape).filter(([k]) => k !== cond.broken);
+      check(
+        `D-031 memory: the ${cond.tag} fixture violates that condition and only that one`,
+        shape[cond.broken] === false && others.every(([, ok]) => ok === true),
+        JSON.stringify(shape)
+      );
+      const before = digest();
+      const refused = await db.claimProtocolExecutionJobById({
+        workerId: "w-cond", leaseSeconds: 60, jobId: fx.jobId, projectId: fx.projectId,
+      });
+      check(
+        `D-031 memory: a job failing only on ${cond.tag} is JOB_NOT_ELIGIBLE with a null payload`,
+        refused.outcome === "JOB_NOT_ELIGIBLE" && refused.job === null && refused.claimToken === null
+      );
+      check(
+        `D-031 memory: the ${cond.tag} refusal left every row and registry byte-identical`,
+        digest() === before
+      );
+    }
+
+    // -- the successful claim ----------------------------------------------
+    const older = await freshJob("older");
+    const target = await freshJob("target");
+    const targetBefore = readJobRow(target.jobId);
+    const everythingElseBefore = digest(target.jobId);
+
+    const claimed = await db.claimProtocolExecutionJobById({
+      workerId: "w-d031", leaseSeconds: 60, jobId: target.jobId, projectId: target.projectId,
+    });
+    check(
+      "D-031 memory: the addressed job is claimed",
+      claimed.outcome === "CLAIMED" && claimed.job !== null && claimed.claimToken !== null
+    );
+    check(
+      "D-031 memory: the returned job is the one addressed",
+      claimed.job?.id === target.jobId && claimed.job?.projectId === target.projectId
+    );
+    check(
+      "D-031 memory: the mutation is canonical and attemptCount moved 0 -> 1",
+      claimed.job?.status === "claimed" && claimed.job?.workerId === "w-d031" &&
+        claimed.job?.attemptCount === 1 && targetBefore.attemptCount === 0 &&
+        claimed.job?.maxAttempts === 1 && claimed.job?.leaseExpiresAt !== null
+    );
+    // Not "changed": the in-memory clock has millisecond resolution and an
+    // enqueue followed immediately by a claim can legitimately land on the
+    // same instant. What must hold is that time never went backwards.
+    check(
+      "D-031 memory: updatedAt is refreshed to an instant no earlier than before the claim",
+      (claimed.job?.updatedAt ?? "") >= targetBefore.updatedAt
+    );
+    const persisted = readJobRow(target.jobId);
+    check(
+      "D-031 memory: the persisted row is field-for-field the row that was returned",
+      JSON.stringify(canon(persisted)) === JSON.stringify(canon(claimed.job))
+    );
+    check(
+      "D-031 memory: the returned token is the persisted token",
+      persisted.claimToken === claimed.claimToken && claimed.claimToken !== null
+    );
+    check(
+      "D-031 memory: every other job row and all three alert registries are byte-identical",
+      digest(target.jobId) === everythingElseBefore
+    );
+    check(
+      "D-031 memory: the older eligible sibling is still queued and never attempted",
+      readJobRow(older.jobId).status === "queued" && readJobRow(older.jobId).attemptCount === 0
+    );
+
+    // -- second call on the winner ------------------------------------------
+    const beforeSecond = digest();
+    const second = await db.claimProtocolExecutionJobById({
+      workerId: "w-second", leaseSeconds: 60, jobId: target.jobId, projectId: target.projectId,
+    });
+    check(
+      "D-031 memory: a second call on the claimed job is JOB_NOT_ELIGIBLE with a null payload",
+      second.outcome === "JOB_NOT_ELIGIBLE" && second.job === null && second.claimToken === null
+    );
+    check(
+      "D-031 memory: the second call changed no row and no registry",
+      digest() === beforeSecond
+    );
+  }
+
+  // ========================================================================
   // Part H — SupabaseAdapter: RPC name/parameter mapping + row-shape parity.
   // ========================================================================
   console.log("\n[H] SupabaseAdapter — RPC mapping (stub client, no network)");
@@ -2678,6 +2972,175 @@ async function main(): Promise<void> {
       supaReceipt.outcome === "RECEIPT_RECORDED" &&
       supaReceipt.finalDeliveryStatus === "accepted"
   );
+
+  // -- D-031 targeted claim, through the injected stub client --------------
+  console.log("\n[H2] SupabaseAdapter — D-031 targeted claim (stub client, no network)");
+  {
+    const REJECT =
+      "claimProtocolExecutionJobById: the RPC reply did not satisfy the closed D-031 contract.";
+
+    // A coherent CLAIMED row: the shape 0059 actually returns on success,
+    // including a lease that parses as a date.
+    const D031_JOB = {
+      ...JOB_ROW,
+      id: "j1", project_id: "p1", status: "claimed",
+      worker_id: "w1", claim_token: "tok",
+      lease_expires_at: "2030-01-01T00:00:00.000Z",
+      attempt_count: 1, max_attempts: 1,
+    };
+    const call = () => supabaseAdapter.claimProtocolExecutionJobById({
+      workerId: "w1", leaseSeconds: 60, jobId: "j1", projectId: "p1",
+    });
+    const thrown = async (): Promise<string> => {
+      try { await call(); return "<no error>"; } catch (e) { return (e as Error).message ?? String(e); }
+    };
+    const refuses = async (label: string, data: unknown): Promise<void> => {
+      nextRpcResponse = { data, error: null };
+      const message = await thrown();
+      check(`Supabase claimProtocolExecutionJobById: ${label} is refused, with the closed error`,
+        message === REJECT, message);
+    };
+
+    rpcCalls = [];
+    nextRpcResponse = { data: { outcome: "CLAIMED", job: D031_JOB, claim_token: "tok" }, error: null };
+    const supaTargeted = await call();
+    check(
+      "Supabase claimProtocolExecutionJobById: exactly one RPC, named claim_protocol_execution_job_by_id",
+      rpcCalls.length === 1 && rpcCalls[0]!.fn === "claim_protocol_execution_job_by_id"
+    );
+    check(
+      "Supabase claimProtocolExecutionJobById: exactly the four contracted parameters",
+      JSON.stringify(Object.keys(rpcCalls[0]!.args).sort()) ===
+        JSON.stringify(["p_job_id", "p_lease_seconds", "p_project_id", "p_worker_id"]) &&
+        rpcCalls[0]!.args.p_worker_id === "w1" && rpcCalls[0]!.args.p_lease_seconds === 60 &&
+        rpcCalls[0]!.args.p_job_id === "j1" && rpcCalls[0]!.args.p_project_id === "p1"
+    );
+    check(
+      "Supabase claimProtocolExecutionJobById: a coherent CLAIMED maps the job and the token",
+      supaTargeted.outcome === "CLAIMED" && supaTargeted.job?.id === "j1" &&
+        supaTargeted.job?.projectId === "p1" && supaTargeted.job?.status === "claimed" &&
+        supaTargeted.job?.attemptCount === 1 && supaTargeted.job?.maxAttempts === 1 &&
+        supaTargeted.claimToken === "tok" && supaTargeted.job?.claimToken === "tok"
+    );
+
+    // The decisive one: `status` here says CLAIMED while `outcome` says
+    // otherwise. An adapter reading row.status would claim a job it did not get.
+    nextRpcResponse = {
+      data: { outcome: "JOB_NOT_ELIGIBLE", status: "CLAIMED", job: null, claim_token: null },
+      error: null,
+    };
+    const readsOutcome = await call();
+    check(
+      "Supabase claimProtocolExecutionJobById: the outcome is read from row.outcome, never from row.status",
+      readsOutcome.outcome === "JOB_NOT_ELIGIBLE" && readsOutcome.job === null &&
+        readsOutcome.claimToken === null
+    );
+
+    for (const outcome of ["JOB_NOT_FOUND", "JOB_NOT_ELIGIBLE", "JOB_LOCKED"] as const) {
+      nextRpcResponse = { data: { outcome, job: null, claim_token: null }, error: null };
+      const r = await call();
+      check(
+        `Supabase claimProtocolExecutionJobById: ${outcome} maps to a null job and a null token`,
+        r.outcome === outcome && r.job === null && r.claimToken === null
+      );
+    }
+
+    // -- cardinality and row shape ----------------------------------------
+    await refuses("an empty response", null);
+    await refuses("an empty array", []);
+    await refuses("a single null row", [null]);
+    await refuses("a two-row response", [
+      { outcome: "JOB_NOT_FOUND", job: null, claim_token: null },
+      { outcome: "CLAIMED", job: D031_JOB, claim_token: "tok" },
+    ]);
+    await refuses("a row that is not an object", ["JOB_NOT_FOUND"]);
+    await refuses("a row that is an array", [[{ outcome: "JOB_NOT_FOUND" }]]);
+
+    // -- absence is never promoted to null --------------------------------
+    await refuses("a missing job property", { outcome: "JOB_NOT_FOUND", claim_token: null });
+    await refuses("a missing claim_token property", { outcome: "JOB_NOT_FOUND", job: null });
+    await refuses("a missing outcome property", { job: null, claim_token: null });
+    await refuses("an undefined job", { outcome: "JOB_NOT_FOUND", job: undefined, claim_token: null });
+    await refuses("an undefined claim_token", { outcome: "JOB_NOT_FOUND", job: null, claim_token: undefined });
+    await refuses("a failure whose properties are simply absent",
+      { outcome: "JOB_LOCKED" });
+
+    // -- value shapes ------------------------------------------------------
+    await refuses("a scalar job", { outcome: "CLAIMED", job: "j1", claim_token: "tok" });
+    await refuses("an array job", { outcome: "CLAIMED", job: [D031_JOB], claim_token: "tok" });
+    await refuses("a false job", { outcome: "JOB_NOT_FOUND", job: false, claim_token: null });
+    await refuses("a numeric claim_token", { outcome: "CLAIMED", job: D031_JOB, claim_token: 42 });
+    await refuses("an object claim_token", { outcome: "CLAIMED", job: D031_JOB, claim_token: { v: "tok" } });
+    await refuses("an empty-string claim_token", { outcome: "CLAIMED", job: D031_JOB, claim_token: "" });
+
+    // -- outcome vocabulary, without echoing what was rejected -------------
+    const SENTINEL = "JOB_RETRY_SENTINEL_9Q7Z";
+    nextRpcResponse = { data: { outcome: SENTINEL, job: null, claim_token: null }, error: null };
+    const unknownMsg = await thrown();
+    check("Supabase claimProtocolExecutionJobById: an outcome outside the four literals is refused",
+      unknownMsg === REJECT, unknownMsg);
+    check("Supabase claimProtocolExecutionJobById: the refusal never echoes the rejected value",
+      !unknownMsg.includes(SENTINEL));
+
+    // -- CLAIMED coherence -------------------------------------------------
+    await refuses("CLAIMED without a token", { outcome: "CLAIMED", job: D031_JOB, claim_token: null });
+    await refuses("CLAIMED without a job", { outcome: "CLAIMED", job: null, claim_token: "tok" });
+    await refuses("CLAIMED returning another job id",
+      { outcome: "CLAIMED", job: { ...D031_JOB, id: "other" }, claim_token: "tok" });
+    await refuses("CLAIMED under another project",
+      { outcome: "CLAIMED", job: { ...D031_JOB, project_id: "other" }, claim_token: "tok" });
+    await refuses("CLAIMED whose job status is not claimed",
+      { outcome: "CLAIMED", job: { ...D031_JOB, status: "queued" }, claim_token: "tok" });
+    await refuses("CLAIMED naming a different worker",
+      { outcome: "CLAIMED", job: { ...D031_JOB, worker_id: "someone-else" }, claim_token: "tok" });
+    await refuses("CLAIMED with an attemptCount other than 1",
+      { outcome: "CLAIMED", job: { ...D031_JOB, attempt_count: 2 }, claim_token: "tok" });
+    await refuses("CLAIMED with a maxAttempts other than 1",
+      { outcome: "CLAIMED", job: { ...D031_JOB, max_attempts: 3 }, claim_token: "tok" });
+    await refuses("CLAIMED with a null lease",
+      { outcome: "CLAIMED", job: { ...D031_JOB, lease_expires_at: null }, claim_token: "tok" });
+    await refuses("CLAIMED with a lease that is not a date",
+      { outcome: "CLAIMED", job: { ...D031_JOB, lease_expires_at: "not-a-date" }, claim_token: "tok" });
+    await refuses("a token disagreeing with the job",
+      { outcome: "CLAIMED", job: { ...D031_JOB, claim_token: "another" }, claim_token: "tok" });
+    await refuses("a failure carrying a job",
+      { outcome: "JOB_LOCKED", job: D031_JOB, claim_token: null });
+    await refuses("a failure carrying a token",
+      { outcome: "JOB_NOT_FOUND", job: null, claim_token: "tok" });
+
+    // -- error propagation and the untouched table path --------------------
+    const rpcError = new Error("supabase-side failure, verbatim");
+    nextRpcResponse = { data: null, error: rpcError };
+    let propagated: unknown = null;
+    try { await call(); } catch (e) { propagated = e; }
+    check(
+      "Supabase claimProtocolExecutionJobById: a Supabase error is propagated unchanged, not replaced",
+      propagated === rpcError
+    );
+
+    let fromThrew = false;
+    try {
+      (stubClient() as unknown as { from: () => unknown }).from();
+    } catch { fromThrew = true; }
+    check(
+      "Supabase claimProtocolExecutionJobById: the .from(...) stub still throws, so a table read would have been caught",
+      fromThrew
+    );
+
+    rpcCalls = [];
+    nextRpcResponse = {
+      data: { status: "CLAIMED", job: { ...JOB_ROW, status: "claimed", claim_token: "gtok" }, claim_token: "gtok" },
+      error: null,
+    };
+    const globalAgain = await supabaseAdapter.claimProtocolExecutionJob({ workerId: "w1", leaseSeconds: 300 });
+    check(
+      "Supabase claimProtocolExecutionJob: the global claim still uses its own RPC, two parameters and row.status",
+      rpcCalls.length === 1 && rpcCalls[0]!.fn === "claim_protocol_execution_job" &&
+        JSON.stringify(Object.keys(rpcCalls[0]!.args).sort()) ===
+          JSON.stringify(["p_lease_seconds", "p_worker_id"]) &&
+        globalAgain.outcome === "CLAIMED" && globalAgain.claimToken === "gtok"
+    );
+  }
 
   __setSupabaseAdapterClientForTests(null);
 

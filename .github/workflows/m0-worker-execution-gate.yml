@@ -38,6 +38,9 @@ on:
       # asserts on; a change to one of them that does not compile must
       # not be able to reach main without the typecheck below running.
       - "scripts/test-m5-*.ts"
+      # The Phase 3D evidence filter decides what leaves a canary run.
+      # A change to it must re-run its contract before it can reach main.
+      - "scripts/phase3d/**"
       - "Dockerfile.worker"
       - ".dockerignore"
       - "fly.worker.toml.template"
@@ -106,6 +109,13 @@ jobs:
       # in microseconds, so this step cannot become the slow one.
       - name: Run the total runtime bound contract
         run: npm run test:m5-b3-max-runtime
+
+      # Phase 3D evidence projection. Network-free and dependency-free:
+      # the contract drives the real shell library over synthetic
+      # fixtures and proves that a prompt, a payload, a free-text
+      # detail or a credential-shaped value cannot reach the output.
+      - name: Run the Phase 3D evidence filter contract
+        run: npm run test:m5-phase3d-evidence
 
       # The Docker half runs here, and ONLY here. The opt-in is a STEP-level
       # env entry on purpose: at job or workflow level it would silently

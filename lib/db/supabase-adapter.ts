@@ -110,6 +110,8 @@ import type {
   AnalysisCallReceiptProvider,
   EnqueueProtocolExecutionJobInput,
   EnqueueProtocolExecutionJobResult,
+  VerifyPhase3dCanaryPostClaimInput,
+  VerifyPhase3dCanaryPostClaimResult,
   ClaimProtocolExecutionJobByIdInput,
   ClaimProtocolExecutionJobByIdResult,
   ClaimProtocolExecutionJobInput,
@@ -3436,6 +3438,63 @@ export const supabaseAdapter: DbAdapter = {
     }
 
     return { outcome, job, claimToken };
+  },
+
+  /**
+   * D-031 — the post-claim verification barrier (migration 0060).
+   *
+   * `get_protocol_execution_job_context` only loads an attempt when
+   * `current_attempt_id` is non-null, and scopes external calls and receipts
+   * to that current attempt. A job carrying an older, non-current attempt
+   * therefore looks empty through that lens. 0060 walks the job's entire
+   * history instead, and this adapter is its only client-side surface.
+   *
+   * One RPC, four parameters, one closed label. There is deliberately no
+   * `.from(...)` read, no second RPC and no fallback here: a verifier that
+   * could answer from anywhere but the server's own single verdict would no
+   * longer be a barrier. The reply carries a label and nothing else, so a
+   * malformed reply is rejected with one value-free error rather than
+   * repaired, and never echoes what the server sent.
+   */
+  async verifyPhase3dCanaryPostClaim(
+    input: VerifyPhase3dCanaryPostClaimInput
+  ): Promise<VerifyPhase3dCanaryPostClaimResult> {
+    const { data, error } = await getClient().rpc("verify_phase3d_canary_post_claim", {
+      p_worker_id: input.workerId,
+      p_job_id: input.jobId,
+      p_project_id: input.projectId,
+      p_claim_token: input.claimToken,
+    });
+    if (error) throw error;
+
+    const REJECT =
+      "verifyPhase3dCanaryPostClaim: the RPC reply did not satisfy the closed D-031 contract.";
+
+    const rows = Array.isArray(data) ? data : data === null || data === undefined ? [] : [data];
+    if (rows.length !== 1) throw new Error(REJECT);
+
+    const row: unknown = rows[0];
+    if (typeof row !== "object" || row === null || Array.isArray(row)) throw new Error(REJECT);
+    const reply = row as Record<string, unknown>;
+
+    // The SQL surface returns exactly one column. Any other own property means
+    // the reply is not the one 0060 defines, and could carry tenant state.
+    const keys = Object.keys(reply);
+    if (keys.length !== 1 || keys[0] !== "outcome") throw new Error(REJECT);
+    if (!Object.prototype.hasOwnProperty.call(reply, "outcome")) throw new Error(REJECT);
+
+    const outcome = reply.outcome;
+    if (
+      outcome !== "VERIFIED"
+      && outcome !== "JOB_NOT_FOUND"
+      && outcome !== "JOB_NOT_OWNED"
+      && outcome !== "JOB_NOT_CLEAN"
+      && outcome !== "PROTOCOL_NOT_ELIGIBLE"
+    ) {
+      throw new Error(REJECT);
+    }
+
+    return { outcome };
   },
 
   async renewProtocolExecutionJobLease(

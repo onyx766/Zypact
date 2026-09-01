@@ -131,6 +131,13 @@ function line(o: Record<string, unknown>): string {
     /provider_request_id_present:\s*bool/.test(SOURCE)
       && /provider_request_id_unique:\s*bool/.test(SOURCE));
 
+  // Cardinality is enforced, not assumed: jq reads a stream of values, so
+  // "exactly one object in" has to be decided on the whole of stdin.
+  assert("build-manifest slurps the whole of stdin before projecting",
+    SOURCE.includes("jq -s -S -c --arg schema"));
+  assert("the rejection path can no longer append a sentinel to partial output",
+    !SOURCE.includes("__invalid"));
+
   const KNOWN = [
     "worker_execution_disabled", "worker_execution_disabled_stopped",
     "shutdown_requested", "worker_initialisation_abandoned",
@@ -384,6 +391,24 @@ function line(o: Record<string, unknown>): string {
   const badJson = run("build-manifest", "not json");
   assert("malformed manifest JSON exits 3", badJson.code === 3, String(badJson.code));
   assert("…and writes nothing to stdout", badJson.out.trim() === "");
+
+  // The command is documented as "exactly one JSON object -> one closed
+  // manifest object". Without an explicit cardinality check an empty
+  // stdin succeeds with no manifest at all, two objects succeed with two
+  // manifests, and a trailing malformed value mixes a partial manifest
+  // with an error marker. All three must fail closed instead.
+  for (const [label, input] of [
+    ["empty stdin", ""],
+    ["two JSON objects", "{\"starts\":1}\n{\"starts\":2}"],
+    ["a valid object followed by a malformed line", "{\"starts\":1}\nnot json"],
+    ["a non-object root", "[1,2,3]"],
+  ] as const) {
+    const r = run("build-manifest", input);
+    assert(`${label} exits 3`, r.code === 3, String(r.code));
+    assert(`…and writes nothing to stdout for ${label}`, r.out === "", r.out.slice(0, 60));
+    assert(`…and reports only the closed error for ${label}`,
+      r.err.trim() === "{\"error\":\"invalid_manifest_input\"}", r.err.trim().slice(0, 80));
+  }
 
   const guarded = JSON.parse(run("build-manifest", JSON.stringify({
     harness_commit: "not-a-sha", worker_image_digest: "latest",

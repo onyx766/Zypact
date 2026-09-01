@@ -24,8 +24,12 @@
 #                   names are platform noise, are dropped, and are not a
 #                   failure.
 #
-#   build-manifest  one JSON object -> one closed manifest object, keys
-#                   sorted for byte-stable comparison.
+#   build-manifest  exactly one JSON object -> one closed manifest object,
+#                   keys sorted for byte-stable comparison. The whole of
+#                   stdin is consumed before any projection runs, so zero
+#                   values, two values, a non-object root or a trailing
+#                   malformed value are all rejected outright rather than
+#                   yielding a partial manifest.
 #
 # Exit status: 0 success, 2 usage or missing dependency, 3 invalid input.
 #
@@ -169,40 +173,43 @@ JQ_FILTER_EOF
 # that never requires storing the identifier itself.
 # ---------------------------------------------------------------------------
 read -r -d '' JQ_MANIFEST <<'JQ_MANIFEST_EOF' || true
-if (type != "object") then
-  { __invalid: true }
+if (length != 1) or ((.[0] | type) != "object") then
+  # Emitting nothing is the rejection signal: a manifest is always one
+  # object, so an empty stdout can only mean the input was refused.
+  empty
 else
-  {
+  .[0] as $m
+  | {
     schema: $schema,
-    harness_commit: str(.harness_commit; SHA1),
-    harness_sha256: str(.harness_sha256; SHA256),
-    worker_image_digest: str(.worker_image_digest; "^sha256:[0-9a-f]{64}$"),
-    worker_source_commit: str(.worker_source_commit; SHA1),
-    supabase_project: str(.supabase_project; "^[a-z]{20}$"),
-    fly_app: str(.fly_app; "^[a-z0-9-]{1,63}$"),
-    machine_id: str(.machine_id; "^[0-9a-f]{14}$"),
-    job_id: str(.job_id; UUID),
-    protocol_id: str(.protocol_id; UUID),
-    prompt_sha256: str(.prompt_sha256; SHA256),
-    config_fingerprint_before: str(.config_fingerprint_before; SHA256),
-    config_fingerprint_after: str(.config_fingerprint_after; SHA256),
-    machine_state_before: str(.machine_state_before; STATELIKE),
-    machine_state_after: str(.machine_state_after; STATELIKE),
-    provider_attempts: num(.provider_attempts),
-    models_requested: strs(.models_requested; MODELLIKE),
-    models_returned: strs(.models_returned; MODELLIKE),
-    provider_request_id_present: bool(.provider_request_id_present),
-    provider_request_id_unique: bool(.provider_request_id_unique),
-    http_statuses: nums(.http_statuses),
-    success_latencies_ms: nums(.success_latencies_ms),
-    receipt_outcome: str(.receipt_outcome; "^[A-Z_]{1,64}$"),
-    actual_cost_usd: num(.actual_cost_usd),
-    starts: num(.starts),
-    stops: num(.stops),
-    exit_code: num(.exit_code),
-    retries: num(.retries),
-    restored: bool(.restored),
-    final_state: str(.final_state; STATELIKE)
+    harness_commit: str($m.harness_commit; SHA1),
+    harness_sha256: str($m.harness_sha256; SHA256),
+    worker_image_digest: str($m.worker_image_digest; "^sha256:[0-9a-f]{64}$"),
+    worker_source_commit: str($m.worker_source_commit; SHA1),
+    supabase_project: str($m.supabase_project; "^[a-z]{20}$"),
+    fly_app: str($m.fly_app; "^[a-z0-9-]{1,63}$"),
+    machine_id: str($m.machine_id; "^[0-9a-f]{14}$"),
+    job_id: str($m.job_id; UUID),
+    protocol_id: str($m.protocol_id; UUID),
+    prompt_sha256: str($m.prompt_sha256; SHA256),
+    config_fingerprint_before: str($m.config_fingerprint_before; SHA256),
+    config_fingerprint_after: str($m.config_fingerprint_after; SHA256),
+    machine_state_before: str($m.machine_state_before; STATELIKE),
+    machine_state_after: str($m.machine_state_after; STATELIKE),
+    provider_attempts: num($m.provider_attempts),
+    models_requested: strs($m.models_requested; MODELLIKE),
+    models_returned: strs($m.models_returned; MODELLIKE),
+    provider_request_id_present: bool($m.provider_request_id_present),
+    provider_request_id_unique: bool($m.provider_request_id_unique),
+    http_statuses: nums($m.http_statuses),
+    success_latencies_ms: nums($m.success_latencies_ms),
+    receipt_outcome: str($m.receipt_outcome; "^[A-Z_]{1,64}$"),
+    actual_cost_usd: num($m.actual_cost_usd),
+    starts: num($m.starts),
+    stops: num($m.stops),
+    exit_code: num($m.exit_code),
+    retries: num($m.retries),
+    restored: bool($m.restored),
+    final_state: str($m.final_state; STATELIKE)
   }
 end
 JQ_MANIFEST_EOF
@@ -234,9 +241,15 @@ evidence_filter_events() {
 
 evidence_build_manifest() {
   evidence_require_jq || return 2
+  # `-s` slurps the whole of stdin into one array BEFORE the program runs,
+  # so cardinality is decided on the complete input rather than on a
+  # stream of values. Zero values, two values, a non-object root or a
+  # trailing malformed value can no longer yield a partial manifest, and
+  # jq's own diagnostics are discarded so only the closed error escapes.
   local result
-  result="$(jq -S -c --arg schema "$EVIDENCE_MANIFEST_SCHEMA" "${JQ_GUARDS}${JQ_MANIFEST}" 2> /dev/null || printf '%s' '{"__invalid":true}')"
-  if [ "$(printf '%s' "$result" | jq -r 'has("__invalid")')" = "true" ]; then
+  local rc=0
+  result="$(jq -s -S -c --arg schema "$EVIDENCE_MANIFEST_SCHEMA" "${JQ_GUARDS}${JQ_MANIFEST}" 2> /dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ] || [ -z "$result" ]; then
     printf '%s\n' '{"error":"invalid_manifest_input"}' >&2
     return 3
   fi

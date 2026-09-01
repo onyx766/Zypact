@@ -85,6 +85,8 @@ import type {
   ProtocolOperatorAction,
   EnqueueProtocolExecutionJobInput,
   EnqueueProtocolExecutionJobResult,
+  VerifyPhase3dCanaryPostClaimInput,
+  VerifyPhase3dCanaryPostClaimResult,
   ClaimProtocolExecutionJobByIdInput,
   ClaimProtocolExecutionJobByIdResult,
   ClaimProtocolExecutionJobInput,
@@ -3550,6 +3552,87 @@ export const memoryAdapter: DbAdapter = {
     };
     store.protocolExecutionJobs.set(claimed.id, claimed);
     return { outcome: "CLAIMED", job: { ...claimed }, claimToken };
+  },
+
+  /**
+   * D-031 — the deterministic mirror of migration 0060. It reads and returns
+   * one label; it mutates nothing, for any outcome.
+   *
+   * The history walk is by `jobId`, never by `currentAttemptId`. A job whose
+   * earlier attempt was closed leaves `currentAttemptId` null while the
+   * attempt, its external calls and its receipts remain on record — the very
+   * blind spot `getProtocolExecutionJobContext` has, and the reason this
+   * verifier exists.
+   */
+  async verifyPhase3dCanaryPostClaim(
+    input: VerifyPhase3dCanaryPostClaimInput
+  ): Promise<VerifyPhase3dCanaryPostClaimResult> {
+    const store = getStore();
+    if (
+      !input.workerId.trim() || !input.jobId || !input.projectId || !input.claimToken
+    ) {
+      throw new Error("invalid_verify_phase3d_canary_post_claim_args");
+    }
+
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) {
+      return { outcome: "JOB_NOT_FOUND" };
+    }
+
+    if (
+      job.status !== "claimed"
+      || job.workerId !== input.workerId
+      || job.claimToken !== input.claimToken
+      || job.leaseExpiresAt === null
+      || new Date(job.leaseExpiresAt).getTime() <= Date.now()
+    ) {
+      return { outcome: "JOB_NOT_OWNED" };
+    }
+
+    if (
+      job.attemptCount !== 1
+      || job.maxAttempts !== 1
+      || job.currentAttemptId !== null
+      || job.nextBaselineOrdinal !== 1
+      || job.needsReviewReason !== null
+      || job.failureReason !== null
+    ) {
+      return { outcome: "JOB_NOT_CLEAN" };
+    }
+
+    const attempts = [...store.protocolAttempts.values()].filter((a) => a.jobId === job.id);
+    const attemptIds = new Set(attempts.map((a) => a.id));
+    const calls = [...store.protocolExternalCalls.values()]
+      .filter((c) => attemptIds.has(c.protocolAttemptId));
+    const callIds = new Set(calls.map((c) => c.id));
+    const providerReceipts = [...store.providerCallReceipts.values()]
+      .filter((r) => callIds.has(r.externalCallId));
+    const analysisReceipts = [...store.analysisCallReceipts.values()]
+      .filter((r) => callIds.has(r.externalCallId));
+    const runIds = new Set(
+      attempts.map((a) => a.probeRunId).filter((id): id is string => id !== null)
+    );
+    const runs = [...store.probeRuns.values()].filter((r) => runIds.has(r.id));
+    const results = (store.probeResultsByProject.get(job.projectId) ?? [])
+      .filter((r) => runIds.has(r.probeRunId));
+
+    const history =
+      attempts.length + calls.length + providerReceipts.length
+      + analysisReceipts.length + runs.length + results.length;
+    if (history !== 0) {
+      return { outcome: "JOB_NOT_CLEAN" };
+    }
+
+    const protocol = store.protocols.get(job.protocolId);
+    if (
+      !protocol
+      || protocol.projectId !== job.projectId
+      || (protocol.status !== "approved" && protocol.status !== "active")
+    ) {
+      return { outcome: "PROTOCOL_NOT_ELIGIBLE" };
+    }
+
+    return { outcome: "VERIFIED" };
   },
 
   async renewProtocolExecutionJobLease(

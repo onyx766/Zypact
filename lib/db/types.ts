@@ -1613,6 +1613,29 @@ export interface ClaimProtocolExecutionJobByIdResult {
   claimToken: string | null;
 }
 
+/**
+ * D-031 — the post-claim verification barrier. Read-only, and answered with
+ * one closed label: a verifier that returned rows or identifiers would become
+ * a way to read tenant state through an outcome string.
+ */
+export type VerifyPhase3dCanaryPostClaimOutcome =
+  | "VERIFIED"
+  | "JOB_NOT_FOUND"
+  | "JOB_NOT_OWNED"
+  | "JOB_NOT_CLEAN"
+  | "PROTOCOL_NOT_ELIGIBLE";
+
+export interface VerifyPhase3dCanaryPostClaimInput {
+  workerId: string;
+  jobId: string;
+  projectId: string;
+  claimToken: string;
+}
+
+export interface VerifyPhase3dCanaryPostClaimResult {
+  outcome: VerifyPhase3dCanaryPostClaimOutcome;
+}
+
 export type RenewProtocolExecutionJobLeaseOutcome =
   | "RENEWED"
   | "JOB_NOT_FOUND"
@@ -2886,6 +2909,13 @@ export interface DbAdapter {
   claimProtocolExecutionJobById(
     input: ClaimProtocolExecutionJobByIdInput
   ): Promise<ClaimProtocolExecutionJobByIdResult>;
+  /**
+   * D-031 — reads the WHOLE history of one claimed job and answers with a
+   * single closed label. Never mutates, and never reports what it saw.
+   */
+  verifyPhase3dCanaryPostClaim(
+    input: VerifyPhase3dCanaryPostClaimInput
+  ): Promise<VerifyPhase3dCanaryPostClaimResult>;
   renewProtocolExecutionJobLease(
     input: RenewProtocolExecutionJobLeaseInput
   ): Promise<RenewProtocolExecutionJobLeaseResult>;

@@ -125,6 +125,16 @@ jobs:
       - name: Run the 0059 targeted claim schema contract
         run: npm run test:m5-0059-schema
 
+      # D-031 post-claim verification, static half only. Migration 0060 is
+      # read as text here: signature, closed outcomes, STABLE, search_path,
+      # ACL, the whole-history walk, and the pinned identity of the three
+      # functions it must not touch. That the verifier really sees a history
+      # `get_protocol_execution_job_context` misses needs a live PostgreSQL,
+      # so it runs locally behind ZYPACT_M5_0060_RUNTIME_TEST=1 and never
+      # here: this job still starts no Supabase stack and reaches no database.
+      - name: Run the 0060 post-claim verification schema contract
+        run: npm run test:m5-0060-schema
+
       # D-031 adapters: the MemoryAdapter mirror and the SupabaseAdapter driven
       # through an injected stub client. The FOR UPDATE NOWAIT lock itself is
       # NOT what this step proves — that belongs to the 0059 runtime contract,

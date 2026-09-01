@@ -213,6 +213,64 @@ async function main(): Promise<void> {
       !/claimProtocolExecutionJobById[\s\S]{0,2600}?claimProtocolExecutionJob\(/.test(memorySrc)
   );
 
+  // -- D-031 post-claim verifier: static shape ---------------------------
+  check(
+    "D-031: verify_phase3d_canary_post_claim appears exactly once as a Supabase .rpc(...) call site",
+    (supabaseSrc.match(/"verify_phase3d_canary_post_claim"/g) ?? []).length === 1
+  );
+  check(
+    "D-031: the verifier RPC is called with exactly p_worker_id/p_job_id/p_project_id/p_claim_token",
+    /rpc\("verify_phase3d_canary_post_claim", \{\s*p_worker_id: input\.workerId,\s*p_job_id: input\.jobId,\s*p_project_id: input\.projectId,\s*p_claim_token: input\.claimToken,\s*\}\)/.test(supabaseSrc)
+  );
+  check(
+    "D-031: verifyPhase3dCanaryPostClaim exists in the types and in both adapters",
+    /verifyPhase3dCanaryPostClaim\(/.test(typesSrc) &&
+      /async verifyPhase3dCanaryPostClaim\(/.test(memorySrc) &&
+      /async verifyPhase3dCanaryPostClaim\(/.test(supabaseSrc)
+  );
+  const verifyOutcomeBlock = /export type VerifyPhase3dCanaryPostClaimOutcome\s*=([\s\S]*?);/
+    .exec(typesSrc);
+  const verifyLiterals = verifyOutcomeBlock
+    ? [...verifyOutcomeBlock[1]!.matchAll(/"([A-Za-z0-9_]+)"/g)].map((m) => m[1]!)
+    : [];
+  check(
+    "D-031: the verifier outcome union holds exactly the five literals, in order, and nothing else",
+    JSON.stringify(verifyLiterals) === JSON.stringify([
+      "VERIFIED", "JOB_NOT_FOUND", "JOB_NOT_OWNED", "JOB_NOT_CLEAN", "PROTOCOL_NOT_ELIGIBLE",
+    ]),
+    verifyLiterals.join("|")
+  );
+  const verifyResultBlock = /export interface VerifyPhase3dCanaryPostClaimResult\s*\{([\s\S]*?)\}/
+    .exec(typesSrc);
+  check(
+    "D-031: the verifier result carries the outcome and nothing else — no row, no identifier, no counter",
+    verifyResultBlock !== null &&
+      (verifyResultBlock[1]!.match(/^\s*\w+[?]?:/gm) ?? []).length === 1 &&
+      /outcome: VerifyPhase3dCanaryPostClaimOutcome;/.test(verifyResultBlock[1]!),
+    (verifyResultBlock?.[1] ?? "").replace(/\s+/g, " ").trim()
+  );
+  const verifyInputBlock = /export interface VerifyPhase3dCanaryPostClaimInput\s*\{([\s\S]*?)\}/
+    .exec(typesSrc);
+  check(
+    "D-031: the verifier input carries exactly workerId, jobId, projectId and claimToken",
+    verifyInputBlock !== null &&
+      JSON.stringify((verifyInputBlock[1]!.match(/^\s*(\w+)[?]?:/gm) ?? [])
+        .map((m) => m.replace(/[^\w]/g, "")).sort()) ===
+        JSON.stringify(["claimToken", "jobId", "projectId", "workerId"]),
+    (verifyInputBlock?.[1] ?? "").replace(/\s+/g, " ").trim()
+  );
+  check(
+    "D-031: the MemoryAdapter verifier walks the history by jobId, never by currentAttemptId",
+    /verifyPhase3dCanaryPostClaim[\s\S]{0,3200}?\(a\) => a\.jobId === job\.id/.test(memorySrc) &&
+      (memorySrc.match(/verifyPhase3dCanaryPostClaim[\s\S]{0,3200}?currentAttemptId/g) ?? []).length === 1
+  );
+  check(
+    "D-031: the MemoryAdapter verifier counts all six history sources",
+    ["protocolAttempts", "protocolExternalCalls", "providerCallReceipts",
+     "analysisCallReceipts", "probeRuns", "probeResultsByProject"]
+      .every((c) => new RegExp(`verifyPhase3dCanaryPostClaim[\\s\\S]{0,3200}?store\\.${c}`).test(memorySrc))
+  );
+
   // ========================================================================
   // Part B — MemoryAdapter, full sequential lifecycle.
   // ========================================================================
@@ -2502,6 +2560,338 @@ async function main(): Promise<void> {
   }
 
   // ========================================================================
+  // Part Q — MemoryAdapter: D-031 post-claim verifier.
+  //
+  // The verifier's reason for existing is that
+  // `getProtocolExecutionJobContext` loads an attempt only when
+  // `currentAttemptId` is set, so a job whose earlier attempt was closed
+  // reads as pristine while its calls, receipts, run and result are all
+  // still on record. That state is built here through the ordinary adapter
+  // surface — a real reserved attempt, real external calls, real receipts, a
+  // real probe run and a real probe result — and only the job row itself is
+  // then forced back to the shape a fresh claim leaves.
+  //
+  // Reads go straight to the in-memory store: using a mutating method to
+  // "read" would be proving non-mutation with a mutation.
+  // ========================================================================
+  console.log("\n[Q] MemoryAdapter — D-031 post-claim verifier");
+
+  {
+    interface QStore {
+      protocolExecutionJobs: Map<string, ProtocolExecutionJob>;
+      protocols: Map<string, { id: string; projectId: string; status: string }>;
+      protocolAttempts: Map<string, { id: string; jobId: string; probeRunId: string | null }>;
+      protocolExternalCalls: Map<string, { id: string; protocolAttemptId: string }>;
+      providerCallReceipts: Map<string, { id: string; externalCallId: string }>;
+      analysisCallReceipts: Map<string, { id: string; externalCallId: string }>;
+      probeRuns: Map<string, { id: string }>;
+      probeResultsByProject: Map<string, { probeRunId: string }[]>;
+    }
+    const qStore = (): QStore =>
+      (globalThis as unknown as Record<string, QStore>)["__zypact_memory_store__"]!;
+
+    const qJob = (jobId: string): ProtocolExecutionJob =>
+      must(qStore().protocolExecutionJobs.get(jobId), `store row for job ${jobId}`);
+
+    /**
+     * Every store collection the verifier reads, canonically serialised.
+     * `protocols` belongs here as much as the rest: the verifier reads it for
+     * its admissibility check, so a digest that left it out would call a
+     * protocol row it had just written "unchanged".
+     */
+    const qDigest = (): string => {
+      const st = qStore();
+      const m = (x: Map<string, unknown>): [string, unknown][] =>
+        [...x.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+      return JSON.stringify({
+        jobs: m(st.protocolExecutionJobs as unknown as Map<string, unknown>),
+        protocols: m(st.protocols as unknown as Map<string, unknown>),
+        attempts: m(st.protocolAttempts as unknown as Map<string, unknown>),
+        calls: m(st.protocolExternalCalls as unknown as Map<string, unknown>),
+        provider: m(st.providerCallReceipts as unknown as Map<string, unknown>),
+        analysis: m(st.analysisCallReceipts as unknown as Map<string, unknown>),
+        runs: m(st.probeRuns as unknown as Map<string, unknown>),
+        results: m(st.probeResultsByProject as unknown as Map<string, unknown>),
+      });
+    };
+
+    /** Overwrites job fields directly — the public surface moves them together. */
+    const qForce = (jobId: string, patch: Partial<ProtocolExecutionJob>): void => {
+      qStore().protocolExecutionJobs.set(jobId, { ...qJob(jobId), ...patch });
+    };
+
+    const pristine = (jobId: string, workerId: string, claimToken: string): void => {
+      qForce(jobId, {
+        status: "claimed", workerId, claimToken,
+        leaseExpiresAt: new Date(Date.now() + 300_000).toISOString(),
+        attemptCount: 1, maxAttempts: 1, currentAttemptId: null,
+        nextBaselineOrdinal: 1, needsReviewReason: null, failureReason: null,
+      });
+    };
+
+    /**
+     * One verification, measured. Every deliberate fixture change is made by
+     * the caller BEFORE this runs, so the window compared here contains the
+     * verification and nothing else — which is the only way "it mutated
+     * nothing" can mean anything.
+     */
+    const verifyPure = async (
+      label: string,
+      expected: string,
+      args: { workerId: string; jobId: string; projectId: string; claimToken: string }
+    ): Promise<void> => {
+      const before = qDigest();
+      const r = await db.verifyPhase3dCanaryPostClaim(args);
+      const after = qDigest();
+      check(`D-031 verifier memory: ${label} — ${expected}`, r.outcome === expected, r.outcome);
+      check(
+        `D-031 verifier memory: …and that ${expected} call mutated no collection, protocols included`,
+        after === before
+      );
+    };
+
+    const freshClaimed = async (tag: string): Promise<{
+      jobId: string; projectId: string; workerId: string; claimToken: string;
+    }> => {
+      const fx = await setupProjectProtocol(db, `d031v-${tag}`);
+      const enq = await db.enqueueProtocolExecutionJob({
+        protocolId: fx.protocolId, projectId: fx.projectId, maxAttempts: 1,
+      });
+      const jobId = must(enq.job, `d031v ${tag} job`).id;
+      const workerId = `w-verify-${tag}`;
+      const claimed = await db.claimProtocolExecutionJobById({
+        workerId, leaseSeconds: 300, jobId, projectId: fx.projectId,
+      });
+      return {
+        jobId, projectId: fx.projectId, workerId,
+        claimToken: must(claimed.claimToken, `d031v ${tag} token`),
+      };
+    };
+
+    // -- argument guards ---------------------------------------------------
+    const g = await freshClaimed("guards");
+    const beforeGuards = qDigest();
+    for (const [label, bad] of [
+      ["an empty workerId", { workerId: "" }],
+      ["a whitespace workerId", { workerId: "   " }],
+      ["an empty jobId", { jobId: "" }],
+      ["an empty projectId", { projectId: "" }],
+      ["an empty claimToken", { claimToken: "" }],
+    ] as const) {
+      let message = "";
+      try {
+        const good = {
+          workerId: g.workerId, jobId: g.jobId, projectId: g.projectId, claimToken: g.claimToken,
+        };
+        await db.verifyPhase3dCanaryPostClaim({ ...good, ...bad });
+      } catch (e) { message = (e as Error).message; }
+      check(
+        `D-031 verifier memory: ${label} is refused with the canonical message`,
+        message === "invalid_verify_phase3d_canary_post_claim_args", message
+      );
+    }
+    check(
+      "D-031 verifier memory: no rejected call touched any store collection",
+      qDigest() === beforeGuards
+    );
+
+    // -- VERIFIED, and its repeatability -----------------------------------
+    await verifyPure("a job freshly claimed through the targeted claim", "VERIFIED", { workerId: g.workerId, jobId: g.jobId, projectId: g.projectId, claimToken: g.claimToken });
+    await verifyPure("the same job again — it is not a one-shot token", "VERIFIED", { workerId: g.workerId, jobId: g.jobId, projectId: g.projectId, claimToken: g.claimToken });
+    const shapeBefore = qDigest();
+    const ok = await db.verifyPhase3dCanaryPostClaim({
+      workerId: g.workerId, jobId: g.jobId, projectId: g.projectId, claimToken: g.claimToken,
+    });
+    check(
+      "D-031 verifier memory: the result carries the outcome and nothing else",
+      JSON.stringify(Object.keys(ok).sort()) === JSON.stringify(["outcome"])
+    );
+    check(
+      "D-031 verifier memory: …and that call, too, mutated no collection",
+      qDigest() === shapeBefore
+    );
+
+    // -- JOB_NOT_FOUND -----------------------------------------------------
+    const elsewhere = await freshClaimed("elsewhere");
+    await verifyPure("an id that exists nowhere", "JOB_NOT_FOUND", {
+      workerId: g.workerId, jobId: "no-such-job", projectId: g.projectId, claimToken: g.claimToken,
+    });
+    await verifyPure("a real job addressed under another project", "JOB_NOT_FOUND", {
+      workerId: g.workerId, jobId: g.jobId, projectId: elsewhere.projectId, claimToken: g.claimToken,
+    });
+
+    // -- JOB_NOT_OWNED, one condition at a time ----------------------------
+    const ownership: [string, Partial<ProtocolExecutionJob>][] = [
+      ["a status other than claimed", { status: "running" }],
+      ["a lapsed lease", { leaseExpiresAt: new Date(Date.now() - 1_000).toISOString() }],
+      ["no lease at all", { leaseExpiresAt: null }],
+    ];
+    for (const [label, patch] of ownership) {
+      qForce(g.jobId, patch);
+      await verifyPure(label, "JOB_NOT_OWNED", { workerId: g.workerId, jobId: g.jobId, projectId: g.projectId, claimToken: g.claimToken });
+      pristine(g.jobId, g.workerId, g.claimToken);
+      await verifyPure(
+        `restoring the one field behind "${label}"`, "VERIFIED", { workerId: g.workerId, jobId: g.jobId, projectId: g.projectId, claimToken: g.claimToken }
+      );
+    }
+    await verifyPure("another worker holding the right token", "JOB_NOT_OWNED", {
+      workerId: "someone-else", jobId: g.jobId, projectId: g.projectId, claimToken: g.claimToken,
+    });
+    await verifyPure("the right worker with the wrong token", "JOB_NOT_OWNED", {
+      workerId: g.workerId, jobId: g.jobId, projectId: g.projectId, claimToken: "another-token",
+    });
+
+    // -- JOB_NOT_CLEAN: each state condition in isolation -------------------
+    const stateCases: [string, Partial<ProtocolExecutionJob>][] = [
+      ["attemptCount is not one", { attemptCount: 2 }],
+      ["maxAttempts is not one", { maxAttempts: 3 }],
+      ["currentAttemptId is set", { currentAttemptId: "attempt-that-is-not-in-the-store" }],
+      ["nextBaselineOrdinal is not one", { nextBaselineOrdinal: 2 }],
+      ["a needsReviewReason is recorded", { needsReviewReason: "ambiguity" }],
+      ["a failureReason is recorded", { failureReason: "earlier_failure" }],
+    ];
+    for (const [label, patch] of stateCases) {
+      qForce(g.jobId, patch);
+      await verifyPure(`${label}, every other field pristine`, "JOB_NOT_CLEAN", { workerId: g.workerId, jobId: g.jobId, projectId: g.projectId, claimToken: g.claimToken });
+      pristine(g.jobId, g.workerId, g.claimToken);
+      await verifyPure(
+        `restoring the one field behind "${label}"`, "VERIFIED", { workerId: g.workerId, jobId: g.jobId, projectId: g.projectId, claimToken: g.claimToken }
+      );
+    }
+
+    // -- JOB_NOT_CLEAN: the blind spot itself -------------------------------
+    // Built with the TARGETED claim, not the global one: the global claim
+    // takes the oldest eligible job, and Part P deliberately leaves an older
+    // queued sibling behind to prove that 0059 does not take it.
+    const histWorker = "d031v-history-worker";
+    const hist = await (async () => {
+      const fx = await setupProjectProtocol(db, "d031v-history", 1);
+      const enq = await db.enqueueProtocolExecutionJob({
+        protocolId: fx.protocolId, projectId: fx.projectId, maxAttempts: 1,
+      });
+      const jobId = must(enq.job, "d031v history job").id;
+      const claimed = await db.claimProtocolExecutionJobById({
+        workerId: histWorker, leaseSeconds: 300, jobId, projectId: fx.projectId,
+      });
+      const claimToken = must(claimed.claimToken, "d031v history token");
+      const admit = await db.admitAndReserveAttemptForJob({
+        jobId, claimToken, projectId: fx.projectId, attemptKind: "baseline",
+        idempotencyKey: `${jobId}:baseline:1`,
+        perplexityReservedCostUsd: 0.01, analysisReservedCostUsd: 0.01,
+      });
+      const attempt = must(admit.attempt, "d031v history attempt");
+      const perplexityCall = must(admit.perplexityCall, "d031v history perplexity call");
+      const analysisCall = must(admit.analysisCall, "d031v history analysis call");
+      const start = await db.createProbeRunAndStartAttemptForJob({
+        jobId, claimToken, projectId: fx.projectId, attemptId: attempt.id,
+        platform: "perplexity", probeMode: "simulated",
+      });
+      const probeRunId = must(start.probeRun, "d031v history probe run").id;
+      await db.markExternalCallSentForJob({
+        jobId, claimToken, projectId: fx.projectId, externalCallId: perplexityCall.id, probeRunId,
+        callKind: "perplexity", requestBody: MARK_BODY_PERPLEXITY,
+        requestBodySha256: sha256Hex(MARK_BODY_PERPLEXITY),
+      });
+      await db.recordProviderCallReceiptForJob({
+        jobId, claimToken, projectId: fx.projectId, externalCallId: perplexityCall.id, probeRunId,
+        outcome: "success", rawResponseSha256: sha256Hex("d031v-perplexity-answer"),
+        rawResponseBody: "d031v-perplexity-answer",
+      });
+      await db.markExternalCallSentForJob({
+        jobId, claimToken, projectId: fx.projectId, externalCallId: analysisCall.id, probeRunId,
+        callKind: "analysis", requestBody: "d031v-analysis-request",
+        requestBodySha256: sha256Hex("d031v-analysis-request"),
+      });
+      await db.recordAnalysisCallReceiptForJob({
+        jobId, claimToken, projectId: fx.projectId, externalCallId: analysisCall.id, probeRunId,
+        outcome: "success", requestSha256: sha256Hex("d031v-analysis-request"),
+        rawRequestBody: "d031v-analysis-request",
+        responseSha256: sha256Hex("d031v-analysis-response"),
+        rawContent: "d031v-analysis-response",
+      });
+      await db.persistProbeResultForJob({
+        jobId, claimToken, projectId: fx.projectId, content: validM5Content,
+      });
+      return { jobId, claimToken, projectId: fx.projectId };
+    })();
+    const st = qStore();
+    const histAttempts = [...st.protocolAttempts.values()].filter((a) => a.jobId === hist.jobId);
+    const histAttemptIds = new Set(histAttempts.map((a) => a.id));
+    const histCalls = [...st.protocolExternalCalls.values()]
+      .filter((c) => histAttemptIds.has(c.protocolAttemptId));
+    const histCallIds = new Set(histCalls.map((c) => c.id));
+    const histRunIds = new Set(histAttempts.map((a) => a.probeRunId).filter((x): x is string => x !== null));
+    check(
+      "D-031 verifier memory: the fixture really left an attempt, external calls, both receipt kinds, "
+      + "a probe run and a probe result on record",
+      histAttempts.length >= 1 && histCalls.length >= 2
+        && [...st.providerCallReceipts.values()].some((r) => histCallIds.has(r.externalCallId))
+        && [...st.analysisCallReceipts.values()].some((r) => histCallIds.has(r.externalCallId))
+        && [...st.probeRuns.values()].some((r) => histRunIds.has(r.id))
+        && (st.probeResultsByProject.get(hist.projectId) ?? []).some((r) => histRunIds.has(r.probeRunId))
+    );
+
+    pristine(hist.jobId, histWorker, hist.claimToken);
+    const ctx = await db.getProtocolExecutionJobContext({
+      jobId: hist.jobId, claimToken: hist.claimToken, projectId: hist.projectId,
+    });
+    check(
+      "D-031 verifier memory: getProtocolExecutionJobContext answers OK and reports no current attempt, "
+      + "no external call and no receipt for that job",
+      ctx.outcome === "OK" && ctx.currentAttempt === null
+        && ctx.externalCalls.length === 0 && ctx.providerReceipts.length === 0
+        && ctx.analysisReceipts.length === 0
+    );
+    await verifyPure(
+      "the same job the context read as pristine — the blind spot closed", "JOB_NOT_CLEAN",
+      { workerId: histWorker, jobId: hist.jobId, projectId: hist.projectId, claimToken: hist.claimToken }
+    );
+
+    // The attempt row is the gate: every other history source is reachable
+    // only through it. Removing the downstream rows and keeping the attempt
+    // still refuses; removing the attempt too is what makes the same row
+    // verify. So this proves the walk keys on the attempt, and the five
+    // further counts are defence in depth against evidence outliving its
+    // attempt — a state ordinary operation cannot produce.
+    for (const c of histCalls) st.protocolExternalCalls.delete(c.id);
+    for (const [id, r] of [...st.providerCallReceipts.entries()]) {
+      if (histCallIds.has(r.externalCallId)) st.providerCallReceipts.delete(id);
+    }
+    for (const [id, r] of [...st.analysisCallReceipts.entries()]) {
+      if (histCallIds.has(r.externalCallId)) st.analysisCallReceipts.delete(id);
+    }
+    for (const id of histRunIds) st.probeRuns.delete(id);
+    st.probeResultsByProject.set(
+      hist.projectId,
+      (st.probeResultsByProject.get(hist.projectId) ?? []).filter((r) => !histRunIds.has(r.probeRunId))
+    );
+    await verifyPure("only the attempt row left", "JOB_NOT_CLEAN", { workerId: histWorker, jobId: hist.jobId, projectId: hist.projectId, claimToken: hist.claimToken });
+    for (const a of histAttempts) st.protocolAttempts.delete(a.id);
+    await verifyPure(
+      "the attempt gone too, on the identical job row — so it was the history that refused, "
+      + "not the state",
+      "VERIFIED", { workerId: histWorker, jobId: hist.jobId, projectId: hist.projectId, claimToken: hist.claimToken }
+    );
+
+    // -- PROTOCOL_NOT_ELIGIBLE ---------------------------------------------
+    const prot = await freshClaimed("protocol");
+    const protArgs = {
+      workerId: prot.workerId, jobId: prot.jobId,
+      projectId: prot.projectId, claimToken: prot.claimToken,
+    };
+    const protocols = qStore().protocols;
+    const protoRow = must(protocols.get(qJob(prot.jobId).protocolId), "protocol row");
+    for (const status of ["draft", "completed", "abandoned"] as const) {
+      protocols.set(protoRow.id, { ...protoRow, status });
+      await verifyPure(`a protocol in \`${status}\``, "PROTOCOL_NOT_ELIGIBLE", protArgs);
+    }
+    protocols.set(protoRow.id, { ...protoRow, status: "active" });
+    await verifyPure("`active`, admissible as well as `approved`", "VERIFIED", protArgs);
+    protocols.set(protoRow.id, protoRow);
+    await verifyPure("the protocol restored to its own status", "VERIFIED", protArgs);
+  }
+
+  // ========================================================================
   // Part H — SupabaseAdapter: RPC name/parameter mapping + row-shape parity.
   // ========================================================================
   console.log("\n[H] SupabaseAdapter — RPC mapping (stub client, no network)");
@@ -3139,6 +3529,114 @@ async function main(): Promise<void> {
         JSON.stringify(Object.keys(rpcCalls[0]!.args).sort()) ===
           JSON.stringify(["p_lease_seconds", "p_worker_id"]) &&
         globalAgain.outcome === "CLAIMED" && globalAgain.claimToken === "gtok"
+    );
+  }
+
+  // -- D-031 post-claim verifier, through the injected stub client ---------
+  console.log("\n[H3] SupabaseAdapter — D-031 post-claim verifier (stub client, no network)");
+  {
+    const REJECT =
+      "verifyPhase3dCanaryPostClaim: the RPC reply did not satisfy the closed D-031 contract.";
+
+    const call = () => supabaseAdapter.verifyPhase3dCanaryPostClaim({
+      workerId: "w1", jobId: "j1", projectId: "p1", claimToken: "tok",
+    });
+    const thrown = async (): Promise<string> => {
+      try { await call(); return "<no error>"; } catch (e) { return (e as Error).message ?? String(e); }
+    };
+    const refuses = async (label: string, data: unknown): Promise<void> => {
+      nextRpcResponse = { data, error: null };
+      const message = await thrown();
+      check(`Supabase verifyPhase3dCanaryPostClaim: ${label} is refused, with the closed error`,
+        message === REJECT, message);
+    };
+
+    rpcCalls = [];
+    nextRpcResponse = { data: [{ outcome: "VERIFIED" }], error: null };
+    const verified = await call();
+    check(
+      "Supabase verifyPhase3dCanaryPostClaim: exactly one RPC, named verify_phase3d_canary_post_claim",
+      rpcCalls.length === 1 && rpcCalls[0]!.fn === "verify_phase3d_canary_post_claim"
+    );
+    check(
+      "Supabase verifyPhase3dCanaryPostClaim: exactly the four contracted parameters",
+      JSON.stringify(Object.keys(rpcCalls[0]!.args).sort()) ===
+        JSON.stringify(["p_claim_token", "p_job_id", "p_project_id", "p_worker_id"]) &&
+        rpcCalls[0]!.args.p_worker_id === "w1" && rpcCalls[0]!.args.p_job_id === "j1" &&
+        rpcCalls[0]!.args.p_project_id === "p1" && rpcCalls[0]!.args.p_claim_token === "tok"
+    );
+    check(
+      "Supabase verifyPhase3dCanaryPostClaim: the reply maps to the outcome and to nothing else",
+      JSON.stringify(verified) === JSON.stringify({ outcome: "VERIFIED" })
+    );
+
+    for (const outcome of [
+      "VERIFIED", "JOB_NOT_FOUND", "JOB_NOT_OWNED", "JOB_NOT_CLEAN", "PROTOCOL_NOT_ELIGIBLE",
+    ] as const) {
+      rpcCalls = [];
+      nextRpcResponse = { data: [{ outcome }], error: null };
+      const r = await call();
+      check(
+        `Supabase verifyPhase3dCanaryPostClaim: ${outcome} is carried through, on exactly one RPC`,
+        r.outcome === outcome && rpcCalls.length === 1
+      );
+    }
+
+    // -- cardinality and row shape ----------------------------------------
+    await refuses("an empty response", null);
+    await refuses("an empty array", []);
+    await refuses("a single null row", [null]);
+    await refuses("a two-row response", [{ outcome: "VERIFIED" }, { outcome: "JOB_NOT_CLEAN" }]);
+    await refuses("a row that is not an object", ["VERIFIED"]);
+    await refuses("a row that is an array", [[{ outcome: "VERIFIED" }]]);
+    await refuses("a missing outcome property", {});
+    await refuses("an undefined outcome", { outcome: undefined });
+    await refuses("a null outcome", { outcome: null });
+    await refuses("a numeric outcome", { outcome: 1 });
+
+    // A verifier that answers with a label must answer with a label ALONE.
+    // Anything else in the row is tenant state travelling on a channel that
+    // is supposed to carry one closed word.
+    await refuses("a reply carrying a job row alongside the label",
+      { outcome: "VERIFIED", job: { id: "j1" } });
+    await refuses("a reply carrying a counter alongside the label",
+      { outcome: "JOB_NOT_CLEAN", history_count: 3 });
+    await refuses("a reply carrying free-text detail alongside the label",
+      { outcome: "JOB_NOT_CLEAN", detail: "attempt 7f3a is still open" });
+    await refuses("a reply naming the column `status` rather than `outcome`",
+      { status: "VERIFIED" });
+
+    // -- outcome vocabulary, without echoing what was rejected -------------
+    const SENTINEL = "JOB_MAYBE_SENTINEL_4K2X";
+    nextRpcResponse = { data: [{ outcome: SENTINEL }], error: null };
+    const unknownMsg = await thrown();
+    check("Supabase verifyPhase3dCanaryPostClaim: an outcome outside the five literals is refused",
+      unknownMsg === REJECT, unknownMsg);
+    check("Supabase verifyPhase3dCanaryPostClaim: the refusal never echoes the rejected value",
+      !unknownMsg.includes(SENTINEL));
+    nextRpcResponse = { data: [{ outcome: "CLAIMED" }], error: null };
+    const claimedMsg = await thrown();
+    check(
+      "Supabase verifyPhase3dCanaryPostClaim: a claim outcome is not a verification outcome",
+      claimedMsg === REJECT, claimedMsg
+    );
+
+    // -- error propagation and the untouched table path --------------------
+    const rpcError = new Error("supabase-side failure, verbatim");
+    nextRpcResponse = { data: null, error: rpcError };
+    let propagated: unknown = null;
+    try { await call(); } catch (e) { propagated = e; }
+    check(
+      "Supabase verifyPhase3dCanaryPostClaim: a Supabase error is propagated unchanged, not replaced",
+      propagated === rpcError
+    );
+
+    rpcCalls = [];
+    nextRpcResponse = { data: [{ outcome: "JOB_NOT_CLEAN" }], error: null };
+    await call();
+    check(
+      "Supabase verifyPhase3dCanaryPostClaim: a refusal still costs exactly one RPC — no retry, no fallback",
+      rpcCalls.length === 1 && rpcCalls[0]!.fn === "verify_phase3d_canary_post_claim"
     );
   }
 

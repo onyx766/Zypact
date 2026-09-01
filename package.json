@@ -64,7 +64,8 @@
     "test:m5-a-lifecycle": "tsx scripts/test-m5-a-lifecycle.ts",
     "test:m5-tk-r": "tsx scripts/test-m5-tk-r-transport-evidence.ts",
     "test:m5-phase3d-bounds": "tsx scripts/test-m5-phase3d-hard-bounds.ts",
-    "test:m5-b3-max-runtime": "tsx scripts/test-m5-b3-max-runtime.ts"
+    "test:m5-b3-max-runtime": "tsx scripts/test-m5-b3-max-runtime.ts",
+    "test:m5-phase3d-evidence": "tsx scripts/test-m5-phase3d-evidence.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

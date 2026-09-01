@@ -125,6 +125,15 @@ jobs:
       - name: Run the 0059 targeted claim schema contract
         run: npm run test:m5-0059-schema
 
+      # D-031 adapters: the MemoryAdapter mirror and the SupabaseAdapter driven
+      # through an injected stub client. The FOR UPDATE NOWAIT lock itself is
+      # NOT what this step proves — that belongs to the 0059 runtime contract,
+      # which runs locally behind its own opt-in against a real PostgreSQL.
+      # Like every other step here, this one touches no database, no secret
+      # and no provider.
+      - name: Run the D-031 targeted claim adapter contract
+        run: npm run test:m5-2-adapter
+
       # The Docker half runs here, and ONLY here. The opt-in is a STEP-level
       # env entry on purpose: at job or workflow level it would silently
       # apply to every other step, and a variable that turns on image builds

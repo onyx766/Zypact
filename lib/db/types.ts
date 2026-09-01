@@ -1589,6 +1589,30 @@ export interface ClaimProtocolExecutionJobResult {
   claimToken: string | null;
 }
 
+/**
+ * D-031 — the targeted claim surface, beside the global one and never in
+ * place of it. Four closed outcomes: a claim, an addressing failure, an
+ * eligibility failure, and a lost race against a concurrent holder.
+ */
+export type ClaimProtocolExecutionJobByIdOutcome =
+  | "CLAIMED"
+  | "JOB_NOT_FOUND"
+  | "JOB_NOT_ELIGIBLE"
+  | "JOB_LOCKED";
+
+export interface ClaimProtocolExecutionJobByIdInput {
+  workerId: string;
+  leaseSeconds: number;
+  jobId: string;
+  projectId: string;
+}
+
+export interface ClaimProtocolExecutionJobByIdResult {
+  outcome: ClaimProtocolExecutionJobByIdOutcome;
+  job: ProtocolExecutionJob | null;
+  claimToken: string | null;
+}
+
 export type RenewProtocolExecutionJobLeaseOutcome =
   | "RENEWED"
   | "JOB_NOT_FOUND"
@@ -2856,6 +2880,12 @@ export interface DbAdapter {
   claimProtocolExecutionJob(
     input: ClaimProtocolExecutionJobInput
   ): Promise<ClaimProtocolExecutionJobResult>;
+  /**
+   * D-031 — claims one named job, or nothing. Never a different one.
+   */
+  claimProtocolExecutionJobById(
+    input: ClaimProtocolExecutionJobByIdInput
+  ): Promise<ClaimProtocolExecutionJobByIdResult>;
   renewProtocolExecutionJobLease(
     input: RenewProtocolExecutionJobLeaseInput
   ): Promise<RenewProtocolExecutionJobLeaseResult>;

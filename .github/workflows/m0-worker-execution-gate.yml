@@ -117,6 +117,14 @@ jobs:
       - name: Run the Phase 3D evidence filter contract
         run: npm run test:m5-phase3d-evidence
 
+      # D-031 targeted claim, static half only. The real proof of
+      # FOR UPDATE NOWAIT and of concurrent races needs a live
+      # PostgreSQL, so it runs locally behind its own opt-in
+      # (ZYPACT_M5_0059_RUNTIME_TEST=1) and never here: this job
+      # still starts no Supabase stack and reaches no database.
+      - name: Run the 0059 targeted claim schema contract
+        run: npm run test:m5-0059-schema
+
       # The Docker half runs here, and ONLY here. The opt-in is a STEP-level
       # env entry on purpose: at job or workflow level it would silently
       # apply to every other step, and a variable that turns on image builds

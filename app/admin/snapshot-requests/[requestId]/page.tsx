@@ -332,6 +332,10 @@ export default async function SnapshotRequestDetailPage({
             </a>
           </DetailRow>
 
+          <DetailRow label="Contact name">
+            {request.contactName || "—"}
+          </DetailRow>
+
           <DetailRow label="Contact">
             <a
               href={`mailto:${request.workEmail}`}
@@ -344,7 +348,7 @@ export default async function SnapshotRequestDetailPage({
             </a>
           </DetailRow>
 
-          <DetailRow label="Buyer category">
+          <DetailRow label="Buyer question">
             {request.buyerCategory}
           </DetailRow>
 

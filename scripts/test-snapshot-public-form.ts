@@ -6,6 +6,7 @@ import {
 
 async function main() {
   const values = {
+    contactName: " Jane Smith ",
     workEmail: " Founder@Example.com ",
     companyName: " Example SaaS ",
     websiteUrl: " example.com ",
@@ -20,6 +21,7 @@ async function main() {
       token
     ),
     {
+      contactName: "Jane Smith",
       workEmail: "Founder@Example.com",
       companyName: "Example SaaS",
       websiteUrl: "example.com",

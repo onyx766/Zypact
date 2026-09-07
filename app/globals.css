@@ -907,6 +907,18 @@ h2 {
   line-height: 1.65;
 }
 
+.scan-intro-note {
+  display: inline-block;
+  margin: 16px 0 0;
+  border: 1px solid var(--card-line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: var(--heading);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
 .scan-summary {
   display: grid;
   gap: 12px;
@@ -994,6 +1006,51 @@ h2 {
   border-color: #b42318;
 }
 
+.scan-field textarea {
+  width: 100%;
+  min-height: 108px;
+  border: 1px solid var(--button-line);
+  border-radius: 10px;
+  background: var(--white);
+  padding: 12px 14px;
+  color: var(--heading);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.scan-field textarea:focus {
+  border-color: var(--heading);
+  box-shadow: 0 0 0 3px rgba(17, 17, 17, 0.08);
+}
+
+.scan-field textarea[aria-invalid="true"] {
+  border-color: #b42318;
+}
+
+.scan-field-question {
+  border: 1px solid var(--card-line);
+  border-radius: 14px;
+  padding: 16px;
+}
+
+.scan-field-question label {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.scan-field-counter {
+  margin: -2px 0 0;
+  color: var(--fine);
+  font-size: 12px;
+  text-align: right;
+}
+
 .scan-field-help,
 .scan-field-error {
   margin: 0;
@@ -1010,6 +1067,7 @@ h2 {
 }
 
 .scan-security {
+  margin-top: 6px;
   min-height: 70px;
 }
 
@@ -1032,6 +1090,7 @@ h2 {
 .scan-submit {
   width: 100%;
   min-height: 48px;
+  margin-top: 8px;
 }
 
 .scan-submit:disabled {
@@ -1071,6 +1130,35 @@ h2 {
 }
 
 .scan-unavailable .button {
+  margin-top: 28px;
+}
+
+.scan-success-steps {
+  margin: 24px 0 0;
+  border-top: 1px solid var(--hairline);
+  padding-top: 20px;
+}
+
+.scan-success-steps-label {
+  margin: 0 0 10px;
+  color: var(--label);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.scan-success-steps ol {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+  color: var(--body);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.scan-return-link {
   margin-top: 28px;
 }
 
@@ -1965,8 +2053,47 @@ h2 {
   box-shadow: 0 0 0 3px rgba(255,138,61,.08);
 }
 
+.scan-field textarea {
+  min-height: 108px;
+  border-color: rgba(255,255,255,.11);
+  border-radius: 9px;
+  background: rgba(5, 7, 10, .68);
+  color: var(--snapshot-white);
+  caret-color: var(--snapshot-teal);
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+}
+
+.scan-field textarea::placeholder { color: #555c67; }
+.scan-field textarea:hover { border-color: rgba(255,255,255,.18); }
+
+.scan-field textarea:focus {
+  border-color: var(--snapshot-teal);
+  box-shadow: 0 0 0 3px rgba(0,221,180,.1);
+}
+
+.scan-field textarea[aria-invalid="true"] {
+  border-color: var(--snapshot-orange);
+  box-shadow: 0 0 0 3px rgba(255,138,61,.08);
+}
+
+.scan-field-question {
+  border-color: var(--snapshot-line);
+}
+
+.scan-field-counter { color: var(--snapshot-muted); }
+
+.scan-intro-note {
+  border-color: var(--snapshot-line);
+  color: var(--snapshot-white);
+}
+
 .scan-field-help { color: var(--snapshot-muted); }
 .scan-field-error { color: #ffad76; }
+
+.scan-success-steps { border-color: var(--snapshot-line); }
+.scan-success-steps-label { color: var(--snapshot-teal); }
+.scan-success-steps ol { color: var(--snapshot-body); }
 
 .scan-security {
   padding-top: 2px;

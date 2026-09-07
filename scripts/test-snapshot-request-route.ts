@@ -18,6 +18,7 @@ type ResendMode =
 async function main() {
   const normalized =
     normalizeSnapshotRequestInput({
+      contactName: " Jane Smith ",
       workEmail:
         " Founder@Example.com ",
       companyName:
@@ -25,7 +26,7 @@ async function main() {
       websiteUrl:
         "WWW.Example.com/pricing?source=test#section",
       buyerCategory:
-        " B2B SaaS software ",
+        " Which B2B SaaS software fits us? ",
     });
 
   assert.equal(
@@ -61,6 +62,7 @@ async function main() {
   assert.throws(
     () =>
       normalizeSnapshotRequestInput({
+        contactName: "Jane Smith",
         workEmail:
           "founder@example.com",
         companyName: "Example",
@@ -77,6 +79,7 @@ async function main() {
   assert.throws(
     () =>
       normalizeSnapshotRequestInput({
+        contactName: "Jane Smith",
         workEmail:
           "founder@example.com",
         companyName: "Example",
@@ -121,6 +124,7 @@ async function main() {
   assert.throws(
     () =>
       parseSnapshotRequestSubmission({
+        contactName: "Jane Smith",
         workEmail:
           "founder@example.com",
         companyName:
@@ -186,13 +190,14 @@ async function main() {
     );
 
   const validBody = {
+    contactName: "Jane Smith",
     workEmail:
       "Founder@Example.com",
     companyName: "Example SaaS",
     websiteUrl:
       "example.com/pricing",
     buyerCategory:
-      "B2B SaaS software",
+      "Which B2B SaaS software fits us?",
     turnstileToken:
       "mock-turnstile-token",
   };

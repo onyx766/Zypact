@@ -379,10 +379,19 @@
 .verification-card { border: 1px solid var(--snapshot-line) !important; border-radius: 12px !important; background: var(--snapshot-panel) !important; box-shadow: none !important; }
 .scan-card::before { display: none !important; }
 .scan-field label { color: #263440 !important; }
-.scan-field input { border: 1px solid var(--snapshot-line) !important; border-radius: 8px !important; background: #fbfaf7 !important; color: #17212b !important; }
-.scan-field input::placeholder { color: #929aa2 !important; }
-.scan-field input:focus { border-color: var(--snapshot-teal) !important; box-shadow: 0 0 0 3px rgba(33,79,115,.14) !important; }
+.scan-field input,
+.scan-field textarea { border: 1px solid var(--snapshot-line) !important; border-radius: 8px !important; background: #fbfaf7 !important; color: #17212b !important; }
+.scan-field input::placeholder,
+.scan-field textarea::placeholder { color: #929aa2 !important; }
+.scan-field input:focus,
+.scan-field textarea:focus { border-color: var(--snapshot-teal) !important; box-shadow: 0 0 0 3px rgba(33,79,115,.14) !important; }
 .scan-field-help { color: var(--snapshot-muted) !important; }
+.scan-field-counter { color: var(--snapshot-muted) !important; }
+.scan-field-question { border-color: var(--snapshot-line) !important; background: rgba(33,79,115,.03) !important; }
+.scan-intro-note { border-color: var(--snapshot-line) !important; color: var(--snapshot-teal) !important; background: #fff !important; }
+.scan-success-steps { border-color: var(--snapshot-line) !important; }
+.scan-success-steps-label { color: var(--snapshot-teal) !important; }
+.scan-success-steps ol { color: var(--snapshot-copy) !important; }
 .scan-page .button-primary,
 .verification-page .button-primary { border-color: var(--snapshot-teal) !important; background: var(--snapshot-teal) !important; color: #fff !important; box-shadow: none !important; }
 .scan-page .button-secondary,

@@ -991,6 +991,7 @@ export const memoryAdapter: DbAdapter = {
       workEmail: input.workEmail,
       normalizedEmail: input.normalizedEmail,
       companyName: input.companyName,
+      contactName: input.contactName ?? null,
       websiteUrl: input.websiteUrl,
       normalizedDomain: input.normalizedDomain,
       buyerCategory: input.buyerCategory,

@@ -85,6 +85,7 @@ async function notifyFounder(
   verified: {
     id: string;
     companyName: string;
+    contactName?: string | null;
     workEmail: string;
     websiteUrl: string;
     normalizedDomain: string;
@@ -122,6 +123,7 @@ async function notifyFounder(
         {
           requestId: verified.id,
           companyName: verified.companyName,
+          contactName: verified.contactName,
           workEmail: verified.workEmail,
           websiteUrl: verified.websiteUrl,
           normalizedDomain:

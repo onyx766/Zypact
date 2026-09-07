@@ -211,6 +211,7 @@ interface SnapshotRequestDbRow {
   work_email: string;
   normalized_email: string;
   company_name: string;
+  contact_name: string | null;
   website_url: string;
   normalized_domain: string;
   buyer_category: string;
@@ -727,6 +728,7 @@ function mapSnapshotRequest(r: SnapshotRequestDbRow): SnapshotRequest {
     workEmail: r.work_email,
     normalizedEmail: r.normalized_email,
     companyName: r.company_name,
+    contactName: r.contact_name ?? null,
     websiteUrl: r.website_url,
     normalizedDomain: r.normalized_domain,
     buyerCategory: r.buyer_category,
@@ -1879,6 +1881,7 @@ export const supabaseAdapter: DbAdapter = {
         p_normalized_domain: input.normalizedDomain,
         p_buyer_category: input.buyerCategory,
         p_request_ip_hash: input.requestIpHash ?? null,
+        p_contact_name: input.contactName ?? null,
       })
       .single<SnapshotRequestDbRow>();
 

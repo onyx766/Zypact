@@ -213,7 +213,7 @@ export default async function SnapshotRequestsAdminPage() {
                     Contact
                   </th>
                   <th style={{ padding: 16 }}>
-                    Buyer category
+                    Buyer question
                   </th>
                   <th style={{ padding: 16 }}>
                     Status
@@ -261,6 +261,11 @@ export default async function SnapshotRequestsAdminPage() {
                     </td>
 
                     <td style={{ padding: 16 }}>
+                      {request.contactName ? (
+                        <div>
+                          {request.contactName}
+                        </div>
+                      ) : null}
                       <a
                         href={`mailto:${request.workEmail}`}
                         style={{

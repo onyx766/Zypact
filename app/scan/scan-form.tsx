@@ -38,11 +38,14 @@ declare global {
 }
 
 const EMPTY_VALUES: SnapshotRequestFormValues = {
+  contactName: "",
   workEmail: "",
   companyName: "",
   websiteUrl: "",
   buyerCategory: "",
 };
+
+const BUYER_QUESTION_MAX_LENGTH = 300;
 
 interface ScanFormProps {
   enabled: boolean;
@@ -267,17 +270,39 @@ export function ScanForm({
         <h2>Check your work email.</h2>
 
         <p>
-          We sent a private verification link.
-          Verification records your request; it
-          does not approve a protocol or start an
-          AI scan. Zypact will contact you about
-          access to the V1 workflow.
+          We&rsquo;ve received your buyer question.
+          No AI call has started. We sent a private
+          verification link to confirm your email —
+          once confirmed, we&rsquo;ll review the
+          question and protocol before the baseline
+          is approved.
         </p>
 
         <p className="scan-privacy-note">
           The link expires in 30 minutes and
           can be used only once.
         </p>
+
+        <div className="scan-success-steps">
+          <p className="scan-success-steps-label">
+            What happens next
+          </p>
+
+          <ol>
+            <li>Confirm your email</li>
+            <li>Question review</li>
+            <li>Protocol approval</li>
+            <li>Controlled baseline</li>
+            <li>Evidence report</li>
+          </ol>
+        </div>
+
+        <a
+          href="/"
+          className="button button-secondary scan-return-link"
+        >
+          Return to Zypact
+        </a>
       </div>
     );
   }
@@ -295,6 +320,46 @@ export function ScanForm({
         onSubmit={handleSubmit}
         noValidate
       >
+        <div className="scan-field">
+          <label htmlFor="contactName">
+            Your name
+          </label>
+
+          <input
+            id="contactName"
+            name="contactName"
+            type="text"
+            autoComplete="name"
+            maxLength={160}
+            required
+            value={values.contactName}
+            onChange={(event) =>
+              updateField(
+                "contactName",
+                event.target.value
+              )
+            }
+            aria-invalid={
+              Boolean(fieldErrors.contactName)
+            }
+            aria-describedby={
+              fieldErrors.contactName
+                ? "contactName-error"
+                : undefined
+            }
+            placeholder="Jane Smith"
+          />
+
+          {fieldErrors.contactName ? (
+            <p
+              id="contactName-error"
+              className="scan-field-error"
+            >
+              {fieldErrors.contactName[0]}
+            </p>
+          ) : null}
+        </div>
+
         <div className="scan-field">
           <label htmlFor="companyName">
             Company name
@@ -416,16 +481,16 @@ export function ScanForm({
           ) : null}
         </div>
 
-        <div className="scan-field">
+        <div className="scan-field scan-field-question">
           <label htmlFor="buyerCategory">
-            What category would buyers use?
+            One buyer question
           </label>
 
-          <input
+          <textarea
             id="buyerCategory"
             name="buyerCategory"
-            type="text"
-            maxLength={160}
+            rows={4}
+            maxLength={BUYER_QUESTION_MAX_LENGTH}
             required
             value={values.buyerCategory}
             onChange={(event) =>
@@ -444,16 +509,28 @@ export function ScanForm({
                 ? "buyerCategory-error"
                 : "buyerCategory-help"
             }
-            placeholder="AI visibility software for B2B SaaS"
+            placeholder="Which AI visibility platforms are best for a B2B SaaS marketing team?"
           />
 
           <p
             id="buyerCategory-help"
             className="scan-field-help"
           >
-            Use the phrase a buyer would type
-            when searching for products like
-            yours.
+            Enter one commercially important
+            question a buyer might ask when
+            comparing products like yours — for
+            example, &ldquo;Which SOC 2 automation
+            platforms are best for a 50-person B2B
+            SaaS company?&rdquo;, not &ldquo;SOC 2
+            software&rdquo;.
+          </p>
+
+          <p
+            className="scan-field-counter"
+            aria-hidden="true"
+          >
+            {values.buyerCategory.length}/
+            {BUYER_QUESTION_MAX_LENGTH}
           </p>
 
           {fieldErrors.buyerCategory ? (
@@ -496,12 +573,12 @@ export function ScanForm({
           }
         >
           {submitting
-            ? "Sending request…"
+            ? "Submitting…"
             : "Request Demo"}
         </button>
 
         <p className="scan-privacy-note">
-          Request only. Automation begins after
+          Request only. No AI call starts until
           the question and protocol are approved.
         </p>
       </form>

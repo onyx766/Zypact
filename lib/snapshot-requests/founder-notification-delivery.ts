@@ -13,6 +13,7 @@ export interface FounderSnapshotNotificationConfig {
 export interface FounderSnapshotNotificationInput {
   requestId: string;
   companyName: string;
+  contactName?: string | null;
   workEmail: string;
   websiteUrl: string;
   normalizedDomain: string;
@@ -140,8 +141,8 @@ export async function sendFounderSnapshotRequestNotification(
     "",
     `Company: ${input.companyName}`,
     `Website: ${input.websiteUrl}`,
-    `Contact: ${input.workEmail}`,
-    `Buyer category: ${input.buyerCategory}`,
+    `Contact: ${input.contactName?.trim() || "(not provided)"} <${input.workEmail}>`,
+    `Buyer question: ${input.buyerCategory}`,
     `Request ID: ${input.requestId}`,
     "",
     `Review request: ${adminUrl}`,
@@ -173,11 +174,12 @@ export async function sendFounderSnapshotRequestNotification(
 
         <p style="margin:0 0 10px;">
           <strong>Contact:</strong>
-          ${escapeHtml(input.workEmail)}
+          ${escapeHtml(input.contactName?.trim() || "(not provided)")}
+          &lt;${escapeHtml(input.workEmail)}&gt;
         </p>
 
         <p style="margin:0 0 24px;line-height:1.55;">
-          <strong>Buyer category:</strong>
+          <strong>Buyer question:</strong>
           ${escapeHtml(input.buyerCategory)}
         </p>
 

@@ -111,10 +111,11 @@ async function main() {
             "x-forwarded-for": `${ip}, 10.0.0.1`,
           },
           body: JSON.stringify({
+            contactName: "Jane Smith",
             workEmail,
             companyName: "Limit Test SaaS",
             websiteUrl,
-            buyerCategory: "B2B SaaS",
+            buyerCategory: "Which B2B SaaS software fits us?",
             turnstileToken: "mock-turnstile-token",
           }),
         }
@@ -205,6 +206,7 @@ async function main() {
       workEmail: "old@example.com",
       normalizedEmail: "old@example.com",
       companyName: "Old SaaS",
+      contactName: null,
       websiteUrl: "https://active.example.com",
       normalizedDomain: "active.example.com",
       buyerCategory: "B2B SaaS",

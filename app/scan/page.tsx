@@ -48,29 +48,30 @@ export default function ScanPage() {
           </h1>
 
           <p className="scan-intro-copy">
-            Request access to the V1 workflow for
-            one commercially important buyer
-            question. This form does not approve a
-            protocol or start an AI call. If you
-            proceed, the question, limits, sampling
-            plan, and observation window are approved
-            first. The controlled baseline then runs
-            automatically.
+            Bring one commercially important buyer
+            question. Zypact reviews the question
+            and protocol first. After approval, the
+            controlled Perplexity Sonar baseline
+            runs automatically and preserves the
+            evidence.
+          </p>
+
+          <p className="scan-intro-note">
+            Submitting this form does not start an
+            AI call.
           </p>
 
           <ul className="scan-summary">
             <li>
               One commercially meaningful buyer
-              question and an approved protocol
+              question
             </li>
+            <li>Approved Perplexity Sonar protocol</li>
             <li>
-              Automated Perplexity baseline with
-              exact evidence and integrity checks
+              Exact evidence and integrity checks
             </li>
-            <li>
-              One registered intervention and a
-              controlled, automatic same-question retest
-            </li>
+            <li>One registered intervention</li>
+            <li>Controlled same-question retest</li>
           </ul>
 
           <p className="scan-caveat">

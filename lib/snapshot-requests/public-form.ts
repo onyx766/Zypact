@@ -1,4 +1,5 @@
 export interface SnapshotRequestFormValues {
+  contactName: string;
   workEmail: string;
   companyName: string;
   websiteUrl: string;
@@ -97,6 +98,7 @@ export function buildSnapshotRequestPayload(
   turnstileToken: string
 ) {
   return {
+    contactName: values.contactName.trim(),
     workEmail: values.workEmail.trim(),
     companyName: values.companyName.trim(),
     websiteUrl: values.websiteUrl.trim(),

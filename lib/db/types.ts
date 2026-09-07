@@ -880,8 +880,21 @@ export interface SnapshotRequest {
   workEmail: string;
   normalizedEmail: string;
   companyName: string;
+  /**
+   * The public form's "Your name" field (migration 0061). Nullable: rows
+   * created before this field existed have no value and are never
+   * backfilled. The public form and its zod schema require it for new
+   * submissions; the database only guarantees the column accepts null.
+   */
+  contactName: string | null;
   websiteUrl: string;
   normalizedDomain: string;
+  /**
+   * Despite the name, this holds the full "one buyer question" text
+   * entered on the public form, not a short category phrase — the column
+   * predates that framing and was reused rather than duplicated (see
+   * migration 0017 and lib/snapshot-requests/normalize-request.ts).
+   */
   buyerCategory: string;
   status: SnapshotRequestStatus;
   requestIpHash: string | null;
@@ -995,6 +1008,8 @@ export interface CreateSnapshotRequestInput {
   workEmail: string;
   normalizedEmail: string;
   companyName: string;
+  /** Optional so pre-existing callers that never collected a name are unaffected; see SnapshotRequest.contactName. */
+  contactName?: string | null;
   websiteUrl: string;
   normalizedDomain: string;
   buyerCategory: string;

@@ -222,6 +222,7 @@ interface SnapshotRequestDbRow {
   progress_updated_at: string | null;
   approved_at: string | null;
   approved_by: string | null;
+  protocol_id: string | null;
   claimed_by: string | null;
   claim_token: string | null;
   lease_expires_at: string | null;
@@ -743,6 +744,7 @@ function mapSnapshotRequest(r: SnapshotRequestDbRow): SnapshotRequest {
     // to a timestamp or an actor.
     approvedAt: r.approved_at ?? null,
     approvedBy: r.approved_by ?? null,
+    protocolId: r.protocol_id ?? null,
     claimedBy: r.claimed_by ?? null,
     claimToken: r.claim_token ?? null,
     leaseExpiresAt: r.lease_expires_at ?? null,
@@ -1959,6 +1961,31 @@ export const supabaseAdapter: DbAdapter = {
           p_request_id: requestId,
           p_approved_by: approvedBy,
           p_competitors: competitors,
+        }
+      )
+      .maybeSingle<SnapshotRequestDbRow>();
+
+    if (error) throw error;
+
+    return data
+      ? mapSnapshotRequest(data)
+      : null;
+  },
+
+  async approveAndLaunchSnapshotBaseline(
+    requestId: string,
+    approvedBy: string,
+    competitors: string[],
+    promptHash: string
+  ): Promise<SnapshotRequest | null> {
+    const { data, error } = await getClient()
+      .rpc(
+        "approve_and_launch_snapshot_baseline",
+        {
+          p_request_id: requestId,
+          p_approved_by: approvedBy,
+          p_competitors: competitors,
+          p_prompt_hash: promptHash,
         }
       )
       .maybeSingle<SnapshotRequestDbRow>();

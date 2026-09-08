@@ -388,6 +388,12 @@ export default async function SnapshotRequestDetailPage({
             )}
           </DetailRow>
 
+          <DetailRow label="Baseline protocol">
+            {request.protocolId
+              ? `${request.protocolId} (one baseline job queued for the existing worker)`
+              : "—"}
+          </DetailRow>
+
           {/*
             Founder-only review metadata. `approvedBy` is an internal auth
             user id and is deliberately not surfaced on the public report

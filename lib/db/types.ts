@@ -920,6 +920,15 @@ export interface SnapshotRequest {
    */
   competitors: string[];
   /**
+   * The approved M4 protocol launched for this request (migration 0062),
+   * set only by `approveAndLaunchSnapshotBaseline`. Null for every request
+   * approved through the legacy `approveAndQueueSnapshotRequest` path.
+   * `buyer_question_version_id`/`buyer_question_id` are reachable from
+   * here via `protocols.buyer_question_version_id` and are not duplicated
+   * as separate columns on this row.
+   */
+  protocolId: string | null;
+  /**
    * Worker ownership. All three are null together for manual CLI runs,
    * and non-null together once a worker holds the request.
    *
@@ -2619,6 +2628,30 @@ export interface DbAdapter {
     requestId: string,
     approvedBy: string,
     competitors: string[]
+  ): Promise<SnapshotRequest | null>;
+  /**
+   * Approves a request and, in one atomic operation (migration 0062),
+   * creates and approves its buyer_question_version and protocol, then
+   * enqueues exactly one protocol_execution_jobs baseline job — the
+   * canonical M4/M5 path. Terminal status is `approved`, not `queued`:
+   * the legacy `claim_next_snapshot_request` worker only ever selects
+   * `status = 'queued'`, so a request approved through this method is
+   * structurally never claimed by the legacy worker.
+   *
+   * `promptHash` must be the SHA-256 (lowercase hex) of the exact
+   * `buyerCategory` text on the request being approved — this is prompt
+   * identity, computed by the application layer, never recomputed or
+   * verified against the text by the database (matching migration 0047's
+   * rule for `buyer_question_versions.prompt_hash`).
+   *
+   * Idempotent: a second call for an already-launched request returns the
+   * existing row unchanged and creates no second question/protocol/job.
+   */
+  approveAndLaunchSnapshotBaseline(
+    requestId: string,
+    approvedBy: string,
+    competitors: string[],
+    promptHash: string
   ): Promise<SnapshotRequest | null>;
   reserveSnapshotRequestProject(
     requestId: string

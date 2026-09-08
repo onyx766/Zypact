@@ -200,6 +200,7 @@ async function main() {
     const oldActiveRequest: SnapshotRequest = {
       approvedAt: null,
       approvedBy: null,
+      protocolId: null,
       // Never approved, so no founder competitor frame exists.
       competitors: [],
       id: "old-active-request",

@@ -397,9 +397,16 @@ async function main(): Promise<void> {
   );
 
   check(
+    // Migration 0062 cuts the approval route over from
+    // approveAndQueueSnapshotRequest (legacy 'queued' + worker-claim path)
+    // to approveAndLaunchSnapshotBaseline (creates/approves the M4 question
+    // + protocol and enqueues one M5 baseline job; terminal status
+    // 'approved', never claimed by the legacy worker). The old function is
+    // untouched and still covered by this file's own tests above — only
+    // the route's call site changed.
     "43. the approval route never writes snapshot_requests directly",
     !/from\("snapshot_requests"\)/.test(route) &&
-      /approveAndQueueSnapshotRequest\(/.test(route)
+      /approveAndLaunchSnapshotBaseline\(/.test(route)
   );
   check(
     "44. the route reuses the shared parser rather than its own copy",

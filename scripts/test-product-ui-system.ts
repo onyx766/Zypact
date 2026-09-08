@@ -25,7 +25,6 @@ const founderDetail = read("app/admin/snapshot-requests/[requestId]/page.tsx");
 const report = read("app/report/[secureToken]/page.tsx");
 const login = read("app/login/page.tsx");
 const thankYou = read("app/thank-you/page.tsx");
-const scanForm = read("app/scan/scan-form.tsx");
 const pricing = read("lib/pricing/plans.ts");
 
 console.log("test-product-ui-system");
@@ -89,7 +88,6 @@ check("priority fix keeps teal treatment", css.includes(".report-fix"));
 check("founder login uses product visual shell", login.includes('className="founder-login-page"'));
 check("thank-you uses product visual shell", thankYou.includes("thankyou-page"));
 
-check("scan still uses dark Turnstile", scanForm.includes('theme: "dark"'));
 check("scan journey dark palette remains", css.includes("Dark intelligence snapshot journey"));
 check("landing dark intelligence system remains", css.includes("Dark intelligence landing"));
 

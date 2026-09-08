@@ -12,15 +12,10 @@ export const metadata: Metadata = {
 };
 
 export default function ScanPage() {
-  const siteKey =
-    process.env
-      .NEXT_PUBLIC_TURNSTILE_SITE_KEY
-      ?.trim() || null;
-
   const enabled =
     process.env
       .SNAPSHOT_PUBLIC_FORM_ENABLED ===
-      "true" && Boolean(siteKey);
+    "true";
 
   return (
     <main className="scan-page">
@@ -82,10 +77,7 @@ export default function ScanPage() {
         </div>
 
         <div className="scan-card">
-          <ScanForm
-            enabled={enabled}
-            siteKey={siteKey}
-          />
+          <ScanForm enabled={enabled} />
         </div>
       </section>
     </main>

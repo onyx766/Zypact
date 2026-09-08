@@ -1066,16 +1066,6 @@ h2 {
   color: #b42318;
 }
 
-.scan-security {
-  margin-top: 6px;
-  min-height: 70px;
-}
-
-.scan-turnstile {
-  width: 100%;
-  min-height: 65px;
-}
-
 .scan-feedback {
   margin: 0;
   border: 1px solid var(--card-line);

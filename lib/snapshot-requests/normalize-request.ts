@@ -40,16 +40,6 @@ const requestFieldsSchema = z
   })
   .strict();
 
-const submissionSchema = requestFieldsSchema
-  .extend({
-    turnstileToken: z
-      .string()
-      .trim()
-      .min(1, "Complete the security check.")
-      .max(2048),
-  })
-  .strict();
-
 type RequestFields = z.infer<typeof requestFieldsSchema>;
 
 export class SnapshotRequestValidationError extends Error {
@@ -163,24 +153,6 @@ export function normalizeSnapshotRequestInput(
   }
 
   return normalizeFields(parsed.data);
-}
-
-export function parseSnapshotRequestSubmission(raw: unknown): {
-  input: CreateSnapshotRequestInput;
-  turnstileToken: string;
-} {
-  const parsed = submissionSchema.safeParse(raw);
-
-  if (!parsed.success) {
-    throw new SnapshotRequestValidationError(
-      validationIssues(parsed.error)
-    );
-  }
-
-  return {
-    input: normalizeFields(parsed.data),
-    turnstileToken: parsed.data.turnstileToken,
-  };
 }
 
 export function extractRequestIp(headers: Headers): string | null {

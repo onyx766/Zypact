@@ -2,14 +2,8 @@ import { strict as assert } from "node:assert";
 import {
   hashRequestIp,
   normalizeSnapshotRequestInput,
-  parseSnapshotRequestSubmission,
   SnapshotRequestValidationError,
 } from "../lib/snapshot-requests/normalize-request";
-
-type TurnstileMode =
-  | "success"
-  | "failed"
-  | "wrong_action";
 
 type ResendMode =
   | "success"
@@ -121,32 +115,11 @@ async function main() {
     "✓ raw IP is not stored as the hash"
   );
 
-  assert.throws(
-    () =>
-      parseSnapshotRequestSubmission({
-        contactName: "Jane Smith",
-        workEmail:
-          "founder@example.com",
-        companyName:
-          "Example SaaS",
-        websiteUrl:
-          "https://example.com",
-        buyerCategory: "B2B SaaS",
-      }),
-    SnapshotRequestValidationError
-  );
-  console.log(
-    "✓ Turnstile token is required"
-  );
-
   delete process.env.VERCEL_ENV;
   Object.assign(process.env, { NODE_ENV: "test" });
   delete process.env.NEXT_PUBLIC_SUPABASE_URL;
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
   delete process.env.ZYPACT_ALLOW_MEMORY_DB;
-
-  delete process.env
-    .TURNSTILE_SECRET_KEY;
 
   delete process.env.RESEND_API_KEY;
   delete process.env
@@ -198,8 +171,6 @@ async function main() {
       "example.com/pricing",
     buyerCategory:
       "Which B2B SaaS software fits us?",
-    turnstileToken:
-      "mock-turnstile-token",
   };
 
   const disabledResponse =
@@ -236,14 +207,6 @@ async function main() {
     "✓ route fails closed without email configuration"
   );
 
-  process.env
-    .TURNSTILE_SECRET_KEY =
-    "test-turnstile-secret";
-
-  process.env
-    .TURNSTILE_EXPECTED_HOSTNAME =
-    "zypact.com";
-
   process.env.RESEND_API_KEY =
     "re_mock_api_key";
 
@@ -265,18 +228,11 @@ async function main() {
   const originalFetch =
     globalThis.fetch;
 
-  let turnstileMode:
-    TurnstileMode = "success";
-
   let resendMode:
     ResendMode = "success";
 
   let networkCalls = 0;
-  let turnstileCalls = 0;
   let resendCalls = 0;
-
-  let lastTurnstilePayload:
-    Record<string, unknown> = {};
 
   let lastResendBody:
     Record<string, unknown> = {};
@@ -293,61 +249,6 @@ async function main() {
         : input instanceof URL
           ? input.toString()
           : input.url;
-
-    if (
-      url ===
-      "https://challenges.cloudflare.com/turnstile/v0/siteverify"
-    ) {
-      turnstileCalls += 1;
-
-      lastTurnstilePayload =
-        JSON.parse(
-          String(init?.body || "{}")
-        ) as Record<
-          string,
-          unknown
-        >;
-
-      if (
-        turnstileMode === "failed"
-      ) {
-        return new Response(
-          JSON.stringify({
-            success: false,
-            "error-codes": [
-              "invalid-input-response",
-            ],
-          }),
-          {
-            status: 200,
-            headers: {
-              "content-type":
-                "application/json",
-            },
-          }
-        );
-      }
-
-      return new Response(
-        JSON.stringify({
-          success: true,
-          hostname: "zypact.com",
-          action:
-            turnstileMode ===
-            "wrong_action"
-              ? "different_action"
-              : "snapshot_request",
-          "error-codes": [],
-        }),
-        {
-          status: 200,
-          headers: {
-            "content-type":
-              "application/json",
-          },
-        }
-      );
-    }
 
     if (
       url ===
@@ -426,43 +327,9 @@ async function main() {
     );
 
     console.log(
-      "✓ invalid fields are rejected before Turnstile"
+      "✓ invalid fields are rejected"
     );
 
-    turnstileMode = "failed";
-
-    const failedChallengeResponse =
-      await POST(
-        makeRequest(validBody)
-      );
-
-    assert.equal(
-      failedChallengeResponse.status,
-      400
-    );
-
-    console.log(
-      "✓ failed Turnstile challenge is rejected"
-    );
-
-    turnstileMode =
-      "wrong_action";
-
-    const wrongActionResponse =
-      await POST(
-        makeRequest(validBody)
-      );
-
-    assert.equal(
-      wrongActionResponse.status,
-      400
-    );
-
-    console.log(
-      "✓ unexpected Turnstile action is rejected"
-    );
-
-    turnstileMode = "success";
     resendMode = "success";
 
     const validResponse =
@@ -473,26 +340,6 @@ async function main() {
     assert.equal(
       validResponse.status,
       201
-    );
-
-    assert.equal(
-      lastTurnstilePayload.response,
-      "mock-turnstile-token"
-    );
-
-    assert.equal(
-      lastTurnstilePayload.remoteip,
-      "203.0.113.10"
-    );
-
-    assert.equal(
-      typeof lastTurnstilePayload
-        .idempotency_key,
-      "string"
-    );
-
-    console.log(
-      "✓ Siteverify receives token, IP, and idempotency key"
     );
 
     assert.deepEqual(
@@ -526,7 +373,6 @@ async function main() {
         status?: string;
         nextStep?: string;
         projectId?: string;
-        turnstileToken?: string;
         token?: string;
       };
 
@@ -545,11 +391,6 @@ async function main() {
 
     assert.equal(
       "projectId" in json,
-      false
-    );
-
-    assert.equal(
-      "turnstileToken" in json,
       false
     );
 
@@ -667,10 +508,6 @@ async function main() {
       "✓ failed delivery does not block a clean retry"
     );
 
-    assert.ok(
-      turnstileCalls >= 5
-    );
-
     assert.equal(
       resendCalls,
       3
@@ -681,7 +518,7 @@ async function main() {
   }
 
   console.log(
-    "\n20/20 checks passed. Snapshot request email flow PASSED."
+    "\n16/16 checks passed. Snapshot request email flow PASSED."
   );
 }
 

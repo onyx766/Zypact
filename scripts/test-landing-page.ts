@@ -81,7 +81,6 @@ async function main(): Promise<void> {
 
   check("request page explains controlled automation", scanPageSource.includes("Zypact V1 · Controlled automation") && scanPageSource.includes("controlled baseline then runs") && scanPageSource.includes("automatically"));
   check("request form separates request from execution", scanFormSource.includes("Request only. Automation begins after") && scanFormSource.includes("does not approve a protocol or start an"));
-  check("request Turnstile uses the light design", scanFormSource.includes('theme: "light"'));
   check("verification page no longer makes founder review the normal path", verifyClientSource.includes("automation begins only after the buyer") && !verifyClientSource.includes("waiting for a fit review"));
   check("verification email explains the approval gate", verificationEmailSource.includes("V1 automation begins only after the buyer question and protocol are approved"));
 

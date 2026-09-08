@@ -1,41 +1,11 @@
 "use client";
 
-import Script from "next/script";
-import {
-  FormEvent,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { FormEvent, useState } from "react";
 import {
   submitSnapshotRequest,
   type SnapshotRequestFormErrors,
   type SnapshotRequestFormValues,
 } from "@/lib/snapshot-requests/public-form";
-
-declare global {
-  interface Window {
-    turnstile?: {
-      render(
-        container: string | HTMLElement,
-        options: {
-          sitekey: string;
-          action?: string;
-          theme?: "light" | "dark" | "auto";
-          size?: "normal" | "compact" | "flexible";
-          callback?: (token: string) => void;
-          "expired-callback"?: () => void;
-          "error-callback"?: (
-            errorCode?: string
-          ) => void;
-        }
-      ): string;
-      reset(widgetId?: string): void;
-      remove(widgetId?: string): void;
-    };
-  }
-}
 
 const EMPTY_VALUES: SnapshotRequestFormValues = {
   contactName: "",
@@ -49,12 +19,10 @@ const BUYER_QUESTION_MAX_LENGTH = 300;
 
 interface ScanFormProps {
   enabled: boolean;
-  siteKey: string | null;
 }
 
 export function ScanForm({
   enabled,
-  siteKey,
 }: ScanFormProps) {
   const [values, setValues] =
     useState<SnapshotRequestFormValues>(
@@ -67,97 +35,11 @@ export function ScanForm({
   const [feedback, setFeedback] =
     useState<string | null>(null);
 
-  const [turnstileToken, setTurnstileToken] =
-    useState("");
-
-  const [turnstileReady, setTurnstileReady] =
-    useState(false);
-
   const [submitting, setSubmitting] =
     useState(false);
 
   const [submitted, setSubmitted] =
     useState(false);
-
-  const widgetContainerRef =
-    useRef<HTMLDivElement | null>(null);
-
-  const widgetIdRef =
-    useRef<string | null>(null);
-
-  const renderTurnstile = useCallback(() => {
-    if (
-      !enabled ||
-      !siteKey ||
-      !widgetContainerRef.current ||
-      !window.turnstile ||
-      widgetIdRef.current
-    ) {
-      return;
-    }
-
-    widgetIdRef.current =
-      window.turnstile.render(
-        widgetContainerRef.current,
-        {
-          sitekey: siteKey,
-          action: "snapshot_request",
-          theme: "light",
-          size: "flexible",
-          callback(token) {
-            setTurnstileToken(token);
-            setTurnstileReady(true);
-            setFieldErrors((current) => {
-              const next = { ...current };
-              delete next.turnstileToken;
-              return next;
-            });
-          },
-          "expired-callback"() {
-            setTurnstileToken("");
-            setTurnstileReady(false);
-          },
-          "error-callback"() {
-            setTurnstileToken("");
-            setTurnstileReady(false);
-            setFeedback(
-              "The security check could not load. Please refresh the page and try again."
-            );
-          },
-        }
-      );
-  }, [enabled, siteKey]);
-
-  useEffect(() => {
-    renderTurnstile();
-
-    return () => {
-      if (
-        widgetIdRef.current &&
-        window.turnstile
-      ) {
-        window.turnstile.remove(
-          widgetIdRef.current
-        );
-
-        widgetIdRef.current = null;
-      }
-    };
-  }, [renderTurnstile]);
-
-  function resetTurnstile() {
-    setTurnstileToken("");
-    setTurnstileReady(false);
-
-    if (
-      widgetIdRef.current &&
-      window.turnstile
-    ) {
-      window.turnstile.reset(
-        widgetIdRef.current
-      );
-    }
-  }
 
   function updateField(
     field: keyof SnapshotRequestFormValues,
@@ -180,11 +62,7 @@ export function ScanForm({
   ) {
     event.preventDefault();
 
-    if (
-      !enabled ||
-      !siteKey ||
-      submitting
-    ) {
+    if (!enabled || submitting) {
       return;
     }
 
@@ -193,37 +71,20 @@ export function ScanForm({
     setFieldErrors({});
 
     const result =
-      await submitSnapshotRequest(
-        values,
-        turnstileToken
-      );
+      await submitSnapshotRequest(values);
 
     if (result.ok) {
       setSubmitted(true);
-      setTurnstileToken("");
-
-      if (
-        widgetIdRef.current &&
-        window.turnstile
-      ) {
-        window.turnstile.remove(
-          widgetIdRef.current
-        );
-
-        widgetIdRef.current = null;
-      }
-
       setSubmitting(false);
       return;
     }
 
     setFeedback(result.message);
     setFieldErrors(result.fieldErrors);
-    resetTurnstile();
     setSubmitting(false);
   }
 
-  if (!enabled || !siteKey) {
+  if (!enabled) {
     return (
       <div className="scan-unavailable">
         <p className="scan-status-label">
@@ -309,12 +170,6 @@ export function ScanForm({
 
   return (
     <>
-      <Script
-        src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
-        strategy="afterInteractive"
-        onLoad={renderTurnstile}
-      />
-
       <form
         className="scan-form"
         onSubmit={handleSubmit}
@@ -543,19 +398,6 @@ export function ScanForm({
           ) : null}
         </div>
 
-        <div className="scan-security">
-          <div
-            ref={widgetContainerRef}
-            className="scan-turnstile"
-          />
-
-          {fieldErrors.turnstileToken ? (
-            <p className="scan-field-error">
-              {fieldErrors.turnstileToken[0]}
-            </p>
-          ) : null}
-        </div>
-
         {feedback ? (
           <p
             className="scan-feedback"
@@ -568,9 +410,7 @@ export function ScanForm({
         <button
           type="submit"
           className="button button-primary scan-submit"
-          disabled={
-            submitting || !turnstileReady
-          }
+          disabled={submitting}
         >
           {submitting
             ? "Submitting…"

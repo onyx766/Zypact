@@ -7,8 +7,7 @@ export interface SnapshotRequestFormValues {
 }
 
 export type SnapshotRequestFormField =
-  | keyof SnapshotRequestFormValues
-  | "turnstileToken";
+  keyof SnapshotRequestFormValues;
 
 export interface SnapshotRequestFormErrors {
   [field: string]: string[];
@@ -24,7 +23,6 @@ export type SnapshotRequestSubmissionResult =
       ok: false;
       reason:
         | "validation"
-        | "security_check"
         | "limit"
         | "delivery_failed"
         | "unavailable"
@@ -94,8 +92,7 @@ function payloadCode(payload: unknown): string | null {
 }
 
 export function buildSnapshotRequestPayload(
-  values: SnapshotRequestFormValues,
-  turnstileToken: string
+  values: SnapshotRequestFormValues
 ) {
   return {
     contactName: values.contactName.trim(),
@@ -103,27 +100,13 @@ export function buildSnapshotRequestPayload(
     companyName: values.companyName.trim(),
     websiteUrl: values.websiteUrl.trim(),
     buyerCategory: values.buyerCategory.trim(),
-    turnstileToken,
   };
 }
 
 export async function submitSnapshotRequest(
   values: SnapshotRequestFormValues,
-  turnstileToken: string,
   fetchImpl: typeof fetch = fetch
 ): Promise<SnapshotRequestSubmissionResult> {
-  if (!turnstileToken.trim()) {
-    return genericFailure(
-      "security_check",
-      "Complete the security check before submitting.",
-      {
-        turnstileToken: [
-          "Complete the security check.",
-        ],
-      }
-    );
-  }
-
   try {
     const response = await fetchImpl(
       "/api/snapshot-requests",
@@ -135,10 +118,7 @@ export async function submitSnapshotRequest(
         credentials: "same-origin",
         cache: "no-store",
         body: JSON.stringify(
-          buildSnapshotRequestPayload(
-            values,
-            turnstileToken
-          )
+          buildSnapshotRequestPayload(values)
         ),
       }
     );
@@ -174,25 +154,10 @@ export async function submitSnapshotRequest(
     if (response.status === 400) {
       const issues = parseIssues(payload);
 
-      if ("turnstileToken" in issues) {
-        return genericFailure(
-          "security_check",
-          "Complete the security check and try again.",
-          issues
-        );
-      }
-
-      if (Object.keys(issues).length > 0) {
-        return genericFailure(
-          "validation",
-          "Please correct the highlighted fields.",
-          issues
-        );
-      }
-
       return genericFailure(
-        "security_check",
-        "Complete the security check and try again."
+        "validation",
+        "Please correct the highlighted fields.",
+        issues
       );
     }
 

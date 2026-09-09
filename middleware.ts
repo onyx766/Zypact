@@ -9,6 +9,8 @@
  *
  * The matcher deliberately excludes Next.js static assets and any
  * public files so we don't spin up an auth client for every image byte.
+ * It does cover `/api`, because a route handler reads the same session
+ * cookies a page does and must see the same refresh.
  */
 
 import { NextResponse, type NextRequest } from "next/server";
@@ -26,18 +28,41 @@ export async function middleware(request: NextRequest) {
 
   const supabase = createServerClient(url, anonKey, {
     cookies: {
-      get(name: string) {
-        return request.cookies.get(name)?.value;
+      getAll() {
+        return request.cookies.getAll();
       },
-      set(name: string, value: string, options: CookieOptions) {
-        request.cookies.set({ name, value, ...options });
+      /**
+       * All cookies from one refresh are written together, on purpose.
+       *
+       * A refresh emits several cookies at once — access token, refresh
+       * token, and the numbered chunks (`...auth-token.0`, `.1`) the
+       * library splits a large session into. The previous per-cookie
+       * `set` rebuilt `response` on every call, so each cookie discarded
+       * the ones written before it and only the last survived to the
+       * browser. The session then arrived partial, the next request read
+       * it as no session at all, and the caller saw an intermittent 401
+       * that a retry cleared once the client refreshed again.
+       *
+       * `setAll` receives the whole batch, so the request is updated
+       * first, the response is rebuilt exactly once, and every cookie is
+       * written to that same response.
+       */
+      setAll(
+        cookiesToSet: {
+          name: string;
+          value: string;
+          options: CookieOptions;
+        }[]
+      ) {
+        for (const { name, value, options } of cookiesToSet) {
+          request.cookies.set({ name, value, ...options });
+        }
+
         response = NextResponse.next({ request });
-        response.cookies.set({ name, value, ...options });
-      },
-      remove(name: string, options: CookieOptions) {
-        request.cookies.set({ name, value: "", ...options });
-        response = NextResponse.next({ request });
-        response.cookies.set({ name, value: "", ...options });
+
+        for (const { name, value, options } of cookiesToSet) {
+          response.cookies.set({ name, value, ...options });
+        }
       },
     },
   });

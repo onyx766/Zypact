@@ -1,0 +1,169 @@
+/*
+ * `@tailwind base` is required even with preflight disabled: it emits the
+ * --tw-* defaults layer that shadow, ring, transform and filter utilities read.
+ * With `corePlugins.preflight: false` it emits no element resets, so it is safe
+ * alongside the legacy global stylesheets.
+ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * shadcn/ui token layer.
+ *
+ * Scoped to .v2-root rather than :root because the root layout also loads
+ * app/globals.css and app/landing-v1.css for the legacy routes. Preflight is
+ * disabled in tailwind.config.ts and re-implemented below under the same scope,
+ * so nothing here can restyle /admin, /scan, /report or the current landing page.
+ */
+.v2-root {
+  --background: 0 0% 100%;
+  --foreground: 160 16% 8%;
+
+  --card: 0 0% 100%;
+  --card-foreground: 160 16% 8%;
+
+  --popover: 0 0% 100%;
+  --popover-foreground: 160 16% 8%;
+
+  --primary: 162 68% 17%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 160 20% 96%;
+  --secondary-foreground: 162 68% 17%;
+
+  --muted: 160 20% 96%;
+  --muted-foreground: 160 6% 40%;
+
+  --accent: 154 33% 92%;
+  --accent-foreground: 162 68% 17%;
+
+  --destructive: 0 72% 45%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 156 12% 90%;
+  --input: 156 12% 90%;
+  --ring: 162 68% 17%;
+
+  --radius: 0.75rem;
+}
+
+/*
+ * Page shell — replaces Tailwind's `container` component, which cannot be
+ * scoped by the `important` strategy and therefore loses to the legacy
+ * `.container { padding: 116px 24px }` rule in app/globals.css.
+ * Written as `.v2-root .shell` (0-2-0) so it out-specifies that rule outright.
+ */
+@layer components {
+  .v2-root .shell {
+    width: 100%;
+    max-width: 1200px;
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
+}
+
+/*
+ * Scoped preflight.
+ *
+ * Two rules govern every selector below, and breaking either one silently
+ * breaks the page:
+ *
+ * 1. Each selector must out-specify the legacy element rules in
+ *    app/globals.css (`h1`, `h2`, `a`, `body` — all 0-0-1).
+ * 2. Each selector must NOT out-specify a Tailwind utility (0-1-0), or the
+ *    reset wins and utilities like `text-[44px]`, `mt-6` and `border` are
+ *    silently dropped.
+ *
+ * `.v2-root :where(...)` satisfies both: :where() contributes zero, so the
+ * total is exactly 0-1-0 — above the legacy element rules, tied with utilities.
+ * The @layer base wrapper then emits these before the utilities layer, so
+ * utilities win the tie on source order.
+ */
+@layer base {
+  /*
+   * Legacy-leak neutralizer.
+   *
+   * app/globals.css declares `.grid { display: grid; gap: 0; margin-top: 56px }`.
+   * Tailwind's `.grid` utility only declares `display`, so that `margin-top`
+   * leaks through unopposed onto every v2 element using the `grid` utility and
+   * pushed each section down by 56px.
+   *
+   * `.grid` is the ONLY collision between the 371 legacy class names and the
+   * utilities used in this route tree, so it is neutralized precisely here
+   * rather than by isolating the whole stylesheet.
+   *
+   * `.v2-root.v2-root` is 0-2-0, beating the legacy 0-1-0 rule regardless of
+   * stylesheet order, while :where() keeps the inner selector weightless.
+   * Emitting from @layer base means real `mt-*` utilities (also 0-2-0) still
+   * win on source order.
+   */
+  .v2-root.v2-root :where(.grid) {
+    margin-top: 0;
+  }
+
+  .v2-root {
+    font-family: theme("fontFamily.sans");
+    color: hsl(var(--foreground));
+    background-color: hsl(var(--background));
+    -webkit-font-smoothing: antialiased;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  .v2-root :where(*, *::before, *::after) {
+    box-sizing: border-box;
+    border: 0 solid hsl(var(--border));
+  }
+
+  .v2-root :where(h1, h2, h3, h4, p, figure, blockquote, dl, dd) {
+    margin: 0;
+  }
+
+  .v2-root :where(h1, h2, h3, h4) {
+    font-size: inherit;
+    font-weight: inherit;
+  }
+
+  .v2-root :where(ul, ol) {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .v2-root :where(a) {
+    color: inherit;
+    text-decoration: inherit;
+  }
+
+  .v2-root :where(button, input, select, textarea) {
+    font: inherit;
+    color: inherit;
+    margin: 0;
+    padding: 0;
+    background-color: transparent;
+  }
+
+  .v2-root :where(button) {
+    cursor: pointer;
+    text-transform: none;
+    background-image: none;
+  }
+
+  .v2-root :where(img, svg, video, canvas) {
+    display: block;
+    vertical-align: middle;
+  }
+
+  .v2-root :where(img, video) {
+    max-width: 100%;
+    height: auto;
+  }
+
+  .v2-root :where(:focus-visible) {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+}

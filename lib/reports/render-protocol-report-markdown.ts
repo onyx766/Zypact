@@ -135,6 +135,9 @@ export function renderProtocolReportMarkdown(
     `- Completed without a readable result: ${reconciliation.excludedNoResult}`
   );
   lines.push(
+    `- Readable (counted in the rate): ${observation.denominator}`
+  );
+  lines.push(
     `- Counts reconcile: ${reconciliation.accountedFor ? "yes" : "NO — review required"}`
   );
   lines.push("");

@@ -427,6 +427,11 @@ async function main(): Promise<void> {
     /"Profound", "Otterly AI"/.test(read("scripts/mvp-scan.ts"))
   );
   const listPage = read("app/admin/snapshot-requests/page.tsx");
+  // The list's rows are rendered by a client component so they can be
+  // filtered and paged; the per-row actions live there, not in page.tsx.
+  const listTable = read(
+    "app/admin/snapshot-requests/requests-table.tsx"
+  );
   const detailPage = read(
     "app/admin/snapshot-requests/[requestId]/page.tsx"
   );
@@ -437,12 +442,15 @@ async function main(): Promise<void> {
   check(
     "49. the request list no longer renders the approval editor",
     !/<ApproveButton/.test(listPage) &&
-      !/approve-button/.test(listPage)
+      !/approve-button/.test(listPage) &&
+      !/<ApproveButton/.test(listTable) &&
+      !/approve-button/.test(listTable)
   );
   check(
     "50. a pending row instead navigates to its detail page",
-    /Review/.test(listPage) &&
-      /\/admin\/snapshot-requests\/\$\{request\.id\}/.test(listPage)
+    /row\.status === "pending_approval"[\s\S]{0,400}\/admin\/snapshot-requests\/\$\{row\.id\}[\s\S]{0,200}Review/.test(
+      listTable
+    )
   );
   check(
     "51. the detail page is the only approval-editor call site",

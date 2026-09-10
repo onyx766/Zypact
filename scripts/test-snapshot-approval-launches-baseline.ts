@@ -103,11 +103,24 @@ async function main() {
   check("7. the protocol exists and is approved", protocol?.status === "approved");
   check(
     "8. the protocol carries a real bounded sample plan, not zero/unbounded",
-    protocol!.plannedBaselineRuns === 3 &&
+    protocol!.plannedBaselineRuns > 0 &&
       protocol!.plannedRetestRuns === 0 &&
       protocol!.runCap >= protocol!.plannedBaselineRuns &&
       protocol!.spendCapUsd > 0 &&
       protocol!.concurrencyLimit > 0
+  );
+  check(
+    "8a. a new baseline plans 5 runs (D-032 / migration 0069), not the old 3",
+    protocol!.plannedBaselineRuns === 5
+  );
+  check(
+    "8b. run_cap keeps retry headroom above the plan (7 = 5 planned + 2)",
+    protocol!.runCap === 7 &&
+      protocol!.runCap - protocol!.plannedBaselineRuns === protocol!.retryCap
+  );
+  check(
+    "8c. spend cap covers every run_cap attempt at the worker's default reservations",
+    protocol!.runCap * (0.02 + 0.02) <= protocol!.spendCapUsd
   );
   check("9. the protocol's approver is the founder", protocol?.approvedBy === founderId);
 
@@ -282,6 +295,58 @@ async function main() {
     /if v_request\.status = 'approved'\s*and v_request\.protocol_id is not null then/.test(
       migration
     )
+  );
+
+  // ── 6. Migration 0069 (static inspection, no database) ───────────────
+  // Raises the default for NEW baselines only. Every existing protocol —
+  // started, completed, or approved-but-queued — must keep its frozen plan,
+  // so the migration may redefine the function but never touch a row.
+  const migration0069 = readFileSync(
+    join(
+      process.cwd(),
+      "supabase/migrations/0069_new_baseline_default_five_runs.sql"
+    ),
+    "utf-8"
+  );
+  const sql0069 = migration0069
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("--"))
+    .join("\n");
+
+  check(
+    "37. 0069 redefines the launch function with the same signature",
+    /create or replace function\s+public\.approve_and_launch_snapshot_baseline\(\s*p_request_id uuid,\s*p_approved_by uuid,\s*p_competitors jsonb,\s*p_prompt_hash text/.test(
+      sql0069
+    )
+  );
+  check(
+    "38. 0069 inserts planned_baseline_runs = 5, planned_retest_runs = 0",
+    /jsonb_build_object\('model', 'sonar'\),\s*5, 0,/.test(sql0069)
+  );
+  check(
+    "39. 0069 inserts run_cap = 7 with spend cap 2 and retry_cap 2 unchanged",
+    /\n\s*7, 2, 86400,\s*\n\s*10, 1, 2,/.test(sql0069)
+  );
+  check(
+    "40. 0069 never updates, deletes or backfills an existing protocol",
+    !/update\s+public\.protocols/i.test(sql0069) &&
+      !/delete\s+from\s+public\.protocols/i.test(sql0069) &&
+      !/alter\s+table\s+public\.protocols/i.test(sql0069)
+  );
+  check(
+    "41. 0069 keeps the idempotent-replay branch, so a re-click never swaps an old protocol",
+    /if v_request\.status = 'approved'\s*and v_request\.protocol_id is not null then/.test(
+      sql0069
+    )
+  );
+  check(
+    "42. 0069 keeps the service_role-only ACL",
+    /grant execute on function\s+public\.approve_and_launch_snapshot_baseline\(uuid, uuid, jsonb, text\)\s*to service_role;/.test(
+      sql0069
+    ) &&
+      /revoke all on function\s+public\.approve_and_launch_snapshot_baseline\(uuid, uuid, jsonb, text\)\s*from authenticated;/.test(
+        sql0069
+      )
   );
 
   console.log(

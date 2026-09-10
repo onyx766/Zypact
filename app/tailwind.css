@@ -14,7 +14,11 @@
  * Scoped to .v2-root rather than :root because the root layout also loads
  * app/globals.css and app/landing-v1.css for the legacy routes. Preflight is
  * disabled in tailwind.config.ts and re-implemented below under the same scope,
- * so nothing here can restyle /admin, /scan, /report or the current landing page.
+ * so nothing here can restyle /scan, /report or /projects.
+ *
+ * The `.v2-root` class name is load-bearing: it is the `important` selector in
+ * tailwind.config.ts and the opt-in hook used by AdminThemeRoot. Renaming it
+ * means changing both, plus app/admin/theme.tsx and app/admin/admin-theme.css.
  */
 .v2-root {
   --background: 0 0% 100%;
@@ -165,5 +169,18 @@
   .v2-root :where(:focus-visible) {
     outline: 2px solid hsl(var(--ring));
     outline-offset: 2px;
+  }
+
+  /*
+   * Carried over from the previous landing stylesheet: motion is opt-out for
+   * visitors who ask their OS to reduce it.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    .v2-root.v2-root :where(*, *::before, *::after) {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }

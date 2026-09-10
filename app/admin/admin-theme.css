@@ -1,0 +1,88 @@
+/**
+ * Founder console theme tokens for Tailwind-rendered admin pages.
+ *
+ * These redefine the shadcn token layer from app/tailwind.css on an inner
+ * `.zp-admin` element, so custom-property inheritance hands them to every
+ * utility inside it. Nothing here reaches the marketing page, whose tokens live
+ * on the outer `.v2-root` and are left untouched. `.dark` swaps the palette:
+ * no component uses `dark:` variants, so one class list serves both themes.
+ */
+
+.zp-admin {
+  --background: 150 16% 97%;
+  --foreground: 165 18% 9%;
+
+  --card: 0 0% 100%;
+  --card-foreground: 165 18% 9%;
+
+  --popover: 0 0% 100%;
+  --popover-foreground: 165 18% 9%;
+
+  --primary: 158 72% 30%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 150 14% 93%;
+  --secondary-foreground: 165 18% 12%;
+
+  --muted: 150 14% 94%;
+  --muted-foreground: 165 6% 38%;
+
+  --accent: 152 45% 92%;
+  --accent-foreground: 158 72% 24%;
+
+  --destructive: 0 72% 46%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 150 10% 87%;
+  --input: 150 10% 82%;
+  --ring: 158 72% 34%;
+
+  --success: 145 63% 32%;
+  --warning: 32 92% 38%;
+  --info: 222 76% 50%;
+
+  /*
+   * app/globals.css paints h1, h2 and a:hover with var(--heading), at element
+   * specificity the scoped preflight does not reset for colour. Pointing it at
+   * the theme foreground keeps those rules legible on the dark palette.
+   */
+  --heading: hsl(var(--foreground));
+
+  color-scheme: light;
+}
+
+.zp-admin.dark {
+  --background: 200 24% 5%;
+  --foreground: 180 12% 94%;
+
+  --card: 200 22% 8%;
+  --card-foreground: 180 12% 94%;
+
+  --popover: 200 22% 9%;
+  --popover-foreground: 180 12% 94%;
+
+  --primary: 153 66% 55%;
+  --primary-foreground: 160 80% 7%;
+
+  --secondary: 200 18% 12%;
+  --secondary-foreground: 180 12% 94%;
+
+  --muted: 200 18% 11%;
+  --muted-foreground: 200 9% 62%;
+
+  --accent: 155 45% 12%;
+  --accent-foreground: 153 60% 70%;
+
+  --destructive: 0 84% 67%;
+  --destructive-foreground: 0 0% 8%;
+
+  --border: 200 16% 16%;
+  --input: 200 16% 20%;
+  --ring: 153 66% 55%;
+
+  --success: 145 60% 55%;
+  --warning: 38 92% 60%;
+  --info: 225 90% 72%;
+
+  color-scheme: dark;
+}

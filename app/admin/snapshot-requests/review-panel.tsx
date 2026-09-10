@@ -2,8 +2,15 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { ArrowUpRight, RefreshCw, Send, ShieldCheck } from "lucide-react";
 
 import type { ReviewState } from "@/lib/reports/review-actions";
+import { cn } from "@/lib/utils";
+import {
+  INTEGRITY_PRESENTATION,
+  toneClass,
+  ui,
+} from "../ui-classes";
 
 /**
  * Founder review surface for the protocol report path.
@@ -17,36 +24,17 @@ import type { ReviewState } from "@/lib/reports/review-actions";
  * puts mail in someone's inbox, and it asks for confirmation first.
  */
 
-const STATUS_STYLES: Record<string, { bg: string; fg: string; label: string }> =
-  {
-    integrity_passed: { bg: "#dcfce7", fg: "#166534", label: "Integrity passed" },
-    needs_review: { bg: "#fef9c3", fg: "#854d0e", label: "Needs review" },
-    blocked: { bg: "#fee2e2", fg: "#991b1b", label: "Blocked" },
-  };
-
 function Badge({ status }: { status: string | null }) {
   if (!status) {
-    return <span style={{ color: "#71717a" }}>Not classified</span>;
+    return <span className="text-sm text-muted-foreground">Not classified</span>;
   }
-  const style = STATUS_STYLES[status] ?? {
-    bg: "#e4e4e7",
-    fg: "#3f3f46",
+  const presentation = INTEGRITY_PRESENTATION[status] ?? {
     label: status,
+    tone: "neutral" as const,
   };
   return (
-    <span
-      style={{
-        display: "inline-block",
-        padding: "3px 10px",
-        borderRadius: 999,
-        background: style.bg,
-        color: style.fg,
-        fontSize: 12,
-        fontWeight: 700,
-        letterSpacing: ".02em",
-      }}
-    >
-      {style.label}
+    <span className={cn(ui.pill, toneClass[presentation.tone])}>
+      {presentation.label}
     </span>
   );
 }
@@ -71,6 +59,7 @@ export function ReviewPanel({
   const jobNeedsReview = job?.status === "needs_review";
   const isBlocked = artifact?.integrityStatus === "blocked";
   const alreadyDelivered = Boolean(artifact?.deliveredAt);
+  const noteTooShort = note.trim().length < 10;
 
   async function post(payload: Record<string, unknown>, label: string) {
     setBusy(label);
@@ -115,138 +104,133 @@ export function ReviewPanel({
   }
 
   return (
-    <section
-      style={{
-        marginTop: 28,
-        padding: 24,
-        border: "1px solid #e4e4e7",
-        borderRadius: 12,
-        background: "#fff",
-      }}
-    >
-      <h2 style={{ margin: "0 0 4px", fontSize: 18 }}>Review</h2>
-      <p style={{ margin: "0 0 20px", color: "#71717a", fontSize: 13 }}>
-        Execution state, the integrity decision, and the actions available on
-        them.
-      </p>
-
-      {/* ---------------------------------------------------- job state */}
-      <div style={{ marginBottom: 20 }}>
-        <strong style={{ fontSize: 13 }}>Execution job</strong>
-        <div style={{ marginTop: 6, fontSize: 14 }}>
-          {job ? (
-            <>
-              <code>{job.status}</code>
-              {job.attemptCount !== null ? (
-                <span style={{ color: "#71717a" }}>
-                  {" "}
-                  · {job.attemptCount} job attempt(s)
-                </span>
-              ) : null}
-              {job.needsReviewReason ? (
-                <p style={{ margin: "8px 0 0", color: "#854d0e" }}>
-                  Held: <code>{job.needsReviewReason}</code>
-                </p>
-              ) : null}
-              {job.priorNeedsReviewReason ? (
-                <p style={{ margin: "8px 0 0", color: "#71717a" }}>
-                  Previously held: <code>{job.priorNeedsReviewReason}</code>
-                  {job.reviewResolution ? (
-                    <>
-                      {" "}
-                      → resolved <code>{job.reviewResolution}</code>
-                      {job.reviewedAt
-                        ? ` on ${job.reviewedAt.slice(0, 10)}`
-                        : ""}
-                    </>
-                  ) : null}
-                </p>
-              ) : null}
-              {job.reviewNote ? (
-                <p
-                  style={{
-                    margin: "8px 0 0",
-                    padding: "8px 12px",
-                    background: "#fafafa",
-                    borderLeft: "3px solid #d4d4d8",
-                    color: "#3f3f46",
-                    fontSize: 13,
-                  }}
-                >
-                  {job.reviewNote}
-                </p>
-              ) : null}
-            </>
-          ) : (
-            <span style={{ color: "#71717a" }}>
-              No protocol job. This request did not go through the M4/M5 path.
-            </span>
+    <section className={cn(ui.panel, "mt-4 p-6")}>
+      <div className="flex items-start gap-4">
+        <span
+          className={cn(
+            "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border",
+            toneClass.neutral
           )}
+        >
+          <ShieldCheck size={20} strokeWidth={1.9} />
+        </span>
+        <div>
+          <h2 className="max-w-none text-lg font-semibold leading-snug tracking-tight text-foreground">
+            Review
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Execution state, the integrity decision, and the actions available on
+            them.
+          </p>
         </div>
       </div>
 
-      {/* ------------------------------------------------------ attempts */}
-      {state.attempts.length > 0 ? (
-        <div style={{ marginBottom: 20 }}>
-          <strong style={{ fontSize: 13 }}>Attempts</strong>
-          <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 14 }}>
-            {state.attempts.map((attempt, index) => (
-              <li key={index}>
-                Run {attempt.ordinal ?? "—"}: <code>{attempt.status}</code>
-                {attempt.terminationReason ? (
-                  <span style={{ color: "#71717a" }}>
+      <div className="mt-5 grid gap-3 md:grid-cols-3">
+        {/* ---------------------------------------------------- job state */}
+        <div className={cn(ui.subPanel, "p-4")}>
+          <p className={ui.label}>Execution job</p>
+          <div className="mt-2 text-sm text-foreground">
+            {job ? (
+              <>
+                <code className={ui.code}>{job.status}</code>
+                {job.attemptCount !== null ? (
+                  <span className="text-muted-foreground">
                     {" "}
-                    — {attempt.terminationReason}
+                    · {job.attemptCount} job attempt(s)
                   </span>
                 ) : null}
-              </li>
-            ))}
-          </ul>
+                {job.needsReviewReason ? (
+                  <p className="mt-2 text-warning">
+                    Held: <code className={ui.code}>{job.needsReviewReason}</code>
+                  </p>
+                ) : null}
+                {job.priorNeedsReviewReason ? (
+                  <p className="mt-2 text-muted-foreground">
+                    Previously held:{" "}
+                    <code className={ui.code}>{job.priorNeedsReviewReason}</code>
+                    {job.reviewResolution ? (
+                      <>
+                        {" "}
+                        → resolved{" "}
+                        <code className={ui.code}>{job.reviewResolution}</code>
+                        {job.reviewedAt
+                          ? ` on ${job.reviewedAt.slice(0, 10)}`
+                          : ""}
+                      </>
+                    ) : null}
+                  </p>
+                ) : null}
+                {job.reviewNote ? (
+                  <p className="mt-2 border-l-2 border-border bg-muted/50 px-3 py-2 text-[13px] text-foreground">
+                    {job.reviewNote}
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <span className="text-muted-foreground">
+                No protocol job. This request did not go through the M4/M5 path.
+              </span>
+            )}
+          </div>
         </div>
-      ) : null}
 
-      {/* ----------------------------------------------------- integrity */}
-      <div style={{ marginBottom: 20 }}>
-        <strong style={{ fontSize: 13 }}>Report integrity</strong>
-        <div style={{ marginTop: 6 }}>
-          <Badge status={artifact?.integrityStatus ?? null} />
-          {artifact?.integrityReasons.length ? (
-            <ul style={{ margin: "10px 0 0", paddingLeft: 18, fontSize: 14 }}>
-              {artifact.integrityReasons.map((reason) => (
-                <li key={reason}>{reason}</li>
+        {/* ------------------------------------------------------ attempts */}
+        {state.attempts.length > 0 ? (
+          <div className={cn(ui.subPanel, "p-4")}>
+            <p className={ui.label}>Attempts</p>
+            <ul className="mt-2 space-y-1.5 text-sm text-foreground">
+              {state.attempts.map((attempt, index) => (
+                <li key={index}>
+                  Run {attempt.ordinal ?? "—"}:{" "}
+                  <code className={ui.code}>{attempt.status}</code>
+                  {attempt.terminationReason ? (
+                    <span className="text-muted-foreground [overflow-wrap:anywhere]">
+                      {" "}
+                      — {attempt.terminationReason}
+                    </span>
+                  ) : null}
+                </li>
               ))}
             </ul>
-          ) : null}
-          {isBlocked ? (
-            <p style={{ margin: "10px 0 0", color: "#991b1b", fontSize: 13 }}>
-              A blocked report is never delivered and is not readable by the
-              client, even with the link.
-            </p>
-          ) : null}
-          {alreadyDelivered ? (
-            <p style={{ margin: "10px 0 0", color: "#166534", fontSize: 13 }}>
-              Delivered {artifact?.deliveredAt?.slice(0, 10)}. A delivered
-              report is immutable.
-            </p>
-          ) : null}
+          </div>
+        ) : null}
+
+        {/* ----------------------------------------------------- integrity */}
+        <div className={cn(ui.subPanel, "p-4")}>
+          <p className={ui.label}>Report integrity</p>
+          <div className="mt-2">
+            <Badge status={artifact?.integrityStatus ?? null} />
+            {artifact?.integrityReasons.length ? (
+              <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-foreground">
+                {artifact.integrityReasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            ) : null}
+            {isBlocked ? (
+              <p className="mt-3 text-[13px] text-destructive">
+                A blocked report is never delivered and is not readable by the
+                client, even with the link.
+              </p>
+            ) : null}
+            {alreadyDelivered ? (
+              <p className="mt-3 text-[13px] text-success">
+                Delivered {artifact?.deliveredAt?.slice(0, 10)}. A delivered
+                report is immutable.
+              </p>
+            ) : null}
+          </div>
         </div>
       </div>
 
       {/* ------------------------------------------------ resolve a job */}
       {jobNeedsReview && job ? (
-        <div
-          style={{
-            marginBottom: 20,
-            padding: 16,
-            background: "#fffbeb",
-            border: "1px solid #fde68a",
-            borderRadius: 8,
-          }}
-        >
-          <strong style={{ fontSize: 14 }}>Resolve this job</strong>
-          <p style={{ margin: "6px 0 12px", fontSize: 13, color: "#713f12" }}>
-            Unconfirmed attempts are marked <code>excluded</code>, never
-            completed. No result is assumed for them.
+        <div className={cn("mt-4 rounded-xl border p-4", toneClass.warning)}>
+          <strong className="text-sm font-semibold">Resolve this job</strong>
+          <p className="mb-3 mt-1.5 text-[13px] text-foreground">
+            Unconfirmed attempts are marked{" "}
+            <code className={ui.code}>excluded</code>, never completed. No result
+            is assumed for them.
           </p>
 
           <textarea
@@ -254,21 +238,13 @@ export function ReviewPanel({
             onChange={(event) => setNote(event.target.value)}
             placeholder="Why is this the right resolution? (required, min 10 characters)"
             rows={3}
-            style={{
-              width: "100%",
-              padding: 10,
-              border: "1px solid #d4d4d8",
-              borderRadius: 6,
-              fontSize: 13,
-              fontFamily: "inherit",
-              marginBottom: 10,
-            }}
+            className={cn(ui.input, "mb-3")}
           />
 
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <div className="flex flex-wrap gap-2.5">
             <button
               type="button"
-              disabled={busy !== null || note.trim().length < 10}
+              disabled={busy !== null || noteTooShort}
               onClick={() =>
                 post(
                   {
@@ -280,22 +256,14 @@ export function ReviewPanel({
                   "resolve"
                 )
               }
-              style={{
-                padding: "9px 16px",
-                borderRadius: 6,
-                border: "none",
-                background: note.trim().length < 10 ? "#a1a1aa" : "#166534",
-                color: "#fff",
-                fontWeight: 600,
-                cursor: busy ? "wait" : "pointer",
-              }}
+              className={cn(ui.btnPrimary, busy && "cursor-wait")}
             >
               {busy === "resolve" ? "Resolving…" : "Exclude & complete"}
             </button>
 
             <button
               type="button"
-              disabled={busy !== null || note.trim().length < 10}
+              disabled={busy !== null || noteTooShort}
               onClick={() =>
                 post(
                   {
@@ -307,15 +275,7 @@ export function ReviewPanel({
                   "fail"
                 )
               }
-              style={{
-                padding: "9px 16px",
-                borderRadius: 6,
-                border: "1px solid #dc2626",
-                background: "#fff",
-                color: "#dc2626",
-                fontWeight: 600,
-                cursor: busy ? "wait" : "pointer",
-              }}
+              className={cn(ui.btnDanger, busy && "cursor-wait")}
             >
               {busy === "fail" ? "Failing…" : "Close as failed"}
             </button>
@@ -324,20 +284,14 @@ export function ReviewPanel({
       ) : null}
 
       {/* --------------------------------------------- regenerate / send */}
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+      <div className="mt-5 flex flex-wrap gap-2.5">
         <button
           type="button"
           disabled={busy !== null}
           onClick={() => post({ action: "regenerate" }, "regenerate")}
-          style={{
-            padding: "9px 16px",
-            borderRadius: 6,
-            border: "1px solid #d4d4d8",
-            background: "#fff",
-            fontWeight: 600,
-            cursor: busy ? "wait" : "pointer",
-          }}
+          className={cn(ui.btnOutline, busy && "cursor-wait")}
         >
+          <RefreshCw size={15} strokeWidth={2.2} />
           {busy === "regenerate" ? "Regenerating…" : "Regenerate report"}
         </button>
 
@@ -353,22 +307,9 @@ export function ReviewPanel({
               post({ action: "deliver" }, "deliver");
             }
           }}
-          style={{
-            padding: "9px 16px",
-            borderRadius: 6,
-            border: "none",
-            background:
-              isBlocked || alreadyDelivered ? "#a1a1aa" : "#18181b",
-            color: "#fff",
-            fontWeight: 600,
-            cursor:
-              isBlocked || alreadyDelivered
-                ? "not-allowed"
-                : busy
-                  ? "wait"
-                  : "pointer",
-          }}
+          className={cn(ui.btnPrimary, busy && "cursor-wait")}
         >
+          <Send size={15} strokeWidth={2.2} />
           {busy === "deliver" ? "Sending…" : "Send to requester"}
         </button>
 
@@ -377,30 +318,20 @@ export function ReviewPanel({
             href={`/report/${artifact.publicToken}`}
             target="_blank"
             rel="noreferrer"
-            style={{
-              padding: "9px 16px",
-              borderRadius: 6,
-              border: "1px solid #d4d4d8",
-              textDecoration: "none",
-              color: "#18181b",
-              fontWeight: 600,
-            }}
+            className={ui.btnOutline}
           >
-            Open report ↗
+            Open report
+            <ArrowUpRight size={15} strokeWidth={2.2} />
           </a>
         ) : null}
       </div>
 
       {message ? (
         <p
-          style={{
-            marginTop: 14,
-            padding: "10px 14px",
-            borderRadius: 6,
-            background: message.kind === "ok" ? "#dcfce7" : "#fee2e2",
-            color: message.kind === "ok" ? "#166534" : "#991b1b",
-            fontSize: 13,
-          }}
+          className={cn(
+            "mt-4 rounded-lg border px-3.5 py-2.5 text-[13px]",
+            message.kind === "ok" ? toneClass.success : toneClass.danger
+          )}
         >
           {message.text}
         </p>

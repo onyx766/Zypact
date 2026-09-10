@@ -7,7 +7,7 @@ import {
   CircleCheck,
 } from "lucide-react";
 
-import { ZypactMark } from "@/components/v2/zypact-mark";
+import { ZypactMark } from "@/components/marketing/zypact-mark";
 
 /**
  * Synthetic product preview for the hero. Every value here is illustrative and

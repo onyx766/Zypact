@@ -1,6 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { CircleX } from "lucide-react";
+
+import { cn } from "@/lib/utils";
+import { ui } from "../ui-classes";
 
 export function RejectButton({
   requestId,
@@ -61,24 +65,12 @@ export function RejectButton({
   return (
     <div>
       <button
-        className="founder-button founder-button-danger"
         type="button"
         onClick={reject}
         disabled={busy}
-        style={{
-          minHeight: 36,
-          border:
-            "1px solid #d0d0d0",
-          borderRadius: 999,
-          padding: "0 14px",
-          background: "#fff",
-          color: "#8b0000",
-          cursor: busy
-            ? "wait"
-            : "pointer",
-          fontWeight: 600,
-        }}
+        className={cn(ui.btnDanger, busy && "cursor-wait")}
       >
+        <CircleX size={16} strokeWidth={2.2} />
         {busy
           ? "Rejecting…"
           : "Reject"}
@@ -87,12 +79,7 @@ export function RejectButton({
       {error ? (
         <p
           role="alert"
-          style={{
-            margin: "8px 0 0",
-            maxWidth: 220,
-            color: "crimson",
-            fontSize: 12,
-          }}
+          className="mt-2 max-w-[220px] text-xs text-destructive"
         >
           {error}
         </p>

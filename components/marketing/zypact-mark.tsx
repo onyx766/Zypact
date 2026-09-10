@@ -38,7 +38,7 @@ export function ZypactMark({
 export function ZypactWordmark({
   className,
   dotFill,
-  href = "/v2",
+  href = "/",
 }: {
   className?: string;
   dotFill?: string;

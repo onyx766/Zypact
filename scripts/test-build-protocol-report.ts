@@ -187,6 +187,71 @@ console.log("\nreconciliation keeps every attempt visible");
   );
 }
 
+console.log("\nnothing is tied to a 3-run plan: a 5-run protocol");
+{
+  // The default for new baselines is 5 (D-032). Every count below must come
+  // from the protocol and the attempts, never from a constant.
+  const payload = buildProtocolReport(
+    input({
+      protocol: { ...input().protocol, plannedBaselineRuns: 5 },
+      attempts: [
+        attempt({ id: "a1", baselineOrdinal: 1, probeRunId: "p1" }),
+        attempt({ id: "a2", baselineOrdinal: 2, probeRunId: "p2" }),
+        attempt({
+          id: "a3",
+          baselineOrdinal: 3,
+          probeRunId: "p3",
+          status: "failed",
+          terminationReason: "provider_timeout",
+        }),
+        attempt({ id: "a4", baselineOrdinal: 4, probeRunId: "p4" }),
+        // Completed but with no readable provider result.
+        attempt({ id: "a5", baselineOrdinal: 5, probeRunId: "p5" }),
+      ],
+      results: [
+        result({ probeRunId: "p1", clientMentioned: true }),
+        result({ probeRunId: "p2", clientMentioned: true }),
+        result({ probeRunId: "p4", clientMentioned: false }),
+      ],
+    })
+  );
+
+  const r = payload.reconciliation;
+  check("planned is 5, carried from the protocol", r.planned === 5);
+  check("all 5 attempts are visible", r.attempted === 5 && payload.runs.length === 5);
+  check("completed is 4", r.completed === 4);
+  check("failed is 1", r.failed === 1);
+  check("completed-without-result is 1", r.excludedNoResult === 1);
+  check("counts reconcile", r.accountedFor === true);
+  check("readable denominator is 3", payload.observation.denominator === 3);
+  check("rate is 2 of 3 readable", payload.observation.numerator === 2);
+  check(
+    "shortfall is stated against the 5-run plan",
+    payload.uncertainty.some((n) =>
+      n.includes("3 of 5 planned runs produced a readable result")
+    )
+  );
+  check(
+    "integrity note states planned, completed, excluded and readable explicitly",
+    payload.integrityNotes.some(
+      (n) =>
+        n.includes("5 planned") &&
+        n.includes("4 completed") &&
+        n.includes("0 excluded after review") &&
+        n.includes("1 completed without a readable result") &&
+        n.includes("3 readable and counted in the rate")
+    )
+  );
+
+  const md = renderProtocolReportMarkdown(payload);
+  check("markdown states planned runs", md.includes("- Planned runs: 5"));
+  check("markdown states completed runs", md.includes("- Completed: 4"));
+  check(
+    "markdown states readable runs",
+    md.includes("- Readable (counted in the rate): 3")
+  );
+}
+
 console.log("\nempty result is honest, not a zero");
 {
   const payload = buildProtocolReport(

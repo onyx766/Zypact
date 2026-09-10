@@ -10,8 +10,9 @@
  *      failed, or completed without a readable provider result, is counted
  *      and shown rather than dropped from the denominator — otherwise a
  *      partial scan reads as a clean one.
- *   2. Nothing is stated more precisely than the sample supports. At the V1
- *      baseline of three runs a presence rate carries a Wilson interval so
+ *   2. Nothing is stated more precisely than the sample supports. At V1
+ *      baseline sizes (a handful of runs, read from each protocol's own
+ *      plannedBaselineRuns) a presence rate carries a Wilson interval so
  *      wide that it is only ever directional, and the report says so in
  *      words rather than leaving the reader to infer it from a number.
  */
@@ -284,7 +285,8 @@ export function buildProtocolReport(
     ),
     integrityNotes: buildIntegrityNotes(
       input,
-      reconciliation
+      reconciliation,
+      observation
     ),
     limitations: buildLimitations(input),
   };
@@ -337,14 +339,17 @@ function buildUncertainty(
 
 function buildIntegrityNotes(
   input: BuildProtocolReportInput,
-  reconciliation: ProtocolReportReconciliation
+  reconciliation: ProtocolReportReconciliation,
+  observation: ProtocolReportObservation
 ): string[] {
+  const readableRuns = observation.denominator;
+
   const notes: string[] = [
     `Every number here is scoped to one buyer question version (hash ${input.question.hash.slice(
       0,
       12
     )}…) executed under approved protocol ${input.protocol.id}.`,
-    `Attempt reconciliation: ${reconciliation.attempted} attempted, ${reconciliation.completed} completed, ${reconciliation.failed} failed, ${reconciliation.excludedByReview} excluded after review, ${reconciliation.excludedNoResult} completed without a readable result.`,
+    `Attempt reconciliation: ${reconciliation.planned} planned, ${reconciliation.attempted} attempted, ${reconciliation.completed} completed, ${reconciliation.failed} failed, ${reconciliation.excludedByReview} excluded after review, ${reconciliation.excludedNoResult} completed without a readable result, ${readableRuns} readable and counted in the rate.`,
   ];
 
   if (reconciliation.excludedByReview > 0) {

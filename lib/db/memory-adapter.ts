@@ -1365,7 +1365,9 @@ export const memoryAdapter: DbAdapter = {
       provider: "perplexity_sonar",
       surface: "answer",
       modelConfig: { model: "sonar" },
-      plannedBaselineRuns: 3,
+      // Migration 0069 / D-032: new baselines plan 5 runs, with run_cap
+      // keeping two attempts of retry headroom above the plan.
+      plannedBaselineRuns: 5,
       plannedRetestRuns: 0,
       paraphrasePlan: [],
       unitOfAnalysis: "buyer_question_version",
@@ -1373,7 +1375,7 @@ export const memoryAdapter: DbAdapter = {
       minimumUsefulChange: null,
       samplePlanningMethod: "fixed_operator_default_pending_pilot_calibration",
       samplePlanningAssumptions: {},
-      runCap: 5,
+      runCap: 7,
       spendCapUsd: 2,
       timeWindowSeconds: 86400,
       rateLimitPerHour: 10,

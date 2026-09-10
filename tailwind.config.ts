@@ -1,9 +1,12 @@
 import type { Config } from "tailwindcss";
 
 /**
- * `content` is deliberately limited to the v2 route tree and its components.
- * The legacy pages (/, /admin, /scan, /report, /projects) are styled by
- * app/globals.css and app/landing-v1.css and must not be scanned or reset.
+ * `content` is deliberately limited to the marketing page at app/page.tsx, its
+ * components, and the founder console under app/admin. Utilities only apply
+ * inside a `.v2-root` element (see `important` below), so an admin page opts in
+ * by rendering inside AdminThemeRoot; admin pages that do not stay on their own
+ * stylesheets. The remaining legacy pages (/scan, /report, /projects) are
+ * styled by app/globals.css and must not be scanned.
  */
 const config: Config = {
   darkMode: ["class"],
@@ -21,12 +24,13 @@ const config: Config = {
    */
   important: ".v2-root",
   content: [
-    "./app/v2/**/*.{ts,tsx}",
+    "./app/page.tsx",
     "./components/ui/**/*.{ts,tsx}",
-    "./components/v2/**/*.{ts,tsx}",
+    "./components/marketing/**/*.{ts,tsx}",
+    "./app/admin/**/*.{ts,tsx}",
   ],
   corePlugins: {
-    // Preflight is applied manually and scoped to .v2-root in app/v2/tailwind.css
+    // Preflight is applied manually and scoped to .v2-root in app/tailwind.css
     // so it cannot leak into the legacy stylesheets loaded by the root layout.
     preflight: false,
   },
@@ -36,43 +40,52 @@ const config: Config = {
      * *component*, and the `important` selector strategy only scopes
      * *utilities* — so `.container` would stay at 0-1-0 and keep losing to
      * `.container { padding: 116px 24px }` in app/globals.css. Use the
-     * `.shell` class defined in app/v2/tailwind.css instead.
+     * `.shell` class defined in app/tailwind.css instead.
      */
     extend: {
       colors: {
-        border: "hsl(var(--border))",
-        input: "hsl(var(--input))",
-        ring: "hsl(var(--ring))",
-        background: "hsl(var(--background))",
-        foreground: "hsl(var(--foreground))",
+        /*
+         * `<alpha-value>` lets opacity modifiers (`bg-success/10`) work on
+         * the token colours. Without a modifier it resolves to 1, so every
+         * existing class renders exactly as before.
+         */
+        border: "hsl(var(--border) / <alpha-value>)",
+        input: "hsl(var(--input) / <alpha-value>)",
+        ring: "hsl(var(--ring) / <alpha-value>)",
+        background: "hsl(var(--background) / <alpha-value>)",
+        foreground: "hsl(var(--foreground) / <alpha-value>)",
         primary: {
-          DEFAULT: "hsl(var(--primary))",
-          foreground: "hsl(var(--primary-foreground))",
+          DEFAULT: "hsl(var(--primary) / <alpha-value>)",
+          foreground: "hsl(var(--primary-foreground) / <alpha-value>)",
         },
         secondary: {
-          DEFAULT: "hsl(var(--secondary))",
-          foreground: "hsl(var(--secondary-foreground))",
+          DEFAULT: "hsl(var(--secondary) / <alpha-value>)",
+          foreground: "hsl(var(--secondary-foreground) / <alpha-value>)",
         },
         muted: {
-          DEFAULT: "hsl(var(--muted))",
-          foreground: "hsl(var(--muted-foreground))",
+          DEFAULT: "hsl(var(--muted) / <alpha-value>)",
+          foreground: "hsl(var(--muted-foreground) / <alpha-value>)",
         },
         accent: {
-          DEFAULT: "hsl(var(--accent))",
-          foreground: "hsl(var(--accent-foreground))",
+          DEFAULT: "hsl(var(--accent) / <alpha-value>)",
+          foreground: "hsl(var(--accent-foreground) / <alpha-value>)",
         },
         destructive: {
-          DEFAULT: "hsl(var(--destructive))",
-          foreground: "hsl(var(--destructive-foreground))",
+          DEFAULT: "hsl(var(--destructive) / <alpha-value>)",
+          foreground: "hsl(var(--destructive-foreground) / <alpha-value>)",
         },
         card: {
-          DEFAULT: "hsl(var(--card))",
-          foreground: "hsl(var(--card-foreground))",
+          DEFAULT: "hsl(var(--card) / <alpha-value>)",
+          foreground: "hsl(var(--card-foreground) / <alpha-value>)",
         },
         popover: {
-          DEFAULT: "hsl(var(--popover))",
-          foreground: "hsl(var(--popover-foreground))",
+          DEFAULT: "hsl(var(--popover) / <alpha-value>)",
+          foreground: "hsl(var(--popover-foreground) / <alpha-value>)",
         },
+        /* Status tokens, defined by the founder console theme only. */
+        success: "hsl(var(--success) / <alpha-value>)",
+        warning: "hsl(var(--warning) / <alpha-value>)",
+        info: "hsl(var(--info) / <alpha-value>)",
         brand: {
           50: "#F2F8F5",
           100: "#E3F0EA",

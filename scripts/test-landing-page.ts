@@ -17,9 +17,11 @@ async function main(): Promise<void> {
   const flat = html.replace(/\s+/g, " ");
 
   const pageSource = readFileSync("app/page.tsx", "utf8");
-  const interactionSource = readFileSync("components/landing-interactions.tsx", "utf8");
-  const cssSource = readFileSync("app/landing-v1.css", "utf8");
+  const headerSource = readFileSync("components/marketing/site-header.tsx", "utf8");
+  const dashboardSource = readFileSync("components/marketing/evidence-dashboard.tsx", "utf8");
+  const cssSource = readFileSync("app/tailwind.css", "utf8");
   const layoutSource = readFileSync("app/layout.tsx", "utf8");
+  const tailwindConfigSource = readFileSync("tailwind.config.ts", "utf8");
   const scanPageSource = readFileSync("app/scan/page.tsx", "utf8");
   const scanFormSource = readFileSync("app/scan/scan-form.tsx", "utf8");
   const verifyClientSource = readFileSync("app/verify-email/verify-email-client.tsx", "utf8");
@@ -27,7 +29,8 @@ async function main(): Promise<void> {
   const publicFormSource = readFileSync("lib/snapshot-requests/public-form.ts", "utf8");
   const publicJourneySource = [
     pageSource,
-    interactionSource,
+    headerSource,
+    dashboardSource,
     scanPageSource,
     scanFormSource,
     verifyClientSource,
@@ -35,36 +38,27 @@ async function main(): Promise<void> {
     publicFormSource,
   ].join("\n");
 
-  check("light Evidence Trail root renders", html.includes('class="ev-page"'));
-  check("approved headline renders", flat.includes("See which competitors appear for one critical buyer question.") && flat.includes("Choose what to test next."));
-  check("primary CTA keeps the protected request route", flat.includes("Request Demo") && /href=["']\/scan["']/.test(html));
-  check("five scroll chapters have real anchors", ["evidence", "method", "fit", "faq"].every((id) => html.includes(`id="${id}"`)));
+  check("Tailwind marketing root renders", html.includes('class="v2-root"'));
+  check("approved headline renders", flat.includes("Turn AI answers") && flat.includes("into evidence"));
+  check("primary CTA keeps the protected request route", flat.includes("Request demo") && /href=["']\/scan["']/.test(html));
+  check("scroll chapters have real anchors", ["evidence", "how-it-works", "features", "scope", "outcomes", "faq"].every((id) => html.includes(`id="${id}"`)));
   check("nav placeholders are absent", !/href=["']#["']/.test(html));
 
   check("V1 automation is explicit", flat.includes("Automated after approval") && flat.includes("controlled baseline runs automatically"));
   check("approval remains a hard precondition", flat.includes("Nothing runs until the question, limits, sampling plan and observation window are approved"));
   check("integrity delivery branches render", ["integrity_passed", "needs_review", "blocked"].every((status) => flat.includes(status)));
-  check("human review is an exception path", flat.includes("Human review is an exception path for `needs_review`, not the normal V1 workflow."));
+  check("blocked never delivers a conclusion", flat.includes("No conclusion or report delivered as certainty"));
+  check("delivery gate meaning is not colour-only", pageSource.includes("{gate.status}") && pageSource.includes('aria-hidden="true"'));
 
-  check("hero orbit centers the Buyer question", interactionSource.includes("Buyer question") && interactionSource.includes("ev-orbit-center"));
-  check("hero orbit shows the V1 evidence loop", ["Approve", "Perplexity", "Evidence", "Observe", "Register", "Retest"].every((label) => interactionSource.includes(label)));
-  check("hero orbit explicitly excludes other surfaces", interactionSource.includes("Other AI surfaces are not represented because they are not part of V1"));
-  check("orbit animation respects reduced motion", interactionSource.includes("useReducedMotion()") && interactionSource.includes("if (reducedMotion) return"));
-  check("multi-model logos are not presented as orbit nodes", !/short:\s*"(ChatGPT|Gemini|Copilot|Claude)"/.test(interactionSource));
+  check("hero product preview is labelled synthetic", flat.includes("Synthetic example") && flat.includes("not a live Perplexity probe"));
+  check("excluded attempts stay in the denominator", flat.includes("Failed and excluded attempts stay visible in the denominator"));
+  check("preview reports attempt reconciliation, not a headline score", ["Preserved", "Retried", "Excluded"].every((label) => flat.includes(label)));
+  check("no universal visibility score is claimed", flat.includes("No universal score, no market-wide claim"));
 
-  check("one synthetic Question Record is prominent", flat.includes("QUESTION RECORD · QR-EXAMPLE-001") && flat.includes("SYNTHETIC EXAMPLE — NOT CUSTOMER DATA"));
-  check("Question Record exposes exact evidence structure", ["Synthetic answer excerpt", "Source rows", "Prompt-scoped observation", "Registered intervention"].every((copy) => flat.includes(copy)));
-  check("canonical observation labels render", ["Primary", "Listed", "Not observed", "Ambiguous"].every((status) => flat.includes(status)));
-  check("registration stamp renders", pageSource.includes('aria-label="Registered before retest"'));
-  check("Question Record has a four-stage retest rail", ["Baseline", "Registered", "Window", "Retest"].every((stage) => flat.includes(stage)));
-  check("three-question carousel was removed", !interactionSource.includes("demoQuestions") && !interactionSource.includes('role="tablist" aria-label="Synthetic approved buyer question examples"'));
-
-  check("monitoring distinction is neutral", flat.includes("Category monitoring") && flat.includes("Gives one question a record, an owner and a later check"));
-  check("one question is framed as the evidence unit", flat.includes("One question is not a quota. It is the controlled unit of evidence."));
   check("all four Outcome Card results render equally", ["Increase observed", "Decrease observed", "No clear change", "Inconclusive"].every((copy) => flat.includes(copy)));
-  check("limitations remain visible", flat.includes("Limitations remain on the primary card") && flat.includes("Observed movement is not proof of causality or revenue impact"));
+  check("limitations remain visible", flat.includes("Observed movement is not proof of causality or revenue impact"));
+  check("incomplete evidence fails closed", flat.includes("Incomplete or inconsistent evidence fails closed"));
 
-  check("six V1 deliverables render", (html.match(/<li><span>0[1-6]<\/span><div><strong>/g) ?? []).length === 6);
   check("eight FAQ questions render", [
     "What does Zypact V1 include?",
     "Which AI platform does V1 test?",
@@ -108,24 +102,20 @@ async function main(): Promise<void> {
   check("no Stripe checkout string", !/stripe\.com|buy\.stripe|checkout\.stripe/i.test(html));
   check("public errors remain request-scoped", publicFormSource.includes("Demo requests are temporarily unavailable."));
 
-  check("mobile menu exposes expanded state", interactionSource.includes('aria-expanded={open}') && interactionSource.includes('aria-controls="ev-mobile-menu"'));
-  check("FAQ and method use native details", pageSource.includes("<details") && pageSource.includes("<summary"));
-  check("new visual stylesheet is imported last", layoutSource.indexOf('"./landing-v1.css"') > layoutSource.indexOf('"./globals.css"'));
-  check("warm light evidence palette exists", cssSource.includes("--ev-canvas: #f6f5f1") && cssSource.includes("--ev-accent: #214f73"));
-  check("12-column-ready 1200px container exists", cssSource.includes("width: min(1200px, calc(100% - 48px))"));
-  check("desktop hero type stays in the refined 50–54px range", cssSource.includes("font-size: clamp(3.125rem, 4.2vw, 3.375rem)") && cssSource.includes("line-height: 1.02") && cssSource.includes("letter-spacing: -.025em") && cssSource.includes("font-weight: 680"));
-  check("section headings stay in the refined 36–42px range", cssSource.includes("font-size: clamp(2.25rem, 3.6vw, 2.625rem)") && cssSource.includes("line-height: 1.12"));
-  check("hero copy keeps a readable measure and supporting scale", cssSource.includes(".ev-hero h1 { max-width: 620px") && cssSource.includes("font-size: clamp(17px, 1.35vw, 18px)") && cssSource.includes("line-height: 1.58"));
-  check("diagram labels are product-readable", cssSource.includes(".ev-orbit-node strong { display: block; margin-top: 2px; font-size: 13px") && cssSource.includes(".ev-orbit-node small { display: block; margin-top: 3px; color: var(--ev-muted); font-size: 11px"));
-  check("secondary copy no longer drops below the readable product scale", cssSource.includes(".ev-fit-grid li") && cssSource.includes("font-size: 16px; line-height: 1.55") && cssSource.includes(".ev-deliverables p") && cssSource.includes("font-size: 15px; line-height: 1.6"));
-  check("muted text meets normal-text contrast on the canvas", cssSource.includes("--ev-muted: #5f6b76"));
-  check("active workflow step is visually dominant", cssSource.includes("min-height: 70px; color: var(--ev-accent); background: var(--ev-accent-soft)") && cssSource.includes("box-shadow: inset 3px 0 0 var(--ev-accent)"));
-  check("FAQ is denser without shrinking its copy", cssSource.includes(".ev-faq { padding-top: 100px; padding-bottom: 100px") && cssSource.includes(".ev-faq-list summary { min-height: 62px") && cssSource.includes("font-size: 16px; font-weight: 700"));
-  check("mobile headline stays in the 38–40px range", cssSource.includes("font-size: clamp(2.375rem, 10vw, 2.5rem); line-height: 1.05"));
-  check("mobile section headings stay in the 30–34px range", cssSource.includes("font-size: clamp(1.875rem, 8vw, 2.125rem)"));
-  check("status meaning is not color-only", pageSource.includes("ev-status-primary\">Primary") && pageSource.includes("ev-status-not-observed\">Not observed"));
-  check("mobile breakpoint preserves single-column records", cssSource.includes("@media (max-width: 600px)") && cssSource.includes(".ev-brand-rows,"));
+  check("mobile menu exposes expanded state", headerSource.includes("aria-expanded={open}") && headerSource.includes('aria-controls="marketing-mobile-menu"'));
+  check("mobile nav reaches every section", headerSource.includes('aria-label="Primary (mobile)"'));
+  check("FAQ uses native details", pageSource.includes("<details") && pageSource.includes("<summary"));
+
+  // Tailwind is loaded globally but every utility is scoped, so the legacy
+  // stylesheets that still style /scan, /report and /projects cannot be reset.
+  check("Tailwind stylesheet is imported by the root layout", layoutSource.includes('"./tailwind.css"'));
+  check("legacy stylesheets still load for the remaining legacy routes", layoutSource.includes('"./globals.css"') && layoutSource.includes('"./landing-v1.css"'));
+  check("utilities stay scoped to the marketing/admin root", tailwindConfigSource.includes('important: ".v2-root"'));
+  check("preflight cannot leak into legacy pages", tailwindConfigSource.includes("preflight: false"));
+  check("scoped preflight out-specifies legacy element rules", cssSource.includes(".v2-root :where(h1, h2, h3, h4)"));
+  check("legacy .grid margin leak stays neutralised", cssSource.includes(".v2-root.v2-root :where(.grid)"));
   check("reduced-motion CSS exists", cssSource.includes("prefers-reduced-motion: reduce"));
+  check("focus-visible outline is preserved", cssSource.includes(":focus-visible"));
 
   const plans = readFileSync("lib/pricing/plans.ts", "utf8");
   check("Growth pricing source remains intact", plans.includes("priceMonthlyUsd: 99"));

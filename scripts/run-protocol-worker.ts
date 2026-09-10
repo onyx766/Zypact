@@ -374,9 +374,29 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
+  // A thrown value is not always an Error. Supabase rejects with a plain
+  // object ({message, details, hint, code}), and `String()` renders that as
+  // "[object Object]" — which is what a crash here used to report, hiding
+  // the only description of why a paid run stopped. Non-Errors are
+  // serialized instead, with a closed field list so no prompt, response,
+  // credential or claim token can reach the log through an unexpected shape.
+  const describe = (value: unknown): string => {
+    if (value instanceof Error) return value.message;
+    if (value && typeof value === "object") {
+      const o = value as Record<string, unknown>;
+      const parts = ["message", "code", "details", "hint"]
+        .filter((k) => typeof o[k] === "string" || typeof o[k] === "number")
+        .map((k) => `${k}=${String(o[k])}`);
+      if (parts.length > 0) return parts.join(" ");
+      return `unserializable ${Object.prototype.toString.call(value)}`;
+    }
+    return String(value);
+  };
+
   console.error(JSON.stringify({
     ts: new Date().toISOString(), level: "error", event: "worker_crashed",
-    message: err instanceof Error ? err.message : String(err),
+    message: describe(err),
+    errorName: err instanceof Error ? err.name : undefined,
   }));
   process.exit(1);
 });

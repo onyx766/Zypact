@@ -7,6 +7,9 @@ import { ApproveButton } from "../approve-button";
 import { RejectButton } from "../reject-button";
 import { SendReportButton } from "../send-report-button";
 import { ReplaceReportPanel } from "../replace-report-panel";
+import { ReviewPanel } from "../review-panel";
+import { getReportServiceClient } from "@/lib/reports/service-client";
+import { loadReviewState } from "@/lib/reports/review-actions";
 import { toSnapshotReportPublicationState } from "@/lib/snapshot-requests/report-publication-state";
 
 export const dynamic = "force-dynamic";
@@ -211,6 +214,19 @@ export default async function SnapshotRequestDetailPage({
     notFound();
   }
 
+  // Best-effort: the review surface must never take the whole page down. A
+  // request that predates the protocol path, or a transient read failure,
+  // renders the page without the panel rather than a 500.
+  let reviewState: Awaited<ReturnType<typeof loadReviewState>> | null = null;
+  try {
+    reviewState = await loadReviewState(
+      getReportServiceClient(),
+      requestId
+    );
+  } catch {
+    reviewState = null;
+  }
+
   return (
     <main
       className="founder-page founder-request-detail"
@@ -305,6 +321,13 @@ export default async function SnapshotRequestDetailPage({
             )}
           </span>
         </div>
+
+        {reviewState ? (
+          <ReviewPanel
+            requestId={requestId}
+            state={reviewState}
+          />
+        ) : null}
 
         <section
           className="founder-info-card"

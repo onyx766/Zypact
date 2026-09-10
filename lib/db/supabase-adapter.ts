@@ -247,6 +247,11 @@ interface SnapshotReportArtifactDbRow {
   delivery_message_id: string | null;
   created_at: string;
   updated_at: string;
+  /** Added in 0065. Absent on rows written before that migration. */
+  report_payload?: unknown | null;
+  /** Added in 0068. Absent on rows written before that migration. */
+  integrity_status?: string | null;
+  integrity_reasons?: unknown | null;
 }
 
 interface ProjectRow {
@@ -779,6 +784,17 @@ function mapSnapshotReportArtifact(
     deliveredAt: row.delivered_at,
     deliveryMessageId:
       row.delivery_message_id,
+    reportPayload: row.report_payload ?? null,
+    integrityStatus:
+      (row.integrity_status as
+        | "integrity_passed"
+        | "needs_review"
+        | "blocked"
+        | null
+        | undefined) ?? null,
+    integrityReasons: Array.isArray(row.integrity_reasons)
+      ? (row.integrity_reasons as string[])
+      : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

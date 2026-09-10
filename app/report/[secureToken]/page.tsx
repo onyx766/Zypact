@@ -8,6 +8,8 @@ import {
 import {
   parsePublicSnapshotReport,
 } from "@/lib/snapshot-requests/parse-public-report";
+import { ProtocolReportView } from "@/components/report/protocol-report-view";
+import { isProtocolReportPayload } from "@/lib/reports/protocol-report-types";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -69,6 +71,25 @@ export default async function PublicReportPage({
 
   if (!artifact) {
     notFound();
+  }
+
+  // `blocked` never reaches a client. The artifact is still stored so a
+  // founder can see what was refused and why, but holding a link must not be
+  // enough to read a report the integrity gate rejected.
+  if (artifact.integrityStatus === "blocked") {
+    notFound();
+  }
+
+  // A V1 protocol artifact carries its own canonical payload and is rendered
+  // from it directly. Legacy mvp-scan artifacts have no payload and continue
+  // to be parsed out of their markdown below, so already-delivered reports
+  // keep rendering exactly as they did.
+  if (isProtocolReportPayload(artifact.reportPayload)) {
+    return (
+      <ProtocolReportView
+        payload={artifact.reportPayload}
+      />
+    );
   }
 
   const report =

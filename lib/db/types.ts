@@ -1001,6 +1001,19 @@ export interface SnapshotReportArtifact {
   deliveryMessageId: string | null;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Canonical V1 protocol report, when this artifact was produced by the
+   * M4/M5 path. Optional and null for legacy mvp-scan artifacts, which the
+   * client page still serves by parsing `shortReportMarkdown`.
+   */
+  reportPayload?: unknown | null;
+  /**
+   * Canonical integrity decision recorded when the artifact was written
+   * (0068). Null for legacy artifacts. `blocked` is never rendered to a
+   * client and never delivered.
+   */
+  integrityStatus?: "integrity_passed" | "needs_review" | "blocked" | null;
+  integrityReasons?: string[] | null;
 }
 
 export interface SaveSnapshotReportArtifactInput {

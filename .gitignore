@@ -40,3 +40,10 @@ supabase/.temp/
 # Pipeline run logs written by the admin "Run scan" action. Local only:
 # they name requests and providers and must never be committed.
 .pipeline-logs/
+
+# Search Console exports. Operational data pulled for SEO cleanup, not
+# source: they carry query and URL data for the live property and are
+# re-exportable at any time, so they stay out of the repository.
+*-Coverage-*.zip
+*-Coverage-*/
+search-console-exports/

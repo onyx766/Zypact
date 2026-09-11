@@ -50,19 +50,10 @@ export const LEGACY_REDIRECTS: readonly LegacyRedirect[] = [
       "Landing-page variant of the homepage. Same offer, so its signal belongs to /.",
   },
   {
-    from: "/demo",
+    from: "/request-assessment",
     to: "/scan",
-    reason: "Demo request is now /scan. Alias to confirm against the GSC export.",
-  },
-  {
-    from: "/request-demo",
-    to: "/scan",
-    reason: "Demo request is now /scan. Alias to confirm against the GSC export.",
-  },
-  {
-    from: "/request-a-demo",
-    to: "/scan",
-    reason: "Demo request is now /scan. Alias to confirm against the GSC export.",
+    reason:
+      "The old 'request an assessment' entry point. /scan is the same action under the current offer: the visitor asks for a diagnostic and nothing runs until it is approved.",
   },
 ] as const;
 
@@ -80,11 +71,35 @@ export const LEGACY_REDIRECTS: readonly LegacyRedirect[] = [
  * later, but only after Google re-crawls it.
  */
 export const LEGACY_GONE: readonly string[] = [
+  // Old marketing pages.
   "/about",
   "/security",
   "/how-it-works",
-  "/blog",
   "/contact",
+  "/methodology",
+  "/pricing",
+  "/privacy",
+  "/100",
+
+  // Blog and its one indexed post. Nothing replaces them today.
+  "/blog",
+  "/blog/harnessing-sentiment-ai-visibility-analytics",
+
+  // The old free-tool funnel. These are deliberately NOT redirected to
+  // /scan: each promised an instant self-serve score, which V1 does not
+  // offer and D-001/D-010 specifically retired. Pointing them at the demo
+  // request would advertise the same promise under a new URL, and Google
+  // treats a redirect to materially different content as a soft 404 anyway.
+  "/grader",
+  "/qualification",
+  "/check",
+  "/audit",
+
+  // Placeholder URLs the previous site leaked through its structured data
+  // (`/search?q={search_term_string}`, `/audit?domain={domain}`), which
+  // Google then crawled literally. The current JSON-LD declares no such
+  // SearchAction, so nothing regenerates them.
+  "/search",
 ] as const;
 
 /**

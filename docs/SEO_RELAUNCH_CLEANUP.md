@@ -46,10 +46,36 @@ so they cannot regress silently:
   **not** disallowed in robots.txt. A disallowed URL is never crawled, so a
   `noindex` Google cannot read is a `noindex` Google cannot obey.
 
-## Adding the Search Console export
+## Legacy inventory (Search Console, 2026-09-12)
 
-The map currently covers the URLs visible in Google's sitelinks plus likely
-demo aliases. To make it complete:
+The map was completed from the `Not found (404)` drill-down export taken on
+2026-09-12: 26 URLs, against 13 indexed pages.
+
+- **8 were not pages at all** — `/_next/static/css/*.css?dpl=...` build
+  assets from earlier deploys. Hashed filenames change on every redeploy, so
+  Google's cached copies 404. This is normal, self-correcting, and must never
+  be redirected; the middleware matcher already excludes `/_next/static`.
+- **1 redirect** — `/request-assessment` → `/scan`, the same action under the
+  current offer.
+- **The rest are 410** — old marketing pages (`/about`, `/pricing`,
+  `/methodology`, `/privacy`, `/100`), the blog and its one indexed post, the
+  retired free-tool funnel (`/grader`, `/qualification`, `/check`, `/audit`),
+  and `/search`, a placeholder URL the previous site leaked through its
+  structured data and Google crawled literally.
+
+The free-tool URLs are deliberately not redirected to `/scan`: each promised
+an instant self-serve score, which V1 does not offer and D-001/D-010
+retired. Redirecting them would advertise the same promise under a new URL.
+
+Three follow-ups are open and are product decisions, not SEO ones: whether
+`/pricing` returns as a real page, whether the blog is revived (a 410'd path
+can be re-indexed later, but only after Google re-crawls it), and whether a
+real `/privacy` page should exist at all given the demo form collects email
+addresses.
+
+## Re-running the export later
+
+To refresh the inventory, or after any further site change:
 
 1. Search Console → **Indexing → Pages** → open **Not found (404)**, and also
    review **Indexed** for pages that should no longer be public.

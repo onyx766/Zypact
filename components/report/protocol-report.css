@@ -47,12 +47,26 @@
   text-decoration: none;
 }
 
-.zpr-root h1,
-.zpr-root h2,
-.zpr-root h3,
-.zpr-root p,
-.zpr-root ul {
+/*
+ * Heading reset.
+ *
+ * app/globals.css styles bare `h1`/`h2` for the light marketing pages: a
+ * near-black `var(--heading)` colour, a clamped font size, tight letter
+ * spacing, and a 680px max-width on h2. Element selectors out-specify the
+ * colour inherited from `.zpr-root`, so without this every heading here
+ * renders dark-on-dark and disappears.
+ *
+ * `:where()` keeps this at 0-1-0 — enough to beat those element rules, while
+ * still losing to the title classes below on source order.
+ */
+.zpr-root :where(h1, h2, h3, p, ul) {
   margin: 0;
+  max-width: none;
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
+  line-height: inherit;
 }
 
 .zpr-mono {

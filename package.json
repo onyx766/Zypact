@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:forever": "node scripts/dev-forever.mjs",
     "build": "next build",
+    "build:verify": "node scripts/build-verify.mjs",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
@@ -44,6 +46,12 @@
     "test:snapshot-worker-dml-revocation-contract": "tsx scripts/test-snapshot-worker-dml-revocation-contract.ts",
     "test:snapshot-adapter-rpc-writes": "tsx scripts/test-snapshot-adapter-rpc-writes.ts",
     "test:snapshot-artifact-cascade-contract": "tsx scripts/test-snapshot-artifact-cascade-contract.ts",
+    "test:snapshot-approval-launches-baseline": "tsx scripts/test-snapshot-approval-launches-baseline.ts",
+    "test:protocol-report": "tsx scripts/test-build-protocol-report.ts",
+    "test:protocol-integrity": "tsx scripts/test-protocol-integrity-signals.ts",
+    "test:seo": "tsx scripts/test-seo-contract.ts",
+    "verify:live-seo": "tsx scripts/verify-live-seo.ts",
+    "worker:report-delivery": "node --import tsx scripts/run-report-delivery-worker.ts",
     "worker:protocol": "node --import tsx scripts/run-protocol-worker.ts",
     "test:m0-worker-execution-gate": "tsx scripts/test-m0-worker-execution-gate.ts",
     "test:m0-worker-hosting-contract": "tsx scripts/test-m0-worker-hosting-contract.ts",
@@ -73,12 +81,17 @@
     "test:m5-2-adapter": "tsx scripts/test-m5-2-adapter-contract.ts"
   },
   "dependencies": {
+    "@radix-ui/react-slot": "^1.3.3",
     "@supabase/ssr": "^0.12.0",
     "@supabase/supabase-js": "^2.110.2",
     "cheerio": "1.0.0-rc.12",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.43.0",
     "next": "15.5.21",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "tailwind-merge": "^3.6.0",
     "tsx": "4.23.12",
     "zod": "3.23.8"
   },
@@ -90,6 +103,7 @@
     "dotenv": "16.4.5",
     "postcss": "^8.5.26",
     "tailwindcss": "^3.4.19",
+    "tailwindcss-animate": "^1.0.7",
     "typescript": "5.5.3"
   },
   "overrides": {

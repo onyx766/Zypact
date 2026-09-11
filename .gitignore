@@ -1,5 +1,10 @@
 node_modules
 .next
+# Verification build output (npm run build:verify), kept out of the .next a
+# running dev server serves from. NEXT_DIST_DIR can name any directory, so
+# every .next-* variant is ignored rather than only the default one.
+.next-verify
+.next-*
 .env
 .env.local
 .env.*.local
@@ -31,3 +36,7 @@ supabase/.temp/
 .vercel
 .env*
 !.env.example
+
+# Pipeline run logs written by the admin "Run scan" action. Local only:
+# they name requests and providers and must never be committed.
+.pipeline-logs/

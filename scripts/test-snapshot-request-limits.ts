@@ -15,12 +15,6 @@ async function main() {
   process.env.SNAPSHOT_IP_HASH_SECRET =
     "test-ip-hash-secret-that-is-at-least-32-characters";
 
-  process.env.TURNSTILE_SECRET_KEY =
-    "test-turnstile-secret";
-
-  process.env.TURNSTILE_EXPECTED_HOSTNAME =
-    "zypact.com";
-
   process.env.RESEND_API_KEY =
     "re_mock_api_key";
 
@@ -38,7 +32,6 @@ async function main() {
 
   const originalFetch = globalThis.fetch;
 
-  let turnstileCalls = 0;
   let resendCalls = 0;
 
   globalThis.fetch = (async (
@@ -50,28 +43,6 @@ async function main() {
         : input instanceof URL
           ? input.toString()
           : input.url;
-
-    if (
-      url ===
-      "https://challenges.cloudflare.com/turnstile/v0/siteverify"
-    ) {
-      turnstileCalls += 1;
-
-      return new Response(
-        JSON.stringify({
-          success: true,
-          hostname: "zypact.com",
-          action: "snapshot_request",
-          "error-codes": [],
-        }),
-        {
-          status: 200,
-          headers: {
-            "content-type": "application/json",
-          },
-        }
-      );
-    }
 
     if (url === "https://api.resend.com/emails") {
       resendCalls += 1;
@@ -111,11 +82,11 @@ async function main() {
             "x-forwarded-for": `${ip}, 10.0.0.1`,
           },
           body: JSON.stringify({
+            contactName: "Jane Smith",
             workEmail,
             companyName: "Limit Test SaaS",
             websiteUrl,
-            buyerCategory: "B2B SaaS",
-            turnstileToken: "mock-turnstile-token",
+            buyerCategory: "Which B2B SaaS software fits us?",
           }),
         }
       );
@@ -180,7 +151,6 @@ async function main() {
 
     assert.equal(fourthIpRequest.status, 429);
 
-    assert.equal(turnstileCalls, 6);
     assert.equal(resendCalls, 3);
 
     console.log(
@@ -199,12 +169,14 @@ async function main() {
     const oldActiveRequest: SnapshotRequest = {
       approvedAt: null,
       approvedBy: null,
+      protocolId: null,
       // Never approved, so no founder competitor frame exists.
       competitors: [],
       id: "old-active-request",
       workEmail: "old@example.com",
       normalizedEmail: "old@example.com",
       companyName: "Old SaaS",
+      contactName: null,
       websiteUrl: "https://active.example.com",
       normalizedDomain: "active.example.com",
       buyerCategory: "B2B SaaS",

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { CircleCheck } from "lucide-react";
 
 import {
   MAX_COMPETITORS,
@@ -11,6 +12,8 @@ import {
   parseCompetitorsInput,
   type CompetitorValidationError,
 } from "@/lib/snapshot-requests/competitors";
+import { cn } from "@/lib/utils";
+import { ui } from "../ui-classes";
 
 /**
  * Approve a snapshot request, supplying the competitor frame in the same
@@ -111,26 +114,15 @@ export function ApproveButton({
   }
 
   return (
-    <div style={{ maxWidth: 420 }}>
+    <div className="w-full max-w-xl">
       <label
         htmlFor="snapshot-competitors"
-        style={{
-          display: "block",
-          marginBottom: 6,
-          fontSize: 13,
-          fontWeight: 600,
-        }}
+        className="block text-sm font-semibold text-foreground"
       >
         Competitors
       </label>
 
-      <p
-        style={{
-          margin: "0 0 6px",
-          fontSize: 12,
-          color: "#555",
-        }}
-      >
+      <p className="mt-1 text-xs text-muted-foreground">
         Add {MIN_COMPETITORS}–{MAX_COMPETITORS}{" "}
         competitors. One per line. Company names
         or domains. {count} entered.
@@ -146,49 +138,23 @@ export function ApproveButton({
         }}
         rows={6}
         disabled={busy}
-        style={{
-          width: "100%",
-          marginBottom: 10,
-          padding: 8,
-          border: "1px solid #ccc",
-          borderRadius: 8,
-          fontFamily: "inherit",
-          fontSize: 13,
-        }}
+        className={cn(ui.input, "mt-2 font-mono text-[13px] leading-6")}
       />
 
       <button
-        className="founder-button founder-button-primary"
         type="button"
         onClick={approve}
         disabled={busy || !parsed.ok}
-        style={{
-          minHeight: 36,
-          border: 0,
-          borderRadius: 999,
-          padding: "0 14px",
-          background:
-            busy || !parsed.ok ? "#888" : "#111",
-          color: "#fff",
-          cursor: busy
-            ? "wait"
-            : parsed.ok
-              ? "pointer"
-              : "not-allowed",
-          fontWeight: 600,
-        }}
+        className={cn(ui.btnPrimary, "mt-3", busy && "cursor-wait")}
       >
+        <CircleCheck size={16} strokeWidth={2.2} />
         {busy ? "Approving…" : "Approve"}
       </button>
 
       {error ? (
         <p
           role="alert"
-          style={{
-            margin: "8px 0 0",
-            color: "crimson",
-            fontSize: 12,
-          }}
+          className="mt-2 text-xs text-destructive"
         >
           {error}
         </p>

@@ -57,8 +57,12 @@ Run from the repository root:
 
 ```bash
 npm run typecheck
-NEXT_TELEMETRY_DISABLED=1 npm run build
+npm run build:verify
 ```
+
+`build:verify` runs the same production build into `.next-verify/`. Use it instead of `npm run build` whenever a dev server may be running: `next build` wipes its output directory first, so building into `.next` deletes the manifests a running `next dev` is serving from and every request 500s until that server is restarted. Deployments keep running `npm run build`, which still writes `.next`.
+
+`npm run dev:forever` supervises `next dev`, restarting it if it exits or stops accepting connections, and printing the reason each time.
 
 Use the exact test-command inventory in [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md). Record commands and results; do not summarize test confidence using only a file count.
 

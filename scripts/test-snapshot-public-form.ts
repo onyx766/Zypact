@@ -6,65 +6,27 @@ import {
 
 async function main() {
   const values = {
+    contactName: " Jane Smith ",
     workEmail: " Founder@Example.com ",
     companyName: " Example SaaS ",
     websiteUrl: " example.com ",
     buyerCategory: " B2B SaaS software ",
   };
 
-  const token = "mock-turnstile-token";
-
   assert.deepEqual(
-    buildSnapshotRequestPayload(
-      values,
-      token
-    ),
+    buildSnapshotRequestPayload(values),
     {
+      contactName: "Jane Smith",
       workEmail: "Founder@Example.com",
       companyName: "Example SaaS",
       websiteUrl: "example.com",
       buyerCategory:
         "B2B SaaS software",
-      turnstileToken: token,
     }
   );
 
   console.log(
     "✓ public form payload is trimmed"
-  );
-
-  let missingTokenCalls = 0;
-
-  const missingToken =
-    await submitSnapshotRequest(
-      values,
-      "",
-      (async () => {
-        missingTokenCalls += 1;
-        throw new Error(
-          "fetch should not run"
-        );
-      }) as typeof fetch
-    );
-
-  assert.equal(missingToken.ok, false);
-
-  if (!missingToken.ok) {
-    assert.equal(
-      missingToken.reason,
-      "security_check"
-    );
-
-    assert.ok(
-      missingToken.fieldErrors
-        .turnstileToken
-    );
-  }
-
-  assert.equal(missingTokenCalls, 0);
-
-  console.log(
-    "✓ missing Turnstile token is rejected locally"
   );
 
   let capturedInput = "";
@@ -75,7 +37,6 @@ async function main() {
   const success =
     await submitSnapshotRequest(
       values,
-      token,
       (async (
         input: URL | RequestInfo,
         init?: RequestInit
@@ -129,8 +90,8 @@ async function main() {
   ) as Record<string, unknown>;
 
   assert.equal(
-    capturedBody.turnstileToken,
-    token
+    capturedBody.workEmail,
+    "Founder@Example.com"
   );
 
   console.log(
@@ -148,19 +109,13 @@ async function main() {
     false
   );
 
-  assert.equal(
-    "turnstileToken" in success,
-    false
-  );
-
   console.log(
-    "✓ successful UI result exposes no request ID or token"
+    "✓ successful UI result exposes no request ID"
   );
 
   const validation =
     await submitSnapshotRequest(
       values,
-      token,
       (async () =>
         new Response(
           JSON.stringify({
@@ -203,7 +158,6 @@ async function main() {
   const limited =
     await submitSnapshotRequest(
       values,
-      token,
       (async () =>
         new Response(
           JSON.stringify({
@@ -231,7 +185,6 @@ async function main() {
   const deliveryFailure =
     await submitSnapshotRequest(
       values,
-      token,
       (async () =>
         new Response(
           JSON.stringify({
@@ -262,7 +215,6 @@ async function main() {
   const unavailable =
     await submitSnapshotRequest(
       values,
-      token,
       (async () =>
         new Response(
           JSON.stringify({
@@ -288,7 +240,6 @@ async function main() {
   const networkFailure =
     await submitSnapshotRequest(
       values,
-      token,
       (async () => {
         throw new Error(
           "simulated connection failure"

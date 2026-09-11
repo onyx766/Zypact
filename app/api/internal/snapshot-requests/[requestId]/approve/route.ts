@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createHash } from "node:crypto";
 import {
   requireCurrentUser,
 } from "@/lib/auth/current-user";
@@ -185,12 +186,21 @@ export async function POST(
     );
   }
 
+  // Prompt identity: the SHA-256 of the exact buyer-question text this
+  // founder is approving. Computed here, from the same locked-and-read
+  // request, and never recomputed or verified by the database — matching
+  // migration 0047's prompt_hash authority rule.
+  const promptHash = createHash("sha256")
+    .update(snapshotRequest.buyerCategory)
+    .digest("hex");
+
   const approved =
     await db
-      .approveAndQueueSnapshotRequest(
+      .approveAndLaunchSnapshotBaseline(
         requestId,
         user.id,
-        parsed.competitors
+        parsed.competitors,
+        promptHash
       );
 
   if (!approved) {
@@ -213,6 +223,7 @@ export async function POST(
       requestId: approved.id,
       approvedBy: user.id,
       status: approved.status,
+      protocolId: approved.protocolId,
     })
   );
 
@@ -221,7 +232,7 @@ export async function POST(
       ok: true,
       status: approved.status,
       nextStep:
-        "awaiting_scan_runner",
+        "awaiting_baseline_worker",
     },
     { status: 200 }
   );

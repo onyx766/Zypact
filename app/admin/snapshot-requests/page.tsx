@@ -1,386 +1,141 @@
 import { getDb } from "@/lib/db";
 import { requireFounderForPage } from "@/lib/auth/founder";
-import {
-  FOUNDER_ADMIN_PATH,
-} from "@/lib/auth/safe-next-path";
+import { FOUNDER_ADMIN_PATH } from "@/lib/auth/safe-next-path";
+import { getReportServiceClient } from "@/lib/reports/service-client";
+import { loadPipelineRowStates } from "@/lib/reports/pipeline-row-state";
+import { AdminShell, type AdminHealth } from "../admin-shell";
+import { RequestsTable, type RequestRow } from "./requests-table";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-function formatDate(value: string): string {
+const DATE_FORMAT = new Intl.DateTimeFormat("en-US", {
+  dateStyle: "medium",
+});
+
+const TIME_FORMAT = new Intl.DateTimeFormat("en-US", {
+  timeStyle: "short",
+});
+
+function formatParts(value: string): {
+  date: string;
+  time: string;
+} {
   const date = new Date(value);
 
   if (Number.isNaN(date.getTime())) {
-    return value;
+    return { date: value, time: "" };
   }
 
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(date);
+  return {
+    date: DATE_FORMAT.format(date),
+    time: TIME_FORMAT.format(date),
+  };
 }
 
-function statusLabel(value: string): string {
-  return value
-    .split("_")
-    .map(
-      (part) =>
-        part.charAt(0).toUpperCase() +
-        part.slice(1)
-    )
-    .join(" ");
+/**
+ * Sidebar health, derived from the rows already on screen rather than asserted.
+ *
+ * A lapsed lease means a paid run stopped with nobody holding it, and a blocked
+ * report never delivers — both need a human, so neither may render as "all
+ * clear". Nothing here claims anything about provider or worker health that
+ * this page has not actually observed.
+ */
+function summarizeHealth(rows: RequestRow[]): AdminHealth {
+  const stalled = rows.filter((row) => row.pipeline.stale).length;
+  const blocked = rows.filter(
+    (row) => row.pipeline.integrityStatus === "blocked"
+  ).length;
+
+  if (stalled === 0 && blocked === 0) {
+    return {
+      ok: true,
+      title: "No runs need attention",
+      note: "No stalled leases or blocked reports in this list.",
+    };
+  }
+
+  const parts: string[] = [];
+  if (stalled > 0) parts.push(`${stalled} stalled run${stalled === 1 ? "" : "s"}`);
+  if (blocked > 0)
+    parts.push(`${blocked} blocked report${blocked === 1 ? "" : "s"}`);
+
+  return {
+    ok: false,
+    title: "Attention needed",
+    note: `${parts.join(" · ")} in this list.`,
+  };
 }
 
 export default async function SnapshotRequestsAdminPage() {
-  const user =
-    await requireFounderForPage(
-      FOUNDER_ADMIN_PATH
-    );
+  const user = await requireFounderForPage(FOUNDER_ADMIN_PATH);
 
-  const requests =
-    await getDb().listSnapshotRequests(100);
+  const requests = await getDb().listSnapshotRequests(100);
+
+  // Best-effort: the list must still render if the pipeline read fails, so a
+  // transient error costs the run buttons, not the whole admin page.
+  let pipelineStates: Awaited<
+    ReturnType<typeof loadPipelineRowStates>
+  > = {};
+
+  try {
+    pipelineStates = await loadPipelineRowStates(
+      getReportServiceClient(),
+      requests.map((request) => ({
+        id: request.id,
+        protocolId: request.protocolId,
+      }))
+    );
+  } catch {
+    pipelineStates = {};
+  }
+
+  const rows: RequestRow[] = requests.map((request) => {
+    const parts = formatParts(request.createdAt);
+
+    return {
+      id: request.id,
+      companyName: request.companyName,
+      normalizedDomain: request.normalizedDomain,
+      websiteUrl: request.websiteUrl,
+      contactName: request.contactName,
+      workEmail: request.workEmail,
+      // `buyerCategory` holds the full buyer-question text; the column name
+      // predates that framing (see lib/db/types.ts).
+      buyerQuestion: request.buyerCategory,
+      status: request.status,
+      progressStage: request.progressStage,
+      createdAt: request.createdAt,
+      createdDate: parts.date,
+      createdTime: parts.time,
+      pipeline: pipelineStates[request.id] ?? {
+        jobStatus: null,
+        stale: false,
+        integrityStatus: null,
+        publicToken: null,
+        delivered: false,
+      },
+    };
+  });
 
   return (
-    <main
-      className="founder-page founder-requests-page"
-      style={{
-        minHeight: "100vh",
-        background: "#fafafa",
-      }}
+    <AdminShell
+      email={user.email}
+      active="requests"
+      health={summarizeHealth(rows)}
     >
-      <header
-        className="founder-topbar"
-        style={{
-          borderBottom: "1px solid #eaeaea",
-          background: "#fff",
-        }}
-      >
-        <div
-          style={{
-            maxWidth: 1280,
-            margin: "0 auto",
-            padding: "20px 24px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 20,
-          }}
-        >
-          <div>
-            <p
-              style={{
-                margin: 0,
-                fontWeight: 700,
-              }}
-            >
-              Zypact
-            </p>
-            <p
-              style={{
-                margin: "4px 0 0",
-                color: "#777",
-                fontSize: 13,
-              }}
-            >
-              Founder operations
-            </p>
-          </div>
-
-          <div
-            style={{
-              textAlign: "right",
-              fontSize: 13,
-            }}
-          >
-            <p
-              style={{
-                margin: 0,
-                color: "#555",
-              }}
-            >
-              {user.email}
-            </p>
-            <a
-              href="/auth/logout"
-              style={{
-                display: "inline-block",
-                marginTop: 5,
-                textDecoration: "underline",
-              }}
-            >
-              Sign out
-            </a>
-          </div>
-        </div>
-      </header>
-
-      <section
-        className="founder-shell"
-        style={{
-          maxWidth: 1280,
-          margin: "0 auto",
-          padding: "48px 24px 80px",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "flex-end",
-            justifyContent: "space-between",
-            gap: 24,
-            marginBottom: 28,
-          }}
-        >
-          <div>
-            <p
-              style={{
-                margin: "0 0 10px",
-                color: "#888",
-                fontSize: 13,
-                textTransform: "uppercase",
-                letterSpacing: "0.04em",
-              }}
-            >
-              Free snapshots
-            </p>
-
-            <h1
-              style={{
-                margin: 0,
-                fontSize: 40,
-                lineHeight: 1.08,
-              }}
-            >
-              Snapshot requests
-            </h1>
-          </div>
-
-          <p
-            style={{
-              margin: 0,
-              color: "#666",
-            }}
-          >
-            {requests.length} request
-            {requests.length === 1 ? "" : "s"}
+      <div className="zpa-page-head">
+        <div>
+          <p className="zpa-eyebrow">Free snapshots</p>
+          <h1 className="zpa-title">Snapshot requests</h1>
+          <p className="zpa-subtitle">
+            Review and manage incoming snapshot requests from potential
+            customers.
           </p>
         </div>
+      </div>
 
-        {requests.length === 0 ? (
-          <div
-            className="founder-empty-card"
-            style={{
-              border: "1px solid #e5e5e5",
-              borderRadius: 14,
-              background: "#fff",
-              padding: 32,
-              color: "#666",
-            }}
-          >
-            No snapshot requests yet.
-          </div>
-        ) : (
-          <div
-            className="founder-table-card"
-            style={{
-              overflowX: "auto",
-              border: "1px solid #e5e5e5",
-              borderRadius: 14,
-              background: "#fff",
-            }}
-          >
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                minWidth: 1050,
-                fontSize: 14,
-              }}
-            >
-              <thead>
-                <tr
-                  style={{
-                    borderBottom:
-                      "1px solid #e5e5e5",
-                    textAlign: "left",
-                    color: "#777",
-                  }}
-                >
-                  <th style={{ padding: 16 }}>
-                    Company
-                  </th>
-                  <th style={{ padding: 16 }}>
-                    Contact
-                  </th>
-                  <th style={{ padding: 16 }}>
-                    Buyer category
-                  </th>
-                  <th style={{ padding: 16 }}>
-                    Status
-                  </th>
-                  <th style={{ padding: 16 }}>
-                    Progress
-                  </th>
-                  <th style={{ padding: 16 }}>
-                    Requested
-                  </th>
-                  <th style={{ padding: 16 }}>
-                    Action
-                  </th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {requests.map((request) => (
-                  <tr
-                    key={request.id}
-                    style={{
-                      borderBottom:
-                        "1px solid #f0f0f0",
-                      verticalAlign: "top",
-                    }}
-                  >
-                    <td style={{ padding: 16 }}>
-                      <strong>
-                        {request.companyName}
-                      </strong>
-                      <br />
-                      <a
-                        href={request.websiteUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{
-                          color: "#666",
-                          fontSize: 13,
-                          textDecoration:
-                            "underline",
-                        }}
-                      >
-                        {request.normalizedDomain}
-                      </a>
-                    </td>
-
-                    <td style={{ padding: 16 }}>
-                      <a
-                        href={`mailto:${request.workEmail}`}
-                        style={{
-                          textDecoration:
-                            "underline",
-                        }}
-                      >
-                        {request.workEmail}
-                      </a>
-                    </td>
-
-                    <td
-                      style={{
-                        padding: 16,
-                        maxWidth: 280,
-                        lineHeight: 1.45,
-                      }}
-                    >
-                      {request.buyerCategory}
-                    </td>
-
-                    <td style={{ padding: 16 }}>
-                      <span
-                        className={`founder-status founder-status-${request.status}`}
-                        style={{
-                          display: "inline-flex",
-                          borderRadius: 999,
-                          background: "#f1f1f1",
-                          padding: "6px 10px",
-                          fontSize: 12,
-                          fontWeight: 600,
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {statusLabel(
-                          request.status
-                        )}
-                      </span>
-                    </td>
-
-                    <td style={{ padding: 16 }}>
-                      {request.progressStage
-                        ? statusLabel(
-                            request.progressStage
-                          )
-                        : "—"}
-                    </td>
-
-                    <td
-                      style={{
-                        padding: 16,
-                        whiteSpace: "nowrap",
-                        color: "#666",
-                      }}
-                    >
-                      {formatDate(
-                        request.createdAt
-                      )}
-                    </td>
-
-                    <td style={{ padding: 16 }}>
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "flex-start",
-                          gap: 10,
-                          flexWrap: "wrap",
-                        }}
-                      >
-                        <a
-                          href={`/admin/snapshot-requests/${request.id}`}
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            minHeight: 36,
-                            border:
-                              "1px solid #d0d0d0",
-                            borderRadius: 999,
-                            padding: "0 14px",
-                            color: "#111",
-                            textDecoration: "none",
-                            fontWeight: 600,
-                          }}
-                        >
-                          View
-                        </a>
-
-                        {request.status ===
-                        "pending_approval" ? (
-                          // Approval happens on the detail page, which is
-                          // the only place the founder can review and supply
-                          // the competitor frame. Approving from a table row
-                          // would mean approving without that context.
-                          <a
-                            href={`/admin/snapshot-requests/${request.id}`}
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              minHeight: 36,
-                              border: 0,
-                              borderRadius: 999,
-                              padding: "0 14px",
-                              background: "#111",
-                              color: "#fff",
-                              textDecoration: "none",
-                              fontWeight: 600,
-                            }}
-                          >
-                            Review
-                          </a>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-    </main>
+      <RequestsTable rows={rows} />
+    </AdminShell>
   );
 }

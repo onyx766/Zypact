@@ -63,6 +63,48 @@ export function answerFromRawResponseBody(raw: string | null): string | null {
 }
 
 /**
+ * D-023 §3 — the MEASURED cost of a Perplexity call, taken from the
+ * provider's own accounting in `usage.cost.total_cost`.
+ *
+ * `measured` is the right basis precisely because nothing here computes a
+ * price: Perplexity reports what it charged, and this reads that number.
+ * No token count is multiplied by a rate, so there is no price table to
+ * drift out of date and no way for this to disagree with the invoice.
+ *
+ * Deliberately total, and it never guesses. Absent body, unparseable JSON,
+ * a missing `usage`/`cost`, a non-number, a non-finite value or a negative
+ * one all return null, and the caller then omits BOTH the cost and the
+ * basis so the ledger records an honest `unknown`. The reservation is
+ * never substituted for a real cost — migration 0050 states that rule and
+ * enforces the pairing with
+ * `protocol_external_calls_cost_basis_pair_check`.
+ *
+ * Read from the same bytes the caller is about to persist as the receipt,
+ * so the recorded cost and the stored evidence can never describe
+ * different responses.
+ */
+export function measuredCostUsdFromRawResponseBody(
+  raw: string | null | undefined
+): number | null {
+  if (raw === null || raw === undefined) return null;
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const usage = (json as { usage?: unknown }).usage;
+  if (!usage || typeof usage !== "object") return null;
+  const cost = (usage as { cost?: unknown }).cost;
+  if (!cost || typeof cost !== "object") return null;
+  const total = (cost as { total_cost?: unknown }).total_cost;
+  if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
+    return null;
+  }
+  return total;
+}
+
+/**
  * Exponential backoff with bounded jitter.
  *
  * Deterministic behaviour is a property of the ledger, not of the sleep:

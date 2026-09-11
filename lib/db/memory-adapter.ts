@@ -991,6 +991,7 @@ export const memoryAdapter: DbAdapter = {
       workEmail: input.workEmail,
       normalizedEmail: input.normalizedEmail,
       companyName: input.companyName,
+      contactName: input.contactName ?? null,
       websiteUrl: input.websiteUrl,
       normalizedDomain: input.normalizedDomain,
       buyerCategory: input.buyerCategory,
@@ -1001,6 +1002,7 @@ export const memoryAdapter: DbAdapter = {
       progressUpdatedAt: null,
       approvedAt: null,
       approvedBy: null,
+      protocolId: null,
       claimedBy: null,
       claimToken: null,
       leaseExpiresAt: null,
@@ -1246,6 +1248,195 @@ export const memoryAdapter: DbAdapter = {
     );
 
     return { ...queuedRequest };
+  },
+
+  /**
+   * Mirrors `approve_and_launch_snapshot_baseline` (migration 0062): one
+   * synchronous pass builds the buyer_question/version, the protocol, and
+   * enqueues its baseline job, then lands the request on `approved` (not
+   * `queued` — the legacy claim path never selects `approved`). Every
+   * store write below is self-contained, matching this file's existing
+   * convention (see `enqueueProtocolExecutionJob`'s own inline dataset-
+   * batch creation) rather than calling sibling adapter methods.
+   */
+  async approveAndLaunchSnapshotBaseline(
+    requestId: string,
+    approvedBy: string,
+    competitors: string[],
+    promptHash: string
+  ): Promise<SnapshotRequest | null> {
+    const store = getStore();
+    const request = store.snapshotRequests.get(requestId);
+
+    if (!request || !approvedBy || !promptHash.trim()) {
+      return null;
+    }
+
+    if (request.status === "approved" && request.protocolId) {
+      return { ...request };
+    }
+
+    if (request.status !== "pending_approval") {
+      return null;
+    }
+
+    // Mirrors `_normalize_snapshot_competitors` — identical to
+    // `approveAndQueueSnapshotRequest` above.
+    const seen = new Set<string>();
+    const normalized: string[] = [];
+
+    for (const entry of competitors ?? []) {
+      if (typeof entry !== "string") return null;
+
+      const value = entry.trim();
+      if (value === "") continue;
+
+      const key = value.toLowerCase();
+      if (seen.has(key)) continue;
+
+      seen.add(key);
+      normalized.push(value);
+    }
+
+    if (normalized.length < 2 || normalized.length > 12) return null;
+
+    for (const value of normalized) {
+      if (value.length > 200) return null;
+
+      if (
+        value.toLowerCase() ===
+          request.companyName.trim().toLowerCase() ||
+        value.toLowerCase() ===
+          request.normalizedDomain.trim().toLowerCase()
+      ) {
+        return null;
+      }
+    }
+
+    let projectId = request.projectId;
+
+    if (!projectId) {
+      const project: Project = {
+        id: randomUUID(),
+        userId: null,
+        companyName: request.companyName,
+        domain: request.normalizedDomain,
+        category: request.buyerCategory,
+        createdAt: new Date().toISOString(),
+      };
+      store.projects.set(project.id, project);
+      projectId = project.id;
+    }
+
+    const now = new Date().toISOString();
+
+    const question: BuyerQuestion = {
+      id: randomUUID(),
+      projectId,
+      createdAt: now,
+    };
+    store.buyerQuestions.set(question.id, question);
+
+    const version: BuyerQuestionVersion = {
+      id: randomUUID(),
+      buyerQuestionId: question.id,
+      projectId,
+      versionNumber: 1,
+      promptText: request.buyerCategory,
+      promptHash,
+      intentType: "shortlist",
+      commercialValue: 3,
+      winnability: 3,
+      priority: 13,
+      rationale:
+        "Buyer question supplied directly by the requester via the public demo-request form; not independently scored.",
+      provenance: "customer_supplied",
+      approvedBy,
+      approvedAt: now,
+      createdAt: now,
+    };
+    store.buyerQuestionVersions.set(version.id, version);
+
+    const protocol: Protocol = {
+      id: randomUUID(),
+      projectId,
+      buyerQuestionVersionId: version.id,
+      baselineProtocolId: null,
+      provider: "perplexity_sonar",
+      surface: "answer",
+      modelConfig: { model: "sonar" },
+      // Migration 0069 / D-032: new baselines plan 5 runs, with run_cap
+      // keeping two attempts of retry headroom above the plan.
+      plannedBaselineRuns: 5,
+      plannedRetestRuns: 0,
+      paraphrasePlan: [],
+      unitOfAnalysis: "buyer_question_version",
+      primaryMetric: "presence_rate",
+      minimumUsefulChange: null,
+      samplePlanningMethod: "fixed_operator_default_pending_pilot_calibration",
+      samplePlanningAssumptions: {},
+      runCap: 7,
+      spendCapUsd: 2,
+      timeWindowSeconds: 86400,
+      rateLimitPerHour: 10,
+      concurrencyLimit: 1,
+      retryCap: 2,
+      observationWindowRule: {},
+      analyzerVersion: 1,
+      entityResolutionVersion: 2,
+      methodologyVersion: "1.1",
+      status: "approved",
+      approvedBy,
+      approvedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    };
+    store.protocols.set(protocol.id, protocol);
+
+    const datasetBatch: DatasetBatch = {
+      id: randomUUID(),
+      projectId,
+      datasetSourceType: "manual_scan",
+      snapshotRequestId: null,
+      backfillKey: null,
+      note: null,
+      createdAt: now,
+    };
+    store.datasetBatches.set(datasetBatch.id, datasetBatch);
+
+    const job: ProtocolExecutionJob = {
+      id: randomUUID(),
+      projectId,
+      protocolId: protocol.id,
+      status: "queued",
+      workerId: null,
+      claimToken: null,
+      leaseExpiresAt: null,
+      attemptCount: 0,
+      maxAttempts: 3,
+      needsReviewReason: null,
+      failureReason: null,
+      datasetBatchId: datasetBatch.id,
+      nextBaselineOrdinal: 1,
+      currentAttemptId: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    store.protocolExecutionJobs.set(job.id, job);
+
+    const launchedRequest: SnapshotRequest = {
+      ...request,
+      competitors: normalized,
+      status: "approved",
+      approvedAt: now,
+      approvedBy,
+      projectId,
+      protocolId: protocol.id,
+      updatedAt: now,
+    };
+    store.snapshotRequests.set(requestId, launchedRequest);
+
+    return { ...launchedRequest };
   },
 
   async reserveSnapshotRequestProject(

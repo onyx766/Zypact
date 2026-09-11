@@ -5,20 +5,38 @@ import type { CreateSnapshotRequestInput } from "@/lib/db/types";
 
 const requestFieldsSchema = z
   .object({
-    workEmail: z.string().trim().email().max(254),
-    companyName: z.string().trim().min(2).max(120),
-    websiteUrl: z.string().trim().min(1).max(2048),
-    buyerCategory: z.string().trim().min(2).max(160),
-  })
-  .strict();
-
-const submissionSchema = requestFieldsSchema
-  .extend({
-    turnstileToken: z
+    contactName: z
       .string()
       .trim()
-      .min(1, "Complete the security check.")
+      .min(1, "Enter your name.")
+      .max(160),
+    workEmail: z
+      .string()
+      .trim()
+      .email("Enter a valid work email.")
+      .max(254),
+    companyName: z
+      .string()
+      .trim()
+      .min(2, "Enter your company name.")
+      .max(120),
+    websiteUrl: z
+      .string()
+      .trim()
+      .min(1, "Enter your company website.")
       .max(2048),
+    // Field name predates the "one buyer question" framing (see
+    // lib/db/types.ts SnapshotRequest.buyerCategory) and is kept to avoid
+    // a schema/column rename; the length floor and message enforce a real
+    // question rather than a short category phrase.
+    buyerCategory: z
+      .string()
+      .trim()
+      .min(
+        10,
+        "Enter a full buyer question, not just a category."
+      )
+      .max(300),
   })
   .strict();
 
@@ -116,6 +134,7 @@ function normalizeFields(
     workEmail: data.workEmail,
     normalizedEmail: data.workEmail.toLowerCase(),
     companyName: data.companyName,
+    contactName: data.contactName,
     websiteUrl: website.websiteUrl,
     normalizedDomain: website.normalizedDomain,
     buyerCategory: data.buyerCategory,
@@ -134,24 +153,6 @@ export function normalizeSnapshotRequestInput(
   }
 
   return normalizeFields(parsed.data);
-}
-
-export function parseSnapshotRequestSubmission(raw: unknown): {
-  input: CreateSnapshotRequestInput;
-  turnstileToken: string;
-} {
-  const parsed = submissionSchema.safeParse(raw);
-
-  if (!parsed.success) {
-    throw new SnapshotRequestValidationError(
-      validationIssues(parsed.error)
-    );
-  }
-
-  return {
-    input: normalizeFields(parsed.data),
-    turnstileToken: parsed.data.turnstileToken,
-  };
 }
 
 export function extractRequestIp(headers: Headers): string | null {

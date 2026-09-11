@@ -211,6 +211,7 @@ interface SnapshotRequestDbRow {
   work_email: string;
   normalized_email: string;
   company_name: string;
+  contact_name: string | null;
   website_url: string;
   normalized_domain: string;
   buyer_category: string;
@@ -221,6 +222,7 @@ interface SnapshotRequestDbRow {
   progress_updated_at: string | null;
   approved_at: string | null;
   approved_by: string | null;
+  protocol_id: string | null;
   claimed_by: string | null;
   claim_token: string | null;
   lease_expires_at: string | null;
@@ -245,6 +247,11 @@ interface SnapshotReportArtifactDbRow {
   delivery_message_id: string | null;
   created_at: string;
   updated_at: string;
+  /** Added in 0065. Absent on rows written before that migration. */
+  report_payload?: unknown | null;
+  /** Added in 0068. Absent on rows written before that migration. */
+  integrity_status?: string | null;
+  integrity_reasons?: unknown | null;
 }
 
 interface ProjectRow {
@@ -727,6 +734,7 @@ function mapSnapshotRequest(r: SnapshotRequestDbRow): SnapshotRequest {
     workEmail: r.work_email,
     normalizedEmail: r.normalized_email,
     companyName: r.company_name,
+    contactName: r.contact_name ?? null,
     websiteUrl: r.website_url,
     normalizedDomain: r.normalized_domain,
     buyerCategory: r.buyer_category,
@@ -741,6 +749,7 @@ function mapSnapshotRequest(r: SnapshotRequestDbRow): SnapshotRequest {
     // to a timestamp or an actor.
     approvedAt: r.approved_at ?? null,
     approvedBy: r.approved_by ?? null,
+    protocolId: r.protocol_id ?? null,
     claimedBy: r.claimed_by ?? null,
     claimToken: r.claim_token ?? null,
     leaseExpiresAt: r.lease_expires_at ?? null,
@@ -775,6 +784,17 @@ function mapSnapshotReportArtifact(
     deliveredAt: row.delivered_at,
     deliveryMessageId:
       row.delivery_message_id,
+    reportPayload: row.report_payload ?? null,
+    integrityStatus:
+      (row.integrity_status as
+        | "integrity_passed"
+        | "needs_review"
+        | "blocked"
+        | null
+        | undefined) ?? null,
+    integrityReasons: Array.isArray(row.integrity_reasons)
+      ? (row.integrity_reasons as string[])
+      : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -1879,6 +1899,7 @@ export const supabaseAdapter: DbAdapter = {
         p_normalized_domain: input.normalizedDomain,
         p_buyer_category: input.buyerCategory,
         p_request_ip_hash: input.requestIpHash ?? null,
+        p_contact_name: input.contactName ?? null,
       })
       .single<SnapshotRequestDbRow>();
 
@@ -1956,6 +1977,31 @@ export const supabaseAdapter: DbAdapter = {
           p_request_id: requestId,
           p_approved_by: approvedBy,
           p_competitors: competitors,
+        }
+      )
+      .maybeSingle<SnapshotRequestDbRow>();
+
+    if (error) throw error;
+
+    return data
+      ? mapSnapshotRequest(data)
+      : null;
+  },
+
+  async approveAndLaunchSnapshotBaseline(
+    requestId: string,
+    approvedBy: string,
+    competitors: string[],
+    promptHash: string
+  ): Promise<SnapshotRequest | null> {
+    const { data, error } = await getClient()
+      .rpc(
+        "approve_and_launch_snapshot_baseline",
+        {
+          p_request_id: requestId,
+          p_approved_by: approvedBy,
+          p_competitors: competitors,
+          p_prompt_hash: promptHash,
         }
       )
       .maybeSingle<SnapshotRequestDbRow>();

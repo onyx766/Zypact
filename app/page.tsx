@@ -1,15 +1,38 @@
 import type { Metadata } from "next";
-import { ZypactLogo } from "@/components/zypact-logo";
-import { AutomationFlow, EvidenceOrbit, LandingNav } from "@/components/landing-interactions";
+import {
+  ArrowRight,
+  BarChart3,
+  Check,
+  ClipboardList,
+  Database,
+  Repeat,
+  Search,
+  ShieldCheck,
+} from "lucide-react";
 
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://zypact.com";
-const demoRequestUrl = "/scan";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { EvidenceDashboard } from "@/components/marketing/evidence-dashboard";
+import { SiteHeader } from "@/components/marketing/site-header";
+import { ZypactWordmark } from "@/components/marketing/zypact-mark";
+import { CANONICAL_SITE_URL } from "@/lib/seo/site";
+
+// One canonical origin for the whole site, so the homepage cannot advertise
+// a different host than the sitemap, robots.txt and every other canonical.
+const siteUrl = CANONICAL_SITE_URL;
+const DEMO_URL = "/scan";
 
 export const metadata: Metadata = {
-  title: "Zypact — Evidence-backed buyer-question diagnostic for B2B SaaS",
+  // Absolute: the root layout's "%s — Zypact" template would otherwise
+  // append the brand to a title that already leads with it.
+  title: {
+    absolute:
+      "Zypact — Evidence-backed buyer-question diagnostic for B2B SaaS",
+  },
   description:
     "See which competitors appear for one commercially important buyer question in Perplexity, preserve the evidence, register one change, and check the same question again.",
-  alternates: { canonical: siteUrl },
+  alternates: { canonical: "/" },
   openGraph: {
     title: "Zypact — One buyer question. Exact evidence. An honest retest.",
     description:
@@ -28,27 +51,105 @@ function getJsonLd() {
       {
         "@type": "Service",
         name: "Zypact Evidence-Backed Buyer-Question Diagnostic",
-        serviceType: "Controlled automated diagnostic and registered retest for B2B SaaS",
+        serviceType:
+          "Controlled automated diagnostic and registered retest for B2B SaaS",
         url: siteUrl,
         provider: { "@type": "Organization", name: "Zypact", url: siteUrl },
         description:
           "After the buyer question and protocol are approved, Zypact runs a bounded Perplexity baseline, preserves exact evidence, supports one registered intervention, and retests the same question after the observation window.",
         audience: {
           "@type": "BusinessAudience",
-          audienceType: "English-language B2B SaaS marketing and product-marketing teams",
+          audienceType:
+            "English-language B2B SaaS marketing and product-marketing teams",
         },
       },
     ],
   };
 }
 
-const deliverables = [
-  ["01", "Approved buyer question", "One commercially meaningful question with purpose, context and an immutable approved version."],
-  ["02", "Bounded protocol", "The Perplexity surface, sampling plan, limits, decision threshold and observation window approved before paid calls."],
-  ["03", "Exact evidence", "Every outbound request, raw response, source, metadata record and integrity check preserved."],
-  ["04", "Observed competitor frame", "Prompt-scoped positions, competitor claims and sources without turning observation into a causal explanation."],
-  ["05", "Registered intervention", "One evidence-backed hypothesis with an owner, date, implementation proof and explicit observation window."],
-  ["06", "Auditable Outcome Card", "The same-question retest, one of four honest outcomes, limitations, confounders and the next decision."],
+const heroProof = [
+  "Approved protocol",
+  "Exact evidence",
+  "Honest outcomes",
+] as const;
+
+const guarantees = [
+  { label: "Approved protocol", icon: ShieldCheck },
+  { label: "Bounded sampling", icon: BarChart3 },
+  { label: "Exact evidence", icon: Database },
+  { label: "Prompt-scoped", icon: Search },
+  { label: "Registered retest", icon: Repeat },
+  { label: "Honest outcomes", icon: ClipboardList },
+] as const;
+
+const steps = [
+  {
+    number: "1",
+    title: "Approve",
+    icon: ClipboardList,
+    copy: "Fix the question, surface, sampling plan, limits and decision rule before any paid provider call.",
+  },
+  {
+    number: "2",
+    title: "Observe",
+    icon: Search,
+    copy: "Run the bounded Perplexity baseline and preserve every request, response and source exactly.",
+  },
+  {
+    number: "3",
+    title: "Retest",
+    icon: Repeat,
+    copy: "Register one change, wait out the observation window, then ask the same question again.",
+  },
+] as const;
+
+const features = [
+  {
+    title: "Approved protocol",
+    icon: ShieldCheck,
+    copy: "Surface, sampling, limits and the decision rule are fixed and versioned before a single paid call.",
+  },
+  {
+    title: "Exact evidence",
+    icon: Database,
+    copy: "Every request, response, source and integrity check is preserved insert-only and stays inspectable.",
+  },
+  {
+    title: "Prompt-scoped observation",
+    icon: BarChart3,
+    copy: "Competitors and positions for that one question. No universal score, no market-wide claim.",
+  },
+  {
+    title: "Registered retest",
+    icon: Repeat,
+    copy: "One recorded intervention, an explicit observation window, and the same question asked again.",
+  },
+] as const;
+
+const outcomes = [
+  "Increase observed",
+  "Decrease observed",
+  "No clear change",
+  "Inconclusive",
+] as const;
+
+/** Canonical V1 delivery gates. `blocked` never delivers. */
+const deliveryGates = [
+  {
+    status: "integrity_passed",
+    tone: "bg-brand-600",
+    copy: "Outcome Card and report delivered automatically.",
+  },
+  {
+    status: "needs_review",
+    tone: "bg-[#E0A33C]",
+    copy: "Exception held for founder review before delivery.",
+  },
+  {
+    status: "blocked",
+    tone: "bg-[#CF4B3B]",
+    copy: "No conclusion or report delivered as certainty.",
+  },
 ] as const;
 
 const faqs = [
@@ -94,341 +195,402 @@ const faqs = [
   },
 ] as const;
 
-const outcomes = [
-  ["Increase observed", "The approved observation increased within the retest frame."],
-  ["Decrease observed", "The approved observation decreased within the retest frame."],
-  ["No clear change", "The evidence does not support a clear directional change."],
-  ["Inconclusive", "The protocol cannot support a reliable conclusion."],
+const footerColumns = [
+  {
+    heading: "Product",
+    links: [
+      { label: "How it works", href: "#how-it-works" },
+      { label: "What you get", href: "#features" },
+      { label: "Evidence", href: "#evidence" },
+      { label: "Request demo", href: DEMO_URL },
+    ],
+  },
+  {
+    heading: "Method",
+    links: [
+      { label: "Scope and limits", href: "#scope" },
+      { label: "Outcome statuses", href: "#outcomes" },
+      { label: "FAQ", href: "#faq" },
+    ],
+  },
+  {
+    heading: "Account",
+    links: [
+      { label: "Sign in", href: "/login" },
+      { label: "Request demo", href: DEMO_URL },
+    ],
+  },
 ] as const;
 
 export default function LandingPage() {
   return (
-    <main id="top" className="ev-page">
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(getJsonLd()) }} />
-      <LandingNav demoRequestUrl={demoRequestUrl} />
+    <div className="v2-root">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(getJsonLd()) }}
+      />
 
-      <section className="ev-hero" aria-labelledby="hero-heading">
-        <div className="ev-shell ev-hero-grid">
-          <div className="ev-hero-copy">
-            <p className="ev-eyebrow"><span aria-hidden="true" /> Evidence-backed diagnostic · Automated after approval</p>
-            <h1 id="hero-heading">
-              See which competitors appear for one critical buyer question.
-              <em>Choose what to test next.</em>
-            </h1>
-            <p className="ev-hero-lede">
-              Bring one commercially important buyer question. Zypact records how Perplexity answers it, preserves the competitors and sources observed, helps register one evidence-backed intervention, and checks the same question again after the observation window.
-            </p>
-            <div className="ev-hero-actions">
-              <a href={demoRequestUrl} className="ev-button ev-button-primary ev-button-large">Request Demo</a>
-              <a href="#evidence" className="ev-button ev-button-secondary ev-button-large">See the evidence trail</a>
-            </div>
-            <div className="ev-trust-row" aria-label="V1 trust signals">
-              <span>Approved protocol</span>
-              <span>Exact evidence</span>
-              <span>Controlled automation</span>
-              <span>Honest outcomes</span>
-            </div>
-            <p className="ev-scope-note">
-              Perplexity Sonar only · One approved question · Automated after approval · No guaranteed outcome
-            </p>
+      <div className="min-h-screen bg-surface-subtle">
+        <SiteHeader />
+
+        {/* -------------------------------------------------------------- Hero */}
+        <section className="relative overflow-hidden bg-surface-subtle">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 right-0 hidden w-[30%] bg-brand-900 lg:block"
+          >
+            <div className="absolute inset-0 bg-[radial-gradient(120%_80%_at_20%_0%,rgba(47,132,103,0.55),transparent_60%),radial-gradient(90%_70%_at_90%_100%,rgba(4,27,20,0.9),transparent_55%)]" />
           </div>
 
-          <EvidenceOrbit />
-        </div>
-      </section>
+          <div className="shell relative grid items-center gap-14 pb-24 pt-16 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] lg:gap-10 lg:pb-28 lg:pt-20">
+            <div className="max-w-xl">
+              <Badge>Evidence-backed diagnostic</Badge>
 
-      <section className="ev-trigger" aria-labelledby="trigger-heading">
-        <div className="ev-shell ev-trigger-grid">
-          <div>
-            <span className="ev-chapter">01 · UNDERSTAND</span>
-            <h2 id="trigger-heading">An AI answer can shape which vendors a buyer investigates.</h2>
-          </div>
-          <div>
-            <p>B2B buyers use AI to explore categories and compare options. AI does not decide every purchase, but one answer can introduce a competitor before your sales team enters the conversation.</p>
-            <blockquote>
-              <span>Example buyer question</span>
-              “Which AI visibility platforms are suitable for a B2B SaaS team that needs auditable evidence?”
-            </blockquote>
-          </div>
-        </div>
-      </section>
+              <h1 className="mt-6 text-[44px] font-extrabold leading-[1.04] tracking-tightest sm:text-[56px]">
+                Turn AI answers
+                <br />
+                into evidence
+              </h1>
 
-      <section id="evidence" className="ev-section ev-section-inspect" aria-labelledby="evidence-heading">
-        <div className="ev-shell">
-          <div className="ev-heading-split">
-            <div>
-              <span className="ev-chapter">02 · INSPECT</span>
-              <h2 id="evidence-heading">The answer behind the observation stays inspectable.</h2>
-            </div>
-            <p>The Question Record is the core V1 object: one approved question, its exact evidence, one registered change and a later check. This example is synthetic and does not represent a customer or live probe.</p>
-          </div>
+              <p className="mt-6 max-w-md text-[15px] leading-relaxed text-muted-foreground">
+                Zypact records how Perplexity answers one commercially important
+                buyer question, preserves the exact evidence, and checks the
+                same question again after one registered change.
+              </p>
 
-          <article className="ev-question-record" aria-label="Synthetic Question Record example">
-            <header className="ev-record-header">
-              <div>
-                <span className="ev-mono">QUESTION RECORD · QR-EXAMPLE-001</span>
-                <span className="ev-synthetic-label">SYNTHETIC EXAMPLE — NOT CUSTOMER DATA</span>
-              </div>
-              <span className="ev-record-state"><i aria-hidden="true" /> Protocol approved</span>
-            </header>
-
-            <div className="ev-record-question">
-              <span className="ev-field-label">Approved buyer question</span>
-              <h3>Which AI visibility platforms are suitable for a B2B SaaS team that needs auditable evidence?</h3>
-              <p>Selected for commercial relevance · Approved version V1</p>
-            </div>
-
-            <dl className="ev-protocol-strip">
-              <div><dt>Surface</dt><dd>Perplexity Sonar</dd></div>
-              <div><dt>Sampling</dt><dd>Approved parameter</dd></div>
-              <div><dt>Decision rule</dt><dd>Approved before calls</dd></div>
-              <div><dt>Automation</dt><dd>Eligible after approval</dd></div>
-            </dl>
-
-            <div className="ev-evidence-grid">
-              <div className="ev-answer-panel">
-                <div className="ev-panel-heading">
-                  <span className="ev-field-label">Synthetic answer excerpt</span>
-                  <span className="ev-mono">PRESERVED</span>
-                </div>
-                <blockquote>
-                  “[Synthetic excerpt] Competitor A is presented as a primary option for teams seeking documented evidence. Competitor B is also listed. The answer uses an independent category guide and first-party proof as supporting sources.”
-                </blockquote>
-                <p>This text demonstrates the evidence layout only. It is not a Perplexity response.</p>
+              <div className="mt-9 flex flex-wrap items-center gap-3">
+                <Button asChild size="lg">
+                  <a href={DEMO_URL}>
+                    Request demo
+                    <ArrowRight className="h-4 w-4" strokeWidth={2.25} />
+                  </a>
+                </Button>
+                <Button asChild size="lg" variant="outline">
+                  <a href="#how-it-works">See the method</a>
+                </Button>
               </div>
 
-              <div className="ev-source-panel">
-                <span className="ev-field-label">Source rows</span>
-                <div className="ev-source-row">
-                  <span>01</span><div><strong>example.org/category-guide</strong><small>Independent comparison · synthetic</small></div>
-                </div>
-                <div className="ev-source-row">
-                  <span>02</span><div><strong>competitor-a.example/proof</strong><small>First-party evidence · synthetic</small></div>
-                </div>
-                <div className="ev-source-row">
-                  <span>03</span><div><strong>example.org/buyer-method</strong><small>Method reference · synthetic</small></div>
-                </div>
-              </div>
-            </div>
-
-            <div className="ev-observation-block">
-              <div className="ev-panel-heading">
-                <span className="ev-field-label">Prompt-scoped observation</span>
-                <span className="ev-mono">NO UNIVERSAL SCORE</span>
-              </div>
-              <div className="ev-brand-rows">
-                <div><strong>Competitor A</strong><span className="ev-status ev-status-primary">Primary</span></div>
-                <div><strong>Competitor B</strong><span className="ev-status ev-status-listed">Listed</span></div>
-                <div><strong>Your Brand</strong><span className="ev-status ev-status-not-observed">Not observed</span></div>
-                <div><strong>Competitor C</strong><span className="ev-status ev-status-ambiguous">Ambiguous</span></div>
-              </div>
-            </div>
-
-            <div className="ev-intervention-row">
-              <div>
-                <span className="ev-field-label">Registered intervention</span>
-                <strong>Strengthen one approved category-proof claim and preserve the implementation evidence.</strong>
-                <small>Owner: Product Marketing · Confounders recorded · Observation window opens after proof</small>
-              </div>
-              <span className="ev-registration-stamp" aria-label="Registered before retest">REGISTERED<br />BEFORE RETEST</span>
-            </div>
-
-            <ol className="ev-retest-rail" aria-label="Retest sequence">
-              <li className="is-complete"><span>Baseline</span><strong>Evidence preserved</strong></li>
-              <li className="is-complete"><span>Registered</span><strong>Intervention frozen</strong></li>
-              <li className="is-current"><span>Window</span><strong>Eligibility tracked</strong></li>
-              <li><span>Retest</span><strong>Pending</strong></li>
-            </ol>
-          </article>
-        </div>
-      </section>
-
-      <section className="ev-section ev-section-decide" aria-labelledby="decide-heading">
-        <div className="ev-shell">
-          <div className="ev-heading-split">
-            <div>
-              <span className="ev-chapter">03 · DECIDE</span>
-              <h2 id="decide-heading">One bounded decision—not another visibility dashboard.</h2>
-            </div>
-            <p>The value is not the number of prompts or charts. It is the ability to inspect one commercially important observation and commit to one test before seeing the result.</p>
-          </div>
-
-          <div className="ev-decision-grid">
-            <article><span>01</span><h3>Inspect</h3><p>See the exact answer, sources and prompt-scoped competitor frame.</p></article>
-            <article><span>02</span><h3>Register</h3><p>Record one hypothesis, its owner and implementation evidence before retesting.</p></article>
-            <article><span>03</span><h3>Retest</h3><p>Check the same approved question and preserve an honest outcome.</p></article>
-          </div>
-
-          <div className="ev-monitor-compare">
-            <div>
-              <span className="ev-field-label">Category monitoring</span>
-              <h3>Shows what appeared across a broader prompt set.</h3>
-              <p>Useful when the job is ongoing market observation.</p>
-            </div>
-            <div>
-              <span className="ev-field-label">Zypact V1</span>
-              <h3>Gives one question a record, an owner and a later check.</h3>
-              <p>Useful when the team needs one defensible next decision.</p>
-            </div>
-          </div>
-
-          <div className="ev-precision-callout">
-            <span className="ev-mono">SELECTED FOR COMMERCIAL RELEVANCE</span>
-            <p>“Which solution would a buyer evaluate for this exact need?”</p>
-            <strong>One question is not a quota. It is the controlled unit of evidence.</strong>
-          </div>
-        </div>
-      </section>
-
-      <section id="method" className="ev-section ev-section-verify" aria-labelledby="method-heading">
-        <div className="ev-shell">
-          <div className="ev-heading-split">
-            <div>
-              <span className="ev-chapter">04 · VERIFY</span>
-              <h2 id="method-heading">Approved first. Automated next. Checked before delivery.</h2>
-            </div>
-            <p>Automation is controlled by approval and integrity gates. Human review is an exception path for `needs_review`, not the normal V1 workflow.</p>
-          </div>
-
-          <AutomationFlow />
-
-          <div className="ev-gate-grid" aria-label="V1 integrity delivery gates">
-            <div><span className="ev-gate-dot ev-gate-pass" /><strong>integrity_passed</strong><p>Outcome Card and report delivered automatically.</p></div>
-            <div><span className="ev-gate-dot ev-gate-review" /><strong>needs_review</strong><p>Exception held for human review before delivery.</p></div>
-            <div><span className="ev-gate-dot ev-gate-blocked" /><strong>blocked</strong><p>No conclusion or report delivered as certainty.</p></div>
-          </div>
-
-          <div className="ev-outcome-card">
-            <div className="ev-outcome-header">
-              <div>
-                <span className="ev-mono">OUTCOME CARD · SYNTHETIC STRUCTURE</span>
-                <h3>The result does not decide whether the method “won.”</h3>
-              </div>
-              <span className="ev-record-state">Same question · versioned protocol</span>
-            </div>
-
-            <dl className="ev-outcome-summary">
-              <div><dt>Baseline</dt><dd>Not observed</dd></div>
-              <div><dt>Registered change</dt><dd>Approved proof strengthened</dd></div>
-              <div><dt>Retest</dt><dd>Evidence preserved</dd></div>
-            </dl>
-
-            <div className="ev-outcome-options">
-              {outcomes.map(([name, copy]) => (
-                <div key={name}><strong>{name}</strong><p>{copy}</p></div>
-              ))}
-            </div>
-
-            <div className="ev-limitations">
-              <span className="ev-field-label">Limitations remain on the primary card</span>
-              <p>Single surface. Prompt-scoped observation. Model and third-party source changes may affect the retest. Observed movement is not proof of causality or revenue impact.</p>
-            </div>
-          </div>
-
-          <div className="ev-method-disclosures">
-            <details>
-              <summary>What the protocol fixes before execution <span aria-hidden="true">+</span></summary>
-              <p>The approved question, Perplexity configuration, sampling plan, limits, decision threshold, estimated paid-call boundary and observation-window rule.</p>
-            </details>
-            <details>
-              <summary>What evidence is preserved <span aria-hidden="true">+</span></summary>
-              <p>Outbound requests, raw responses, sources, metadata, failures, canonical observations, integrity hashes and the versioned protocol behind them.</p>
-            </details>
-            <details>
-              <summary>What V1 does not claim <span aria-hidden="true">+</span></summary>
-              <p>No market-wide score, multi-model coverage, guaranteed recommendation, proven causality, automatic revenue attribution or certainty when the evidence is insufficient.</p>
-            </details>
-          </div>
-        </div>
-      </section>
-
-      <section id="fit" className="ev-section ev-section-act" aria-labelledby="fit-heading">
-        <div className="ev-shell">
-          <div className="ev-heading-split">
-            <div>
-              <span className="ev-chapter">05 · ACT</span>
-              <h2 id="fit-heading">Built for a team that can act on one important question.</h2>
-            </div>
-            <p>Zypact V1 is intentionally narrow. It is strongest when a B2B SaaS team has a comparison-heavy buying motion and can implement one documented evidence change.</p>
-          </div>
-
-          <div className="ev-fit-grid">
-            <div>
-              <span className="ev-field-label">A strong fit</span>
-              <ul>
-                <li>High-consideration B2B SaaS</li>
-                <li>One commercially important buyer question</li>
-                <li>A team able to implement one evidence change</li>
-                <li>A need for inspectable evidence and an honest retest</li>
+              <ul className="mt-9 flex flex-wrap items-center gap-x-7 gap-y-3">
+                {heroProof.map((item) => (
+                  <li key={item} className="flex items-center gap-2">
+                    <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full bg-primary text-primary-foreground">
+                      <Check className="h-2.5 w-2.5" strokeWidth={3.5} />
+                    </span>
+                    <span className="text-[13px] font-medium">{item}</span>
+                  </li>
+                ))}
               </ul>
+
+              <p className="mt-7 text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+                Perplexity Sonar only · One approved question · Automated after
+                approval · No guaranteed outcome
+              </p>
             </div>
-            <div>
-              <span className="ev-field-label">Not a fit yet</span>
-              <ul>
-                <li>Broad multi-model monitoring</li>
-                <li>A universal AI visibility score</li>
-                <li>Guaranteed rankings or recommendations</li>
-                <li>Pipeline or revenue attribution from one observation</li>
-              </ul>
+
+            <div id="evidence" className="scroll-mt-24 lg:translate-x-6">
+              <EvidenceDashboard />
             </div>
           </div>
+        </section>
 
-          <div className="ev-deliverables">
-            <div className="ev-subheading">
-              <span className="ev-field-label">What V1 delivers</span>
-              <h3>Six parts. One auditable learning loop.</h3>
-            </div>
-            <ol>
-              {deliverables.map(([number, title, copy]) => (
-                <li key={number}>
-                  <span>{number}</span>
-                  <div><strong>{title}</strong><p>{copy}</p></div>
+        {/* ---------------------------------------------------- Guarantee strip */}
+        <section className="border-y border-border bg-background">
+          <div className="shell flex flex-col gap-8 py-10 lg:flex-row lg:items-center lg:gap-14">
+            <p className="shrink-0 text-[11px] font-semibold uppercase leading-[1.5] tracking-[0.12em] text-muted-foreground">
+              What every V1
+              <br className="hidden lg:block" /> engagement fixes
+            </p>
+            <ul className="flex flex-1 flex-wrap items-center justify-between gap-x-6 gap-y-5">
+              {guarantees.map((item) => (
+                <li
+                  key={item.label}
+                  className="flex items-center gap-2 whitespace-nowrap text-[14px] font-semibold tracking-tight text-foreground/80"
+                >
+                  <item.icon
+                    className="h-[17px] w-[17px] shrink-0 text-primary"
+                    strokeWidth={1.9}
+                  />
+                  {item.label}
                 </li>
               ))}
-            </ol>
+            </ul>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <section id="faq" className="ev-section ev-faq" aria-labelledby="faq-heading">
-        <div className="ev-shell ev-faq-grid">
-          <div className="ev-faq-intro">
-            <span className="ev-chapter">DUE DILIGENCE · FAQ</span>
-            <h2 id="faq-heading">What V1 does—and does not claim.</h2>
-            <p>Clear boundaries are part of the product. A partial or unsafe result is reviewed or blocked, not delivered as certainty.</p>
+        {/* ------------------------------------------------------ How it works */}
+        <section
+          id="how-it-works"
+          className="scroll-mt-20 bg-surface-subtle py-20 lg:py-24"
+        >
+          <div className="shell grid gap-14 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] lg:gap-16">
+            <div className="max-w-sm">
+              <Badge>How it works</Badge>
+              <h2 className="mt-6 text-[34px] font-extrabold leading-[1.1] tracking-tightest sm:text-[38px]">
+                From one question
+                <br />
+                to an honest outcome
+              </h2>
+              <p className="mt-5 text-[15px] leading-relaxed text-muted-foreground">
+                Nothing runs until the question, limits, sampling plan and
+                observation window are approved. After that the controlled
+                baseline runs automatically.
+              </p>
+              <Button asChild variant="outline" className="mt-8 h-11 px-5">
+                <a href="#scope">Scope and limits</a>
+              </Button>
+            </div>
+
+            <div className="relative grid gap-10 sm:grid-cols-3 sm:gap-6">
+              <div
+                aria-hidden="true"
+                className="absolute left-[16.6%] right-[16.6%] top-[21px] hidden h-px bg-border sm:block"
+              />
+              {steps.map((step) => (
+                <div key={step.title} className="sm:text-center">
+                  <span className="relative z-10 flex h-[42px] w-[42px] items-center justify-center rounded-full bg-accent text-[13px] font-bold text-accent-foreground sm:mx-auto">
+                    {step.number}
+                  </span>
+                  <step.icon
+                    className="mt-7 h-6 w-6 text-primary sm:mx-auto"
+                    strokeWidth={1.6}
+                  />
+                  <h3 className="mt-4 text-[17px] font-bold tracking-tight">
+                    {step.title}
+                  </h3>
+                  <p className="mt-2.5 text-[13px] leading-relaxed text-muted-foreground">
+                    {step.copy}
+                  </p>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="ev-faq-list">
-            {faqs.map((faq, index) => (
-              <details key={faq.question}>
-                <summary><span>{String(index + 1).padStart(2, "0")}</span>{faq.question}<i aria-hidden="true">+</i></summary>
-                <p>{faq.answer}</p>
-              </details>
+        </section>
+
+        {/* ---------------------------------------------------------- Features */}
+        <section
+          id="features"
+          className="scroll-mt-20 bg-background py-20 lg:py-24"
+        >
+          <div className="shell">
+            <div className="flex flex-col gap-8 sm:flex-row sm:items-start sm:justify-between">
+              <div className="max-w-lg">
+                <Badge>What you get</Badge>
+                <h2 className="mt-6 text-[34px] font-extrabold leading-[1.1] tracking-tightest sm:text-[38px]">
+                  Everything you need
+                  <br />
+                  for one defensible decision
+                </h2>
+                <p className="mt-5 text-[15px] leading-relaxed text-muted-foreground">
+                  Narrow by design, and auditable end to end.
+                </p>
+              </div>
+              <Button
+                asChild
+                variant="outline"
+                className="h-11 shrink-0 px-5 sm:mt-11"
+              >
+                <a href="#scope">Read the scope</a>
+              </Button>
+            </div>
+
+            <div className="mt-14 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+              {features.map((feature) => (
+                <Card key={feature.title} className="bg-card">
+                  <CardContent className="p-6 pt-6">
+                    <feature.icon
+                      className="h-[22px] w-[22px] text-primary"
+                      strokeWidth={1.7}
+                    />
+                    <h3 className="mt-6 text-[15px] font-bold tracking-tight">
+                      {feature.title}
+                    </h3>
+                    <p className="mt-2.5 text-[13px] leading-relaxed text-muted-foreground">
+                      {feature.copy}
+                    </p>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+
+            {/* Methodology boundary — required on any client-facing surface. */}
+            <div
+              id="scope"
+              className="mt-16 grid scroll-mt-20 gap-10 rounded-xl border border-border bg-surface-muted p-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:p-10"
+            >
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                  Scope and limits
+                </p>
+                <h3 className="mt-4 text-[22px] font-bold leading-snug tracking-tight">
+                  What V1 does not claim
+                </h3>
+                <p className="mt-4 text-[13px] leading-relaxed text-muted-foreground">
+                  Perplexity Sonar is the only live V1 surface, and it is
+                  presented as a directional proxy rather than the whole
+                  AI-search market. V1 produces no market-wide score, no
+                  multi-model coverage, no guaranteed recommendation, and no
+                  causal or revenue attribution. Observed movement is not proof
+                  of causality or revenue impact.
+                </p>
+              </div>
+              <div id="outcomes" className="scroll-mt-20">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                  Every retest ends in one of four statuses
+                </p>
+                <ul className="mt-4 grid gap-2.5 sm:grid-cols-2">
+                  {outcomes.map((outcome) => (
+                    <li
+                      key={outcome}
+                      className="flex items-center gap-2.5 rounded-lg border border-border bg-background px-3.5 py-3 text-[13px] font-semibold tracking-tight"
+                    >
+                      <span
+                        className="h-1.5 w-1.5 rounded-full bg-primary"
+                        aria-hidden="true"
+                      />
+                      {outcome}
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-4 text-[12px] leading-relaxed text-muted-foreground">
+                  Incomplete or inconsistent evidence fails closed. Nothing is
+                  delivered as certainty it cannot support.
+                </p>
+              </div>
+
+              {/* Delivery gates decide what reaches the client, and when. */}
+              <div className="lg:col-span-2">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                  What reaches you, and when
+                </p>
+                <dl className="mt-4 grid gap-4 sm:grid-cols-3">
+                  {deliveryGates.map((gate) => (
+                    <div
+                      key={gate.status}
+                      className="rounded-lg border border-border bg-background p-4"
+                    >
+                      <dt className="flex items-center gap-2 font-mono text-[12px] font-semibold tracking-tight">
+                        <span
+                          className={`h-2 w-2 shrink-0 rounded-full ${gate.tone}`}
+                          aria-hidden="true"
+                        />
+                        {gate.status}
+                      </dt>
+                      <dd className="mt-2 text-[12px] leading-relaxed text-muted-foreground">
+                        {gate.copy}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* --------------------------------------------------------------- FAQ */}
+        <section
+          id="faq"
+          className="scroll-mt-20 bg-surface-subtle py-20 lg:py-24"
+        >
+          <div className="shell grid gap-12 lg:grid-cols-[minmax(0,0.72fr)_minmax(0,1.28fr)] lg:gap-16">
+            <div className="max-w-sm">
+              <Badge>Due diligence</Badge>
+              <h2 className="mt-6 text-[34px] font-extrabold leading-[1.1] tracking-tightest sm:text-[38px]">
+                What V1 does
+                <br />
+                and does not claim
+              </h2>
+              <p className="mt-5 text-[15px] leading-relaxed text-muted-foreground">
+                Clear boundaries are part of the product. A partial or unsafe
+                result is reviewed or blocked, not delivered as certainty.
+              </p>
+            </div>
+
+            <div className="divide-y divide-border border-y border-border">
+              {faqs.map((faq, index) => (
+                <details key={faq.question} className="group py-4">
+                  <summary className="flex cursor-pointer list-none items-center gap-4 text-[15px] font-semibold tracking-tight">
+                    <span className="font-mono text-[11px] text-muted-foreground">
+                      {String(index + 1).padStart(2, "0")}
+                    </span>
+                    <span className="flex-1">{faq.question}</span>
+                    <span
+                      aria-hidden="true"
+                      className="text-[18px] font-normal text-muted-foreground transition-transform group-open:rotate-45"
+                    >
+                      +
+                    </span>
+                  </summary>
+                  <p className="mt-3 pl-[calc(0.75rem+1rem)] text-[13px] leading-relaxed text-muted-foreground">
+                    {faq.answer}
+                  </p>
+                </details>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* --------------------------------------------------------- Final CTA */}
+        <section className="bg-brand-800">
+          <div className="shell flex flex-col gap-8 py-16 lg:flex-row lg:items-center lg:justify-between lg:py-20">
+            <div>
+              <Badge variant="onDark">Ready to get started?</Badge>
+              <h2 className="mt-6 max-w-2xl text-[30px] font-extrabold leading-[1.15] tracking-tightest text-white sm:text-[36px]">
+                Bring one buyer question worth examining.
+              </h2>
+              <p className="mt-4 max-w-xl text-[14px] leading-relaxed text-brand-200">
+                Requesting a demo does not approve a protocol or start an AI
+                call.
+              </p>
+            </div>
+            <Button asChild size="lg" variant="onDark">
+              <a href={DEMO_URL}>
+                Request demo
+                <ArrowRight className="h-4 w-4" strokeWidth={2.25} />
+              </a>
+            </Button>
+          </div>
+        </section>
+
+        {/* ------------------------------------------------------------ Footer */}
+        <footer className="bg-background">
+          <div className="shell grid gap-12 py-16 lg:grid-cols-[minmax(0,1.4fr)_repeat(3,minmax(0,1fr))]">
+            <div>
+              <ZypactWordmark className="text-primary" dotFill="#FFFFFF" />
+              <p className="mt-4 text-[13px] text-muted-foreground">
+                Evidence, not estimates.
+              </p>
+            </div>
+
+            {footerColumns.map((column) => (
+              <nav key={column.heading} aria-label={column.heading}>
+                <p className="text-[13px] font-bold tracking-tight">
+                  {column.heading}
+                </p>
+                <ul className="mt-4 space-y-2.5">
+                  {column.links.map((link) => (
+                    <li key={link.label}>
+                      <a
+                        href={link.href}
+                        className="text-[13px] text-muted-foreground transition-colors hover:text-foreground"
+                      >
+                        {link.label}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </nav>
             ))}
           </div>
-        </div>
-      </section>
 
-      <section className="ev-final-cta" aria-labelledby="final-cta-heading">
-        <div className="ev-shell ev-final-panel">
-          <span className="ev-chapter">START WITH ONE QUESTION</span>
-          <h2 id="final-cta-heading">Bring one buyer question worth examining.</h2>
-          <p>Request access to the V1 workflow. The form does not approve a protocol or start an AI call. After the question and protocol are approved, the controlled baseline runs automatically.</p>
-          <a href={demoRequestUrl} className="ev-button ev-button-primary ev-button-large">Request Demo</a>
-          <span className="ev-final-note">PERPLEXITY SONAR V1 · AUTOMATED AFTER APPROVAL · HONEST OUTCOME</span>
-        </div>
-      </section>
-
-      <footer className="ev-footer">
-        <div className="ev-shell ev-footer-grid">
-          <ZypactLogo href="#top" className="ev-wordmark" />
-          <nav aria-label="Footer navigation">
-            <a href="#evidence">Evidence</a>
-            <a href="#method">Method</a>
-            <a href="#faq">FAQ</a>
-          </nav>
-          <span>Perplexity Sonar V1 · © 2026 Zypact</span>
-        </div>
-      </footer>
-    </main>
+          <div className="shell flex flex-col gap-2 border-t border-border py-6 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-[12px] text-muted-foreground">
+              Perplexity Sonar V1 · Automated after approval · No guaranteed
+              outcome
+            </p>
+            <p className="text-[12px] text-muted-foreground">© 2026 Zypact</p>
+          </div>
+        </footer>
+      </div>
+    </div>
   );
 }

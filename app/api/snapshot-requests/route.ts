@@ -8,13 +8,9 @@ import {
 import {
   extractRequestIp,
   hashRequestIp,
-  parseSnapshotRequestSubmission,
+  normalizeSnapshotRequestInput,
   SnapshotRequestValidationError,
 } from "@/lib/snapshot-requests/normalize-request";
-import {
-  SNAPSHOT_TURNSTILE_ACTION,
-  verifyTurnstileToken,
-} from "@/lib/snapshot-requests/turnstile";
 import {
   sendSnapshotVerificationEmail,
   SnapshotEmailDeliveryError,
@@ -176,16 +172,12 @@ export async function POST(request: Request) {
   const ipHashSecret =
     process.env.SNAPSHOT_IP_HASH_SECRET;
 
-  const turnstileSecret =
-    process.env.TURNSTILE_SECRET_KEY;
-
   const emailFlow =
     readEmailFlowConfiguration();
 
   if (
     !ipHashSecret ||
     ipHashSecret.length < 32 ||
-    !turnstileSecret ||
     !emailFlow
   ) {
     console.error(
@@ -234,47 +226,11 @@ export async function POST(request: Request) {
   }
 
   try {
-    const submission =
-      parseSnapshotRequestSubmission(body);
+    const input =
+      normalizeSnapshotRequestInput(body);
 
     const requestIp =
       extractRequestIp(request.headers);
-
-    const turnstile =
-      await verifyTurnstileToken({
-        token: submission.turnstileToken,
-        secret: turnstileSecret,
-        remoteIp: requestIp,
-        expectedAction:
-          SNAPSHOT_TURNSTILE_ACTION,
-        expectedHostname:
-          process.env
-            .TURNSTILE_EXPECTED_HOSTNAME ||
-          null,
-      });
-
-    if (!turnstile.ok) {
-      console.warn(
-        JSON.stringify({
-          ts: new Date().toISOString(),
-          level: "warn",
-          event:
-            "snapshot_request_turnstile_rejected",
-          reason: turnstile.reason,
-          errorCodes:
-            turnstile.errorCodes,
-        })
-      );
-
-      return NextResponse.json(
-        {
-          ok: false,
-          error:
-            "Complete the security check and try again.",
-        },
-        { status: 400 }
-      );
-    }
 
     const requestIpHash =
       hashRequestIp(
@@ -286,7 +242,7 @@ export async function POST(request: Request) {
 
     const saved =
       await db.createSnapshotRequest({
-        ...submission.input,
+        ...input,
         requestIpHash,
       });
 

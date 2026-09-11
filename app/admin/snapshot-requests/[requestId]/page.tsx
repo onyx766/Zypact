@@ -1,4 +1,30 @@
+import type { ReactNode } from "react";
+import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
+import {
+  Activity,
+  ArrowLeft,
+  ArrowUpRight,
+  Building2,
+  CalendarDays,
+  ChartLine,
+  ChartNoAxesColumn,
+  ChevronDown,
+  CircleCheck,
+  Download,
+  Eye,
+  FileText,
+  Hash,
+  Info,
+  Layers,
+  ListChecks,
+  Lock,
+  Play,
+  ShieldCheck,
+  TriangleAlert,
+  User,
+} from "lucide-react";
+
 import { getDb } from "@/lib/db";
 import {
   requireFounderForPage,
@@ -7,7 +33,27 @@ import { ApproveButton } from "../approve-button";
 import { RejectButton } from "../reject-button";
 import { SendReportButton } from "../send-report-button";
 import { ReplaceReportPanel } from "../replace-report-panel";
+import { ReviewPanel } from "../review-panel";
+import { getReportServiceClient } from "@/lib/reports/service-client";
+import { loadReviewState } from "@/lib/reports/review-actions";
 import { toSnapshotReportPublicationState } from "@/lib/snapshot-requests/report-publication-state";
+import {
+  isProtocolReportPayload,
+  type ProtocolReportPayload,
+} from "@/lib/reports/protocol-report-types";
+import { cn } from "@/lib/utils";
+import { AdminThemeRoot, ThemeToggle } from "../../theme";
+import { ADMIN_THEME_COOKIE, parseAdminTheme } from "../../theme-shared";
+import {
+  INTEGRITY_PRESENTATION,
+  dotClass,
+  humanize,
+  requestStatusTone,
+  toneClass,
+  ui,
+  type Tone,
+} from "../../ui-classes";
+import { CopyButton } from "./copy-button";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -37,17 +83,54 @@ function formatDate(
   ).format(date);
 }
 
-function statusLabel(
-  value: string
-): string {
-  return value
-    .split("_")
-    .map(
-      (part) =>
-        part.charAt(0).toUpperCase() +
-        part.slice(1)
-    )
-    .join(" ");
+function percent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function plural(count: number, word: string): string {
+  return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * Stable monogram tint, derived from the domain rather than fetched from a
+ * favicon service, which would hand a prospect's domain to a third party on
+ * every page load.
+ */
+function avatarStyle(seed: string): React.CSSProperties {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = (hash * 31 + seed.charCodeAt(i)) % 360;
+  }
+
+  return {
+    background: `linear-gradient(145deg, hsl(${hash} 62% 52%), hsl(${(hash + 28) % 360} 58% 38%))`,
+  };
+}
+
+function runStatusTone(status: string): Tone {
+  if (/fail|error/i.test(status)) return "danger";
+  if (/exclud/i.test(status)) return "warning";
+  if (/complet|success/i.test(status)) return "success";
+  return "neutral";
+}
+
+function IconTile({
+  children,
+  tone = "neutral",
+}: {
+  children: ReactNode;
+  tone?: Tone;
+}) {
+  return (
+    <span
+      className={cn(
+        "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border",
+        toneClass[tone]
+      )}
+    >
+      {children}
+    </span>
+  );
 }
 
 function DetailRow({
@@ -55,39 +138,116 @@ function DetailRow({
   children,
 }: {
   label: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns:
-          "minmax(150px, 220px) 1fr",
-        gap: 20,
-        padding: "14px 0",
-        borderBottom:
-          "1px solid #eeeeee",
-      }}
-    >
-      <strong
-        style={{
-          color: "#666",
-          fontSize: 13,
-        }}
-      >
-        {label}
-      </strong>
+    <div className={cn(ui.subPanel, "min-w-0 px-4 py-3")}>
+      <dt className={ui.label}>{label}</dt>
+      <dd className="mt-1.5 text-sm text-foreground [overflow-wrap:anywhere]">
+        {children}
+      </dd>
+    </div>
+  );
+}
 
-      <div
-        style={{
-          minWidth: 0,
-          overflowWrap:
-            "anywhere",
-        }}
-      >
+function MetaItem({
+  icon,
+  label,
+  children,
+}: {
+  icon: ReactNode;
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex min-w-0 items-start gap-3 bg-card px-6 py-4">
+      <span className="mt-0.5 text-muted-foreground">{icon}</span>
+      <div className="min-w-0">
+        <dt className="text-xs text-muted-foreground">{label}</dt>
+        <dd className="mt-1 text-sm font-medium text-foreground [overflow-wrap:anywhere]">
+          {children}
+        </dd>
+      </div>
+    </div>
+  );
+}
+
+function Metric({
+  icon,
+  tone,
+  label,
+  value,
+  hint,
+  children,
+}: {
+  icon: ReactNode;
+  tone: Tone;
+  label: string;
+  value: ReactNode;
+  hint?: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div className={cn(ui.panel, "flex items-start gap-4 p-5")}>
+      <IconTile tone={tone}>{icon}</IconTile>
+      <div className="min-w-0 flex-1">
+        <p className="text-xs text-muted-foreground first-letter:uppercase">
+          {label}
+        </p>
+        <p className="mt-2 text-2xl font-bold tracking-tight text-foreground">
+          {value}
+        </p>
+        {hint ? (
+          <p className="mt-1.5 text-xs text-muted-foreground">{hint}</p>
+        ) : null}
         {children}
       </div>
     </div>
+  );
+}
+
+/**
+ * Collapsible section row. A native <details>, so it opens and closes without
+ * any client JavaScript.
+ */
+function Disclosure({
+  icon,
+  title,
+  description,
+  badge,
+  defaultOpen = false,
+  children,
+}: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+  badge?: ReactNode;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <details
+      className={cn(ui.panel, "group mt-4 overflow-hidden")}
+      open={defaultOpen}
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-4 px-6 py-5 transition-colors hover:bg-muted/40 [&::-webkit-details-marker]:hidden">
+        <IconTile>{icon}</IconTile>
+        <span className="min-w-0 flex-1">
+          <span className="block text-base font-semibold tracking-tight text-foreground">
+            {title}
+          </span>
+          <span className="mt-0.5 block text-sm text-muted-foreground">
+            {description}
+          </span>
+        </span>
+        {badge}
+        <ChevronDown
+          size={18}
+          className="shrink-0 text-muted-foreground transition-transform group-open:rotate-180"
+        />
+      </summary>
+      <div className="border-t border-border px-6 py-5">{children}</div>
+    </details>
   );
 }
 
@@ -108,74 +268,136 @@ function ReportPreview({
   heading,
   filename,
   markdown,
+  downloadHref,
 }: {
   heading: string;
   filename: string;
   markdown: string;
+  downloadHref: string;
 }) {
   const isEmpty =
     markdown.trim().length === 0;
 
   return (
-    <section
-      className="founder-report-preview"
-      style={{ marginTop: 24 }}
-    >
-      <h3
-        style={{
-          margin: "0 0 8px",
-          fontSize: 15,
-        }}
-      >
-        {heading}
-      </h3>
+    <section className={cn(ui.panel, "flex min-w-0 flex-col overflow-hidden")}>
+      <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
+        <div className="min-w-0">
+          <h3 className="text-[15px] font-semibold tracking-tight text-foreground">
+            {heading}
+          </h3>
+          <p className="mt-0.5 truncate font-mono text-[11.5px] text-muted-foreground">
+            {filename}
+          </p>
+        </div>
 
-      <p
-        style={{
-          margin: "0 0 10px",
-          color: "#777",
-          fontSize: 12,
-        }}
-      >
-        {filename} ·{" "}
-        {markdown.length.toLocaleString(
-          "en-US"
-        )}{" "}
-        characters
-      </p>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="rounded-full border border-border px-2.5 py-1 text-[11px] text-muted-foreground">
+            {markdown.length.toLocaleString(
+              "en-US"
+            )}{" "}
+            characters
+          </span>
+          {isEmpty ? null : (
+            <CopyButton
+              value={markdown}
+              label={`Copy ${heading.toLowerCase()}`}
+            />
+          )}
+          <a
+            href={downloadHref}
+            aria-label={`Download ${heading.toLowerCase()}`}
+            title={`Download ${heading.toLowerCase()}`}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <Download size={14} strokeWidth={2} />
+          </a>
+        </div>
+      </div>
 
       {isEmpty ? (
-        <p
-          style={{
-            margin: 0,
-            color: "#777",
-            fontSize: 13,
-          }}
-        >
+        <p className="px-5 py-10 text-center text-sm text-muted-foreground">
           This report is empty.
         </p>
       ) : (
-        <pre
-          style={{
-            maxHeight: 520,
-            overflow: "auto",
-            margin: 0,
-            padding: 20,
-            borderRadius: 12,
-            background: "#f7f7f7",
-            whiteSpace: "pre-wrap",
-            overflowWrap: "anywhere",
-            fontFamily:
-              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-            fontSize: 13,
-            lineHeight: 1.6,
-          }}
+        <div
+          className="bg-muted/40 py-3 font-mono text-[12.5px] leading-6"
+          style={{ maxHeight: 520, overflow: "auto" }}
         >
-          {markdown}
-        </pre>
+          {markdown.split("\n").map((line, index) => (
+            <div key={index} className="flex gap-4 px-4">
+              <span
+                aria-hidden="true"
+                className="w-8 shrink-0 select-none text-right text-muted-foreground/60"
+              >
+                {index + 1}
+              </span>
+              <span
+                className="min-w-0 flex-1 text-foreground [overflow-wrap:anywhere]"
+                style={{ whiteSpace: "pre-wrap" }}
+              >
+                {line || " "}
+              </span>
+            </div>
+          ))}
+        </div>
       )}
     </section>
   );
+}
+
+/**
+ * Plain-language summary of the stored payload. Every line is derived from
+ * the payload's own counts, so it can never say more than the evidence does:
+ * an empty result is called empty, not zero, and a reconciliation mismatch is
+ * surfaced rather than smoothed over.
+ */
+function buildTakeaways(
+  payload: ProtocolReportPayload
+): { kind: "fact" | "caveat" | "alert"; text: string }[] {
+  const { observation, reconciliation } = payload;
+  const items: { kind: "fact" | "caveat" | "alert"; text: string }[] = [];
+
+  items.push({
+    kind: "fact",
+    text: `${reconciliation.completed} of ${plural(
+      reconciliation.attempted,
+      "attempt"
+    )} completed · ${reconciliation.failed} failed · ${reconciliation.excludedByReview} excluded after review.`,
+  });
+
+  if (observation.denominator === 0 || observation.rate === null) {
+    items.push({
+      kind: "caveat",
+      text: "No run produced a readable provider result, so no rate is reported. This is an empty result, not a zero.",
+    });
+  } else {
+    const interval = observation.interval
+      ? `; 95% interval ${percent(observation.interval.low)} – ${percent(
+          observation.interval.high
+        )}`
+      : "";
+    items.push({
+      kind: "fact",
+      text: `The brand appeared in ${observation.numerator} of ${plural(
+        observation.denominator,
+        "readable run"
+      )} (${percent(observation.rate)}${interval}).`,
+    });
+  }
+
+  items.push({
+    kind: "caveat",
+    text: "Single surface, point-in-time: not a measure of how all AI assistants describe this brand.",
+  });
+
+  if (!reconciliation.accountedFor) {
+    items.push({
+      kind: "alert",
+      text: "These counts do not reconcile and this report requires review.",
+    });
+  }
+
+  return items;
 }
 
 export default async function SnapshotRequestDetailPage({
@@ -191,7 +413,7 @@ export default async function SnapshotRequestDetailPage({
     notFound();
   }
 
-  await requireFounderForPage(
+  const user = await requireFounderForPage(
     `/admin/snapshot-requests/${requestId}`
   );
 
@@ -211,274 +433,140 @@ export default async function SnapshotRequestDetailPage({
     notFound();
   }
 
+  // Best-effort: the review surface must never take the whole page down. A
+  // request that predates the protocol path, or a transient read failure,
+  // renders the page without the panel rather than a 500.
+  let reviewState: Awaited<ReturnType<typeof loadReviewState>> | null = null;
+  try {
+    reviewState = await loadReviewState(
+      getReportServiceClient(),
+      requestId
+    );
+  } catch {
+    reviewState = null;
+  }
+
+  const theme = parseAdminTheme(
+    (await cookies()).get(ADMIN_THEME_COOKIE)?.value
+  );
+
+  // Protocol sections render only from a canonical V1 payload. Legacy
+  // artifacts have none, and nothing here re-derives one from Markdown.
+  const payload =
+    artifact && isProtocolReportPayload(artifact.reportPayload)
+      ? artifact.reportPayload
+      : null;
+
+  const publication = artifact
+    ? toSnapshotReportPublicationState(artifact)
+    : null;
+
+  const integrity = artifact?.integrityStatus
+    ? INTEGRITY_PRESENTATION[artifact.integrityStatus] ?? {
+        label: humanize(artifact.integrityStatus),
+        tone: "neutral" as Tone,
+      }
+    : null;
+
+  // A blocked report is not readable by the client even with the link, so
+  // the page does not offer a link that would only 404.
+  const blocked = artifact?.integrityStatus === "blocked";
+
+  const reconciliation = payload?.reconciliation ?? null;
+  const observation = payload?.observation ?? null;
+  const completedShare =
+    reconciliation && reconciliation.planned > 0
+      ? Math.min(100, (reconciliation.completed / reconciliation.planned) * 100)
+      : 0;
+
   return (
-    <main
-      className="founder-page founder-request-detail"
-      style={{
-        minHeight: "100vh",
-        background: "#fafafa",
-      }}
-    >
-      <section
-        className="founder-shell"
-        style={{
-          maxWidth: 1040,
-          margin: "0 auto",
-          padding:
-            "40px 24px 80px",
-        }}
-      >
+    <AdminThemeRoot initialTheme={theme}>
+      <div className="sticky top-0 z-30 border-b border-border bg-background/80 backdrop-blur">
+        <div className="mx-auto flex h-16 w-full max-w-6xl items-center gap-8 px-6">
+          <a
+            href="/admin/snapshot-requests"
+            className="text-lg font-bold tracking-tight text-foreground"
+          >
+            Zypact
+          </a>
+          <nav className="hidden items-center gap-6 text-sm sm:flex">
+            <a
+              href="/admin/snapshot-requests"
+              className="font-medium text-foreground"
+            >
+              Snapshot requests
+            </a>
+          </nav>
+          <div className="ml-auto flex items-center gap-3">
+            <ThemeToggle />
+            {user.email ? (
+              <span className="hidden text-sm text-muted-foreground md:inline">
+                {user.email}
+              </span>
+            ) : null}
+            <a href="/auth/logout" className={cn(ui.btnOutline, ui.btnSm)}>
+              Sign out
+            </a>
+          </div>
+        </div>
+      </div>
+
+      <main className="mx-auto w-full max-w-6xl flex-1 px-6 pb-16 pt-6">
         <a
           href="/admin/snapshot-requests"
-          style={{
-            display: "inline-block",
-            marginBottom: 24,
-            color: "#555",
-            textDecoration:
-              "underline",
-          }}
+          className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline"
         >
-          ← Back to snapshot requests
+          <ArrowLeft size={16} strokeWidth={2} />
+          Back to snapshot requests
         </a>
 
-        <div
-          style={{
-            display: "flex",
-            alignItems: "flex-start",
-            justifyContent:
-              "space-between",
-            gap: 24,
-            flexWrap: "wrap",
-            marginBottom: 28,
-          }}
-        >
-          <div>
-            <p
-              style={{
-                margin: "0 0 8px",
-                color: "#888",
-                fontSize: 13,
-                textTransform:
-                  "uppercase",
-                letterSpacing:
-                  "0.04em",
-              }}
+        {/* ---------------------------------------------------- header */}
+        <div className="mt-6 flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex min-w-0 items-start gap-5">
+            <span
+              aria-hidden="true"
+              className="flex h-[72px] w-[72px] shrink-0 items-center justify-center rounded-2xl text-3xl font-bold uppercase text-white shadow-lg"
+              style={avatarStyle(request.normalizedDomain)}
             >
-              Founder operations
-            </p>
+              {request.companyName.trim().charAt(0) || "?"}
+            </span>
 
-            <h1
-              style={{
-                margin: 0,
-                fontSize: 38,
-                lineHeight: 1.1,
-              }}
-            >
-              {request.companyName}
-            </h1>
-
-            <p
-              style={{
-                margin: "10px 0 0",
-                color: "#666",
-              }}
-            >
-              {request.normalizedDomain}
-            </p>
+            <div className="min-w-0">
+              <h1 className="max-w-none text-[30px] font-bold leading-tight tracking-[-0.02em] text-foreground sm:text-[34px]">
+                {request.companyName}
+              </h1>
+              <a
+                href={request.websiteUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-flex items-center gap-1.5 text-[15px] text-muted-foreground hover:text-foreground"
+              >
+                {request.normalizedDomain}
+                <ArrowUpRight size={14} strokeWidth={2} />
+              </a>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <span
+                  className={cn(ui.pill, toneClass[requestStatusTone(request.status)])}
+                >
+                  {humanize(request.status)}
+                </span>
+                {payload ? (
+                  <span className={cn(ui.pill, toneClass.neutral)}>
+                    AI answer snapshot
+                  </span>
+                ) : null}
+                {integrity ? (
+                  <span className={cn(ui.pill, toneClass[integrity.tone])}>
+                    {integrity.label}
+                  </span>
+                ) : null}
+              </div>
+            </div>
           </div>
 
-          <span
-            className={`founder-status founder-status-${request.status}`}
-            style={{
-              display:
-                "inline-flex",
-              borderRadius: 999,
-              background: "#eeeeee",
-              padding:
-                "8px 12px",
-              fontSize: 13,
-              fontWeight: 700,
-            }}
-          >
-            {statusLabel(
-              request.status
-            )}
-          </span>
-        </div>
-
-        <section
-          className="founder-info-card"
-          style={{
-            border:
-              "1px solid #e5e5e5",
-            borderRadius: 14,
-            background: "#fff",
-            padding:
-              "10px 24px",
-            marginBottom: 28,
-          }}
-        >
-          <DetailRow label="Website">
-            <a
-              href={request.websiteUrl}
-              target="_blank"
-              rel="noreferrer"
-              style={{
-                textDecoration:
-                  "underline",
-              }}
-            >
-              {request.websiteUrl}
-            </a>
-          </DetailRow>
-
-          <DetailRow label="Contact">
-            <a
-              href={`mailto:${request.workEmail}`}
-              style={{
-                textDecoration:
-                  "underline",
-              }}
-            >
-              {request.workEmail}
-            </a>
-          </DetailRow>
-
-          <DetailRow label="Buyer category">
-            {request.buyerCategory}
-          </DetailRow>
-
-          <DetailRow label="Progress">
-            {request.progressStage
-              ? statusLabel(
-                  request.progressStage
-                )
-              : "—"}
-          </DetailRow>
-
-          <DetailRow label="Project ID">
-            {request.projectId || "—"}
-          </DetailRow>
-
-          <DetailRow label="Requested">
-            {formatDate(
-              request.createdAt
-            )}
-          </DetailRow>
-
-          <DetailRow label="Updated">
-            {formatDate(
-              request.updatedAt
-            )}
-          </DetailRow>
-
-          <DetailRow label="Approval">
-            {request.approvedAt
-              ? "Approved"
-              : "Not approved yet"}
-          </DetailRow>
-
-          <DetailRow label="Approved at">
-            {formatDate(
-              request.approvedAt
-            )}
-          </DetailRow>
-
-          {/*
-            Founder-only review metadata. `approvedBy` is an internal auth
-            user id and is deliberately not surfaced on the public report
-            page — this detail page is gated by requireFounderForPage.
-          */}
-          <DetailRow label="Approved by">
-            {request.approvedBy || "—"}
-          </DetailRow>
-        </section>
-
-        {request.status ===
-        "pending_approval" ? (
-          <section
-            className="founder-decision-row"
-            style={{
-              display: "flex",
-              gap: 12,
-              flexWrap: "wrap",
-              marginBottom: 28,
-            }}
-          >
-            <ApproveButton
-              requestId={request.id}
-              competitors={
-                request.competitors
-              }
-              scannedCompany={
-                request.companyName
-              }
-              scannedDomain={
-                request.normalizedDomain
-              }
-            />
-
-            <RejectButton
-              requestId={request.id}
-            />
-          </section>
-        ) : null}
-
-        <section
-          className="founder-report-card"
-          style={{
-            border:
-              "1px solid #e5e5e5",
-            borderRadius: 14,
-            background: "#fff",
-            padding: 24,
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              alignItems:
-                "flex-start",
-              justifyContent:
-                "space-between",
-              gap: 20,
-              flexWrap: "wrap",
-              marginBottom: 20,
-            }}
-          >
-            <div>
-              <h2
-                style={{
-                  margin: 0,
-                  fontSize: 24,
-                }}
-              >
-                Snapshot report
-              </h2>
-
-              <p
-                style={{
-                  margin:
-                    "8px 0 0",
-                  color: "#666",
-                }}
-              >
-                {artifact
-                  ? `Generated ${formatDate(
-                      artifact.generatedAt
-                    )}`
-                  : "No persisted report is available yet."}
-              </p>
-            </div>
-
-            {artifact ? (
-              <div
-                style={{
-                  display: "flex",
-                  gap: 10,
-                  flexWrap: "wrap",
-                }}
-              >
+          {artifact && publication ? (
+            <div className="flex flex-col items-start gap-2 lg:items-end">
+              <div className="flex flex-wrap items-start gap-2 lg:justify-end">
                 <SendReportButton
                   requestId={request.id}
                   recipientEmail={request.workEmail}
@@ -486,111 +574,544 @@ export default async function SnapshotRequestDetailPage({
                     artifact.deliveredAt
                   )}
                   expectedArtifactId={artifact.id}
-                  expectedRevision={
-                    toSnapshotReportPublicationState(
-                      artifact
-                    ).revision
-                  }
+                  expectedRevision={publication.revision}
                   deliveryClaimActive={
                     artifact.deliveryClaimActive
                   }
                 />
 
-                <a
-                  href={`/report/${artifact.publicToken}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{
-                    display:
-                      "inline-flex",
-                    alignItems:
-                      "center",
-                    minHeight: 38,
-                    border:
-                      "1px solid #111",
-                    borderRadius: 999,
-                    padding:
-                      "0 14px",
-                    background: "#fff",
-                    color: "#111",
-                    textDecoration:
-                      "none",
-                    fontWeight: 600,
-                  }}
-                >
-                  Preview client report
-                </a>
+                <details className="group relative">
+                  <summary
+                    className={cn(
+                      ui.btnOutline,
+                      "cursor-pointer list-none [&::-webkit-details-marker]:hidden"
+                    )}
+                  >
+                    Download report
+                    <ChevronDown
+                      size={16}
+                      className="transition-transform group-open:rotate-180"
+                    />
+                  </summary>
+                  <div className="absolute right-0 z-20 mt-2 w-72 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-xl">
+                    <a
+                      href={`/api/internal/snapshot-requests/${request.id}/reports/short`}
+                      className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-foreground hover:bg-muted"
+                    >
+                      <FileText size={16} className="text-muted-foreground" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block font-medium">Short report</span>
+                        <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                          {artifact.shortReportFilename}
+                        </span>
+                      </span>
+                    </a>
+                    <a
+                      href={`/api/internal/snapshot-requests/${request.id}/reports/full`}
+                      className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-foreground hover:bg-muted"
+                    >
+                      <FileText size={16} className="text-muted-foreground" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block font-medium">Full report</span>
+                        <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                          {artifact.fullReportFilename}
+                        </span>
+                      </span>
+                    </a>
+                  </div>
+                </details>
 
-                <a
-                  href={`/api/internal/snapshot-requests/${request.id}/reports/short`}
-                  style={{
-                    display:
-                      "inline-flex",
-                    alignItems:
-                      "center",
-                    minHeight: 38,
-                    border:
-                      "1px solid #d0d0d0",
-                    borderRadius: 999,
-                    padding:
-                      "0 14px",
-                    color: "#111",
-                    textDecoration:
-                      "none",
-                    fontWeight: 600,
-                  }}
-                >
-                  Download short report
-                </a>
-
-                <a
-                  href={`/api/internal/snapshot-requests/${request.id}/reports/full`}
-                  style={{
-                    display:
-                      "inline-flex",
-                    alignItems:
-                      "center",
-                    minHeight: 38,
-                    borderRadius: 999,
-                    padding:
-                      "0 14px",
-                    background: "#111",
-                    color: "#fff",
-                    textDecoration:
-                      "none",
-                    fontWeight: 600,
-                  }}
-                >
-                  Download full report
-                </a>
+                {blocked ? (
+                  <span
+                    className={cn(ui.btnOutline, "pointer-events-none opacity-60")}
+                    title="A blocked report is never readable by the client."
+                  >
+                    <Lock size={15} strokeWidth={2} />
+                    Blocked — not viewable
+                  </span>
+                ) : (
+                  <a
+                    href={`/report/${artifact.publicToken}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={ui.btnPrimary}
+                  >
+                    Open client report
+                    <ArrowUpRight size={16} strokeWidth={2.2} />
+                  </a>
+                )}
               </div>
+              <p className="text-xs text-muted-foreground">
+                Generated {formatDate(artifact.generatedAt)} · Delivered{" "}
+                {artifact.deliveredAt ? formatDate(artifact.deliveredAt) : "No"}
+              </p>
+            </div>
+          ) : null}
+        </div>
+
+        {/* ------------------------------------------ approval decision */}
+        {request.status ===
+        "pending_approval" ? (
+          <section className={cn(ui.panel, "mt-6 p-6")}>
+            <div className="flex items-start gap-4">
+              <IconTile tone="warning">
+                <ShieldCheck size={20} strokeWidth={1.9} />
+              </IconTile>
+              <div>
+                <h2 className="max-w-none text-lg font-semibold leading-snug tracking-tight text-foreground">
+                  Approval decision
+                </h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Review the question and competitor frame, then approve or
+                  reject. Approving stores the frame and queues one baseline
+                  job; rejecting means no AI scan runs.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
+              <ApproveButton
+                requestId={request.id}
+                competitors={request.competitors}
+                scannedCompany={request.companyName}
+                scannedDomain={request.normalizedDomain}
+              />
+
+              <RejectButton
+                requestId={request.id}
+              />
+            </div>
+          </section>
+        ) : null}
+
+        {/* --------------------------------------------- buyer question */}
+        <section className={cn(ui.panel, "mt-6 overflow-hidden")}>
+          <div className="p-6 sm:p-7">
+            <p className={ui.label}>Buyer question</p>
+            <h2 className="mt-3 max-w-4xl text-2xl font-bold leading-snug tracking-[-0.015em] text-foreground sm:text-[28px]">
+              {request.buyerCategory}
+            </h2>
+            {payload &&
+            payload.question.text.trim() !== request.buyerCategory.trim() ? (
+              <p className="mt-3 text-sm text-muted-foreground">
+                Approved wording (version {payload.question.versionNumber}):{" "}
+                <span className="text-foreground">{payload.question.text}</span>
+              </p>
             ) : null}
           </div>
 
-          {artifact ? (
-            <>
-              <p
-                style={{
-                  color: "#777",
-                  fontSize: 13,
-                }}
+          <dl className="grid gap-px border-t border-border bg-border sm:grid-cols-2 lg:grid-cols-5">
+            <MetaItem icon={<Building2 size={18} />} label="Company">
+              {request.companyName}
+            </MetaItem>
+            <MetaItem icon={<User size={18} />} label="Contact">
+              {request.contactName || "—"}
+              <a
+                href={`mailto:${request.workEmail}`}
+                className="mt-0.5 block text-xs font-normal text-muted-foreground hover:text-foreground hover:underline"
               >
-                Short report:{" "}
-                {artifact.shortReportMarkdown.length.toLocaleString(
-                  "en-US"
-                )}{" "}
-                characters · Full report:{" "}
-                {artifact.fullReportMarkdown.length.toLocaleString(
-                  "en-US"
-                )}{" "}
-                characters · Delivered:{" "}
-                {artifact.deliveredAt
-                  ? formatDate(
-                      artifact.deliveredAt
-                    )
-                  : "No"}
-              </p>
+                {request.workEmail}
+              </a>
+            </MetaItem>
+            <MetaItem icon={<CalendarDays size={18} />} label="Requested">
+              {formatDate(
+                request.createdAt
+              )}
+            </MetaItem>
+            <MetaItem icon={<Activity size={18} />} label="Status">
+              <span
+                className={cn(ui.pill, "mt-0.5", toneClass[requestStatusTone(request.status)])}
+              >
+                {humanize(request.status)}
+              </span>
+            </MetaItem>
+            <MetaItem icon={<Hash size={18} />} label="Report ID">
+              {artifact ? (
+                <span className="font-mono text-xs font-normal">
+                  {artifact.id}
+                </span>
+              ) : (
+                <span className="font-normal text-muted-foreground">
+                  No report yet
+                </span>
+              )}
+            </MetaItem>
+          </dl>
+        </section>
 
+        {/* ------------------------------------------------- metrics */}
+        {payload && reconciliation && observation ? (
+          <>
+            <section className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <Metric
+                icon={<Layers size={20} strokeWidth={1.9} />}
+                tone="success"
+                label="Runs completed"
+                value={
+                  <>
+                    {reconciliation.completed}
+                    <span className="ml-2 text-sm font-normal text-muted-foreground">
+                      of {reconciliation.planned} planned
+                    </span>
+                  </>
+                }
+                hint={`${reconciliation.attempted} attempted · ${reconciliation.failed} failed · ${reconciliation.excludedByReview} excluded`}
+              >
+                <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-primary"
+                    style={{ width: `${completedShare}%` }}
+                  />
+                </div>
+              </Metric>
+              <Metric
+                icon={<Eye size={20} strokeWidth={1.9} />}
+                tone="info"
+                label="Readable results"
+                value={observation.denominator}
+                hint={
+                  observation.denominator === 0
+                    ? "No readable runs"
+                    : `${observation.numerator} named the brand`
+                }
+              />
+              <Metric
+                icon={<ChartNoAxesColumn size={20} strokeWidth={2} />}
+                tone="neutral"
+                label={observation.metric.replace(/_/g, " ")}
+                value={
+                  observation.rate === null
+                    ? "Not measured"
+                    : percent(observation.rate)
+                }
+                hint={
+                  observation.rate === null
+                    ? "Rate not reported"
+                    : `${observation.numerator} of ${plural(
+                        observation.denominator,
+                        "readable run"
+                      )}`
+                }
+              />
+              <Metric
+                icon={<ChartLine size={20} strokeWidth={1.9} />}
+                tone="neutral"
+                label="95% confidence interval"
+                value={
+                  observation.interval
+                    ? `${percent(observation.interval.low)} – ${percent(
+                        observation.interval.high
+                      )}`
+                    : "Not available"
+                }
+                hint="Wilson, from this sample"
+              />
+            </section>
+
+            {/* ------------------------------------ what this report is */}
+            <section className={cn(ui.panel, "mt-4 flex flex-col gap-5 p-6 sm:flex-row")}>
+              <IconTile>
+                <FileText size={20} strokeWidth={1.9} />
+              </IconTile>
+              <div className="min-w-0 flex-1">
+                <h2 className="max-w-none text-lg font-semibold leading-snug tracking-tight text-foreground">
+                  What this report is
+                </h2>
+                <p className="mt-2 max-w-3xl text-[15px] leading-relaxed text-muted-foreground">
+                  This records what {payload.protocol.provider} returned when
+                  asked this buyer question,{" "}
+                  {plural(reconciliation.attempted, "time")}. It is a
+                  directional reading of one surface, not a measure of how all
+                  AI assistants describe you.
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <span className={ui.chip}>
+                    Surface: {payload.protocol.provider} ({payload.protocol.surface})
+                  </span>
+                  <span className={ui.chip}>Model: {payload.protocol.model}</span>
+                  <span className={ui.chip}>
+                    Methodology v{payload.protocol.methodologyVersion}
+                  </span>
+                  <span className={ui.chip}>
+                    Generated {payload.generatedAt.slice(0, 10)}
+                  </span>
+                  <span className={ui.chip}>Single surface</span>
+                  <span className={ui.chip}>Prompt-scoped</span>
+                </div>
+                <div className="mt-4 flex items-start gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className={ui.label}>Prompt hash</p>
+                    <p className="mt-1 break-all font-mono text-xs text-foreground">
+                      {payload.question.hash}
+                    </p>
+                  </div>
+                  <CopyButton value={payload.question.hash} label="Copy prompt hash" />
+                </div>
+              </div>
+            </section>
+
+            {/* ---------------------------------------- key takeaways */}
+            <Disclosure
+              defaultOpen
+              icon={<ListChecks size={20} strokeWidth={1.9} />}
+              title="Key takeaways"
+              description="A quick summary of what this report shows and what it doesn't."
+            >
+              <ul className="space-y-3 rounded-xl border border-success/25 bg-success/5 p-5">
+                {buildTakeaways(payload).map((item) => (
+                  <li key={item.text} className="flex items-start gap-3 text-sm">
+                    {item.kind === "fact" ? (
+                      <CircleCheck size={17} className="mt-0.5 shrink-0 text-success" />
+                    ) : item.kind === "alert" ? (
+                      <TriangleAlert size={17} className="mt-0.5 shrink-0 text-destructive" />
+                    ) : (
+                      <Info size={17} className="mt-0.5 shrink-0 text-muted-foreground" />
+                    )}
+                    <span
+                      className={cn(
+                        "text-foreground",
+                        item.kind === "alert" && "font-semibold text-destructive"
+                      )}
+                    >
+                      {item.text}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </Disclosure>
+
+            {/* ---------------------------------------------- run by run */}
+            <Disclosure
+              icon={<Play size={20} strokeWidth={1.9} />}
+              title="Run by run"
+              description="Details for each attempted run, including status and any exclusions."
+              badge={
+                <span className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground">
+                  {plural(payload.runs.length, "run")}
+                </span>
+              }
+            >
+              <div className="overflow-x-auto rounded-xl border border-border">
+                <table className="w-full min-w-[760px] border-collapse text-sm">
+                  <thead>
+                    <tr className="bg-muted/50 text-left">
+                      {["Run", "Status", "Your brand", "Other brands named", "Sources", "Evidence"].map(
+                        (heading) => (
+                          <th
+                            key={heading}
+                            className="whitespace-nowrap border-b border-border px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground"
+                          >
+                            {heading}
+                          </th>
+                        )
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {payload.runs.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="px-4 py-6 text-center text-muted-foreground">
+                          No runs recorded.
+                        </td>
+                      </tr>
+                    ) : (
+                      payload.runs.map((item, index) => (
+                        <tr
+                          key={`${item.ordinal}-${index}`}
+                          className="border-b border-border align-top last:border-b-0"
+                        >
+                          <td className="px-4 py-3 text-foreground">
+                            {item.ordinal}
+                            {item.retryOfOrdinal !== null ? (
+                              <span className="block text-xs text-muted-foreground">
+                                retry of {item.retryOfOrdinal}
+                              </span>
+                            ) : null}
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="flex items-start gap-2">
+                              <span
+                                className={cn(
+                                  "mt-1.5 h-2 w-2 shrink-0 rounded-full",
+                                  dotClass[runStatusTone(item.status)]
+                                )}
+                              />
+                              <span className="text-foreground">
+                                {humanize(item.status)}
+                                {item.terminationReason ? (
+                                  <span className="block text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                                    {item.terminationReason}
+                                  </span>
+                                ) : null}
+                              </span>
+                            </span>
+                          </td>
+                          <td
+                            className={cn(
+                              "px-4 py-3",
+                              item.brandPresent ? "text-success" : "text-muted-foreground"
+                            )}
+                          >
+                            {item.brandPresent === null
+                              ? "No readable result"
+                              : item.brandPresent
+                                ? "Present"
+                                : "Not present"}
+                          </td>
+                          <td className="px-4 py-3 text-foreground">
+                            {item.competitors.length > 0
+                              ? item.competitors.join(", ")
+                              : "None"}
+                          </td>
+                          <td className="px-4 py-3 text-foreground">
+                            {item.citedSourceCount}
+                          </td>
+                          <td
+                            className="px-4 py-3 font-mono text-xs text-muted-foreground"
+                            title={item.evidenceHash ?? undefined}
+                          >
+                            {item.evidenceHash
+                              ? `${item.evidenceHash.slice(0, 12)}…`
+                              : "—"}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <p
+                className={cn(
+                  "mt-4 rounded-xl border px-4 py-3 text-sm",
+                  reconciliation.accountedFor ? toneClass.warning : toneClass.danger
+                )}
+              >
+                <strong className="font-semibold">Every attempt is accounted for.</strong>{" "}
+                <span className="text-foreground">
+                  {reconciliation.attempted} attempted · {reconciliation.completed}{" "}
+                  completed · {reconciliation.failed} failed ·{" "}
+                  {reconciliation.excludedByReview} excluded after review ·{" "}
+                  {reconciliation.retried} retried · {reconciliation.excludedNoResult}{" "}
+                  completed without a readable result.
+                </span>
+                {reconciliation.accountedFor ? null : (
+                  <strong className="font-semibold">
+                    {" "}
+                    These counts do not reconcile and this report requires review.
+                  </strong>
+                )}
+              </p>
+            </Disclosure>
+          </>
+        ) : null}
+
+        {/* ----------------------------------------- founder review */}
+        {reviewState ? (
+          <ReviewPanel
+            requestId={requestId}
+            state={reviewState}
+          />
+        ) : null}
+
+        {/* ----------------------------------------- request details */}
+        <section className={cn(ui.panel, "mt-4 p-6")}>
+          <h2 className="max-w-none text-lg font-semibold leading-snug tracking-tight text-foreground">
+            Request details
+          </h2>
+          <dl className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <DetailRow label="Website">
+              <a
+                href={request.websiteUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary hover:underline"
+              >
+                {request.websiteUrl}
+              </a>
+            </DetailRow>
+
+            <DetailRow label="Progress">
+              {request.progressStage
+                ? humanize(
+                    request.progressStage
+                  )
+                : "—"}
+            </DetailRow>
+
+            <DetailRow label="Updated">
+              {formatDate(
+                request.updatedAt
+              )}
+            </DetailRow>
+
+            <DetailRow label="Approval">
+              {request.approvedAt
+                ? "Approved"
+                : "Not approved yet"}
+            </DetailRow>
+
+            <DetailRow label="Approved at">
+              {formatDate(
+                request.approvedAt
+              )}
+            </DetailRow>
+
+            {/*
+              Founder-only review metadata. `approvedBy` is an internal auth
+              user id and is deliberately not surfaced on the public report
+              page — this detail page is gated by requireFounderForPage.
+            */}
+            <DetailRow label="Approved by">
+              <span className="font-mono text-xs">
+                {request.approvedBy || "—"}
+              </span>
+            </DetailRow>
+
+            <DetailRow label="Baseline protocol">
+              {request.protocolId
+                ? `${request.protocolId} (one baseline job queued for the existing worker)`
+                : "—"}
+            </DetailRow>
+
+            <DetailRow label="Project ID">
+              <span className="font-mono text-xs">
+                {request.projectId || "—"}
+              </span>
+            </DetailRow>
+
+            <DetailRow label="Request ID">
+              <span className="font-mono text-xs">{request.id}</span>
+            </DetailRow>
+          </dl>
+        </section>
+
+        {/* ------------------------------------------- stored report */}
+        {artifact && publication ? (
+          <>
+            <ReplaceReportPanel
+              requestId={request.id}
+              state={publication}
+            />
+
+            <p className="mt-4 text-xs text-muted-foreground">
+              Short report:{" "}
+              {artifact.shortReportMarkdown.length.toLocaleString(
+                "en-US"
+              )}{" "}
+              characters · Full report:{" "}
+              {artifact.fullReportMarkdown.length.toLocaleString(
+                "en-US"
+              )}{" "}
+              characters · Delivered:{" "}
+              {artifact.deliveredAt
+                ? formatDate(
+                    artifact.deliveredAt
+                  )
+                : "No"}
+            </p>
+
+            <div className="mt-4 grid gap-4 xl:grid-cols-2">
               <ReportPreview
                 heading="Short report"
                 filename={
@@ -599,6 +1120,7 @@ export default async function SnapshotRequestDetailPage({
                 markdown={
                   artifact.shortReportMarkdown
                 }
+                downloadHref={`/api/internal/snapshot-requests/${request.id}/reports/short`}
               />
 
               <ReportPreview
@@ -609,29 +1131,39 @@ export default async function SnapshotRequestDetailPage({
                 markdown={
                   artifact.fullReportMarkdown
                 }
+                downloadHref={`/api/internal/snapshot-requests/${request.id}/reports/full`}
               />
-            </>
-          ) : (
-            <p
-              style={{
-                margin: 0,
-                color: "#777",
-              }}
-            >
+            </div>
+          </>
+        ) : (
+          <section className={cn(ui.panel, "mt-4 flex flex-col items-center px-6 py-12 text-center")}>
+            <IconTile>
+              <FileText size={20} strokeWidth={1.9} />
+            </IconTile>
+            <h2 className="mt-4 max-w-none text-lg font-semibold leading-snug tracking-tight text-foreground">
+              Snapshot report
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              No persisted report is available yet.
+            </p>
+            <p className="mt-1 text-sm text-muted-foreground">
               The report will appear here after
               the approved runner persists it.
             </p>
-          )}
-        </section>
-      </section>
-            {artifact ? (
-              <ReplaceReportPanel
-                requestId={request.id}
-                state={toSnapshotReportPublicationState(
-                  artifact
-                )}
-              />
-            ) : null}
-    </main>
+          </section>
+        )}
+      </main>
+
+      <footer className="border-t border-border">
+        <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-3 px-6 py-5 text-xs text-muted-foreground">
+          <span className="inline-flex items-center gap-2">
+            <Info size={14} />
+            Founder-only view. Clients read the report through its private
+            link, never this page.
+          </span>
+          <span>Zypact · Founder operations</span>
+        </div>
+      </footer>
+    </AdminThemeRoot>
   );
 }

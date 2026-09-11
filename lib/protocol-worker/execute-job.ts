@@ -47,7 +47,10 @@ import type {
   ProtocolExternalCall,
   ProviderCallReceipt,
 } from "@/lib/db/types";
-import { answerFromRawResponseBody } from "@/lib/protocol-worker/worker";
+import {
+  answerFromRawResponseBody,
+  measuredCostUsdFromRawResponseBody,
+} from "@/lib/protocol-worker/worker";
 import {
   WorkerAbort,
   type AnalysisTransport,
@@ -225,6 +228,12 @@ async function runProviderCall(
       // empty answer and any transport throw alike.
       deadline.dispose();
     }
+    // D-023 §3 — Perplexity reports what it charged, in the same body about
+    // to be persisted as the receipt. Null when that number is absent or
+    // unusable, and then BOTH fields stay unset: the ledger records an
+    // honest `unknown` rather than the reservation, which migration 0050
+    // forbids substituting and enforces as a pair.
+    const measuredCostUsd = measuredCostUsdFromRawResponseBody(res.rawResponseBody);
     const rec = await deps.db.recordProviderCallReceiptForJob({
       jobId: f.jobId,
       claimToken: f.claimToken,
@@ -236,6 +245,8 @@ async function runProviderCall(
       providerRequestId: res.providerRequestId ?? null,
       rawResponseSha256: res.rawResponseBodySha256 ?? null,
       latencyMs: res.latencyMs ?? null,
+      actualCostUsd: measuredCostUsd,
+      costBasis: measuredCostUsd === null ? null : "measured",
       rawResponseBody: res.rawResponseBody ?? null,
     });
     // Only two outcomes let the run continue, and in BOTH the durable

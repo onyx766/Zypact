@@ -1,57 +1,28 @@
 "use client";
 
-import Script from "next/script";
-import {
-  FormEvent,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { FormEvent, useState } from "react";
 import {
   submitSnapshotRequest,
   type SnapshotRequestFormErrors,
   type SnapshotRequestFormValues,
 } from "@/lib/snapshot-requests/public-form";
 
-declare global {
-  interface Window {
-    turnstile?: {
-      render(
-        container: string | HTMLElement,
-        options: {
-          sitekey: string;
-          action?: string;
-          theme?: "light" | "dark" | "auto";
-          size?: "normal" | "compact" | "flexible";
-          callback?: (token: string) => void;
-          "expired-callback"?: () => void;
-          "error-callback"?: (
-            errorCode?: string
-          ) => void;
-        }
-      ): string;
-      reset(widgetId?: string): void;
-      remove(widgetId?: string): void;
-    };
-  }
-}
-
 const EMPTY_VALUES: SnapshotRequestFormValues = {
+  contactName: "",
   workEmail: "",
   companyName: "",
   websiteUrl: "",
   buyerCategory: "",
 };
 
+const BUYER_QUESTION_MAX_LENGTH = 300;
+
 interface ScanFormProps {
   enabled: boolean;
-  siteKey: string | null;
 }
 
 export function ScanForm({
   enabled,
-  siteKey,
 }: ScanFormProps) {
   const [values, setValues] =
     useState<SnapshotRequestFormValues>(
@@ -64,97 +35,11 @@ export function ScanForm({
   const [feedback, setFeedback] =
     useState<string | null>(null);
 
-  const [turnstileToken, setTurnstileToken] =
-    useState("");
-
-  const [turnstileReady, setTurnstileReady] =
-    useState(false);
-
   const [submitting, setSubmitting] =
     useState(false);
 
   const [submitted, setSubmitted] =
     useState(false);
-
-  const widgetContainerRef =
-    useRef<HTMLDivElement | null>(null);
-
-  const widgetIdRef =
-    useRef<string | null>(null);
-
-  const renderTurnstile = useCallback(() => {
-    if (
-      !enabled ||
-      !siteKey ||
-      !widgetContainerRef.current ||
-      !window.turnstile ||
-      widgetIdRef.current
-    ) {
-      return;
-    }
-
-    widgetIdRef.current =
-      window.turnstile.render(
-        widgetContainerRef.current,
-        {
-          sitekey: siteKey,
-          action: "snapshot_request",
-          theme: "light",
-          size: "flexible",
-          callback(token) {
-            setTurnstileToken(token);
-            setTurnstileReady(true);
-            setFieldErrors((current) => {
-              const next = { ...current };
-              delete next.turnstileToken;
-              return next;
-            });
-          },
-          "expired-callback"() {
-            setTurnstileToken("");
-            setTurnstileReady(false);
-          },
-          "error-callback"() {
-            setTurnstileToken("");
-            setTurnstileReady(false);
-            setFeedback(
-              "The security check could not load. Please refresh the page and try again."
-            );
-          },
-        }
-      );
-  }, [enabled, siteKey]);
-
-  useEffect(() => {
-    renderTurnstile();
-
-    return () => {
-      if (
-        widgetIdRef.current &&
-        window.turnstile
-      ) {
-        window.turnstile.remove(
-          widgetIdRef.current
-        );
-
-        widgetIdRef.current = null;
-      }
-    };
-  }, [renderTurnstile]);
-
-  function resetTurnstile() {
-    setTurnstileToken("");
-    setTurnstileReady(false);
-
-    if (
-      widgetIdRef.current &&
-      window.turnstile
-    ) {
-      window.turnstile.reset(
-        widgetIdRef.current
-      );
-    }
-  }
 
   function updateField(
     field: keyof SnapshotRequestFormValues,
@@ -177,11 +62,7 @@ export function ScanForm({
   ) {
     event.preventDefault();
 
-    if (
-      !enabled ||
-      !siteKey ||
-      submitting
-    ) {
+    if (!enabled || submitting) {
       return;
     }
 
@@ -190,37 +71,20 @@ export function ScanForm({
     setFieldErrors({});
 
     const result =
-      await submitSnapshotRequest(
-        values,
-        turnstileToken
-      );
+      await submitSnapshotRequest(values);
 
     if (result.ok) {
       setSubmitted(true);
-      setTurnstileToken("");
-
-      if (
-        widgetIdRef.current &&
-        window.turnstile
-      ) {
-        window.turnstile.remove(
-          widgetIdRef.current
-        );
-
-        widgetIdRef.current = null;
-      }
-
       setSubmitting(false);
       return;
     }
 
     setFeedback(result.message);
     setFieldErrors(result.fieldErrors);
-    resetTurnstile();
     setSubmitting(false);
   }
 
-  if (!enabled || !siteKey) {
+  if (!enabled) {
     return (
       <div className="scan-unavailable">
         <p className="scan-status-label">
@@ -267,34 +131,90 @@ export function ScanForm({
         <h2>Check your work email.</h2>
 
         <p>
-          We sent a private verification link.
-          Verification records your request; it
-          does not approve a protocol or start an
-          AI scan. Zypact will contact you about
-          access to the V1 workflow.
+          We&rsquo;ve received your buyer question.
+          No AI call has started. We sent a private
+          verification link to confirm your email —
+          once confirmed, we&rsquo;ll review the
+          question and protocol before the baseline
+          is approved.
         </p>
 
         <p className="scan-privacy-note">
           The link expires in 30 minutes and
           can be used only once.
         </p>
+
+        <div className="scan-success-steps">
+          <p className="scan-success-steps-label">
+            What happens next
+          </p>
+
+          <ol>
+            <li>Confirm your email</li>
+            <li>Question review</li>
+            <li>Protocol approval</li>
+            <li>Controlled baseline</li>
+            <li>Evidence report</li>
+          </ol>
+        </div>
+
+        <a
+          href="/"
+          className="button button-secondary scan-return-link"
+        >
+          Return to Zypact
+        </a>
       </div>
     );
   }
 
   return (
     <>
-      <Script
-        src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
-        strategy="afterInteractive"
-        onLoad={renderTurnstile}
-      />
-
       <form
         className="scan-form"
         onSubmit={handleSubmit}
         noValidate
       >
+        <div className="scan-field">
+          <label htmlFor="contactName">
+            Your name
+          </label>
+
+          <input
+            id="contactName"
+            name="contactName"
+            type="text"
+            autoComplete="name"
+            maxLength={160}
+            required
+            value={values.contactName}
+            onChange={(event) =>
+              updateField(
+                "contactName",
+                event.target.value
+              )
+            }
+            aria-invalid={
+              Boolean(fieldErrors.contactName)
+            }
+            aria-describedby={
+              fieldErrors.contactName
+                ? "contactName-error"
+                : undefined
+            }
+            placeholder="Jane Smith"
+          />
+
+          {fieldErrors.contactName ? (
+            <p
+              id="contactName-error"
+              className="scan-field-error"
+            >
+              {fieldErrors.contactName[0]}
+            </p>
+          ) : null}
+        </div>
+
         <div className="scan-field">
           <label htmlFor="companyName">
             Company name
@@ -416,16 +336,16 @@ export function ScanForm({
           ) : null}
         </div>
 
-        <div className="scan-field">
+        <div className="scan-field scan-field-question">
           <label htmlFor="buyerCategory">
-            What category would buyers use?
+            One buyer question
           </label>
 
-          <input
+          <textarea
             id="buyerCategory"
             name="buyerCategory"
-            type="text"
-            maxLength={160}
+            rows={4}
+            maxLength={BUYER_QUESTION_MAX_LENGTH}
             required
             value={values.buyerCategory}
             onChange={(event) =>
@@ -444,16 +364,28 @@ export function ScanForm({
                 ? "buyerCategory-error"
                 : "buyerCategory-help"
             }
-            placeholder="AI visibility software for B2B SaaS"
+            placeholder="Which AI visibility platforms are best for a B2B SaaS marketing team?"
           />
 
           <p
             id="buyerCategory-help"
             className="scan-field-help"
           >
-            Use the phrase a buyer would type
-            when searching for products like
-            yours.
+            Enter one commercially important
+            question a buyer might ask when
+            comparing products like yours — for
+            example, &ldquo;Which SOC 2 automation
+            platforms are best for a 50-person B2B
+            SaaS company?&rdquo;, not &ldquo;SOC 2
+            software&rdquo;.
+          </p>
+
+          <p
+            className="scan-field-counter"
+            aria-hidden="true"
+          >
+            {values.buyerCategory.length}/
+            {BUYER_QUESTION_MAX_LENGTH}
           </p>
 
           {fieldErrors.buyerCategory ? (
@@ -462,19 +394,6 @@ export function ScanForm({
               className="scan-field-error"
             >
               {fieldErrors.buyerCategory[0]}
-            </p>
-          ) : null}
-        </div>
-
-        <div className="scan-security">
-          <div
-            ref={widgetContainerRef}
-            className="scan-turnstile"
-          />
-
-          {fieldErrors.turnstileToken ? (
-            <p className="scan-field-error">
-              {fieldErrors.turnstileToken[0]}
             </p>
           ) : null}
         </div>
@@ -491,17 +410,15 @@ export function ScanForm({
         <button
           type="submit"
           className="button button-primary scan-submit"
-          disabled={
-            submitting || !turnstileReady
-          }
+          disabled={submitting}
         >
           {submitting
-            ? "Sending request…"
+            ? "Submitting…"
             : "Request Demo"}
         </button>
 
         <p className="scan-privacy-note">
-          Request only. Automation begins after
+          Request only. No AI call starts until
           the question and protocol are approved.
         </p>
       </form>

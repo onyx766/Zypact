@@ -6,6 +6,10 @@ import {
 import {
   useState,
 } from "react";
+import { CircleCheck, Send } from "lucide-react";
+
+import { cn } from "@/lib/utils";
+import { ui } from "../ui-classes";
 
 export function SendReportButton({
   requestId,
@@ -94,9 +98,8 @@ export function SendReportButton({
   }
 
   return (
-    <div>
+    <div className="flex flex-col items-start gap-1.5 lg:items-end">
       <button
-        className="founder-button founder-button-primary"
         type="button"
         onClick={sendReport}
         disabled={
@@ -104,22 +107,17 @@ export function SendReportButton({
           alreadyDelivered ||
           deliveryClaimActive
         }
-        style={{
-          minHeight: 38,
-          border: "1px solid #111",
-          borderRadius: 999,
-          background: "#111",
-          color: "#fff",
-          padding: "0 14px",
-          cursor:
-            pending
-              ? "wait"
-              : "pointer",
-          fontWeight: 600,
-          opacity:
-            pending ? 0.65 : 1,
-        }}
+        className={cn(
+          ui.btnOutline,
+          alreadyDelivered && "text-success",
+          pending && "cursor-wait"
+        )}
       >
+        {alreadyDelivered ? (
+          <CircleCheck size={16} strokeWidth={2.2} />
+        ) : (
+          <Send size={15} strokeWidth={2.2} />
+        )}
         {pending
           ? "Sending…"
           : alreadyDelivered
@@ -128,13 +126,7 @@ export function SendReportButton({
       </button>
 
       {error ? (
-        <p
-          style={{
-            margin: "8px 0 0",
-            color: "#b42318",
-            fontSize: 12,
-          }}
-        >
+        <p className="max-w-xs text-xs text-destructive">
           {error}
         </p>
       ) : null}

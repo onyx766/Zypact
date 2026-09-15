@@ -58,7 +58,7 @@ function build(over: Partial<{
       // Pre-BEGIN content exists but must never reach the provider.
       spy.artifactContentReads += 0;
       return over.context === undefined
-        ? { workEmail: "client@example.com", companyName: "Acme", publicToken: "t".repeat(43) }
+        ? { workEmail: "client@example.com", companyName: "Acme", publicToken: "t".repeat(43), integrityStatus: "integrity_passed" }
         : over.context;
     },
     beginSnapshotReportDelivery: async (input) => {
@@ -145,6 +145,33 @@ async function main(): Promise<void> {
     const { handler: h2, spy: s2 } = build({ context: null });
     check("missing request context → 404 before BEGIN",
       (await call(h2, VALID)).status === 404 && s2.begin.length === 0);
+  }
+
+  /* ---- integrity gate: `blocked` never delivers ---- */
+  {
+    const blockedContext = {
+      workEmail: "client@example.com", companyName: "Acme",
+      publicToken: "t".repeat(43), integrityStatus: "blocked",
+    };
+    const { handler, spy } = build({ context: blockedContext });
+    const r = await call(handler, VALID);
+    const body = await r.json();
+    check("blocked artifact → 409 integrity_blocked",
+      r.status === 409 && body.error === "integrity_blocked");
+    check("blocked artifact never reaches BEGIN, provider or FINALIZE",
+      spy.begin.length === 0 && spy.provider.length === 0 && spy.finalize.length === 0);
+    check("blocked artifact takes no claim to release",
+      spy.release.length === 0 && spy.order.join(">") === "auth>prep");
+
+    // The other two decisions are not this gate's business: `integrity_passed`
+    // delivers, and a legacy null predates 0068 and keeps its prior behavior.
+    for (const status of ["integrity_passed", null] as Array<string | null>) {
+      const { handler: h, spy: s } = build({
+        context: { ...blockedContext, integrityStatus: status },
+      });
+      check(`integrityStatus ${String(status)} still delivers`,
+        (await call(h, VALID)).status === 200 && s.provider.length === 1);
+    }
   }
 
   /* ---- §24 BEGIN conflicts ---- */

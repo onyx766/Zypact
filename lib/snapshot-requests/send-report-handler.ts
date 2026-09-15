@@ -102,6 +102,17 @@ const CONFLICT = {
     "The report changed or delivery became locked. Refresh before sending.",
 } as const;
 
+/**
+ * `blocked` never delivers. The admin UI already hides the control, but a gate
+ * that exists only in a React component is not a gate: this route is reachable
+ * by any founder-authenticated caller.
+ */
+const INTEGRITY_BLOCKED = {
+  error: "integrity_blocked",
+  message:
+    "This report failed its integrity gate and cannot be delivered. Resolve the blocking reasons and re-render it.",
+} as const;
+
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -117,6 +128,8 @@ export interface SendReportDeps {
     workEmail: string;
     companyName: string;
     publicToken: string;
+    /** Null for artifacts written before migration 0068 recorded a decision. */
+    integrityStatus: string | null;
   } | null>;
   beginSnapshotReportDelivery: (input: {
     snapshotRequestId: string;
@@ -230,6 +243,11 @@ export function createSendReportHandler(deps: SendReportDeps) {
     const context = await deps.loadRequestContext(resolvedParams.requestId);
     if (!context) {
       return NextResponse.json({ error: "not_found" }, { status: 404 });
+    }
+
+    // Refused before the claim, so a blocked artifact never holds one.
+    if (context.integrityStatus === "blocked") {
+      return NextResponse.json(INTEGRITY_BLOCKED, { status: 409 });
     }
 
     // ---- BEGIN: the concurrency boundary -----------------------------------

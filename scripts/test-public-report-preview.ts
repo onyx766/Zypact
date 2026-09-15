@@ -26,6 +26,15 @@
 import { readFileSync } from "node:fs";
 import { parsePublicSnapshotReport } from "@/lib/snapshot-requests/parse-public-report";
 
+/**
+ * Next resolves `import "./x.css"` itself; bare Node cannot parse one and
+ * throws before a single render assertion runs. Every rendered check below
+ * was silently dead from the moment the report view gained a stylesheet, so
+ * the stub is load-bearing, not cosmetic.
+ */
+(require("node:module") as { _extensions: Record<string, unknown> })
+  ._extensions[".css"] = () => undefined;
+
 let failures = 0;
 function check(label: string, condition: boolean): void {
   if (condition) console.log(`  ok   ${label}`);
@@ -176,7 +185,11 @@ async function main(): Promise<void> {
           shortReportMarkdown: FIXTURE,
           fullReportMarkdown: "# full report",
           publicToken: TOKEN,
-          deliveredAt: null,
+          // A legacy mvp-scan artifact: no integrity decision was recorded
+          // when it was written, and it was delivered to a real client. The
+          // page's allowlist must keep rendering exactly this case.
+          integrityStatus: null,
+          deliveredAt: "2026-01-02T00:00:00.000Z",
         }),
       }),
     },
@@ -228,6 +241,66 @@ async function main(): Promise<void> {
   check("rendered: no invented booking destination",
     !/calendly|cal\.com|savvycal|hubspot\.com\/meetings|mailto:/i.test(html));
   check("rendered: no guarantee language", !/guarantee/i.test(html));
+}
+
+/* ---- the integrity gate is an allowlist, proven per state ---- */
+{
+  (globalThis as unknown as { React: unknown }).React = require("react");
+  const { renderToStaticMarkup } = require("react-dom/server");
+  const TOKEN = "t".repeat(43);
+  const dbPath = require.resolve("@/lib/db");
+
+  async function renders(
+    integrityStatus: string | null,
+    deliveredAt: string | null
+  ): Promise<boolean> {
+    require.cache[dbPath] = {
+      id: dbPath,
+      loaded: true,
+      exports: {
+        getDb: () => ({
+          getSnapshotReportArtifactByPublicToken: async () => ({
+            id: "00000000-0000-4000-8000-0000000000ff",
+            shortReportMarkdown: FIXTURE,
+            fullReportMarkdown: "# full report",
+            publicToken: TOKEN,
+            integrityStatus,
+            deliveredAt,
+          }),
+        }),
+      },
+    } as unknown as NodeJS.Module;
+
+    delete require.cache[require.resolve("@/app/report/[secureToken]/page")];
+    const Page = require("@/app/report/[secureToken]/page").default;
+    try {
+      const out: string = renderToStaticMarkup(
+        await Page({ params: Promise.resolve({ secureToken: TOKEN }) })
+      );
+      return out.includes(BRAND);
+    } catch {
+      // notFound() throws NEXT_HTTP_ERROR_FALLBACK;404.
+      return false;
+    }
+  }
+
+  // Cleared by the gate, or already delivered under founder authority.
+  check("gate: integrity_passed renders",
+    await renders("integrity_passed", null));
+  check("gate: legacy null + delivered renders",
+    await renders(null, "2026-01-02T00:00:00.000Z"));
+  check("gate: needs_review that was already delivered still renders",
+    await renders("needs_review", "2026-01-02T00:00:00.000Z"));
+
+  // Never readable on the strength of holding a link alone.
+  check("gate: needs_review undelivered is refused",
+    !(await renders("needs_review", null)));
+  check("gate: blocked is refused",
+    !(await renders("blocked", null)));
+  check("gate: blocked is refused even if a delivery was somehow recorded",
+    !(await renders("blocked", "2026-01-02T00:00:00.000Z")));
+  check("gate: legacy null undelivered is refused",
+    !(await renders(null, null)));
 }
 
   console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);

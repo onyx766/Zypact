@@ -439,7 +439,8 @@ const DETECTORS: Detector[] = [
     assert(d.label, d.holds(SQL), d.id);
   }
   assert("the file is the canonically named 0060 migration",
-    MIGRATION.endsWith("/supabase/migrations/0060_m5_phase3d_post_claim_verification.sql"));
+    MIGRATION.split(path.sep).join("/")
+      .endsWith("/supabase/migrations/0060_m5_phase3d_post_claim_verification.sql"));
   assert("the migration defines exactly one function",
     (SQL.match(/create or replace function/gi) ?? []).length === 1);
   assert("the PL/pgSQL body is delimitable, so the body-scoped detectors read a real body",
@@ -493,8 +494,11 @@ const DETECTORS: Detector[] = [
 
   assert("0060 is present in the migration ledger",
     files.some((x) => x.f === "0060_m5_phase3d_post_claim_verification.sql"));
-  assert("no migration numbered above 0060 exists yet",
-    files.every((x) => x.n <= 60), String(files.filter((x) => x.n > 60).length));
+  // Deliberately not asserted: that 0060 is still the highest-numbered
+  // migration. That was only ever a proxy for "nothing later undoes this
+  // slice", and it fails on every subsequent migration regardless of whether
+  // one is relevant — a test that cries wolf gets muted. The PINNED scan below
+  // enforces the real property directly, against every later file.
 
   for (const p of PINNED) {
     const later = files.filter((x) => x.n > p.definedAt);

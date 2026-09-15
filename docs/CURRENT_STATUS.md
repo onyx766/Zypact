@@ -13,7 +13,7 @@
 > - **Validated head:** `3fc52856d34ccdac0b0a7c02d1b766624e3936bc`
 > - **Shared tree:** `042e87006aec88462377c660ce1b2994187603d0` — identical for both commits above, so the merge into `main` added no content of its own
 >
-> Sections 1-12 are preserved historical snapshots, taken on 2026-08-16 and 2026-08-21. They are deliberately not rewritten, and several of their figures are now superseded. For any statement about the *current* repository, section 13 prevails.
+> Sections 1-12 are preserved historical snapshots, taken on 2026-08-16 and 2026-08-21. They are deliberately not rewritten, and several of their figures are now superseded. For any statement about the *current* repository, section 15 prevails, then section 13.
 
 ## 1. Reading rule
 
@@ -422,5 +422,132 @@ M5_B3_PHASE_3C_EMPTY_QUEUE_LIVE_SMOKE_COMPLETE_RETURNED_DISABLED_STOPPED
 ```
 
 This entry records only the successful `v6` validation. Earlier harness revisions produced diagnostic, fail-closed results and are not counted as successful Phase 3C evidence.
+
+## 15. `fix/v1-customer-flow` — unmerged branch status
+
+- **As of:** 2026-09-15
+- **`main` at:** `6a50b976293c9b49a610ad686bacb3dc8b85fae3`
+- **Branch head:** `91ff9545a4498db3f3dfe4a41ef33589ee71ad67` (`fix/v1-customer-flow`)
+- **Scope of this entry:** what exists on the unmerged branch, and what remains
+  unverified about it. This section supersedes section 13's inventory figures
+  for current-state purposes; it does not rewrite them.
+
+### 15.1 The branch is not `main`, and none of it is deployed
+
+The V1 customer flow — public demo request, founder approval, protocol
+baseline execution, client report rendering and delivery — exists **only on
+this branch**. It is 11 commits and 102 changed files ahead of `main`, and it
+adds nine migrations, `0061` through `0069`.
+
+**No migration in `0061`–`0069` has been applied to any environment.** No
+staging demonstration has been performed for this branch. Any statement that
+"the baseline workflow is live" must name the exact path that served it,
+because it is not this branch running on `main`.
+
+Section 13.4's finding still stands unchanged: the M5 worker **as a running
+system** is not established. Section 14 records the only deployed-worker
+evidence there is — a single empty-queue staging smoke on 2026-08-31, which
+explicitly does not establish job claiming, provider execution, receipt
+durability, anti-double-payment behaviour or recovery.
+
+### 15.2 Measured inventory
+
+| Item | Current value on the branch head |
+|---|---|
+| SQL migrations | 69 files, `0001_init.sql` through `0069_new_baseline_default_five_runs.sql` |
+| Migration continuity | `0001`-`0069` complete, no gap |
+| Registered test commands | 57 `test:*` and `verify:*` scripts in `package.json` |
+
+Section 13.1's figures (54 migrations, 24 registered `test:*`, 2 `verify:*`)
+were accurate at tree `042e8700…` and are superseded here.
+
+### 15.3 Migrations 0061-0069 are now audited
+
+They were not audited when the branch was written. A full read-only audit is
+recorded in [`MIGRATION_AUDIT_0061_0069.md`](MIGRATION_AUDIT_0061_0069.md).
+
+Verdict: all nine are additive, privilege-hardened and carry rollback notes;
+nothing found blocks applying them to staging. Nine findings are recorded, of
+which one was fixed in that pass (`blocked` artifacts were deliverable through
+the send-report API because the gate existed only in admin React components),
+one is a deployment precondition (`0064` requires PostgreSQL 16+), and one
+becomes a real defect precisely when M7 lands (`resolve_protocol_job_review`
+excludes attempts across the whole protocol rather than the job, which
+corrupts a retest denominator as soon as a protocol has two jobs).
+
+The audit also records that `approve_and_launch_snapshot_baseline` is defined
+three times across `0062`, `0063` and `0069`, and that **only `0069` is
+authoritative**.
+
+### 15.4 Registered-command results are not all green
+
+Measured on the branch head, on Windows, offline:
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | PASS |
+| `test:seo` | PASS |
+| `test:protocol-report` | PASS |
+| `test:protocol-integrity` | PASS |
+| `test:m0-0057-schema` | PASS |
+| `test:snapshot-worker-migration-contract` | PASS |
+| `test:snapshot-worker-dml-revocation-contract` | PASS |
+| `test:snapshot-artifact-cascade-contract` | PASS |
+| `test:m5-0056-schema` | PASS (71/71) after renormalisation |
+| `test:m5-0059-schema` | PASS (127/127) after renormalisation |
+| `test:m5-0060-schema` | PASS (183/183) after renormalisation and one fix |
+| `test:snapshot-send-idempotency` | **FAIL — 6 passed, 18 failed** |
+
+`test:snapshot-send-idempotency` is a pre-existing failure unrelated to this
+branch: it exercises a send-report contract that predates delivery fencing and
+sends no `expectedArtifactId`/`expectedRevision`, so every failure is
+`400 invalid_expected_artifact_id`. It is one of the commands section 7 lists
+as the registered inventory. It should be rewritten against the fenced
+contract or retired; until then it is not coverage.
+
+**The remaining 45 registered commands were deliberately not run.** Real
+`PERPLEXITY_API_KEY` and `OPENAI_API_KEY` values are present in the local
+environment, and a mechanical scan could not reliably separate the scripts
+that issue a paid provider call or contact a database from those that do not.
+Running them blind risks unapproved spend. Classifying every script and
+running the safe set against approved staging resources remains M0 work, and
+this table must not be read as a suite pass.
+
+### 15.5 Windows checkouts produced false test failures
+
+`core.autocrlf` is `true` and the repository carried no `.gitattributes`, so
+every text file materialised with CRLF on Windows while several contract tests
+pin SHA-256 digests computed over LF. `test:m5-0059-schema` scored 111/127 for
+that reason alone — a false failure that masks real ones on the machine where
+the work is actually done.
+
+A `.gitattributes` forcing `eol=lf` is added on this branch. **Existing
+working copies still need `git add --renormalize .` run once, committed on its
+own**, because a `.gitattributes` does not rewrite files already checked out.
+
+Two POSIX-separator path assertions and one obsolete "no migration above 0060
+exists" assertion were also fixed; see the audit's section 5.
+
+### 15.6 Still absent — M7 in its entirety
+
+No migration in `0001`-`0069` mentions an intervention record, an observation
+window, or any outcome status. The schema carries the *hooks* for retest and
+nothing more:
+
+- `protocols.baseline_protocol_id` (self-FK, `0047`);
+- `protocols.planned_retest_runs`, which `0062`/`0069` set to `0`;
+- `protocol_attempts.attempt_kind in ('baseline','retest','control','paraphrase')`.
+
+Two further facts bound the work:
+
+- `0050`'s own header states the durable execution job exists at
+  baseline granularity and **"jamais le retest — M7"**. A retest therefore
+  needs its own job path, not merely a new `attempt_kind` value.
+- No code path can create a retest protocol. The only `insert into
+  public.protocols` in the entire ledger is
+  `approve_and_launch_snapshot_baseline`, and `protocols` has had every table
+  privilege revoked since `0047`.
+
+Item 6-9 of section 6 remain open exactly as written.
 
 **What this does not claim.** Phase 3C exercised the deployed worker against an empty queue only. It establishes readiness, execution-enabled worker start, idle proof over three consecutive no-job cycles, zero iterations, graceful stop, and versioned return to `disabled`. It does not establish job claiming, provider execution, receipt durability, browser-disconnect survival, anti-double-payment behavior, abandoned-job recovery, or structured error/alert handling. Those M5 acceptance requirements remain open. This evidence does not close M5.

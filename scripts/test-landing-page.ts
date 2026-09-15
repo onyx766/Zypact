@@ -8,6 +8,11 @@ function check(label: string, condition: boolean): void {
   else { failures += 1; console.error("  FAIL " + label); }
 }
 
+/** JSX wraps prose across source lines, so phrase guards must read it flattened. */
+function flatten(source: string): string {
+  return source.replace(/\s+/g, " ");
+}
+
 async function main(): Promise<void> {
   console.log("test-landing-page");
   (globalThis as unknown as { React: unknown }).React = require("react");
@@ -73,8 +78,12 @@ async function main(): Promise<void> {
   check("no fixed three-run default is promised", flat.includes("does not silently treat three runs"));
   check("no favorable outcome is guaranteed", flat.includes("not a favorable model response"));
 
-  check("request page explains controlled automation", scanPageSource.includes("Zypact V1 · Controlled automation") && scanPageSource.includes("controlled baseline then runs") && scanPageSource.includes("automatically"));
-  check("request form separates request from execution", scanFormSource.includes("Request only. Automation begins after") && scanFormSource.includes("does not approve a protocol or start an"));
+  const flatScanPage = flatten(scanPageSource);
+  const flatScanForm = flatten(scanFormSource);
+
+  check("request page explains controlled automation", flatScanPage.includes("Zypact V1 · Controlled automation") && flatScanPage.includes("Zypact reviews the question and protocol first") && flatScanPage.includes("baseline runs automatically"));
+  check("request page states that submitting starts no paid call", flatScanPage.includes("Submitting this form does not start an AI call"));
+  check("request form separates request from execution", flatScanForm.includes("Request only.") && flatScanForm.includes("No AI call starts until the question and protocol are approved"));
   check("verification page no longer makes founder review the normal path", verifyClientSource.includes("automation begins only after the buyer") && !verifyClientSource.includes("waiting for a fit review"));
   check("verification email explains the approval gate", verificationEmailSource.includes("V1 automation begins only after the buyer question and protocol are approved"));
 

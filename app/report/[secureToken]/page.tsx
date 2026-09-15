@@ -73,10 +73,21 @@ export default async function PublicReportPage({
     notFound();
   }
 
-  // `blocked` never reaches a client. The artifact is still stored so a
-  // founder can see what was refused and why, but holding a link must not be
-  // enough to read a report the integrity gate rejected.
-  if (artifact.integrityStatus === "blocked") {
+  // Allowlist, not a denylist. Holding a link must never be enough to read a
+  // report the integrity gate has not cleared, and a denylist silently admits
+  // both `needs_review` and the null a pre-0068 artifact carries.
+  //
+  // `delivered_at` is the second arm because delivery is already the fenced,
+  // founder-authorised, recorded act: an artifact a client was actually sent
+  // keeps rendering, which is what every legacy link depends on.
+  // `blocked` vetoes unconditionally — it is never readable, whatever else is
+  // recorded about the artifact.
+  const readableByClient =
+    artifact.integrityStatus !== "blocked" &&
+    (artifact.integrityStatus === "integrity_passed" ||
+      artifact.deliveredAt !== null);
+
+  if (!readableByClient) {
     notFound();
   }
 

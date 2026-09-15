@@ -41,6 +41,7 @@ export const POST = createSendReportHandler({
       workEmail: snapshotRequest.workEmail,
       companyName: snapshotRequest.companyName ?? "",
       publicToken: artifact.publicToken,
+      integrityStatus: artifact.integrityStatus ?? null,
     };
   },
 

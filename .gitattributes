@@ -1,0 +1,24 @@
+# Normalise text to LF in the working tree, not just in the index.
+#
+# Several contract tests pin a SHA-256 digest over file content
+# (scripts/test-m5-00*-schema-contract.ts) or regex production source. Those
+# digests were computed over LF. With core.autocrlf=true and no rules here, a
+# Windows checkout materialises CRLF and the digests can never match, so the
+# contracts fail locally while passing in Linux CI — a false failure that
+# hides real ones.
+#
+# After changing this file, existing working copies must be renormalised once:
+#   git add --renormalize .
+# Review and commit that on its own; it touches every text file.
+
+* text=auto eol=lf
+
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.ico  binary
+*.pdf  binary
+*.woff binary
+*.woff2 binary

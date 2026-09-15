@@ -309,7 +309,8 @@ const DETECTORS: Detector[] = [
   assert("the migration carries no literal step-over token, even in prose",
     !/skip\s+locked/i.test(RAW));
   assert("the file is the canonically named 0059 migration",
-    MIGRATION.endsWith("/supabase/migrations/0059_m5_phase3d_targeted_claim.sql"));
+    MIGRATION.split(path.sep).join("/")
+      .endsWith("/supabase/migrations/0059_m5_phase3d_targeted_claim.sql"));
 }
 
 /* ════════════════════════════ 2. the global function is untouched ════════ */

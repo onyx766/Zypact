@@ -212,11 +212,28 @@ const TRIGGER_FN = section(/create or replace function public\._reject_registere
 
   assert("the only table created is interventions",
     (FLAT.match(/create table/gi) ?? []).length === 1);
-  assert("no migration numbered above 0071 redefines these functions",
-    readdirSync(MIGRATIONS)
-      .filter((f) => /^\d{4}_.*\.sql$/.test(f) && Number(f.slice(0, 4)) > 71)
-      .every((f) => !/register_intervention|approve_intervention|confirm_intervention_implementation/i
-        .test(readFileSync(path.join(MIGRATIONS, f), "utf8"))));
+  // `register_intervention` and `approve_intervention` establish the
+  // registered claim and must not be redefined downstream. The lifecycle
+  // functions deliberately ARE extended later — 0072 opens the observation
+  // window inside confirm_intervention_implementation, and its own contract
+  // re-verifies every guarantee asserted here. Naming the permitted definer
+  // keeps that an explicit, reviewed exception rather than a silent one.
+  const later = readdirSync(MIGRATIONS)
+    .filter((f) => /^\d{4}_.*\.sql$/.test(f) && Number(f.slice(0, 4)) > 71)
+    .map((f) => ({ f, sql: readFileSync(path.join(MIGRATIONS, f), "utf8") }));
+
+  for (const name of ["register_intervention", "approve_intervention"]) {
+    assert(`no later migration redefines ${name}`,
+      later.every(({ sql }) =>
+        !new RegExp(`(create|drop|alter)\\s+(or\\s+replace\\s+)?function[\\s\\S]{0,80}?public\\.${name}\\s*\\(`, "i").test(sql)));
+  }
+
+  const redefiners = later
+    .filter(({ sql }) => /create or replace function public\.(confirm_intervention_implementation|_reject_registered_intervention_edit)/i.test(sql))
+    .map(({ f }) => f);
+  assert("the lifecycle functions are extended only by 0072",
+    redefiners.every((f) => f.startsWith("0072_")),
+    redefiners.join(", ") || "none");
 }
 
 /* ═══════════════ 6. every detector is proved to bite ═══════════════ */

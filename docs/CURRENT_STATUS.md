@@ -434,6 +434,11 @@ This entry records only the successful `v6` validation. Earlier harness revision
 
 ### 15.1 The branch is not `main`, and none of it is deployed
 
+> **Superseded on 2026-09-16 — see 15.7.** Both claims in this subsection are
+> now false: the branch was merged to `main` by PR #40, and eight of the nine
+> migrations are applied to the staging database. The original text is kept
+> below unrewritten, because what it got wrong is itself the finding.
+
 The V1 customer flow — public demo request, founder approval, protocol
 baseline execution, client report rendering and delivery — exists **only on
 this branch**. It is 11 commits and 102 changed files ahead of `main`, and it
@@ -549,5 +554,77 @@ Two further facts bound the work:
   privilege revoked since `0047`.
 
 Item 6-9 of section 6 remain open exactly as written.
+
+## 15.7 Observed staging migration state — corrects 15.1
+
+- **As of:** 2026-09-16
+- **Method:** direct read-only probe of the staging database through the
+  Supabase SQL editor (`information_schema.columns`, `pg_proc`,
+  `pg_get_functiondef`). No write was issued.
+- **Environment:** staging, confirmed by the operator.
+
+**Section 15.1 is wrong on both of its claims.** They were true when written on
+2026-09-15 and are recorded here as superseded rather than deleted.
+
+1. **The branch is merged.** PR #40 merged `fix/v1-customer-flow` into `main`
+   at `589483c`. Section 15's title and 15.1's first claim both predate that.
+2. **Eight of the nine migrations are applied to staging.** 15.1 states that no
+   migration in `0061`–`0069` has been applied to any environment.
+
+| Migration | Staging | Evidence used |
+|---|---|---|
+| `0061` | applied | `snapshot_requests.contact_name` present |
+| `0062` | applied | `approve_and_launch_snapshot_baseline` exists |
+| `0063` | applied | its body contains `paraphrase_plan` |
+| `0064` | **unknown** | data-only backfill, no schema marker |
+| `0065` | applied | `snapshot_report_artifacts.report_payload` present |
+| `0066` | applied | `resolve_protocol_job_review` exists |
+| `0067` | applied | `protocol_execution_jobs.prior_needs_review_reason` present |
+| `0068` | applied | `snapshot_report_artifacts.integrity_status` present |
+| `0069` | applied 2026-09-16 | see below |
+
+**`0069` apply, 2026-09-16.** Applied by the operator through the Supabase SQL
+editor against `zypact-staging`, wrapped in an explicit transaction, and
+verified immediately afterwards by re-reading `pg_proc`:
+
+| Verified property | Result |
+|---|---|
+| Overloads of `approve_and_launch_snapshot_baseline` | exactly 1 |
+| Signature | `(uuid, uuid, jsonb, text)` |
+| Body carries `D-032` (the five-run default) | true |
+| Body still carries `paraphrase_plan` (0063's fix) | true |
+| `execute` grants to `service_role` | 1 |
+
+The single-overload result matters: `create or replace` with a differing
+argument list would have created a second function rather than replacing the
+first, leaving the application free to resolve to either. It did not.
+
+An earlier probe in the same session reported `0062` as absent. That was a
+faulty query — it asserted the signature as `(uuid,uuid,text[],text)` when the
+competitors parameter is `jsonb`. `0062` is applied. Recorded here because the
+same mistake would, if acted on, have overwritten the live function with the
+oldest of its three bodies.
+
+**Not established by this probe:** when each migration was applied, by whom,
+through what tooling, or whether the Supabase CLI ledger
+(`supabase_migrations.schema_migrations`) records them. Production state was
+not probed and remains unknown. No runtime contract has been executed against
+staging, so this establishes schema presence only — never that any RPC behaves
+correctly.
+
+**Consequence for `0069`.** It is the only outstanding migration, and it is the
+only authoritative body of `approve_and_launch_snapshot_baseline` (see
+[`MIGRATION_AUDIT_0061_0069.md`](MIGRATION_AUDIT_0061_0069.md) §4). Until it is
+applied, staging creates new baselines with the old three-run plan. Re-applying
+`0062` or `0063` at this point would overwrite the live function with an older
+body and reintroduce the `paraphrase_plan` bug `0063` fixed.
+
+**Process finding.** Eight migrations reached a real environment without a
+recorded apply, and this document asserted the opposite for a day. Sections 1
+and 9 warn that repository files prove nothing about deployed state; this is
+the mirror-image failure, where the documentation proved nothing either. Any
+future apply must record environment, date, operator and tooling at the time it
+happens, and a probe like this one must precede any migration run rather than
+follow it.
 
 **What this does not claim.** Phase 3C exercised the deployed worker against an empty queue only. It establishes readiness, execution-enabled worker start, idle proof over three consecutive no-job cycles, zero iterations, graceful stop, and versioned return to `disabled`. It does not establish job claiming, provider execution, receipt durability, browser-disconnect survival, anti-double-payment behavior, abandoned-job recovery, or structured error/alert handling. Those M5 acceptance requirements remain open. This evidence does not close M5.

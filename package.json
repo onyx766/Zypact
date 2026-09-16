@@ -85,7 +85,8 @@
     "test:m5-2-adapter": "tsx scripts/test-m5-2-adapter-contract.ts",
     "test:m7-0070-schema": "tsx scripts/test-m7-0070-schema-contract.ts",
     "test:m7-0071-schema": "tsx scripts/test-m7-0071-schema-contract.ts",
-    "test:m7-0072-schema": "tsx scripts/test-m7-0072-schema-contract.ts"
+    "test:m7-0072-schema": "tsx scripts/test-m7-0072-schema-contract.ts",
+    "test:m7-0073-schema": "tsx scripts/test-m7-0073-schema-contract.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.3.3",

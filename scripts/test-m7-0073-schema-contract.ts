@@ -88,9 +88,14 @@ const FN =
       new RegExp(`v_baseline\\.${col}\\b`).test(FN));
   }
 
-  assert("the retest runs no baseline of its own",
-    /-- This protocol runs no baseline of its own\.\s*0,|\b0,\s*v_baseline\.planned_baseline_runs/.test(SQL.replace(/\r/g, "")) ||
-    /0, v_baseline\.planned_baseline_runs/.test(FN));
+  // The run count must land in planned_baseline_runs. 0051's enqueue refuses
+  // planned_baseline_runs = 0 outright (NO_BASELINE_RUNS_PLANNED), so putting
+  // the count in planned_retest_runs yields a protocol that can never execute
+  // — a mistake that reads as tidier and is silently fatal.
+  assert("the run count lands in planned_baseline_runs, which the slot machinery reads",
+    /v_baseline\.planned_baseline_runs,\s*0,/.test(FN));
+  assert("planned_baseline_runs is never set to 0",
+    !/\b0,\s*v_baseline\.planned_baseline_runs/.test(FN));
   assert("phase sizes match, so the detection threshold does not move",
     /v_baseline\.planned_baseline_runs/.test(FN));
   assert("caps are inherited rather than invented",

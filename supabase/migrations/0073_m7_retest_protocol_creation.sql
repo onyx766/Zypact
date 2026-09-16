@@ -209,9 +209,21 @@ begin
     v_baseline.provider,
     v_baseline.surface,
     v_baseline.model_config,
-    -- This protocol runs no baseline of its own.
-    0,
+    -- `planned_baseline_runs` is this protocol's planned run count, whichever
+    -- phase it belongs to — the slot machinery in 0051/0052 reads no other
+    -- column. Writing 0 here and putting the count in planned_retest_runs
+    -- would look tidier and produce a protocol that can never execute:
+    -- enqueue_protocol_execution_job refuses planned_baseline_runs = 0 with
+    -- NO_BASELINE_RUNS_PLANNED, and next_baseline_ordinal / baseline_ordinal
+    -- would have nothing to count against. The phase is carried by
+    -- baseline_protocol_id, not by which column holds the number.
+    --
+    -- Matching the baseline's count exactly is also what keeps the comparison
+    -- honest: the signed-off method assumes equal-sized phases, and an
+    -- asymmetric plan would move the detection threshold with nobody
+    -- choosing to.
     v_baseline.planned_baseline_runs,
+    0,
     v_baseline.paraphrase_plan,
     v_baseline.unit_of_analysis,
     v_baseline.primary_metric,

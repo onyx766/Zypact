@@ -628,3 +628,68 @@ happens, and a probe like this one must precede any migration run rather than
 follow it.
 
 **What this does not claim.** Phase 3C exercised the deployed worker against an empty queue only. It establishes readiness, execution-enabled worker start, idle proof over three consecutive no-job cycles, zero iterations, graceful stop, and versioned return to `disabled`. It does not establish job claiming, provider execution, receipt durability, browser-disconnect survival, anti-double-payment behavior, abandoned-job recovery, or structured error/alert handling. Those M5 acceptance requirements remain open. This evidence does not close M5.
+
+## 16. M7 migrations 0070-0076 applied to staging
+
+- **As of:** 2026-09-18
+- **Environment:** `zypact-staging` (Supabase project `bfqpkfqsonixdnfiodwk`)
+- **Tooling:** Supabase SQL editor, one migration per explicit transaction, applied in ascending order
+- **Procedure and verification SQL:** [`M7_STAGING_APPLY_RUNBOOK.md`](M7_STAGING_APPLY_RUNBOOK.md)
+
+This supersedes 15.6's "Still absent — M7 in its entirety" **at the schema layer
+of staging only**. It changes nothing about `main`, production, or the
+application layer.
+
+**Pre-flight (read-only, before any write).** `0069` live and carrying `D-032`;
+exactly one overload each of `approve_and_launch_snapshot_baseline`,
+`approve_protocol` and `resolve_protocol_job_review`; neither `interventions`
+nor `outcome_card_artifacts` present; `protocols_one_active_per_version` still
+present. Worker quiesced: Fly Machine `e826322a695098` stopped, zero jobs in
+`claimed`/`running`, zero attempts in `reserved`/`in_progress`, no open
+transactions.
+
+**Verified after apply.**
+
+| Property | Result |
+|---|---|
+| `interventions`, `outcome_card_artifacts` | both present |
+| `protocols_one_live_baseline_per_version`, `protocols_one_live_retest_per_baseline` | both present |
+| `protocols_one_active_per_version` (0047's index, dropped by 0073) | gone |
+| The 13 new M7 functions | 13 rows — one per name, so no duplicate overload |
+| `resolve_protocol_job_review` | 1 overload, body carries 0070's job-scoping predicate |
+| `approve_protocol` | 1 overload, body carries `detectable_change_at_plan` |
+| Triggers on `interventions` / `protocol_attempts` | 1 / `protocol_attempts_phase_matches_protocol` present |
+| Observation-window columns / `protocols.detectable_change_at_plan` | 5 / present |
+| `_smallest_detectable_change` at n = 5/10/15/20/30 | 0.60 / 0.40 / 0.27 / 0.25 / 0.17 — the signed-off table exactly |
+
+The `n=5` value matters beyond a schema check: at the five-run default the
+smallest detectable change equals Δ_min, so the deployed PL/pgSQL body
+reproduces the sign-off boundary rather than merely existing under the right
+name.
+
+**Recorded weakness.** Per-migration apply timestamps were not captured at the
+time. The Step 3 per-migration checks were skipped; the combined and gap probes
+above were run afterwards against final state. 15.4's process finding asks for
+the stronger record, and this apply did not fully meet it. The verification is
+sound — every probe reads current state — but the timing record is not.
+
+**The CLI ledger was deliberately not touched.** No row was inserted into
+`supabase_migrations.schema_migrations`. It is not established that the ledger
+records `0061`-`0069` (see 15.7); adding only `0070`-`0076` would lead a future
+`supabase db push` to re-run the earlier migrations, which for `0062`/`0063`
+would overwrite live function bodies with older ones.
+
+**What this does not establish.** No runtime contract was executed against
+staging — the M7 harnesses write fixture data and target disposable databases.
+They passed against real PostgreSQL 16 (0070-0074: 56/56, 0075: 22/22, 0076:
+26/26), and the probes above confirm staging carries those same bodies, but no
+M7 RPC has been invoked on staging. No intervention exists, no retest protocol
+exists, no Outcome Card exists. The worker remains `disabled/stopped`.
+
+**The application layer is unchanged and still absent.** No route or UI calls
+`register_intervention`, `approve_intervention`,
+`confirm_intervention_implementation`, `authorize_early_retest`,
+`create_retest_protocol` or `retest_eligibility`. `detectable_change_at_plan` is
+stored but rendered nowhere, so the §5 condition of the founder sign-off remains
+open. A retest is now reachable on staging only by an operator issuing SQL
+directly. That is a capability, not a workflow.

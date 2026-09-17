@@ -267,16 +267,26 @@ async function runOneSlot(
   }
 
   // D-025 — the key must be exactly `${jobId}:baseline:${nextBaselineOrdinal}`
-  // and the ordinal comes from the ledger, never from a local counter.
+  // and the ordinal comes from the ledger, never from a local counter. The
+  // literal `baseline` in the key names the job's slot counter
+  // (next_baseline_ordinal), not the phase — 0073 reuses that same counter
+  // for a retest protocol's job, so the key format does not vary by phase.
   const ordinal = ctx.job?.nextBaselineOrdinal ?? 0;
   if (ordinal < 1) {
     return { outcome: "failed", jobId: f.jobId, detail: "INVALID_BASELINE_ORDINAL" };
   }
+  // M7/0074 — a retest protocol (baselineProtocolId set) must record its
+  // attempts as 'retest', never 'baseline', or a later comparison that
+  // splits phases by attempt_kind would silently compare a baseline against
+  // itself. This predicate is exactly the one 0074's protocol_attempts
+  // trigger enforces, which is the actual backstop: if this ever drifts,
+  // the insert is refused rather than mislabelling evidence.
+  const attemptKind = ctx.protocol.baselineProtocolId !== null ? "retest" : "baseline";
   const admitted = await deps.db.admitAndReserveAttemptForJob({
     jobId: f.jobId,
     claimToken: f.claimToken,
     projectId: f.projectId,
-    attemptKind: "baseline",
+    attemptKind,
     idempotencyKey: `${f.jobId}:baseline:${ordinal}`,
     perplexityReservedCostUsd: opts.perplexityReservedCostUsd,
     analysisReservedCostUsd: opts.analysisReservedCostUsd,

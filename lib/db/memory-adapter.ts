@@ -3930,6 +3930,19 @@ export const memoryAdapter: DbAdapter = {
       };
     }
 
+    // M7/0074 — mirrors protocol_attempts_phase_matches_protocol, the real
+    // trigger that refuses an attempt whose kind contradicts its protocol's
+    // phase. Without this the memory adapter would silently accept what
+    // Postgres refuses, and the worker's own tests would stop being able to
+    // prove the guard actually matters.
+    const isRetestProtocol = protocol.baselineProtocolId !== null;
+    if (isRetestProtocol && input.attemptKind !== "retest") {
+      throw new Error("attempt_kind_must_be_retest_on_a_retest_protocol");
+    }
+    if (!isRetestProtocol && input.attemptKind === "retest") {
+      throw new Error("attempt_kind_retest_requires_a_retest_protocol");
+    }
+
     // D-025: baselineOrdinal supplied in the SAME reservation as job_id
     // (never a later, separate stamp) so the memory adapter's own write
     // ordering matches the real SQL, where the equivalent CHECK

@@ -194,6 +194,52 @@ async function main(): Promise<void> {
     console.log("\n[2] Fixtures");
     const projectId = q(`insert into public.projects (domain) values ('m7-0076.example') returning id;`);
     const actor = q(`select gen_random_uuid();`);
+
+    /**
+     * A full, genuine baseline -> intervention -> retest chain, ending with
+     * a real create_retest_protocol call. Every fixture in this file that
+     * needs a (baseline, retest) pair `save_outcome_card_artifact` will
+     * actually accept goes through this — NOT through fabricating a
+     * "retest" by passing one protocol's id as both arguments, which can
+     * never satisfy `p.baseline_protocol_id = p_baseline_protocol_id`
+     * (a genuine baseline's own baseline_protocol_id is always null, never
+     * equal to its own id). Two earlier drafts of section [6] made exactly
+     * that mistake and it silently produced an empty result from
+     * save_outcome_card_artifact, which then crashed the NEXT call
+     * (begin_outcome_card_delivery) on an empty-string-to-uuid cast rather
+     * than testing what section [6] actually intends to test.
+     */
+    function mintImplementedChain(
+      label: string,
+      hashChar: string
+    ): { interventionId: string; baselineId: string; retestId: string } {
+      const questionId = q(`insert into public.buyer_questions (project_id) values ('${projectId}') returning id;`);
+      const versionId = q(
+        `insert into public.buyer_question_versions (buyer_question_id, project_id, version_number, prompt_text, prompt_hash, intent_type, commercial_value, winnability, priority, rationale, provenance)
+         values ('${questionId}','${projectId}',1,'${label}?','${hashChar.repeat(64)}','shortlist',3,3,13,'fixture','customer_supplied') returning id;`
+      );
+      q(`select public.approve_buyer_question_version('${versionId}','${projectId}','${actor}');`);
+      const baselineId = q(
+        `insert into public.protocols (project_id, buyer_question_version_id, provider, surface, model_config,
+           planned_baseline_runs, planned_retest_runs, unit_of_analysis, primary_metric, sample_planning_method,
+           run_cap, spend_cap_usd, time_window_seconds, rate_limit_per_hour, concurrency_limit, retry_cap)
+         values ('${projectId}','${versionId}','perplexity_sonar','answer','{"model":"sonar"}'::jsonb,
+           5,0,'buyer_question_version','presence_rate','fixed_operator_default_pending_pilot_calibration',
+           7,2,86400,10,1,2) returning id;`
+      );
+      q(`select public.approve_protocol('${baselineId}','${projectId}','${actor}');`);
+      const interventionId = q(
+        `select id from public.register_intervention('${projectId}','${baselineId}','h-${label}','m-${label}','content_published','https://x.example/${label}','owner','["run-${label}"]'::jsonb);`
+      );
+      q(`select public.approve_intervention('${interventionId}','${projectId}','${actor}');`);
+      q(`update public.interventions set expected_observation_days = 21 where id='${interventionId}';`);
+      q(`select public.confirm_intervention_implementation('${interventionId}','${projectId}','${actor}','{"url":"https://x.example/${label}"}'::jsonb);`);
+      q(`select public.authorize_early_retest('${interventionId}','${projectId}','${actor}','runtime contract needs it now');`);
+      q(`select public.create_retest_protocol('${interventionId}','${projectId}','${actor}');`);
+      const retestId = q(`select id from public.protocols where baseline_protocol_id='${baselineId}';`);
+      return { interventionId, baselineId, retestId };
+    }
+
     const questionId = q(`insert into public.buyer_questions (project_id) values ('${projectId}') returning id;`);
     const versionId = q(
       `insert into public.buyer_question_versions (buyer_question_id, project_id, version_number, prompt_text, prompt_hash, intent_type, commercial_value, winnability, priority, rationale, provenance)
@@ -306,43 +352,43 @@ async function main(): Promise<void> {
 
     /* ═══════════ 6. blocked is refused at the database layer ═══════════ */
     console.log("\n[6] blocked is refused by the database itself");
-    const blockedArtifact = q(
-      `select id from public.save_outcome_card_artifact('${iv2}','${projectId}','${p2}','${p2}','# blocked card',now(),'{"v":1}'::jsonb,'blocked','["legacy verdict exposure"]'::jsonb);`
-    );
-    check("a blocked artifact was saved for the fixture", blockedArtifact.length > 0);
-    const blockedRevision = q(`select public.outcome_card_artifact_revision('# blocked card', '{"v":1}'::jsonb);`);
-    check(
-      "THE DELIBERATE IMPROVEMENT: begin_outcome_card_delivery refuses a blocked artifact outright",
-      qError(`select public.begin_outcome_card_delivery('${iv2}','${blockedArtifact}','${blockedRevision}');`) !== null
-    );
-    check("needs_review is NOT refused the same way — a human may still deliver it manually",
-      (() => {
-        const iv3q = q(`insert into public.buyer_questions (project_id) values ('${projectId}') returning id;`);
-        const v3 = q(
-          `insert into public.buyer_question_versions (buyer_question_id, project_id, version_number, prompt_text, prompt_hash, intent_type, commercial_value, winnability, priority, rationale, provenance)
-           values ('${iv3q}','${projectId}',1,'Third question?','${"c".repeat(64)}','shortlist',3,3,13,'fixture','customer_supplied') returning id;`
-        );
-        q(`select public.approve_buyer_question_version('${v3}','${projectId}','${actor}');`);
-        const p3 = q(
-          `insert into public.protocols (project_id, buyer_question_version_id, provider, surface, model_config,
-             planned_baseline_runs, planned_retest_runs, unit_of_analysis, primary_metric, sample_planning_method,
-             run_cap, spend_cap_usd, time_window_seconds, rate_limit_per_hour, concurrency_limit, retry_cap)
-           values ('${projectId}','${v3}','perplexity_sonar','answer','{"model":"sonar"}'::jsonb,
-             5,0,'buyer_question_version','presence_rate','fixed_operator_default_pending_pilot_calibration',
-             7,2,86400,10,1,2) returning id;`
-        );
-        q(`select public.approve_protocol('${p3}','${projectId}','${actor}');`);
-        const iv3 = q(`select id from public.register_intervention('${projectId}','${p3}','h3','m3','content_published','https://x.example/c','owner','["run-3"]'::jsonb);`);
-        q(`select public.approve_intervention('${iv3}','${projectId}','${actor}');`);
-        q(`update public.interventions set expected_observation_days = 21 where id='${iv3}';`);
-        q(`select public.confirm_intervention_implementation('${iv3}','${projectId}','${actor}','{"url":"https://x.example/c"}'::jsonb);`);
-        const nrArtifact = q(
-          `select id from public.save_outcome_card_artifact('${iv3}','${projectId}','${p3}','${p3}','# needs review card',now(),'{"v":1}'::jsonb,'needs_review','["M4 gap"]'::jsonb);`
-        );
-        const nrRevision = q(`select public.outcome_card_artifact_revision('# needs review card', '{"v":1}'::jsonb);`);
-        return qError(`select public.begin_outcome_card_delivery('${iv3}','${nrArtifact}','${nrRevision}');`) === null;
-      })()
-    );
+    {
+      // A genuine (baseline, retest) pair — save_outcome_card_artifact's
+      // re-derived pairing check would refuse anything less, exactly as
+      // section [3] already proved. That refusal is not this section's
+      // subject; the integrity gate on an artifact that WAS legitimately
+      // saved is.
+      const chain = mintImplementedChain("blocked-fixture", "d");
+      const blockedArtifact = q(
+        `select id from public.save_outcome_card_artifact('${chain.interventionId}','${projectId}','${chain.baselineId}','${chain.retestId}','# blocked card',now(),'{"v":1}'::jsonb,'blocked','["legacy verdict exposure"]'::jsonb);`
+      );
+      check("a blocked artifact was saved for the fixture", blockedArtifact.length > 0, blockedArtifact);
+      const blockedRevision = q(`select public.outcome_card_artifact_revision('# blocked card', '{"v":1}'::jsonb);`);
+      const blockedErr = qError(
+        `select public.begin_outcome_card_delivery('${chain.interventionId}','${blockedArtifact}','${blockedRevision}');`
+      );
+      check(
+        "THE DELIBERATE IMPROVEMENT: begin_outcome_card_delivery refuses a blocked artifact outright",
+        blockedErr !== null && blockedErr.includes("may never be delivered"),
+        blockedErr ?? "no error raised"
+      );
+    }
+    {
+      const chain = mintImplementedChain("needs-review-fixture", "e");
+      const nrArtifact = q(
+        `select id from public.save_outcome_card_artifact('${chain.interventionId}','${projectId}','${chain.baselineId}','${chain.retestId}','# needs review card',now(),'{"v":1}'::jsonb,'needs_review','["M4 gap"]'::jsonb);`
+      );
+      check("a needs_review artifact was saved for the fixture", nrArtifact.length > 0, nrArtifact);
+      const nrRevision = q(`select public.outcome_card_artifact_revision('# needs review card', '{"v":1}'::jsonb);`);
+      const claimed = q(
+        `select delivery_claim_token from public.begin_outcome_card_delivery('${chain.interventionId}','${nrArtifact}','${nrRevision}');`
+      );
+      check(
+        "needs_review is NOT refused the same way — a human may still deliver it manually",
+        claimed.length > 0,
+        claimed
+      );
+    }
 
     console.log(`\n${checks - failures}/${checks} checks passed.`);
     if (failures === 0) succeeded = true;

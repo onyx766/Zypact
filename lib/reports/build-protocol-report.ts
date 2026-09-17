@@ -29,39 +29,60 @@ import {
   type ProtocolReportRun,
 } from "@/lib/reports/protocol-report-types";
 
-/** z for a two-sided 95% interval. */
-const Z = 1.959963984540054;
+/** z for a two-sided 95% interval. Shared with lib/reports/compare-protocols.ts. */
+export const WILSON_Z = 1.959963984540054;
 
 /**
- * Wilson score interval.
+ * Wilson score interval, unrounded.
  *
  * Chosen over the normal approximation because V1 baselines are tiny and
  * frequently land on p = 0 or p = 1, where the normal interval collapses to
  * zero width and would present "0%" as if it were certain.
+ *
+ * Exported unrounded so `compare-protocols.ts` can build the Newcombe
+ * interval for a baseline/retest difference from these exact bounds rather
+ * than from `wilsonInterval`'s display-rounded ones — the comparison decides
+ * an outcome status, and compounding two roundings into that decision is a
+ * needless (if small) source of drift from what the underlying data says.
  */
-export function wilsonInterval(
+export function wilsonBounds(
   successes: number,
   trials: number
 ): ProtocolReportInterval | null {
   if (trials <= 0) return null;
 
   const p = successes / trials;
-  const z2 = Z * Z;
+  const z2 = WILSON_Z * WILSON_Z;
   const denominator = 1 + z2 / trials;
   const center = (p + z2 / (2 * trials)) / denominator;
 
   const margin =
-    (Z / denominator) *
+    (WILSON_Z / denominator) *
     Math.sqrt(
       (p * (1 - p)) / trials + z2 / (4 * trials * trials)
     );
 
-  const round = (v: number) =>
-    Math.round(Math.min(1, Math.max(0, v)) * 1000) / 1000;
+  const clamp = (v: number) => Math.min(1, Math.max(0, v));
 
   return {
-    low: round(center - margin),
-    high: round(center + margin),
+    low: clamp(center - margin),
+    high: clamp(center + margin),
+  };
+}
+
+/** Wilson score interval, rounded to 3 decimals for display. */
+export function wilsonInterval(
+  successes: number,
+  trials: number
+): ProtocolReportInterval | null {
+  const bounds = wilsonBounds(successes, trials);
+  if (bounds === null) return null;
+
+  const round = (v: number) => Math.round(v * 1000) / 1000;
+
+  return {
+    low: round(bounds.low),
+    high: round(bounds.high),
   };
 }
 

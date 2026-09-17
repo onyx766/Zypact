@@ -64,35 +64,21 @@ function asStringArray(value: unknown): string[] {
   return names;
 }
 
-export async function readProtocolEvidence(
+/**
+ * The part of evidence-reading that is genuinely protocol-agnostic: given a
+ * protocol id and the subject it belongs to, read the approved question
+ * version and every attempt/result row. `readProtocolEvidence` and
+ * `readRetestProtocolEvidence` are both thin wrappers around this — the
+ * only thing that differs between a baseline and a retest protocol is
+ * WHERE `subject`/`projectId` come from, never how evidence is read.
+ */
+async function readProtocolEvidenceCore(
   client: SupabaseClient,
-  snapshotRequestId: string
+  snapshotRequestId: string,
+  projectId: string,
+  protocolId: string,
+  subject: BuildProtocolReportInput["subject"]
 ): Promise<BuildProtocolReportInput> {
-  const { data: request, error: requestError } = await client
-    .from("snapshot_requests")
-    .select(
-      "id,company_name,website_url,normalized_domain,project_id,protocol_id,status"
-    )
-    .eq("id", snapshotRequestId)
-    .maybeSingle();
-
-  if (requestError) throw requestError;
-
-  const req = required(
-    request,
-    `Snapshot request ${snapshotRequestId} was not found.`
-  ) as Record<string, any>;
-
-  const protocolId = required(
-    req.protocol_id,
-    "Snapshot request has no protocol. It was not approved through the M4/M5 path, so there is no protocol evidence to report."
-  );
-
-  const projectId = required(
-    req.project_id,
-    "Snapshot request has no project."
-  );
-
   const { data: protocol, error: protocolError } = await client
     .from("protocols")
     .select("*")
@@ -170,13 +156,9 @@ export async function readProtocolEvidence(
   }
 
   return {
-    snapshotRequestId: req.id,
+    snapshotRequestId,
     projectId,
-    subject: {
-      companyName: req.company_name,
-      websiteUrl: req.website_url,
-      normalizedDomain: req.normalized_domain,
-    },
+    subject,
     question: {
       text: qv.prompt_text,
       hash: qv.prompt_hash,
@@ -203,4 +185,75 @@ export async function readProtocolEvidence(
     attempts,
     results,
   };
+}
+
+/**
+ * Reads evidence for a request that went through the founder-operated
+ * public flow. `subject` and `snapshotRequestId` come from
+ * `snapshot_requests`, exactly as before this function was split — this
+ * wrapper's behavior is unchanged from the pre-split version.
+ */
+export async function readProtocolEvidence(
+  client: SupabaseClient,
+  snapshotRequestId: string
+): Promise<BuildProtocolReportInput> {
+  const { data: request, error: requestError } = await client
+    .from("snapshot_requests")
+    .select(
+      "id,company_name,website_url,normalized_domain,project_id,protocol_id,status"
+    )
+    .eq("id", snapshotRequestId)
+    .maybeSingle();
+
+  if (requestError) throw requestError;
+
+  const req = required(
+    request,
+    `Snapshot request ${snapshotRequestId} was not found.`
+  ) as Record<string, any>;
+
+  const protocolId = required(
+    req.protocol_id,
+    "Snapshot request has no protocol. It was not approved through the M4/M5 path, so there is no protocol evidence to report."
+  );
+
+  const projectId = required(
+    req.project_id,
+    "Snapshot request has no project."
+  );
+
+  return readProtocolEvidenceCore(client, req.id, projectId, protocolId, {
+    companyName: req.company_name,
+    websiteUrl: req.website_url,
+    normalizedDomain: req.normalized_domain,
+  });
+}
+
+/**
+ * Reads evidence for a RETEST protocol — one with no `snapshot_request` of
+ * its own, since it is identified by its intervention and baseline
+ * protocol instead (0073). `subject` is supplied by the caller, who reads
+ * it from the baseline's own evidence: the two phases describe the same
+ * company, so there is nothing for this function to look up independently.
+ *
+ * `snapshotRequestId` in the returned `BuildProtocolReportInput` is set to
+ * the retest protocol's own id — that field exists only so
+ * `buildProtocolReport`'s output payload carries SOME stable identifier;
+ * `buildOutcomeCard` never reads it (it takes identity from
+ * `protocol.id`/`question.hash` instead), so this substitution is
+ * inert rather than a lie a client could be shown.
+ */
+export async function readRetestProtocolEvidence(
+  client: SupabaseClient,
+  retestProtocolId: string,
+  projectId: string,
+  subject: BuildProtocolReportInput["subject"]
+): Promise<BuildProtocolReportInput> {
+  return readProtocolEvidenceCore(
+    client,
+    retestProtocolId,
+    projectId,
+    retestProtocolId,
+    subject
+  );
 }

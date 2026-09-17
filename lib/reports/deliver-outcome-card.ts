@@ -434,3 +434,81 @@ export async function processOutcomeCard(
     messageId,
   };
 }
+
+/**
+ * Implemented interventions whose retest protocol has a succeeded job and
+ * whose card has not been delivered yet. Mirrors findDeliverableRequests's
+ * exact three-step shape: find the candidate parent rows, require the
+ * SUCCEEDED job precondition (a retest protocol can exist while its job is
+ * still queued or running — that is not this function's business yet),
+ * then exclude anything already delivered.
+ */
+export async function findDeliverableInterventions(
+  client: SupabaseClient,
+  limit = 25
+): Promise<string[]> {
+  const { data: interventions, error: interventionsError } = await client
+    .from("interventions")
+    .select("id,protocol_id")
+    .eq("status", "implemented")
+    .limit(500);
+
+  if (interventionsError) throw interventionsError;
+
+  const rows = (interventions ?? []) as Array<{ id: string; protocol_id: string }>;
+  if (rows.length === 0) return [];
+
+  const baselineIds = rows.map((r) => r.protocol_id);
+
+  const { data: retests, error: retestsError } = await client
+    .from("protocols")
+    .select("id,baseline_protocol_id")
+    .in("baseline_protocol_id", baselineIds);
+
+  if (retestsError) throw retestsError;
+
+  const retestRows = (retests ?? []) as Array<{ id: string; baseline_protocol_id: string }>;
+  if (retestRows.length === 0) return [];
+
+  const { data: jobs, error: jobsError } = await client
+    .from("protocol_execution_jobs")
+    .select("protocol_id")
+    .eq("status", "succeeded")
+    .in(
+      "protocol_id",
+      retestRows.map((r) => r.id)
+    );
+
+  if (jobsError) throw jobsError;
+
+  const succeededRetestProtocolIds = new Set(
+    (jobs ?? []).map((j: Record<string, any>) => j.protocol_id as string)
+  );
+
+  const retestProtocolIdByBaseline = new Map(
+    retestRows
+      .filter((r) => succeededRetestProtocolIds.has(r.id))
+      .map((r) => [r.baseline_protocol_id, r.id])
+  );
+
+  const candidateInterventionIds = rows
+    .filter((r) => retestProtocolIdByBaseline.has(r.protocol_id))
+    .map((r) => r.id);
+
+  if (candidateInterventionIds.length === 0) return [];
+
+  const { data: existingArtifacts, error: artifactsError } = await client
+    .from("outcome_card_artifacts")
+    .select("intervention_id,delivered_at")
+    .in("intervention_id", candidateInterventionIds);
+
+  if (artifactsError) throw artifactsError;
+
+  const deliveredIds = new Set(
+    (existingArtifacts ?? [])
+      .filter((a: Record<string, any>) => a.delivered_at)
+      .map((a: Record<string, any>) => a.intervention_id as string)
+  );
+
+  return candidateInterventionIds.filter((id) => !deliveredIds.has(id)).slice(0, limit);
+}

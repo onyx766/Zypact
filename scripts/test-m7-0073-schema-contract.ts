@@ -201,11 +201,24 @@ const FN =
   assert("security definer with a pinned search_path",
     /security definer/i.test(FN) && /set search_path = public, pg_temp/i.test(FN));
 
+  // Checked as an actual CREATE/DROP/ALTER statement, not a bare substring
+  // over raw file text — a later migration's own header prose legitimately
+  // cross-references this migration by name (0075's does, explaining why
+  // approve_protocol's symmetric-n disclosure also covers a retest protocol
+  // created here) without redefining anything. A comment mention is not a
+  // redefinition.
+  const definitionRe = (name: string) =>
+    new RegExp(`(create|drop|alter)\\s+(or\\s+replace\\s+)?(function|index)[\\s\\S]{0,120}?\\b${name}\\b`, "i");
   assert("no later migration redefines it or the indexes",
     readdirSync(MIGRATIONS)
       .filter((f) => /^\d{4}_.*\.sql$/.test(f) && Number(f.slice(0, 4)) > 73)
-      .every((f) => !/create_retest_protocol|protocols_one_live_baseline_per_version|protocols_one_live_retest_per_baseline/i
-        .test(readFileSync(path.join(MIGRATIONS, f), "utf8"))));
+      .every((f) => {
+        const stripped = readFileSync(path.join(MIGRATIONS, f), "utf8")
+          .replace(/\/\*[\s\S]*?\*\//g, "")
+          .replace(/^\s*--.*$/gm, "");
+        return ["create_retest_protocol", "protocols_one_live_baseline_per_version", "protocols_one_live_retest_per_baseline"]
+          .every((name) => !definitionRe(name).test(stripped));
+      }));
 }
 
 /* ═══════════════ 7. every detector is proved to bite ═══════════════ */

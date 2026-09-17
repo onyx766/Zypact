@@ -115,9 +115,31 @@ async function main(): Promise<void> {
   try {
     run("supabase", ["init", "--workdir", workdir, "--yes"]);
     const cfg = path.join(workdir, "supabase", "config.toml");
-    const edited = setTomlScalar(readFileSync(cfg, "utf8"), "db.seed", "enabled", "false");
-    if (edited.replacements !== 1) throw new Error(`config replacements=${edited.replacements}`);
-    writeFileSync(cfg, edited.text);
+    // This harness talks to Postgres only, via `docker exec ... psql` — never
+    // PostgREST, Auth, Storage, Realtime, Studio, or an edge function. Every
+    // one of those is `enabled = true` by default in a fresh `supabase init`,
+    // so leaving them on starts the full stack for a test that needs one
+    // container. On a memory-constrained host that starves the BEAM-based
+    // Realtime service, which fails with an ERL_CRASH_DUMP rather than a
+    // clean error. Disabling the unused services is both a real memory
+    // saving and a faithful description of what this test exercises.
+    let cfgText = readFileSync(cfg, "utf8");
+    for (const [section, key, value] of [
+      ["db.seed", "enabled", "false"],
+      ["api", "enabled", "false"],
+      ["realtime", "enabled", "false"],
+      ["studio", "enabled", "false"],
+      ["storage", "enabled", "false"],
+      ["auth", "enabled", "false"],
+      ["edge_runtime", "enabled", "false"],
+      ["analytics", "enabled", "false"],
+      ["local_smtp", "enabled", "false"],
+    ] as const) {
+      const edited = setTomlScalar(cfgText, section, key, value);
+      if (edited.replacements !== 1) throw new Error(`config replacements for [${section}].${key}=${edited.replacements}`);
+      cfgText = edited.text;
+    }
+    writeFileSync(cfg, cfgText);
 
     const srcDir = path.join(REPO, "supabase", "migrations");
     const dstDir = path.join(workdir, "supabase", "migrations");
@@ -139,9 +161,13 @@ async function main(): Promise<void> {
       .split("\n").find((n) => n.startsWith("supabase_db_"));
     if (!container) throw new Error("no supabase_db container");
 
+    // `-t` suppresses headers/footers of the result set, but psql still
+    // appends its own command-completion tag ("INSERT 0 1", "UPDATE 1", …)
+    // on the next line for INSERT/UPDATE/DELETE — including when RETURNING
+    // is used, unlike a plain SELECT. Keep only the scalar's own line.
     const q = (sql: string): string =>
       execFileSync("docker", ["exec", container, "psql", "-U", "postgres", "-d", "postgres", "-tAc", sql],
-        { encoding: "utf8", maxBuffer: 1 << 26 }).trim();
+        { encoding: "utf8", maxBuffer: 1 << 26 }).trim().split("\n", 1)[0];
     const qError = (sql: string): string | null => {
       try { q(sql); return null; }
       catch (e) { return String((e as { stderr?: Buffer }).stderr ?? (e as Error).message); }

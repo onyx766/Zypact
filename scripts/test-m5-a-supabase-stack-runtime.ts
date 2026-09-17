@@ -840,9 +840,12 @@ async function main(): Promise<void> {
       check("the job is closed — not left claimable for ever", after.job?.id !== seeded.jobId, after.outcome);
       {
         const dbc = run("docker", ["ps", "--format", "{{.Names}}"]).split("\n").find((n) => n.startsWith("supabase_db_"))!;
+        // `-t` suppresses result-set headers/footers, but psql still appends
+        // its own command-completion tag on the next line for INSERT/UPDATE/
+        // DELETE, including with RETURNING. Keep only the scalar's own line.
         const q = (sql: string) =>
           execFileSync("docker", ["exec", dbc, "psql", "-U", "postgres", "-d", "postgres", "-tAc", sql],
-            { encoding: "utf8" }).trim();
+            { encoding: "utf8" }).trim().split("\n", 1)[0];
         const st = q(`select j.status||'|'||coalesce(j.current_attempt_id::text,'NULL')
                         from public.protocol_execution_jobs j
                         join public.projects p on p.id=j.project_id where p.domain='stack-unknown-outcome.test';`);
@@ -864,9 +867,12 @@ async function main(): Promise<void> {
       // Read the ledger directly: "unclaimable" proves nothing, terminal
       // rows do. `psql` is the authority here, not the adapter.
       const dbc = run("docker", ["ps", "--format", "{{.Names}}"]).split("\n").find((n) => n.startsWith("supabase_db_"))!;
+      // `-t` suppresses result-set headers/footers, but psql still appends
+      // its own command-completion tag on the next line for INSERT/UPDATE/
+      // DELETE, including with RETURNING. Keep only the scalar's own line.
       const q = (sql: string) =>
         execFileSync("docker", ["exec", dbc, "psql", "-U", "postgres", "-d", "postgres", "-tAc", sql],
-          { encoding: "utf8" }).trim();
+          { encoding: "utf8" }).trim().split("\n", 1)[0];
 
       const closedState = (domain: string) => ({
         job: q(`select j.status||'|'||coalesce(j.current_attempt_id::text,'NULL')
@@ -943,9 +949,12 @@ async function main(): Promise<void> {
     sc("S10");
     {
       const dbc = run("docker", ["ps", "--format", "{{.Names}}"]).split("\n").find((n) => n.startsWith("supabase_db_"))!;
+      // `-t` suppresses result-set headers/footers, but psql still appends
+      // its own command-completion tag on the next line for INSERT/UPDATE/
+      // DELETE, including with RETURNING. Keep only the scalar's own line.
       const q = (sql: string) =>
         execFileSync("docker", ["exec", dbc, "psql", "-U", "postgres", "-d", "postgres", "-tAc", sql],
-          { encoding: "utf8" }).trim();
+          { encoding: "utf8" }).trim().split("\n", 1)[0];
 
       for (const [label, content] of [
         ["invalid_json", "not json at all {{{"],

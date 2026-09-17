@@ -1,0 +1,579 @@
+
+> zypact-mvp@0.1.0 test:m7-runtime
+> tsx scripts/test-m7-runtime-contract.ts
+
+Disposable workdir: /tmp/zypact-m7-Fz4m7Y
+✓ the tranche under test is 0070-0074 (5 files)
+
+Starting the disposable stack with 0001-0069 only...
+HARNESS ERROR Error: Command failed: supabase start --workdir /tmp/zypact-m7-Fz4m7Y
+Starting database...
+Initialising schema...
+Seeding globals from roles.sql...
+Applying migration 0001_init.sql...
+Applying migration 0002_generated_prompts.sql...
+Applying migration 0003_probe_analysis.sql...
+Applying migration 0004_competitors.sql...
+Applying migration 0005_gap_map.sql...
+Applying migration 0006_evidence_bank.sql...
+Applying migration 0007_fix_briefs.sql...
+Applying migration 0008_generated_assets.sql...
+Applying migration 0009_qa_reports.sql...
+Applying migration 0010_grants.sql...
+Applying migration 0011_security_hardening.sql...
+Applying migration 0012_probe_mode_and_evidence_provenance.sql...
+Applying migration 0013_live_perplexity_probe_mode.sql...
+Applying migration 0014_generated_asset_generation_metadata.sql...
+Applying migration 0015_asset_lifecycle_and_fix_brief_status.sql...
+Applying migration 0016_probe_request_and_product_scorecard.sql...
+Applying migration 0017_snapshot_requests.sql...
+Applying migration 0018_snapshot_request_limits.sql...
+Applying migration 0019_snapshot_email_verification.sql...
+Applying migration 0020_snapshot_verification_delivery_failure.sql...
+Applying migration 0021_snapshot_founder_approval.sql...
+Applying migration 0022_snapshot_fi_invite.sql...
+Applying migration 0023_remove_snapshot_fi_invite.sql...
+Applying migration 0024_snapshot_project_reservation.sql...
+Applying migration 0025_snapshot_progress.sql...
+Applying migration 0026_snapshot_completion.sql...
+Applying migration 0027_snapshot_report_artifacts.sql...
+Applying migration 0028_snapshot_request_rejection.sql...
+Applying migration 0029_snapshot_report_public_token.sql...
+Applying migration 0030_snapshot_request_worker_claim.sql...
+Applying migration 0031_snapshot_worker_fenced_writes.sql...
+Applying migration 0032_revoke_direct_snapshot_dml.sql...
+Applying migration 0033_restrict_snapshot_artifact_project_delete.sql...
+Applying migration 0034_snapshot_request_competitors.sql...
+Applying migration 0035_snapshot_report_delivery_fencing.sql...
+Applying migration 0036_m1_probe_evidence_contract.sql...
+Applying migration 0037_m1_probe_failure_and_raw_body_contract.sql...
+Applying migration 0038_m2_canonical_observations_schema.sql...
+Applying migration 0039_m2_backfill_probe_result_dataset_identity_rpc.sql...
+Applying migration 0040_m2_probe_dataset_not_null.sql...
+Applying migration 0041_m2_entity_resolution_schema.sql...
+Applying migration 0042_m2_entity_resolution_rpc.sql...
+Applying migration 0043_m2_fix_entity_resolution_rpc_ambiguity.sql...
+Applying migration 0044_m2_fix_entity_resolution_rpc_found.sql...
+Applying migration 0045_m3_competitors_canonical_entity.sql...
+Applying migration 0046_m3_replace_competitors_transactional_rpc.sql...
+Applying migration 0047_m4_buyer_question_protocol_attempts.sql...
+Applying migration 0048_m4_buyer_question_version_numeric_range_checks.sql...
+Applying migration 0049_m4_fix_protocol_rpc_status_ambiguities.sql...
+Applying migration 0050_m5_protocol_execution_jobs_and_external_call_ledger.sql...
+Applying migration 0051_m5_protocol_worker_resumption_and_retry_safety.sql...
+Applying migration 0052_m5_durable_call_payloads_and_probe_result_replay.sql...
+Applying migration 0053_m5_analysis_parse_failure_and_raw_request_body.sql...
+Applying migration 0054_m5_worker_probe_result_and_alert_outbox.sql...
+Applying migration 0055_m1_exact_provider_request_body.sql...
+Applying migration 0056_m5_external_call_request_evidence.sql...
+Applying migration 0057_m0_harden_table_privileges.sql...
+Applying migration 0058_m5_analysis_receipt_transport_evidence.sql...
+Applying migration 0059_m5_phase3d_targeted_claim.sql...
+Applying migration 0060_m5_phase3d_post_claim_verification.sql...
+Applying migration 0061_snapshot_request_contact_name.sql...
+Applying migration 0062_snapshot_approval_launches_protocol_baseline.sql...
+Applying migration 0063_snapshot_baseline_paraphrase_plan.sql...
+Applying migration 0064_backfill_measured_perplexity_cost.sql...
+Applying migration 0065_protocol_report_payload.sql...
+Applying migration 0066_protocol_job_review_resolution.sql...
+Applying migration 0067_preserve_prior_needs_review_reason.sql...
+Applying migration 0068_report_integrity_status.sql...
+Applying migration 0069_new_baseline_default_five_runs.sql...
+Starting containers...
+Waiting for health checks...
+supabase_analytics_zypact-m7-Fz4m7Y container logs:
+supabase_vector_zypact-m7-Fz4m7Y container logs:
+supabase_realtime_zypact-m7-Fz4m7Y container logs:
+1024
+Running migrations
+18:50:56.243 [info] Migrations already up
+Seeding selfhosted Realtime
+18:51:03.149 [warning] Failed to load OTP-trusted CAs: :error::function_clause, falling back to hardcoded authorities
+18:51:03.604 [info] Loading 121 CA(s) from :hardcoded store
+18:51:05.083 [info] [driver: :tcp, port: 5369, socket: [~c"#Port<0.5>"], msg: ~c"server_setup_successfully"]
+18:51:05.124 [info] [domain: [:gen_rpc, :dispatcher], "$kind": :gen_rpc_dispatcher_start]
+18:51:06.752 [notice]     :alarm_handler: {:set, {:system_memory_high_watermark, []}}
+18:51:08.088 [notice] SYN[nonode@nohost] Adding node to scope <Elixir.RegionNodes>
+18:51:08.118 [notice] SYN[nonode@nohost] Creating tables for scope <Elixir.RegionNodes>
+18:51:08.184 [notice] SYN[nonode@nohost|registry<Elixir.RegionNodes>] Discovering the cluster
+18:51:08.219 [notice] SYN[nonode@nohost|pg<Elixir.RegionNodes>] Discovering the cluster
+18:51:08.229 [notice] SYN[nonode@nohost] Adding node to scope <Elixir.Realtime.Tenants.Connect>
+18:51:08.229 [notice] SYN[nonode@nohost] Creating tables for scope <Elixir.Realtime.Tenants.Connect>
+18:51:08.233 [notice] SYN[nonode@nohost|registry<Elixir.Realtime.Tenants.Connect>] Discovering the cluster
+18:51:08.234 [notice] SYN[nonode@nohost|pg<Elixir.Realtime.Tenants.Connect>] Discovering the cluster
+18:51:14.737 [warning] MFA {Realtime.PromEx.Plugins.TenantGlobal, :execute_global_connection_metrics, []} encountered an error but has not been detached: %ArgumentError{message: "errors were found at the given arguments:\n\n  * 1st argument: the table identifier does not refer to an existing ETS table\n"}
+18:51:14.737 [warning] MFA {Realtime.PromEx.Plugins.Tenant, :execute_tenant_metrics, []} encountered an error but has not been detached: %ArgumentError{message: "errors were found at the given arguments:\n\n  * 1st argument: the table identifier does not refer to an existing ETS table\n"}
+18:51:14.745 [info] Forum[nonode@nohost|users] Starting
+18:51:14.964 [info] [libcluster:postgres] Connected to Postgres database
+18:51:15.381 [info] Muster[nonode@nohost|realtime_channels_local] Starting
+18:51:15.789 [info] Starting Reconnector
+18:51:16.185 [info] Running RealtimeWeb.Endpoint with cowboy 2.18.0 at :::4000 (http)
+18:51:16.186 [info] Access RealtimeWeb.Endpoint at http://realtime.supabase.co:443
+18:51:18.809 [notice] SYN[nonode@nohost] Adding node to scope <realtime_postgres_cdc_0>
+18:51:18.809 [notice] SYN[nonode@nohost] Creating tables for scope <realtime_postgres_cdc_0>
+18:51:18.810 [notice] SYN[nonode@nohost|registry<realtime_postgres_cdc_0>] Discovering the cluster
+18:51:18.810 [notice] SYN[nonode@nohost|pg<realtime_postgres_cdc_0>] Discovering the cluster
+18:51:18.810 [notice] SYN[nonode@nohost] Adding node to scope <realtime_postgres_cdc_1>
+18:51:18.810 [notice] SYN[nonode@nohost] Creating tables for scope <realtime_postgres_cdc_1>
+18:51:18.810 [notice] SYN[nonode@nohost|registry<realtime_postgres_cdc_1>] Discovering the cluster
+18:51:18.811 [notice] SYN[nonode@nohost|pg<realtime_postgres_cdc_1>] Discovering the cluster
+18:51:18.811 [notice] SYN[nonode@nohost] Adding node to scope <realtime_postgres_cdc_2>
+18:51:18.815 [notice] SYN[nonode@nohost] Creating tables for scope <realtime_postgres_cdc_2>
+18:51:18.815 [notice] SYN[nonode@nohost|registry<realtime_postgres_cdc_2>] Discovering the cluster
+18:51:18.816 [notice] SYN[nonode@nohost|pg<realtime_postgres_cdc_2>] Discovering the cluster
+18:51:18.819 [notice] SYN[nonode@nohost] Adding node to scope <realtime_postgres_cdc_3>
+18:51:18.819 [notice] SYN[nonode@nohost] Creating tables for scope <realtime_postgres_cdc_3>
+18:51:18.820 [notice] SYN[nonode@nohost|registry<realtime_postgres_cdc_3>] Discovering the cluster
+18:51:18.821 [notice] SYN[nonode@nohost|pg<realtime_postgres_cdc_3>] Discovering the cluster
+18:51:18.821 [notice] SYN[nonode@nohost] Adding node to scope <realtime_postgres_cdc_4>
+18:51:18.822 [notice] SYN[nonode@nohost] Creating tables for scope <realtime_postgres_cdc_4>
+18:51:18.823 [notice] SYN[nonode@nohost|registry<realtime_postgres_cdc_4>] Discovering the cluster
+18:51:18.824 [notice] SYN[nonode@nohost|pg<realtime_postgres_cdc_4>] Discovering the cluster
+18:51:18.828 [info] Janitor started
+18:51:18.831 [info] Starting MetricsCleaner
+18:51:21.025 [warning] Zero region nodes for us-east-1 using :nonode@nohost
+18:51:21.067 project=realtime-dev external_id=realtime-dev error_code=DatabaseIpVersionIsIpv4 [warning] DatabaseIpVersionIsIpv4: Tenant database host supabase_db_zypact-m7-Fz4m7Y resolved to an IPv4 address
+18:51:21.070 project=realtime-dev external_id=realtime-dev [info] Applying migrations to supabase_db_zypact-m7-Fz4m7Y
+18:51:21.438 project=realtime-dev external_id=realtime-dev [info] Migrations already up
+18:51:21.438 project=realtime-dev external_id=realtime-dev [info] Finished applying 0 migrations for tenant realtime-dev in 367ms
+18:51:22.391 error_code=DatabaseIpVersionIsIpv4 [warning] DatabaseIpVersionIsIpv4: Tenant database host supabase_db_zypact-m7-Fz4m7Y resolved to an IPv4 address
+18:51:22.603 [info] Creating partitions for realtime.messages
+18:51:22.931 [info] Tenant set-up successfully
+Starting Realtime
+1024
++ ulimit -n
++ '[' -n '' ']'
++ export ERL_CRASH_DUMP=/tmp/erl_crash.dump
++ ERL_CRASH_DUMP=/tmp/erl_crash.dump
++ '[' false = true ']'
++ [[ -n '' ]]
++ echo 'Running migrations'
++ sudo -E -u nobody /app/bin/migrate
++ '[' true = true ']'
++ echo 'Seeding selfhosted Realtime'
++ sudo -E -u nobody /app/bin/realtime eval 'Realtime.Release.seeds(Realtime.Repo)'
+[os_mon] memory supervisor port (memsup): Erlang has closed
+[os_mon] cpu supervisor port (cpu_sup): Erlang has closed
++ echo 'Starting Realtime'
++ ulimit -n
++ exec /app/bin/server
+supabase_studio_zypact-m7-Fz4m7Y container logs:
+▲ Next.js 16.2.11
+- Local:         http://localhost:3000
+- Network:       http://0.0.0.0:3000
+✓ Ready in 0ms
+Stopping containers...
+supabase_analytics_zypact-m7-Fz4m7Y container is not ready: unhealthy
+supabase_vector_zypact-m7-Fz4m7Y container is not ready: unhealthy
+supabase_realtime_zypact-m7-Fz4m7Y container is not ready: unhealthy
+supabase_studio_zypact-m7-Fz4m7Y container is not ready: unhealthy
+Try rerunning the command with --debug to troubleshoot the error.
+
+    at genericNodeError (node:internal/errors:985:15)
+    at wrappedFn (node:internal/errors:539:14)
+    at checkExecSyncError (node:child_process:942:11)
+    at execFileSync (node:child_process:978:15)
+    at run (/home/kevin/Desktop/zypact/zypact-clean-mvp/scripts/test-m7-runtime-contract.ts:51:10)
+    at main (/home/kevin/Desktop/zypact/zypact-clean-mvp/scripts/test-m7-runtime-contract.ts:130:5)
+    at path (/home/kevin/Desktop/zypact/zypact-clean-mvp/scripts/test-m7-runtime-contract.ts:400:1)
+    at Object.<anonymous> (/home/kevin/Desktop/zypact/zypact-clean-mvp/scripts/test-m7-runtime-contract.ts:400:76)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object.transformer (/home/kevin/Desktop/zypact/zypact-clean-mvp/node_modules/tsx/dist/register-C557imBs.cjs:9:3619) {
+  status: 1,
+  signal: null,
+  output: [
+    null,
+    '',
+    'Starting database...\n' +
+      'Initialising schema...\n' +
+      'Seeding globals from roles.sql...\n' +
+      'Applying migration 0001_init.sql...\n' +
+      'Applying migration 0002_generated_prompts.sql...\n' +
+      'Applying migration 0003_probe_analysis.sql...\n' +
+      'Applying migration 0004_competitors.sql...\n' +
+      'Applying migration 0005_gap_map.sql...\n' +
+      'Applying migration 0006_evidence_bank.sql...\n' +
+      'Applying migration 0007_fix_briefs.sql...\n' +
+      'Applying migration 0008_generated_assets.sql...\n' +
+      'Applying migration 0009_qa_reports.sql...\n' +
+      'Applying migration 0010_grants.sql...\n' +
+      'Applying migration 0011_security_hardening.sql...\n' +
+      'Applying migration 0012_probe_mode_and_evidence_provenance.sql...\n' +
+      'Applying migration 0013_live_perplexity_probe_mode.sql...\n' +
+      'Applying migration 0014_generated_asset_generation_metadata.sql...\n' +
+      'Applying migration 0015_asset_lifecycle_and_fix_brief_status.sql...\n' +
+      'Applying migration 0016_probe_request_and_product_scorecard.sql...\n' +
+      'Applying migration 0017_snapshot_requests.sql...\n' +
+      'Applying migration 0018_snapshot_request_limits.sql...\n' +
+      'Applying migration 0019_snapshot_email_verification.sql...\n' +
+      'Applying migration 0020_snapshot_verification_delivery_failure.sql...\n' +
+      'Applying migration 0021_snapshot_founder_approval.sql...\n' +
+      'Applying migration 0022_snapshot_fi_invite.sql...\n' +
+      'Applying migration 0023_remove_snapshot_fi_invite.sql...\n' +
+      'Applying migration 0024_snapshot_project_reservation.sql...\n' +
+      'Applying migration 0025_snapshot_progress.sql...\n' +
+      'Applying migration 0026_snapshot_completion.sql...\n' +
+      'Applying migration 0027_snapshot_report_artifacts.sql...\n' +
+      'Applying migration 0028_snapshot_request_rejection.sql...\n' +
+      'Applying migration 0029_snapshot_report_public_token.sql...\n' +
+      'Applying migration 0030_snapshot_request_worker_claim.sql...\n' +
+      'Applying migration 0031_snapshot_worker_fenced_writes.sql...\n' +
+      'Applying migration 0032_revoke_direct_snapshot_dml.sql...\n' +
+      'Applying migration 0033_restrict_snapshot_artifact_project_delete.sql...\n' +
+      'Applying migration 0034_snapshot_request_competitors.sql...\n' +
+      'Applying migration 0035_snapshot_report_delivery_fencing.sql...\n' +
+      'Applying migration 0036_m1_probe_evidence_contract.sql...\n' +
+      'Applying migration 0037_m1_probe_failure_and_raw_body_contract.sql...\n' +
+      'Applying migration 0038_m2_canonical_observations_schema.sql...\n' +
+      'Applying migration 0039_m2_backfill_probe_result_dataset_identity_rpc.sql...\n' +
+      'Applying migration 0040_m2_probe_dataset_not_null.sql...\n' +
+      'Applying migration 0041_m2_entity_resolution_schema.sql...\n' +
+      'Applying migration 0042_m2_entity_resolution_rpc.sql...\n' +
+      'Applying migration 0043_m2_fix_entity_resolution_rpc_ambiguity.sql...\n' +
+      'Applying migration 0044_m2_fix_entity_resolution_rpc_found.sql...\n' +
+      'Applying migration 0045_m3_competitors_canonical_entity.sql...\n' +
+      'Applying migration 0046_m3_replace_competitors_transactional_rpc.sql...\n' +
+      'Applying migration 0047_m4_buyer_question_protocol_attempts.sql...\n' +
+      'Applying migration 0048_m4_buyer_question_version_numeric_range_checks.sql...\n' +
+      'Applying migration 0049_m4_fix_protocol_rpc_status_ambiguities.sql...\n' +
+      'Applying migration 0050_m5_protocol_execution_jobs_and_external_call_ledger.sql...\n' +
+      'Applying migration 0051_m5_protocol_worker_resumption_and_retry_safety.sql...\n' +
+      'Applying migration 0052_m5_durable_call_payloads_and_probe_result_replay.sql...\n' +
+      'Applying migration 0053_m5_analysis_parse_failure_and_raw_request_body.sql...\n' +
+      'Applying migration 0054_m5_worker_probe_result_and_alert_outbox.sql...\n' +
+      'Applying migration 0055_m1_exact_provider_request_body.sql...\n' +
+      'Applying migration 0056_m5_external_call_request_evidence.sql...\n' +
+      'Applying migration 0057_m0_harden_table_privileges.sql...\n' +
+      'Applying migration 0058_m5_analysis_receipt_transport_evidence.sql...\n' +
+      'Applying migration 0059_m5_phase3d_targeted_claim.sql...\n' +
+      'Applying migration 0060_m5_phase3d_post_claim_verification.sql...\n' +
+      'Applying migration 0061_snapshot_request_contact_name.sql...\n' +
+      'Applying migration 0062_snapshot_approval_launches_protocol_baseline.sql...\n' +
+      'Applying migration 0063_snapshot_baseline_paraphrase_plan.sql...\n' +
+      'Applying migration 0064_backfill_measured_perplexity_cost.sql...\n' +
+      'Applying migration 0065_protocol_report_payload.sql...\n' +
+      'Applying migration 0066_protocol_job_review_resolution.sql...\n' +
+      'Applying migration 0067_preserve_prior_needs_review_reason.sql...\n' +
+      'Applying migration 0068_report_integrity_status.sql...\n' +
+      'Applying migration 0069_new_baseline_default_five_runs.sql...\n' +
+      'Starting containers...\n' +
+      'Waiting for health checks...\n' +
+      'supabase_analytics_zypact-m7-Fz4m7Y container logs:\n' +
+      'supabase_vector_zypact-m7-Fz4m7Y container logs:\n' +
+      'supabase_realtime_zypact-m7-Fz4m7Y container logs:\n' +
+      '1024\n' +
+      'Running migrations\n' +
+      '18:50:56.243 [info] Migrations already up\n' +
+      'Seeding selfhosted Realtime\n' +
+      '18:51:03.149 [warning] Failed to load OTP-trusted CAs: :error::function_clause, falling back to hardcoded authorities\n' +
+      '18:51:03.604 [info] Loading 121 CA(s) from :hardcoded store\n' +
+      '18:51:05.083 [info] [driver: :tcp, port: 5369, socket: [~c"#Port<0.5>"], msg: ~c"server_setup_successfully"]\n' +
+      '18:51:05.124 [info] [domain: [:gen_rpc, :dispatcher], "$kind": :gen_rpc_dispatcher_start]\n' +
+      '18:51:06.752 [notice]     :alarm_handler: {:set, {:system_memory_high_watermark, []}}\n' +
+      '18:51:08.088 [notice] SYN[nonode@nohost] Adding node to scope <Elixir.RegionNodes>\n' +
+      '18:51:08.118 [notice] SYN[nonode@nohost] Creating tables for scope <Elixir.RegionNodes>\n' +
+      '18:51:08.184 [notice] SYN[nonode@nohost|registry<Elixir.RegionNodes>] Discovering the cluster\n' +
+      '18:51:08.219 [notice] SYN[nonode@nohost|pg<Elixir.RegionNodes>] Discovering the cluster\n' +
+      '18:51:08.229 [notice] SYN[nonode@nohost] Adding node to scope <Elixir.Realtime.Tenants.Connect>\n' +
+      '18:51:08.229 [notice] SYN[nonode@nohost] Creating tables for scope <Elixir.Realtime.Tenants.Connect>\n' +
+      '18:51:08.233 [notice] SYN[nonode@nohost|registry<Elixir.Realtime.Tenants.Connect>] Discovering the cluster\n' +
+      '18:51:08.234 [notice] SYN[nonode@nohost|pg<Elixir.Realtime.Tenants.Connect>] Discovering the cluster\n' +
+      '18:51:14.737 [warning] MFA {Realtime.PromEx.Plugins.TenantGlobal, :execute_global_connection_metrics, []} encountered an error but has not been detached: %ArgumentError{message: "errors were found at the given arguments:\\n\\n  * 1st argument: the table identifier does not refer to an existing ETS table\\n"}\n' +
+      '18:51:14.737 [warning] MFA {Realtime.PromEx.Plugins.Tenant, :execute_tenant_metrics, []} encountered an error but has not been detached: %ArgumentError{message: "errors were found at the given arguments:\\n\\n  * 1st argument: the table identifier does not refer to an existing ETS table\\n"}\n' +
+      '18:51:14.745 [info] Forum[nonode@nohost|users] Starting\n' +
+      '18:51:14.964 [info] [libcluster:postgres] Connected to Postgres database\n' +
+      '18:51:15.381 [info] Muster[nonode@nohost|realtime_channels_local] Starting\n' +
+      '18:51:15.789 [info] Starting Reconnector\n' +
+      '18:51:16.185 [info] Running RealtimeWeb.Endpoint with cowboy 2.18.0 at :::4000 (http)\n' +
+      '18:51:16.186 [info] Access RealtimeWeb.Endpoint at http://realtime.supabase.co:443\n' +
+      '18:51:18.809 [notice] SYN[nonode@nohost] Adding node to scope <realtime_postgres_cdc_0>\n' +
+      '18:51:18.809 [notice] SYN[nonode@nohost] Creating tables for scope <realtime_postgres_cdc_0>\n' +
+      '18:51:18.810 [notice] SYN[nonode@nohost|registry<realtime_postgres_cdc_0>] Discovering the cluster\n' +
+      '18:51:18.810 [notice] SYN[nonode@nohost|pg<realtime_postgres_cdc_0>] Discovering the cluster\n' +
+      '18:51:18.810 [notice] SYN[nonode@nohost] Adding node to scope <realtime_postgres_cdc_1>\n' +
+      '18:51:18.810 [notice] SYN[nonode@nohost] Creating tables for scope <realtime_postgres_cdc_1>\n' +
+      '18:51:18.810 [notice] SYN[nonode@nohost|registry<realtime_postgres_cdc_1>] Discovering the cluster\n' +
+      '18:51:18.811 [notice] SYN[nonode@nohost|pg<realtime_postgres_cdc_1>] Discovering the cluster\n' +
+      '18:51:18.811 [notice] SYN[nonode@nohost] Adding node to scope <realtime_postgres_cdc_2>\n' +
+      '18:51:18.815 [notice] SYN[nonode@nohost] Creating tables for scope <realtime_postgres_cdc_2>\n' +
+      '18:51:18.815 [notice] SYN[nonode@nohost|registry<realtime_postgres_cdc_2>] Discovering the cluster\n' +
+      '18:51:18.816 [notice] SYN[nonode@nohost|pg<realtime_postgres_cdc_2>] Discovering the cluster\n' +
+      '18:51:18.819 [notice] SYN[nonode@nohost] Adding node to scope <realtime_postgres_cdc_3>\n' +
+      '18:51:18.819 [notice] SYN[nonode@nohost] Creating tables for scope <realtime_postgres_cdc_3>\n' +
+      '18:51:18.820 [notice] SYN[nonode@nohost|registry<realtime_postgres_cdc_3>] Discovering the cluster\n' +
+      '18:51:18.821 [notice] SYN[nonode@nohost|pg<realtime_postgres_cdc_3>] Discovering the cluster\n' +
+      '18:51:18.821 [notice] SYN[nonode@nohost] Adding node to scope <realtime_postgres_cdc_4>\n' +
+      '18:51:18.822 [notice] SYN[nonode@nohost] Creating tables for scope <realtime_postgres_cdc_4>\n' +
+      '18:51:18.823 [notice] SYN[nonode@nohost|registry<realtime_postgres_cdc_4>] Discovering the cluster\n' +
+      '18:51:18.824 [notice] SYN[nonode@nohost|pg<realtime_postgres_cdc_4>] Discovering the cluster\n' +
+      '18:51:18.828 [info] Janitor started\n' +
+      '18:51:18.831 [info] Starting MetricsCleaner\n' +
+      '18:51:21.025 [warning] Zero region nodes for us-east-1 using :nonode@nohost\n' +
+      '18:51:21.067 project=realtime-dev external_id=realtime-dev error_code=DatabaseIpVersionIsIpv4 [warning] DatabaseIpVersionIsIpv4: Tenant database host supabase_db_zypact-m7-Fz4m7Y resolved to an IPv4 address\n' +
+      '18:51:21.070 project=realtime-dev external_id=realtime-dev [info] Applying migrations to supabase_db_zypact-m7-Fz4m7Y\n' +
+      '18:51:21.438 project=realtime-dev external_id=realtime-dev [info] Migrations already up\n' +
+      '18:51:21.438 project=realtime-dev external_id=realtime-dev [info] Finished applying 0 migrations for tenant realtime-dev in 367ms\n' +
+      '18:51:22.391 error_code=DatabaseIpVersionIsIpv4 [warning] DatabaseIpVersionIsIpv4: Tenant database host supabase_db_zypact-m7-Fz4m7Y resolved to an IPv4 address\n' +
+      '18:51:22.603 [info] Creating partitions for realtime.messages\n' +
+      '18:51:22.931 [info] Tenant set-up successfully\n' +
+      'Starting Realtime\n' +
+      '1024\n' +
+      '+ ulimit -n\n' +
+      "+ '[' -n '' ']'\n" +
+      '+ export ERL_CRASH_DUMP=/tmp/erl_crash.dump\n' +
+      '+ ERL_CRASH_DUMP=/tmp/erl_crash.dump\n' +
+      "+ '[' false = true ']'\n" +
+      "+ [[ -n '' ]]\n" +
+      "+ echo 'Running migrations'\n" +
+      '+ sudo -E -u nobody /app/bin/migrate\n' +
+      "+ '[' true = true ']'\n" +
+      "+ echo 'Seeding selfhosted Realtime'\n" +
+      "+ sudo -E -u nobody /app/bin/realtime eval 'Realtime.Release.seeds(Realtime.Repo)'\n" +
+      '[os_mon'... 695 more characters
+  ],
+  pid: 4225,
+  stdout: '',
+  stderr: 'Starting database...\n' +
+    'Initialising schema...\n' +
+    'Seeding globals from roles.sql...\n' +
+    'Applying migration 0001_init.sql...\n' +
+    'Applying migration 0002_generated_prompts.sql...\n' +
+    'Applying migration 0003_probe_analysis.sql...\n' +
+    'Applying migration 0004_competitors.sql...\n' +
+    'Applying migration 0005_gap_map.sql...\n' +
+    'Applying migration 0006_evidence_bank.sql...\n' +
+    'Applying migration 0007_fix_briefs.sql...\n' +
+    'Applying migration 0008_generated_assets.sql...\n' +
+    'Applying migration 0009_qa_reports.sql...\n' +
+    'Applying migration 0010_grants.sql...\n' +
+    'Applying migration 0011_security_hardening.sql...\n' +
+    'Applying migration 0012_probe_mode_and_evidence_provenance.sql...\n' +
+    'Applying migration 0013_live_perplexity_probe_mode.sql...\n' +
+    'Applying migration 0014_generated_asset_generation_metadata.sql...\n' +
+    'Applying migration 0015_asset_lifecycle_and_fix_brief_status.sql...\n' +
+    'Applying migration 0016_probe_request_and_product_scorecard.sql...\n' +
+    'Applying migration 0017_snapshot_requests.sql...\n' +
+    'Applying migration 0018_snapshot_request_limits.sql...\n' +
+    'Applying migration 0019_snapshot_email_verification.sql...\n' +
+    'Applying migration 0020_snapshot_verification_delivery_failure.sql...\n' +
+    'Applying migration 0021_snapshot_founder_approval.sql...\n' +
+    'Applying migration 0022_snapshot_fi_invite.sql...\n' +
+    'Applying migration 0023_remove_snapshot_fi_invite.sql...\n' +
+    'Applying migration 0024_snapshot_project_reservation.sql...\n' +
+    'Applying migration 0025_snapshot_progress.sql...\n' +
+    'Applying migration 0026_snapshot_completion.sql...\n' +
+    'Applying migration 0027_snapshot_report_artifacts.sql...\n' +
+    'Applying migration 0028_snapshot_request_rejection.sql...\n' +
+    'Applying migration 0029_snapshot_report_public_token.sql...\n' +
+    'Applying migration 0030_snapshot_request_worker_claim.sql...\n' +
+    'Applying migration 0031_snapshot_worker_fenced_writes.sql...\n' +
+    'Applying migration 0032_revoke_direct_snapshot_dml.sql...\n' +
+    'Applying migration 0033_restrict_snapshot_artifact_project_delete.sql...\n' +
+    'Applying migration 0034_snapshot_request_competitors.sql...\n' +
+    'Applying migration 0035_snapshot_report_delivery_fencing.sql...\n' +
+    'Applying migration 0036_m1_probe_evidence_contract.sql...\n' +
+    'Applying migration 0037_m1_probe_failure_and_raw_body_contract.sql...\n' +
+    'Applying migration 0038_m2_canonical_observations_schema.sql...\n' +
+    'Applying migration 0039_m2_backfill_probe_result_dataset_identity_rpc.sql...\n' +
+    'Applying migration 0040_m2_probe_dataset_not_null.sql...\n' +
+    'Applying migration 0041_m2_entity_resolution_schema.sql...\n' +
+    'Applying migration 0042_m2_entity_resolution_rpc.sql...\n' +
+    'Applying migration 0043_m2_fix_entity_resolution_rpc_ambiguity.sql...\n' +
+    'Applying migration 0044_m2_fix_entity_resolution_rpc_found.sql...\n' +
+    'Applying migration 0045_m3_competitors_canonical_entity.sql...\n' +
+    'Applying migration 0046_m3_replace_competitors_transactional_rpc.sql...\n' +
+    'Applying migration 0047_m4_buyer_question_protocol_attempts.sql...\n' +
+    'Applying migration 0048_m4_buyer_question_version_numeric_range_checks.sql...\n' +
+    'Applying migration 0049_m4_fix_protocol_rpc_status_ambiguities.sql...\n' +
+    'Applying migration 0050_m5_protocol_execution_jobs_and_external_call_ledger.sql...\n' +
+    'Applying migration 0051_m5_protocol_worker_resumption_and_retry_safety.sql...\n' +
+    'Applying migration 0052_m5_durable_call_payloads_and_probe_result_replay.sql...\n' +
+    'Applying migration 0053_m5_analysis_parse_failure_and_raw_request_body.sql...\n' +
+    'Applying migration 0054_m5_worker_probe_result_and_alert_outbox.sql...\n' +
+    'Applying migration 0055_m1_exact_provider_request_body.sql...\n' +
+    'Applying migration 0056_m5_external_call_request_evidence.sql...\n' +
+    'Applying migration 0057_m0_harden_table_privileges.sql...\n' +
+    'Applying migration 0058_m5_analysis_receipt_transport_evidence.sql...\n' +
+    'Applying migration 0059_m5_phase3d_targeted_claim.sql...\n' +
+    'Applying migration 0060_m5_phase3d_post_claim_verification.sql...\n' +
+    'Applying migration 0061_snapshot_request_contact_name.sql...\n' +
+    'Applying migration 0062_snapshot_approval_launches_protocol_baseline.sql...\n' +
+    'Applying migration 0063_snapshot_baseline_paraphrase_plan.sql...\n' +
+    'Applying migration 0064_backfill_measured_perplexity_cost.sql...\n' +
+    'Applying migration 0065_protocol_report_payload.sql...\n' +
+    'Applying migration 0066_protocol_job_review_resolution.sql...\n' +
+    'Applying migration 0067_preserve_prior_needs_review_reason.sql...\n' +
+    'Applying migration 0068_report_integrity_status.sql...\n' +
+    'Applying migration 0069_new_baseline_default_five_runs.sql...\n' +
+    'Starting containers...\n' +
+    'Waiting for health checks...\n' +
+    'supabase_analytics_zypact-m7-Fz4m7Y container logs:\n' +
+    'supabase_vector_zypact-m7-Fz4m7Y container logs:\n' +
+    'supabase_realtime_zypact-m7-Fz4m7Y container logs:\n' +
+    '1024\n' +
+    'Running migrations\n' +
+    '18:50:56.243 [info] Migrations already up\n' +
+    'Seeding selfhosted Realtime\n' +
+    '18:51:03.149 [warning] Failed to load OTP-trusted CAs: :error::function_clause, falling back to hardcoded authorities\n' +
+    '18:51:03.604 [info] Loading 121 CA(s) from :hardcoded store\n' +
+    '18:51:05.083 [info] [driver: :tcp, port: 5369, socket: [~c"#Port<0.5>"], msg: ~c"server_setup_successfully"]\n' +
+    '18:51:05.124 [info] [domain: [:gen_rpc, :dispatcher], "$kind": :gen_rpc_dispatcher_start]\n' +
+    '18:51:06.752 [notice]     :alarm_handler: {:set, {:system_memory_high_watermark, []}}\n' +
+    '18:51:08.088 [notice] SYN[nonode@nohost] Adding node to scope <Elixir.RegionNodes>\n' +
+    '18:51:08.118 [notice] SYN[nonode@nohost] Creating tables for scope <Elixir.RegionNodes>\n' +
+    '18:51:08.184 [notice] SYN[nonode@nohost|registry<Elixir.RegionNodes>] Discovering the cluster\n' +
+    '18:51:08.219 [notice] SYN[nonode@nohost|pg<Elixir.RegionNodes>] Discovering the cluster\n' +
+    '18:51:08.229 [notice] SYN[nonode@nohost] Adding node to scope <Elixir.Realtime.Tenants.Connect>\n' +
+    '18:51:08.229 [notice] SYN[nonode@nohost] Creating tables for scope <Elixir.Realtime.Tenants.Connect>\n' +
+    '18:51:08.233 [notice] SYN[nonode@nohost|registry<Elixir.Realtime.Tenants.Connect>] Discovering the cluster\n' +
+    '18:51:08.234 [notice] SYN[nonode@nohost|pg<Elixir.Realtime.Tenants.Connect>] Discovering the cluster\n' +
+    '18:51:14.737 [warning] MFA {Realtime.PromEx.Plugins.TenantGlobal, :execute_global_connection_metrics, []} encountered an error but has not been detached: %ArgumentError{message: "errors were found at the given arguments:\\n\\n  * 1st argument: the table identifier does not refer to an existing ETS table\\n"}\n' +
+    '18:51:14.737 [warning] MFA {Realtime.PromEx.Plugins.Tenant, :execute_tenant_metrics, []} encountered an error but has not been detached: %ArgumentError{message: "errors were found at the given arguments:\\n\\n  * 1st argument: the table identifier does not refer to an existing ETS table\\n"}\n' +
+    '18:51:14.745 [info] Forum[nonode@nohost|users] Starting\n' +
+    '18:51:14.964 [info] [libcluster:postgres] Connected to Postgres database\n' +
+    '18:51:15.381 [info] Muster[nonode@nohost|realtime_channels_local] Starting\n' +
+    '18:51:15.789 [info] Starting Reconnector\n' +
+    '18:51:16.185 [info] Running RealtimeWeb.Endpoint with cowboy 2.18.0 at :::4000 (http)\n' +
+    '18:51:16.186 [info] Access RealtimeWeb.Endpoint at http://realtime.supabase.co:443\n' +
+    '18:51:18.809 [notice] SYN[nonode@nohost] Adding node to scope <realtime_postgres_cdc_0>\n' +
+    '18:51:18.809 [notice] SYN[nonode@nohost] Creating tables for scope <realtime_postgres_cdc_0>\n' +
+    '18:51:18.810 [notice] SYN[nonode@nohost|registry<realtime_postgres_cdc_0>] Discovering the cluster\n' +
+    '18:51:18.810 [notice] SYN[nonode@nohost|pg<realtime_postgres_cdc_0>] Discovering the cluster\n' +
+    '18:51:18.810 [notice] SYN[nonode@nohost] Adding node to scope <realtime_postgres_cdc_1>\n' +
+    '18:51:18.810 [notice] SYN[nonode@nohost] Creating tables for scope <realtime_postgres_cdc_1>\n' +
+    '18:51:18.810 [notice] SYN[nonode@nohost|registry<realtime_postgres_cdc_1>] Discovering the cluster\n' +
+    '18:51:18.811 [notice] SYN[nonode@nohost|pg<realtime_postgres_cdc_1>] Discovering the cluster\n' +
+    '18:51:18.811 [notice] SYN[nonode@nohost] Adding node to scope <realtime_postgres_cdc_2>\n' +
+    '18:51:18.815 [notice] SYN[nonode@nohost] Creating tables for scope <realtime_postgres_cdc_2>\n' +
+    '18:51:18.815 [notice] SYN[nonode@nohost|registry<realtime_postgres_cdc_2>] Discovering the cluster\n' +
+    '18:51:18.816 [notice] SYN[nonode@nohost|pg<realtime_postgres_cdc_2>] Discovering the cluster\n' +
+    '18:51:18.819 [notice] SYN[nonode@nohost] Adding node to scope <realtime_postgres_cdc_3>\n' +
+    '18:51:18.819 [notice] SYN[nonode@nohost] Creating tables for scope <realtime_postgres_cdc_3>\n' +
+    '18:51:18.820 [notice] SYN[nonode@nohost|registry<realtime_postgres_cdc_3>] Discovering the cluster\n' +
+    '18:51:18.821 [notice] SYN[nonode@nohost|pg<realtime_postgres_cdc_3>] Discovering the cluster\n' +
+    '18:51:18.821 [notice] SYN[nonode@nohost] Adding node to scope <realtime_postgres_cdc_4>\n' +
+    '18:51:18.822 [notice] SYN[nonode@nohost] Creating tables for scope <realtime_postgres_cdc_4>\n' +
+    '18:51:18.823 [notice] SYN[nonode@nohost|registry<realtime_postgres_cdc_4>] Discovering the cluster\n' +
+    '18:51:18.824 [notice] SYN[nonode@nohost|pg<realtime_postgres_cdc_4>] Discovering the cluster\n' +
+    '18:51:18.828 [info] Janitor started\n' +
+    '18:51:18.831 [info] Starting MetricsCleaner\n' +
+    '18:51:21.025 [warning] Zero region nodes for us-east-1 using :nonode@nohost\n' +
+    '18:51:21.067 project=realtime-dev external_id=realtime-dev error_code=DatabaseIpVersionIsIpv4 [warning] DatabaseIpVersionIsIpv4: Tenant database host supabase_db_zypact-m7-Fz4m7Y resolved to an IPv4 address\n' +
+    '18:51:21.070 project=realtime-dev external_id=realtime-dev [info] Applying migrations to supabase_db_zypact-m7-Fz4m7Y\n' +
+    '18:51:21.438 project=realtime-dev external_id=realtime-dev [info] Migrations already up\n' +
+    '18:51:21.438 project=realtime-dev external_id=realtime-dev [info] Finished applying 0 migrations for tenant realtime-dev in 367ms\n' +
+    '18:51:22.391 error_code=DatabaseIpVersionIsIpv4 [warning] DatabaseIpVersionIsIpv4: Tenant database host supabase_db_zypact-m7-Fz4m7Y resolved to an IPv4 address\n' +
+    '18:51:22.603 [info] Creating partitions for realtime.messages\n' +
+    '18:51:22.931 [info] Tenant set-up successfully\n' +
+    'Starting Realtime\n' +
+    '1024\n' +
+    '+ ulimit -n\n' +
+    "+ '[' -n '' ']'\n" +
+    '+ export ERL_CRASH_DUMP=/tmp/erl_crash.dump\n' +
+    '+ ERL_CRASH_DUMP=/tmp/erl_crash.dump\n' +
+    "+ '[' false = true ']'\n" +
+    "+ [[ -n '' ]]\n" +
+    "+ echo 'Running migrations'\n" +
+    '+ sudo -E -u nobody /app/bin/migrate\n' +
+    "+ '[' true = true ']'\n" +
+    "+ echo 'Seeding selfhosted Realtime'\n" +
+    "+ sudo -E -u nobody /app/bin/realtime eval 'Realtime.Release.seeds(Realtime.Repo)'\n" +
+    '[os_mon'... 695 more characters
+}
+kevin@zypact-worker-01:~/Desktop/zypact/zypact-clean-mvp$ free -h
+               total        used        free      shared  buff/cache   available
+Mem:           3.8Gi       2.1Gi       1.3Gi        63Mi       781Mi       1.7Gi
+Swap:             0B          0B          0B
+kevin@zypact-worker-01:~/Desktop/zypact/zypact-clean-mvp$ sudo fallocate -l 4G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+[sudo] password for kevin: 
+Setting up swapspace version 1, size = 4 GiB (4294963200 bytes)
+no label, UUID=cd18c443-180f-4e48-abe1-e0869151d965
+kevin@zypact-worker-01:~/Desktop/zypact/zypact-clean-mvp$ free -h
+               total        used        free      shared  buff/cache   available
+Mem:           3.8Gi       2.5Gi       601Mi        84Mi       1.1Gi       1.4Gi
+Swap:          4.0Gi          0B       4.0Gi
+kevin@zypact-worker-01:~/Desktop/zypact/zypact-clean-mvp$ docker ps
+CONTAINER ID   IMAGE     COMMAND   CREATED   STATUS    PORTS     NAMES
+kevin@zypact-worker-01:~/Desktop/zypact/zypact-clean-mvp$ ZYPACT_M7_RUNTIME_TEST=1 npm run test:m7-runtime
+
+> zypact-mvp@0.1.0 test:m7-runtime
+> tsx scripts/test-m7-runtime-contract.ts
+
+Disposable workdir: /tmp/zypact-m7-2On5Kh
+✓ the tranche under test is 0070-0074 (5 files)
+
+Starting the disposable stack with 0001-0069 only...
+Stack started.
+
+[0] Before 0070-0074
+✓ 0047's index is present before the tranche
+✓ interventions does not exist yet
+
+Applying 0070-0074...
+✓ 0070_scope_job_review_resolution_to_its_job.sql applied cleanly
+✓ 0071_m7_registered_interventions.sql applied cleanly
+✓ 0072_m7_observation_window_and_retest_eligibility.sql applied cleanly
+✓ 0073_m7_retest_protocol_creation.sql applied cleanly
+✓ 0074_m7_retest_phase_integrity.sql applied cleanly
+
+[1] 0073 — the liveness rule was swapped, not lost
+✓ 0047's index is gone
+✓ the baseline-scoped index exists and is unique
+✓ the retest-scoped index exists and is unique
+
+[2] 0071 — privileges refuse a write, they do not merely look revoked
+✓ interventions exists
+✓ service_role holds SELECT and nothing else
+✓ row level security is on
+✓ anon holds nothing
+ERROR:  permission denied for table interventions
+HINT:  Grant the required privileges to the current role with: GRANT INSERT ON public.interventions TO service_role;
+✓ service_role is actually refused an INSERT
+
+[3] Fixtures
+ERROR:  invalid input syntax for type uuid: "f3701d5d-7d94-4b4c-b5eb-e97efd3908f3
+INSERT 0 1"
+LINE 1: ... into public.buyer_questions (project_id) values ('f3701d5d-...
+                                                             ^
+
+LEFT RUNNING for diagnosis. Workdir: /tmp/zypact-m7-2On5Kh
+Stop it with: supabase stop --workdir /tmp/zypact-m7-2On5Kh --no-backup
+HARNESS ERROR Error: Command failed: docker exec supabase_db_zypact-m7-2On5Kh psql -U postgres -d postgres -tAc insert into public.buyer_questions (project_id) values ('f3701d5d-7d94-4b4c-b5eb-e97efd3908f3
+INSERT 0 1') returning id;
+ERROR:  invalid input syntax for type uuid: "f3701d5d-7d94-4b4c-b5eb-e97efd3908f3
+INSERT 0 1"
+LINE 1: ... into public.buyer_questions (project_id) values ('f3701d5d-...
+                                                             ^
+
+    at genericNodeError (node:internal/errors:985:15)
+    at wrappedFn (node:internal/errors:539:14)
+    at checkExecSyncError (node:child_process:942:11)
+    at execFileSync (node:child_process:978:15)
+    at q (/home/kevin/Desktop/zypact/zypact-clean-mvp/scripts/test-m7-runtime-contract.ts:161:7)
+    at main (/home/kevin/Desktop/zypact/zypact-clean-mvp/scripts/test-m7-runtime-contract.ts:222:24)
+    at path (/home/kevin/Desktop/zypact/zypact-clean-mvp/scripts/test-m7-runtime-contract.ts:422:1)
+    at Object.<anonymous> (/home/kevin/Desktop/zypact/zypact-clean-mvp/scripts/test-m7-runtime-contract.ts:422:76)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object.transformer (/home/kevin/Desktop/zypact/zypact-clean-mvp/node_modules/tsx/dist/register-C557imBs.cjs:9:3619) {
+  status: 1,
+  signal: null,
+  output: [
+    null,
+    '',
+    'ERROR:  invalid input syntax for type uuid: "f3701d5d-7d94-4b4c-b5eb-e97efd3908f3\n' +
+      'INSERT 0 1"\n' +
+      "LINE 1: ... into public.buyer_questions (project_id) values ('f3701d5d-...\n" +
+      '                                                             ^\n'
+  ],
+  pid: 16527,
+  stdout: '',
+  stderr: 'ERROR:  invalid input syntax for type uuid: "f3701d5d-7d94-4b4c-b5eb-e97efd3908f3\n' +
+    'INSERT 0 1"\n' +
+    "LINE 1: ... into public.buyer_questions (project_id) values ('f3701d5d-...\n" +
+    '                                                             ^\n'
+}
+kevin@zypact-worker-01:~/Desktop/zypact/zypact-clean-mvp$ ^C
+kevin@zypact-worker-01:~/Desktop/zypact/zypact-clean-mvp$ 

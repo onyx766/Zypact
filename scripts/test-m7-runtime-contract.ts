@@ -110,9 +110,31 @@ async function main(): Promise<void> {
   try {
     run("supabase", ["init", "--workdir", workdir, "--yes"]);
     const cfg = path.join(workdir, "supabase", "config.toml");
-    const edited = setTomlScalar(readFileSync(cfg, "utf8"), "db.seed", "enabled", "false");
-    if (edited.replacements !== 1) throw new Error(`config replacements=${edited.replacements}`);
-    writeFileSync(cfg, edited.text);
+    // This harness talks to Postgres only, via `docker exec ... psql` — never
+    // PostgREST, Auth, Storage, Realtime, Studio, or an edge function. Every
+    // one of those is `enabled = true` by default in a fresh `supabase init`,
+    // so leaving them on starts the full stack for a test that needs one
+    // container. On a memory-constrained host that starves the BEAM-based
+    // Realtime service, which fails with an ERL_CRASH_DUMP rather than a
+    // clean error. Disabling the unused services is both a real memory
+    // saving and a faithful description of what this test exercises.
+    let text = readFileSync(cfg, "utf8");
+    for (const [section, key, value] of [
+      ["db.seed", "enabled", "false"],
+      ["api", "enabled", "false"],
+      ["realtime", "enabled", "false"],
+      ["studio", "enabled", "false"],
+      ["storage", "enabled", "false"],
+      ["auth", "enabled", "false"],
+      ["edge_runtime", "enabled", "false"],
+      ["analytics", "enabled", "false"],
+      ["local_smtp", "enabled", "false"],
+    ] as const) {
+      const edited = setTomlScalar(text, section, key, value);
+      if (edited.replacements !== 1) throw new Error(`config replacements for [${section}].${key}=${edited.replacements}`);
+      text = edited.text;
+    }
+    writeFileSync(cfg, text);
 
     const srcDir = path.join(REPO, "supabase", "migrations");
     const dstDir = path.join(workdir, "supabase", "migrations");
@@ -135,9 +157,13 @@ async function main(): Promise<void> {
       .split("\n").find((n) => n.startsWith("supabase_db_"));
     if (!container) throw new Error("no supabase_db container");
 
+    // `-t` suppresses headers/footers of the result set, but psql still
+    // appends its own command-completion tag ("INSERT 0 1", "UPDATE 1", …)
+    // on the next line for INSERT/UPDATE/DELETE — including when RETURNING
+    // is used, unlike a plain SELECT. Keep only the scalar's own line.
     const q = (sql: string): string =>
       execFileSync("docker", ["exec", container, "psql", "-U", "postgres", "-d", "postgres", "-tAc", sql],
-        { encoding: "utf8", maxBuffer: 1 << 26 }).trim();
+        { encoding: "utf8", maxBuffer: 1 << 26 }).trim().split("\n", 1)[0];
     /** Runs sql and returns the error text, or null if it unexpectedly succeeded. */
     const qError = (sql: string): string | null => {
       try { q(sql); return null; }
@@ -311,8 +337,13 @@ async function main(): Promise<void> {
     check("the retest is approved", q(`select status from public.protocols where id='${retestId}';`) === "approved");
     check("it reuses the baseline's question version ROW",
       q(`select buyer_question_version_id from public.protocols where id='${retestId}';`) === versionId);
-    check("no new question version was minted",
-      q(`select count(*) from public.buyer_question_versions where project_id='${projectId}';`) === "1");
+    // Scoped to the retested question, not the project: section 4's D-009
+    // fixture deliberately adds a second, unrelated buyer_question (with its
+    // own version) to the same project, so a project-wide count is 2 by
+    // design and would fail this check regardless of create_retest_protocol's
+    // correctness.
+    check("no new question version was minted for the retested question",
+      q(`select count(*) from public.buyer_question_versions where buyer_question_id='${questionId}';`) === "1");
     check("the run count landed in planned_baseline_runs",
       q(`select planned_baseline_runs from public.protocols where id='${retestId}';`) === "5");
     check("minimum_useful_change was stamped at 0.60",
@@ -348,35 +379,44 @@ async function main(): Promise<void> {
 
     /* ═══════════ 8. 0070's job scoping ═══════════ */
     console.log("\n[8] 0070 — a review resolves only its own job's attempts");
-    const jobBaseline = q(`insert into public.protocol_execution_jobs (project_id, protocol_id, status, max_attempts, needs_review_reason)
-       values ('${projectId}','${baselineId}','needs_review',3,'ambiguous') returning id;`);
+    // protocol_execution_jobs.protocol_id is a TOTAL unique constraint (0050:
+    // "un job baseline par protocole") — a protocol can never carry two job
+    // rows, so "two jobs on the same protocol" cannot be built as two rows in
+    // this table. jobOther is the retest's own real job (already created by
+    // section 6's enqueue call, on its own protocol). To exercise the actual
+    // defect 0070 fixes — the old query scoped by protocol_id, not by job_id
+    // — attB below borrows jobOther's real id as a FOREIGN job_id on an
+    // attempt whose protocol_id is the baseline's. That is precisely the
+    // shape the old code would have wrongly swept in and the new code must
+    // not: protocol_attempts.job_id has no compound FK tying it back to the
+    // referenced job's own protocol_id, so this is schema-legal without ever
+    // creating a second job row for the baseline.
+    const datasetBatchId = q(`insert into public.dataset_batches (project_id, dataset_source_type)
+       values ('${projectId}','manual_scan') returning id;`);
+    const jobBaseline = q(`insert into public.protocol_execution_jobs (project_id, protocol_id, status, max_attempts, needs_review_reason, dataset_batch_id)
+       values ('${projectId}','${baselineId}','needs_review',3,'ambiguous','${datasetBatchId}') returning id;`);
     const jobOther = q(`select id from public.protocol_execution_jobs where protocol_id='${retestId}';`);
-    // One attempt owned by each job, both non-terminal, both on the SAME protocol
-    // is impossible now (phase trigger), so scope the proof to the baseline
-    // protocol with two jobs pointed at it.
-    const jobSecond = q(`insert into public.protocol_execution_jobs (project_id, protocol_id, status, max_attempts)
-       values ('${projectId}','${baselineId}','running',3) returning id;`);
-    const attA = q(`insert into public.protocol_attempts (project_id, protocol_id, buyer_question_version_id, attempt_kind, status, idempotency_key, reserved_cost_usd, job_id)
-       values ('${projectId}','${baselineId}','${versionId}','baseline','in_progress','s1',0.02,'${jobBaseline}') returning id;`);
-    const attB = q(`insert into public.protocol_attempts (project_id, protocol_id, buyer_question_version_id, attempt_kind, status, idempotency_key, reserved_cost_usd, job_id)
-       values ('${projectId}','${baselineId}','${versionId}','baseline','in_progress','s2',0.02,'${jobSecond}') returning id;`);
+    // protocol_attempts_job_baseline_ordinal_check (0051) requires
+    // baseline_ordinal whenever job_id is set, enforced at INSERT time with
+    // no grace for a later UPDATE. The partial unique index on
+    // (job_id, baseline_ordinal) is scoped per job_id, so attA and attB both
+    // using ordinal 1 under their own, different jobs cannot collide.
+    const attA = q(`insert into public.protocol_attempts (project_id, protocol_id, buyer_question_version_id, attempt_kind, status, idempotency_key, reserved_cost_usd, job_id, baseline_ordinal)
+       values ('${projectId}','${baselineId}','${versionId}','baseline','in_progress','s1',0.02,'${jobBaseline}',1) returning id;`);
+    const attB = q(`insert into public.protocol_attempts (project_id, protocol_id, buyer_question_version_id, attempt_kind, status, idempotency_key, reserved_cost_usd, job_id, baseline_ordinal)
+       values ('${projectId}','${baselineId}','${versionId}','baseline','in_progress','s2',0.02,'${jobOther}',1) returning id;`);
+    const orphan = q(`insert into public.protocol_attempts (project_id, protocol_id, buyer_question_version_id, attempt_kind, status, idempotency_key, reserved_cost_usd)
+       values ('${projectId}','${baselineId}','${versionId}','baseline','reserved','s3',0.02) returning id;`);
 
     q(`select public.resolve_protocol_job_review('${jobBaseline}','${projectId}','${actor}','excluded_and_completed','reviewed');`);
     check("the resolved job's own attempt is excluded",
       q(`select status from public.protocol_attempts where id='${attA}';`) === "excluded");
     check("THE OTHER JOB'S ATTEMPT IS UNTOUCHED — the retest denominator is safe",
       q(`select status from public.protocol_attempts where id='${attB}';`) === "in_progress");
+    check("a job-less attempt on the same protocol is still covered",
+      q(`select status from public.protocol_attempts where id='${orphan}';`) === "excluded");
     check("the review reason was preserved, not discarded",
       q(`select prior_needs_review_reason from public.protocol_execution_jobs where id='${jobBaseline}';`) === "ambiguous");
-    check("a job-less attempt on the same protocol is still covered", (() => {
-      const orphan = q(`insert into public.protocol_attempts (project_id, protocol_id, buyer_question_version_id, attempt_kind, status, idempotency_key, reserved_cost_usd)
-         values ('${projectId}','${baselineId}','${versionId}','baseline','reserved','s3',0.02) returning id;`);
-      const j = q(`insert into public.protocol_execution_jobs (project_id, protocol_id, status, max_attempts, needs_review_reason)
-         values ('${projectId}','${baselineId}','needs_review',3,'second review') returning id;`);
-      q(`select public.resolve_protocol_job_review('${j}','${projectId}','${actor}','failed','reviewed again');`);
-      return q(`select status from public.protocol_attempts where id='${orphan}';`) === "excluded";
-    })());
-    void jobOther;
 
     console.log(`\n${checks - failures}/${checks} checks passed.`);
     if (failures === 0) succeeded = true;

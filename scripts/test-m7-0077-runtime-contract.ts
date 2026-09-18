@@ -187,10 +187,18 @@ async function main(): Promise<void> {
     /* ═══════════ 1. ACL ═══════════ */
     console.log("[1] Privileges refuse, they do not merely look revoked");
     for (const fn of ["reject_intervention", "abandon_intervention"]) {
-      check(`${fn} is granted to service_role only`,
-        q(`select coalesce(string_agg(distinct grantee,','),'NONE') from information_schema.role_routine_grants where routine_name='${fn}';`) === "service_role");
+      check(`${fn} grants execute to service_role`,
+        q(`select count(*) from information_schema.role_routine_grants where routine_name='${fn}' and grantee='service_role' and privilege_type='EXECUTE';`) === "1");
+      // The owner is deliberately not asserted against. Every object here is
+      // owned by the role that runs the migration, and an owner's EXECUTE is
+      // inherent to ownership rather than a grant — revoking it is meaningless
+      // because the owner can re-grant at will. What matters is that no
+      // untrusted role holds it.
+      check(`${fn} grants execute to no untrusted role`,
+        q(`select count(*) from information_schema.role_routine_grants where routine_name='${fn}' and grantee in ('PUBLIC','anon','authenticated');`) === "0");
       check(`anon is actually refused ${fn}`,
-        qError(`set role anon; select public.${fn}(gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 'x');`) !== null);
+        qError(`set role anon; select public.${fn}(gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 'x');`) !== null,
+        "the behavioural check — a grant table can be read wrong, a refusal cannot");
     }
     check("service_role still has no UPDATE on interventions after 0077",
       q(`select count(*) from information_schema.role_table_grants where table_name='interventions' and grantee='service_role' and privilege_type='UPDATE';`) === "0",

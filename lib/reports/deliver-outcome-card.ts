@@ -178,11 +178,18 @@ export async function processOutcomeCard(
     };
   }
 
+  // A retest protocol records its baseline, not the intervention that created
+  // it. Resolving by baseline is still exact once abandoned retests are
+  // excluded: 0079 guarantees at most one non-abandoned retest per baseline,
+  // and 0077 guarantees an abandoned one observed nothing. Without the status
+  // filter, a baseline that had an intervention abandoned and a replacement
+  // registered holds two retest rows, and maybeSingle() throws.
   const { data: retestRow, error: retestError } = await deps.client
     .from("protocols")
     .select("id")
     .eq("project_id", interventionRow.project_id)
     .eq("baseline_protocol_id", interventionRow.protocol_id)
+    .neq("status", "abandoned")
     .maybeSingle();
 
   if (retestError) throw retestError;
@@ -460,10 +467,13 @@ export async function findDeliverableInterventions(
 
   const baselineIds = rows.map((r) => r.protocol_id);
 
+  // Same resolution rule as processOutcomeCard: abandoned retests never
+  // belong to a deliverable intervention (see 0079).
   const { data: retests, error: retestsError } = await client
     .from("protocols")
     .select("id,baseline_protocol_id")
-    .in("baseline_protocol_id", baselineIds);
+    .in("baseline_protocol_id", baselineIds)
+    .neq("status", "abandoned");
 
   if (retestsError) throw retestsError;
 

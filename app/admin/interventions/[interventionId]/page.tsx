@@ -7,6 +7,7 @@ import { requireFounderForPage } from "@/lib/auth/founder";
 import { getReportServiceClient } from "@/lib/reports/service-client";
 import { readEligibility, readIntervention } from "@/lib/interventions/intervention-actions";
 import { readBaselineContext, readCitedRuns } from "@/lib/interventions/admin-reads";
+import { readRetestProgress, type RetestProgress } from "@/lib/interventions/retest-actions";
 import { interventionAdminEnabled } from "@/lib/interventions/route-guard";
 import { UUID_PATTERN } from "@/lib/interventions/validate";
 import { cn } from "@/lib/utils";
@@ -67,6 +68,67 @@ function TimelineItem({ when, title, children, tone = "neutral" }: {
   );
 }
 
+const JOB_TONE: Record<string, Tone> = {
+  queued: "info",
+  claimed: "info",
+  running: "info",
+  succeeded: "success",
+  needs_review: "warning",
+  failed: "danger",
+  abandoned_exhausted: "danger",
+  cancelled: "neutral",
+};
+
+/** Counts from the stored rows. Nothing here is inferred from the job alone. */
+function RetestPanel({ retest }: { retest: RetestProgress }) {
+  const nonRetestKinds = Object.entries(retest.attempts.byKind).filter(([kind]) => kind !== "retest");
+  const completed = retest.attempts.byStatus.completed ?? 0;
+  return (
+    <section className={cn(ui.panel, "p-6")}>
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <h2 className="text-base font-semibold">Retest</h2>
+        {retest.job ? (
+          <span className={cn(ui.pill, toneClass[JOB_TONE[retest.job.status] ?? "neutral"])}>
+            Job {retest.job.status.replace(/_/g, " ")}
+          </span>
+        ) : (
+          <span className={cn(ui.pill, toneClass.neutral)}>Not queued</span>
+        )}
+      </div>
+      <dl className="grid gap-3 sm:grid-cols-3">
+        <Field label="Completed runs">
+          {completed} of {retest.protocol.plannedRuns ?? "?"}
+        </Field>
+        <Field label="Attempts recorded">{retest.attempts.total}</Field>
+        <Field label="Protocol status">{retest.protocol.status}</Field>
+        {Object.keys(retest.attempts.byStatus).length > 0 ? (
+          <div className="sm:col-span-3">
+            <Field label="Attempts by status">
+              {Object.entries(retest.attempts.byStatus).map(([s, n]) => `${s} ${n}`).join(" · ")}
+            </Field>
+          </div>
+        ) : null}
+        <div className="sm:col-span-3">
+          <Field label="Retest protocol"><span className="font-mono text-xs">{retest.protocol.id}</span></Field>
+        </div>
+      </dl>
+      {retest.job?.needsReviewReason ? (
+        <p className="mt-3 text-sm text-warning">Needs review: {retest.job.needsReviewReason}</p>
+      ) : null}
+      {retest.job?.failureReason ? (
+        <p className="mt-3 text-sm text-muted-foreground">Stop reason: {retest.job.failureReason}</p>
+      ) : null}
+      {nonRetestKinds.length > 0 ? (
+        <p className="mt-3 flex items-center gap-2 text-sm text-destructive">
+          <TriangleAlert size={15} />
+          {nonRetestKinds.map(([k, n]) => `${n} '${k}'`).join(", ")} attempt(s) on a retest protocol. 0074 forbids
+          this; the phase invariant has been bypassed and these results must not be trusted.
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 export default async function InterventionDetailPage({
   params,
 }: {
@@ -81,10 +143,11 @@ export default async function InterventionDetailPage({
   const iv = await readIntervention(client, interventionId);
   if (!iv) notFound();
 
-  const [eligibility, baseline, citedRuns] = await Promise.all([
+  const [eligibility, baseline, citedRuns, retest] = await Promise.all([
     readEligibility(client, iv),
     readBaselineContext(client, iv.protocolId),
     readCitedRuns(client, iv.supportingEvidence),
+    readRetestProgress(client, iv),
   ]);
 
   const theme = parseAdminTheme((await cookies()).get(ADMIN_THEME_COOKIE)?.value);
@@ -201,6 +264,9 @@ export default async function InterventionDetailPage({
               ) : null}
             </section>
 
+            {/* ------------------------------------------ retest */}
+            {retest ? <RetestPanel retest={retest} /> : null}
+
             {/* ------------------------------------------ baseline */}
             <section className={cn(ui.panel, "p-6")}>
               <h2 className="mb-4 text-base font-semibold">Baseline</h2>
@@ -264,6 +330,15 @@ export default async function InterventionDetailPage({
                 label: eligibility.label,
                 authorizedEarly: eligibility.authorizedEarly,
               }}
+              retest={
+                retest
+                  ? {
+                      protocolStatus: retest.protocol.status,
+                      jobStatus: retest.job?.status ?? null,
+                      attempts: retest.attempts.total,
+                    }
+                  : null
+              }
               actionsEnabled={interventionAdminEnabled()}
             />
           </aside>

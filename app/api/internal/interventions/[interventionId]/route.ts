@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getReportServiceClient } from "@/lib/reports/service-client";
 import { guardInterventionRoute } from "@/lib/interventions/route-guard";
 import { readEligibility, readIntervention } from "@/lib/interventions/intervention-actions";
+import { readRetestProgress } from "@/lib/interventions/retest-actions";
 import { invalidId, type RouteContext } from "@/lib/interventions/route-handlers";
 import { UUID_PATTERN } from "@/lib/interventions/validate";
 
@@ -25,6 +26,9 @@ export async function GET(_request: Request, context: RouteContext) {
     );
   }
 
-  const eligibility = await readEligibility(client, intervention);
-  return NextResponse.json({ ok: true, intervention, eligibility }, { status: 200 });
+  const [eligibility, retest] = await Promise.all([
+    readEligibility(client, intervention),
+    readRetestProgress(client, intervention),
+  ]);
+  return NextResponse.json({ ok: true, intervention, eligibility, retest }, { status: 200 });
 }

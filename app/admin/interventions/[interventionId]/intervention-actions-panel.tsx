@@ -136,14 +136,44 @@ function ConfirmImplementation({ interventionId, disabled }: { interventionId: s
   );
 }
 
+type RetestState = { protocolStatus: string; jobStatus: string | null; attempts: number } | null;
+
+/** A single confirmed POST with inline error, for the retest steps. */
+function ConfirmAction({
+  label, busyLabel, icon, confirmText, path, disabled, primary = true,
+}: {
+  label: string; busyLabel: string; icon: React.ReactNode; confirmText: string;
+  path: string; disabled: boolean; primary?: boolean;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <>
+      <button type="button" disabled={disabled || busy}
+        className={cn(primary ? ui.btnPrimary : ui.btnOutline, "w-full")}
+        onClick={async () => {
+          if (!window.confirm(confirmText)) return;
+          setBusy(true); setError(null);
+          const r = await post(path, {});
+          if (r.ok) window.location.reload();
+          else { setError(r.message); setBusy(false); }
+        }}>
+        {icon} {busy ? busyLabel : label}
+      </button>
+      {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
+    </>
+  );
+}
+
 export function InterventionActionsPanel({
-  interventionId, status, hasEvidence, hasObservationWindow, eligibility, actionsEnabled,
+  interventionId, status, hasEvidence, hasObservationWindow, eligibility, retest = null, actionsEnabled,
 }: {
   interventionId: string;
   status: string;
   hasEvidence: boolean;
   hasObservationWindow: boolean;
   eligibility: Eligibility;
+  retest?: RetestState;
   actionsEnabled: boolean;
 }) {
   const [approving, setApproving] = useState(false);
@@ -151,10 +181,24 @@ export function InterventionActionsPanel({
   const base = `/api/internal/interventions/${interventionId}`;
   const off = !actionsEnabled;
 
-  const abandon = (
+  // Once an attempt exists, 0077 refuses abandonment outright. Offering the
+  // button then would only produce a refusal, so it is replaced by the rule.
+  const measuring = (retest?.attempts ?? 0) > 0 ||
+    retest?.jobStatus === "claimed" || retest?.jobStatus === "running";
+
+  const abandon = measuring ? (
+    <p className="text-xs text-muted-foreground">
+      The retest has started measuring, so this intervention can no longer be abandoned. Let it
+      finish: an inconclusive result is an honest outcome.
+    </p>
+  ) : (
     <ReasonAction
       label="Abandon" icon={<FlagOff size={16} />} tone="danger" disabled={off}
-      warning="Permanent. Refused once the retest has started measuring — after that, let it finish and record deviations instead."
+      warning={
+        retest?.jobStatus === "queued"
+          ? "Permanent. Also cancels the queued retest job and takes the retest protocol down, so nothing runs."
+          : "Permanent. Refused once the retest has started measuring — after that, let it finish and record deviations instead."
+      }
       placeholder="Why this intervention is being abandoned"
       onSubmit={(reason) => post(`${base}/abandon`, { reason })}
     />
@@ -217,9 +261,38 @@ export function InterventionActionsPanel({
           <p className={cn(ui.subPanel, "flex items-center gap-2 px-3 py-2 text-sm")}>
             <Clock size={15} className="shrink-0 text-muted-foreground" /> {eligibility.label}
           </p>
-          {eligibility.eligible ? (
+          {eligibility.eligible && !retest ? (
+            <ConfirmAction
+              label="Create retest protocol" busyLabel="Creating…" icon={<Rocket size={16} />}
+              path={`${base}/create-retest`} disabled={off}
+              confirmText={
+                "Create the retest protocol?\n\nIt reuses this baseline's exact question, provider and sampling plan. " +
+                "It queues nothing and spends nothing — running it is a separate step.\n\n" +
+                "An intervention gets exactly one retest: once this one completes, it cannot be replaced."
+              }
+            />
+          ) : null}
+          {retest && retest.jobStatus === null && retest.protocolStatus !== "completed" ? (
+            <>
+              <ConfirmAction
+                label="Queue retest run" busyLabel="Queueing…" icon={<Rocket size={16} />}
+                path={`${base}/queue-retest`} disabled={off}
+                confirmText={
+                  "Queue the retest run?\n\nThis commits paid provider calls. Nothing runs while the worker is " +
+                  "stopped, but the job waits in the queue: the next time the worker starts, for any reason, it runs.\n\n" +
+                  "Until the first attempt lands you can still abandon the intervention, which cancels the job. " +
+                  "After that, abandonment is refused and the retest must finish."
+                }
+              />
+              <p className="text-xs text-muted-foreground">
+                Commits spend: the job runs the next time the worker starts.
+              </p>
+            </>
+          ) : null}
+          {retest && retest.jobStatus !== null ? (
             <p className="text-xs text-muted-foreground">
-              The retest may start. Creating and running the retest protocol arrives with the next phase.
+              Retest job {retest.jobStatus.replace(/_/g, " ")} · {retest.attempts} attempt
+              {retest.attempts === 1 ? "" : "s"} recorded.
             </p>
           ) : null}
           {eligibility.reason === "OBSERVATION_WINDOW_OPEN" && !eligibility.authorizedEarly ? (

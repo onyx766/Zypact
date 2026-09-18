@@ -134,6 +134,46 @@ for (const closed of ["rejected", "abandoned"]) {
   check(`${closed}: says it is closed`, html.includes("Closed."));
 }
 
+/* ═══════════ 3. retest steps (Phase 4) ═══════════ */
+console.log("\n[3] Retest steps");
+const readyElig = { eligible: true, reason: "WINDOW_ELAPSED", label: "Retest ready", authorizedEarly: false };
+
+const readyNoRetest = panel({ status: "implemented", eligibility: readyElig, retest: null });
+check("eligible with no retest: create is offered", readyNoRetest.includes("Create retest protocol"));
+check("and queue is not — there is nothing to queue yet", !readyNoRetest.includes("Queue retest run"));
+
+const waiting = panel({ status: "implemented", retest: null,
+  eligibility: { eligible: false, reason: "OBSERVATION_WINDOW_OPEN", label: "Observing — closes Oct 9, 2026", authorizedEarly: false } });
+check("window open: create is not offered", !waiting.includes("Create retest protocol"));
+
+const created = panel({ status: "implemented", eligibility: readyElig,
+  retest: { protocolStatus: "approved", jobStatus: null, attempts: 0 } });
+check("retest created, not queued: queue is offered", created.includes("Queue retest run"));
+check("and it says it commits spend", created.includes("Commits spend"));
+check("and create is not offered a second time", !created.includes("Create retest protocol"));
+check("abandon is still offered before anything is queued", created.includes("Abandon"));
+
+const queued = panel({ status: "implemented", eligibility: readyElig,
+  retest: { protocolStatus: "approved", jobStatus: "queued", attempts: 0 } });
+check("queued: no second queue button", !queued.includes("Queue retest run"));
+check("queued: abandon is still possible — it would cancel the job", queued.includes("Abandon"));
+check("queued: the job state is shown", queued.includes("Retest job queued"));
+
+const measuringHtml = panel({ status: "implemented", eligibility: readyElig,
+  retest: { protocolStatus: "active", jobStatus: "running", attempts: 2 } });
+check("measuring: no Abandon button — 0077 would refuse it", buttonDisabled(measuringHtml, "Abandon") === null);
+check("measuring: the rule is stated instead", measuringHtml.includes("can no longer be abandoned"));
+
+const claimedNoAttempt = panel({ status: "implemented", eligibility: readyElig,
+  retest: { protocolStatus: "approved", jobStatus: "claimed", attempts: 0 } });
+check("claimed with no attempt yet: abandon is also withheld — an attempt may be landing",
+  buttonDisabled(claimedNoAttempt, "Abandon") === null);
+
+const done = panel({ status: "implemented", eligibility: readyElig,
+  retest: { protocolStatus: "completed", jobStatus: "succeeded", attempts: 5 } });
+check("completed retest: neither create nor queue is offered — one retest per intervention",
+  !done.includes("Create retest protocol") && !done.includes("Queue retest run"));
+
 const off = panel({ status: "proposed", actionsEnabled: false });
 check("kill switch off: approve is disabled", buttonDisabled(off, "Approve and freeze") === true);
 check("kill switch off: reject is disabled", buttonDisabled(off, "Reject") === true);

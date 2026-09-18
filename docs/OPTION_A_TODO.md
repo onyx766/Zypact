@@ -12,8 +12,10 @@ can do a retest. Nothing in `app/` can reach it: no route or component calls
 
 **What already exists and should be reused, not rebuilt:**
 
-- `POST /api/projects/[projectId]/protocol-runs` — fully generic, enqueues any
-  approved protocol's execution job. Works for a retest protocol unchanged.
+- `enqueue_protocol_execution_job` — the idempotent enqueue RPC. *Not* its
+  HTTP route `POST /api/projects/[projectId]/protocol-runs`, which authorizes
+  the project owner and so answers the founder 404 for snapshot-created
+  projects (see Phase 4).
 - `scripts/run-outcome-card-worker.ts` — builds and delivers Outcome Cards.
 - `lib/reports/deliver-outcome-card.ts` — `processOutcomeCard`,
   `findDeliverableInterventions`.
@@ -31,7 +33,7 @@ whenever status is `rejected`. But no RPC sets either status, and `0071` grants
 `service_role` only `select` on the table — no `UPDATE`. **Both states are
 structurally unreachable.** Any UI that offers a Reject button will fail.
 
-- [ ] **0077** — `reject_intervention(p_intervention_id, p_project_id, p_rejected_by, p_reason)`
+- [x] **0077** — `reject_intervention(p_intervention_id, p_project_id, p_rejected_by, p_reason)`
   - only from `proposed`; idempotent replay returns the row untouched
   - requires non-empty reason (the constraint already demands it)
   - must not set `approved_by`/`approved_at` — `interventions_approval_pair_check`
@@ -63,10 +65,9 @@ landing at that instant. Only a never-claimed `queued` job is cancelled.
       lease, and the 0051/0056 terminal guards are reachable only by a worker
       holding a lease.
 - [x] Runtime contract — `scripts/test-m7-0077-runtime-contract.ts`
-- [ ] **Run it**: `ZYPACT_M7_0077_RUNTIME_TEST=1 npm run test:m7-0077-runtime`
-      (needs Docker; not runnable on the Windows workstation)
+- [x] Run — 52/52 against real PostgreSQL 16
 - [ ] Schema contract test (text-only, digest-pinned, per existing precedent)
-- [ ] Apply to staging via [`M7_STAGING_APPLY_RUNBOOK.md`](M7_STAGING_APPLY_RUNBOOK.md)
+- [x] Applied to staging — CURRENT_STATUS §16.1
 
 ---
 
@@ -118,8 +119,8 @@ Mirror `app/api/internal/snapshot-requests/[requestId]/*`.
 - [x] **Chained retests — decided: forbidden in the database too.** `0078`
       makes `register_intervention` raise `protocol_is_not_a_baseline`, with a
       precondition block that refuses to apply over an already-chained row.
-      Runtime contract `test:m7-0078-runtime` written, **not yet run**; not yet
-      applied to staging.
+      Runtime contract 16/16. Applied to staging, pre-flight run first;
+      post-apply verification screenshot outstanding (§16.2 pending).
 - [x] Supporting evidence is checked at registration (D-009): every cited id
       must be a completed baseline attempt of the same protocol. The database
       stores evidence as opaque strings and cannot check this itself.
@@ -162,15 +163,35 @@ client and need staging to render. The plan below is kept for reference.
 
 ## Phase 4 — Retest execution
 
-- [ ] `POST /api/internal/interventions/[id]/create-retest` → `create_retest_protocol`
-  - refuse unless `retest_eligibility().eligible` is true; do not re-derive the
-    rule in TypeScript — that function is the single authority
-- [ ] Wire the existing `POST /api/projects/[projectId]/protocol-runs` to enqueue
-      the retest protocol's job. **Do not write a new enqueue endpoint.**
-- [ ] Show retest job/attempt progress on the intervention detail page
-- [ ] Confirm the worker writes `attempt_kind = 'retest'` end-to-end on staging
+- [x] `POST /api/internal/interventions/[id]/create-retest` → `create_retest_protocol`.
+      Eligibility is not re-derived; the RPC calls `retest_eligibility` itself.
+- [x] `POST /api/internal/interventions/[id]/queue-retest` →
+      `enqueue_protocol_execution_job`, with the RPC's default `max_attempts`
+      exactly as the baseline path calls it.
+  - **Corrected plan.** This originally said to reuse
+    `POST /api/projects/[projectId]/protocol-runs` and write no new endpoint.
+    That route authorizes the project *owner*; projects created from snapshot
+    requests have none, so it answers the founder 404 by design. The RPC is
+    the shared contract and is reused; the authorization model is not.
+- [x] Retest progress on the detail page: job status, attempts by status and
+      by kind. A non-`retest` attempt on a retest protocol is surfaced as a
+      broken invariant, never hidden.
+- [x] **0079 — one retest per intervention.** 0073's idempotency lookup
+      skipped `completed`, so a finished retest could be followed by a fresh
+      one for the same intervention: re-measurement until the result is
+      welcome. 0079 returns a completed retest instead of replacing it.
+      Runtime contract written, **not yet run**; not yet applied to staging.
+- [x] **Latent delivery bug fixed.** `deliver-outcome-card.ts` resolved an
+      intervention's retest by baseline with no status filter, so after one
+      abandonment a baseline held two retest rows and `maybeSingle()` threw.
+      Both lookups now exclude `abandoned`; exact by 0079's invariant.
+- [x] Tested: `test:retest-actions` (30), `test:intervention-admin-ui` (50).
+- [ ] **HELD for explicit go-ahead — crosses the irreversible line.** Confirm
+      the worker writes `attempt_kind = 'retest'` end-to-end on staging
       (`lib/protocol-worker/worker.ts` derives it from `baselineProtocolId`;
-      `0074`'s trigger enforces it, but this path has never run outside tests)
+      `0074`'s trigger enforces it, but this path has never run outside
+      tests). The first real retest attempt cannot be rolled back without
+      deleting evidence.
 
 ---
 

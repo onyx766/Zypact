@@ -57,6 +57,7 @@
     "test:intervention-routes": "tsx scripts/test-intervention-routes.ts",
     "test:intervention-admin-ui": "tsx scripts/test-intervention-admin-ui.ts",
     "test:retest-actions": "tsx scripts/test-retest-actions.ts",
+    "test:outcome-card-delivery": "tsx scripts/test-outcome-card-delivery.ts",
     "test:protocol-integrity": "tsx scripts/test-protocol-integrity-signals.ts",
     "test:public-report": "tsx scripts/test-public-report-preview.ts",
     "test:landing-page": "tsx scripts/test-landing-page.ts",

@@ -723,3 +723,30 @@ against an expectation of 1. The query was too loose — it matched
 `claim_fields_check` and `needs_review_reason_pair_check`, which reference
 `status` without enumerating it. A full constraint listing confirmed exactly
 one enumerating check. The discrepancy was in the probe, not the schema.
+
+### 16.2 Migration 0078 applied to staging
+
+- **As of:** 2026-09-18 · `zypact-staging`, Supabase SQL editor, one explicit transaction
+- **Runtime contract before apply:** `test:m7-0078-runtime` 16/16
+
+| Probe | Before apply | After apply |
+|---|---|---|
+| Interventions registered against a retest protocol | 0 | 0 |
+| `register_intervention` overloads | 1 | 1 |
+| Body carries `protocol_is_not_a_baseline` | false | true |
+
+The pre-flight was run before the apply and confirmed the old body was live,
+so unlike 16.1 this record shows the intended order.
+
+### 16.3 Migration 0079 applied to staging
+
+- **As of:** 2026-09-18 · `zypact-staging`, Supabase SQL editor, one explicit transaction
+- **Runtime contract before apply:** `test:m7-0079-runtime` 19/19. Section [0]
+  reproduced the defect on 0073 itself: a completed retest was followed by a
+  second `CREATED` retest for the same intervention.
+
+**Recorded weakness.** No separate pre-flight probe was run. The migration's own
+precondition block (abort if any baseline carries more than one non-abandoned
+retest) executed inside the same transaction and the apply succeeded, so that
+condition held — but the body-before check was not captured. Post-apply
+verification: *pending*.

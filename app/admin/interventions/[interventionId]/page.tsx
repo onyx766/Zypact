@@ -8,6 +8,9 @@ import { getReportServiceClient } from "@/lib/reports/service-client";
 import { readEligibility, readIntervention } from "@/lib/interventions/intervention-actions";
 import { readBaselineContext, readCitedRuns } from "@/lib/interventions/admin-reads";
 import { readRetestProgress, type RetestProgress } from "@/lib/interventions/retest-actions";
+import { readOutcomeCard, type StoredOutcomeCard } from "@/lib/interventions/outcome-card-actions";
+import { OutcomeCardView } from "@/components/report/outcome-card-view";
+import { OutcomeCardControls } from "./outcome-card-controls";
 import { interventionAdminEnabled } from "@/lib/interventions/route-guard";
 import { UUID_PATTERN } from "@/lib/interventions/validate";
 import { cn } from "@/lib/utils";
@@ -129,6 +132,66 @@ function RetestPanel({ retest }: { retest: RetestProgress }) {
   );
 }
 
+const INTEGRITY_LABEL: Record<string, { label: string; tone: Tone }> = {
+  integrity_passed: { label: "Integrity passed", tone: "success" },
+  needs_review: { label: "Needs your review", tone: "warning" },
+  blocked: { label: "Blocked — never delivered", tone: "danger" },
+};
+
+/**
+ * The stored card, rendered with the SAME component the customer's page
+ * uses, from the stored payload — so the founder reviews exactly what the
+ * customer would see, not a re-rendering of fresh data.
+ */
+function OutcomeCardPanel({ card }: { card: StoredOutcomeCard }) {
+  const integrity = INTEGRITY_LABEL[card.integrityStatus] ?? { label: card.integrityStatus, tone: "neutral" as Tone };
+  return (
+    <section className={cn(ui.panel, "p-6")}>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-base font-semibold">Outcome Card</h2>
+        <div className="flex flex-wrap gap-2">
+          <span className={cn(ui.pill, toneClass[integrity.tone])}>{integrity.label}</span>
+          <span className={cn(ui.pill, toneClass[card.deliveredAt ? "success" : "neutral"])}>
+            {card.deliveredAt ? `Delivered ${formatDate(card.deliveredAt)}` : "Not delivered"}
+          </span>
+        </div>
+      </div>
+
+      {card.integrityReasons.length > 0 ? (
+        <div className={cn(ui.subPanel, "mb-4 px-4 py-3")}>
+          <p className={ui.label}>Flagged reasons</p>
+          <ul className="mt-2 list-disc pl-5 text-sm text-foreground">
+            {card.integrityReasons.map((r) => <li key={r}>{r}</li>)}
+          </ul>
+        </div>
+      ) : null}
+
+      <dl className="mb-4 grid gap-3 sm:grid-cols-2">
+        <Field label="Built">{formatDate(card.generatedAt)}</Field>
+        <Field label="Revision"><span className="font-mono text-xs">{card.revision.slice(0, 16)}…</span></Field>
+        {card.deliveryClaimedAt && !card.deliveredAt ? (
+          <div className="sm:col-span-2">
+            <Field label="Delivery claim held">
+              Since {formatDate(card.deliveryClaimedAt)}. A send whose outcome was unknown is held here on
+              purpose, to prevent a duplicate email — confirm with the provider before any retry.
+            </Field>
+          </div>
+        ) : null}
+      </dl>
+
+      {card.payload ? (
+        <div className="overflow-hidden rounded-xl border border-border">
+          <OutcomeCardView payload={card.payload} />
+        </div>
+      ) : (
+        <p className={cn(ui.subPanel, "px-4 py-3 text-sm text-destructive")}>
+          The stored card is not in a shape this page can render. It cannot be sent.
+        </p>
+      )}
+    </section>
+  );
+}
+
 export default async function InterventionDetailPage({
   params,
 }: {
@@ -143,12 +206,22 @@ export default async function InterventionDetailPage({
   const iv = await readIntervention(client, interventionId);
   if (!iv) notFound();
 
-  const [eligibility, baseline, citedRuns, retest] = await Promise.all([
+  const [eligibility, baseline, citedRuns, retest, card] = await Promise.all([
     readEligibility(client, iv),
     readBaselineContext(client, iv.protocolId),
     readCitedRuns(client, iv.supportingEvidence),
     readRetestProgress(client, iv),
+    readOutcomeCard(client, iv.id),
   ]);
+
+  // Same precondition the worker and generateOutcomeCard enforce: a card is
+  // built only from a finished retest.
+  const retestFinished = retest?.job?.status === "succeeded";
+  const generateBlockedReason = !retest
+    ? "No retest exists yet."
+    : !retestFinished
+      ? `The retest job is ${retest.job ? `'${retest.job.status}'` : "not queued"}. A card is built only from a finished retest.`
+      : null;
 
   const theme = parseAdminTheme((await cookies()).get(ADMIN_THEME_COOKIE)?.value);
   const status = statusPresentation(iv.status);
@@ -267,6 +340,9 @@ export default async function InterventionDetailPage({
             {/* ------------------------------------------ retest */}
             {retest ? <RetestPanel retest={retest} /> : null}
 
+            {/* ------------------------------------------ outcome card */}
+            {card ? <OutcomeCardPanel card={card} /> : null}
+
             {/* ------------------------------------------ baseline */}
             <section className={cn(ui.panel, "p-6")}>
               <h2 className="mb-4 text-base font-semibold">Baseline</h2>
@@ -341,6 +417,28 @@ export default async function InterventionDetailPage({
               }
               actionsEnabled={interventionAdminEnabled()}
             />
+
+            {iv.status === "implemented" && retest ? (
+              <section className={cn(ui.panel, "flex flex-col gap-3 p-5")}>
+                <h2 className="text-base font-semibold">Outcome Card</h2>
+                <OutcomeCardControls
+                  interventionId={iv.id}
+                  canGenerate={retestFinished}
+                  generateBlockedReason={generateBlockedReason}
+                  card={
+                    card
+                      ? {
+                          artifactId: card.artifactId,
+                          revision: card.revision,
+                          integrityStatus: card.integrityStatus,
+                          delivered: card.deliveredAt !== null,
+                        }
+                      : null
+                  }
+                  actionsEnabled={interventionAdminEnabled()}
+                />
+              </section>
+            ) : null}
           </aside>
         </div>
       </main>

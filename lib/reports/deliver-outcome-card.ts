@@ -337,35 +337,129 @@ export async function processOutcomeCard(
     return { ...heldWithArtifact, outcome: "already_delivered" };
   }
 
-  const recipient = await loadRecipientForProject(deps.client, interventionRow.project_id);
-  if (!recipient) {
-    return {
-      ...heldWithArtifact,
-      outcome: "delivery_rejected",
-      detail: "No usable recipient address for this project.",
-    };
-  }
-
   const { data: revisionData, error: revisionError } = await deps.client.rpc(
     "outcome_card_artifact_revision",
     { p_markdown: markdown, p_payload: card }
   );
   if (revisionError) throw revisionError;
-  const revision = revisionData as string;
+
+  const delivery = await deliverSavedOutcomeCard(
+    {
+      interventionId,
+      projectId: interventionRow.project_id,
+      artifactId,
+      publicToken,
+      revision: revisionData as string,
+      questionText: card.question.text,
+    },
+    deps
+  );
+
+  return {
+    ...heldWithArtifact,
+    outcome: delivery.outcome,
+    messageId: delivery.messageId,
+    ...(delivery.detail ? { detail: delivery.detail } : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The one path that emails a customer an Outcome Card
+// ---------------------------------------------------------------------------
+
+export interface SavedOutcomeCardDelivery {
+  interventionId: string;
+  projectId: string;
+  artifactId: string;
+  publicToken: string;
+  /**
+   * outcome_card_artifact_revision() of the content being sent. For the
+   * automatic path this is the card just built; for a founder send it is
+   * the revision of the card the founder reviewed. begin_outcome_card_delivery
+   * refuses unless the stored artifact still has exactly this revision, so a
+   * card that changed after review is never the one delivered.
+   */
+  revision: string;
+  questionText: string;
+}
+
+export interface SavedOutcomeCardDeliveryResult {
+  outcome: Extract<
+    OutcomeCardDeliveryOutcome,
+    | "delivered"
+    | "already_delivered"
+    | "held_blocked"
+    | "delivery_claim_unavailable"
+    | "delivery_rejected"
+    | "delivery_ambiguous"
+  >;
+  messageId: string | null;
+  detail?: string;
+}
+
+/**
+ * 0076's begin_outcome_card_delivery raises (rather than returning no row)
+ * when it refuses. Each refusal is a known state, not a crash: mapped here so
+ * neither the worker nor a founder route treats a stale revision or an
+ * in-flight claim as an unexpected error.
+ */
+const BEGIN_REFUSALS: Record<string, { outcome: SavedOutcomeCardDeliveryResult["outcome"]; detail: string }> = {
+  "outcome card already delivered": {
+    outcome: "already_delivered",
+    detail: "This card was already delivered.",
+  },
+  "outcome card is blocked and may never be delivered": {
+    outcome: "held_blocked",
+    detail: "This card is blocked and can never be delivered.",
+  },
+  "artifact revision changed since preview": {
+    outcome: "delivery_claim_unavailable",
+    detail: "The card changed after it was reviewed. Reload and review the current version before sending.",
+  },
+  "delivery claim is active": {
+    outcome: "delivery_claim_unavailable",
+    detail: "Another delivery of this card is already in progress.",
+  },
+  "artifact id mismatch": {
+    outcome: "delivery_claim_unavailable",
+    detail: "The card was regenerated after it was reviewed. Reload and review the current version before sending.",
+  },
+  "outcome card artifact not found": {
+    outcome: "delivery_claim_unavailable",
+    detail: "No saved card exists for this intervention.",
+  },
+};
+
+export async function deliverSavedOutcomeCard(
+  card: SavedOutcomeCardDelivery,
+  deps: Pick<OutcomeCardProcessDeps, "client" | "deliveryConfig" | "sendEmail">
+): Promise<SavedOutcomeCardDeliveryResult> {
+  const recipient = await loadRecipientForProject(deps.client, card.projectId);
+  if (!recipient) {
+    return {
+      outcome: "delivery_rejected",
+      messageId: null,
+      detail: "No usable recipient address for this project.",
+    };
+  }
 
   const { data: begun, error: beginError } = await deps.client.rpc("begin_outcome_card_delivery", {
-    p_intervention_id: interventionId,
-    p_expected_artifact_id: artifactId,
-    p_expected_revision: revision,
+    p_intervention_id: card.interventionId,
+    p_expected_artifact_id: card.artifactId,
+    p_expected_revision: card.revision,
   });
 
-  if (beginError) throw beginError;
+  if (beginError) {
+    const refusal = BEGIN_REFUSALS[String((beginError as { message?: unknown }).message ?? "").trim()];
+    if (refusal) return { ...refusal, messageId: null };
+    throw beginError;
+  }
 
   const claim = (Array.isArray(begun) ? begun[0] : begun) as Record<string, any> | null;
   if (!claim) {
     return {
-      ...heldWithArtifact,
       outcome: "delivery_claim_unavailable",
+      messageId: null,
       detail: "Delivery claim refused: the artifact changed, is already delivered, is blocked, or a claim is held.",
     };
   }
@@ -379,9 +473,12 @@ export async function processOutcomeCard(
       {
         to: recipient.workEmail,
         companyName: recipient.companyName,
-        publicToken,
-        questionText: card.question.text,
-        deliveryIdempotencyKey: `outcome-card:${interventionId}:${revision.slice(0, 32)}`,
+        publicToken: card.publicToken,
+        questionText: card.questionText,
+        // Keyed on content revision, so retrying the same revision is
+        // deduplicated by the provider while a different revision is a
+        // genuinely new message.
+        deliveryIdempotencyKey: `outcome-card:${card.interventionId}:${card.revision.slice(0, 32)}`,
       },
       deps.deliveryConfig
     );
@@ -392,30 +489,30 @@ export async function processOutcomeCard(
     if (PROVEN_NON_DELIVERY.has(code)) {
       try {
         await deps.client.rpc("release_outcome_card_delivery_claim", {
-          p_intervention_id: interventionId,
-          p_artifact_id: artifactId,
+          p_intervention_id: card.interventionId,
+          p_artifact_id: card.artifactId,
           p_delivery_claim_token: claimToken,
         });
       } catch {
         // A failed release is never reported as released.
       }
       return {
-        ...heldWithArtifact,
         outcome: "delivery_rejected",
+        messageId: null,
         detail: `Provider refused before sending (${code}). Claim released; retry is safe.`,
       };
     }
 
     return {
-      ...heldWithArtifact,
       outcome: "delivery_ambiguous",
+      messageId: null,
       detail: `Delivery outcome unknown (${code}). Claim intentionally held to prevent a duplicate email.`,
     };
   }
 
   const { data: finalized, error: finalizeError } = await deps.client.rpc("finalize_outcome_card_delivery", {
-    p_intervention_id: interventionId,
-    p_artifact_id: artifactId,
+    p_intervention_id: card.interventionId,
+    p_artifact_id: card.artifactId,
     p_delivery_claim_token: claimToken,
     p_delivery_message_id: messageId,
   });
@@ -425,7 +522,6 @@ export async function processOutcomeCard(
   const done = (Array.isArray(finalized) ? finalized[0] : finalized) as Record<string, any> | null;
   if (!done) {
     return {
-      ...heldWithArtifact,
       outcome: "delivery_ambiguous",
       messageId,
       detail:
@@ -433,13 +529,7 @@ export async function processOutcomeCard(
     };
   }
 
-  return {
-    ...held,
-    outcome: "delivered",
-    artifactId,
-    publicToken,
-    messageId,
-  };
+  return { outcome: "delivered", messageId };
 }
 
 /**

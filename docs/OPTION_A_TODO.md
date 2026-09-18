@@ -197,14 +197,34 @@ client and need staging to render. The plan below is kept for reference.
 
 ## Phase 5 — Outcome Card
 
-- [ ] Trigger for build + deliver — a route wrapping `processOutcomeCard`, or a
-      schedule. Today it only runs by hand.
-- [ ] Admin review screen for `needs_review` cards **(flagged missing earlier;
-      still missing)**
-- [ ] Manual send route for `needs_review` after review
-- [ ] `blocked` must be visibly un-sendable in the UI. `0076` already refuses it
-      at the database layer — the UI must not present a button that always fails.
+- [x] Founder trigger — `POST .../[id]/outcome-card` runs `processOutcomeCard`
+      with auto-send **forced off**, and only once the retest job has
+      `succeeded` (the worker's own precondition, which `processOutcomeCard`
+      did not itself enforce — a direct call could have built a card from a
+      half-finished retest). The scheduled worker is unchanged.
+- [x] Review screen — the stored card rendered with the customer's own
+      `OutcomeCardView`, its integrity status, every flagged reason, its
+      revision, and any held delivery claim.
+- [x] Manual send — `POST .../[id]/outcome-card/send` carries the reviewed
+      artifact id and revision and refuses if either changed; `needs_review`
+      requires an explicit acknowledgement.
+- [x] `blocked` has no send button at all, and is refused before any claim.
+- [x] **One path emails a customer.** The claim → send → finalize-or-release
+      sequence was extracted from `processOutcomeCard` into
+      `deliverSavedOutcomeCard`, used by both the worker and the founder
+      send. 0076's `begin_outcome_card_delivery` raises on refusal; those
+      known refusals are now mapped (a stale revision, an active claim) rather
+      than thrown — a small behaviour change for the worker, which previously
+      crashed on them.
+- [x] Tested — `test:outcome-card-delivery` (43). The customer-email path had
+      no tests before; see Phase 7.
+- [ ] **Recorded inconsistency, not fixed.** The worker builds the card link
+      from `SNAPSHOT_PUBLIC_BASE_URL`; the web send routes (snapshot report and
+      now Outcome Card) use `NEXT_PUBLIC_SITE_URL || https://zypact.com`. If the
+      two are set differently, a card sent by the worker and one sent by the
+      founder link to different hosts. Needs one decision and one variable.
 - [ ] Show the comparison result with its interval and the non-causality footer
+      — rendered by the existing `OutcomeCardView`; not re-verified here
 - [ ] Verify the four canonical statuses are the only ones rendered:
       `increase_observed`, `decrease_observed`, `no_clear_change`, `inconclusive`
 
@@ -224,7 +244,10 @@ client and need staging to render. The plan below is kept for reference.
 
 ## Phase 7 — Tests
 
-- [ ] `lib/reports/deliver-outcome-card.ts` — **no tests exist**
+- [ ] `lib/reports/deliver-outcome-card.ts` — **partly covered.**
+      `deliverSavedOutcomeCard` (the email path) is tested by
+      `test:outcome-card-delivery`. `processOutcomeCard`'s build half — reading
+      both phases, building, integrity, persisting — still has no test.
 - [ ] `lib/reports/deliver-protocol-report.ts` — **no tests exist**
 - [ ] Route-level auth coverage for every new internal route
 - [ ] End-to-end on staging: register → approve → confirm → window → retest →

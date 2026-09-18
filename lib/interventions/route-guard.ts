@@ -41,7 +41,14 @@ export async function guardInterventionRoute(
   return requireFounderForRoute(route);
 }
 
-export function failureResponse(failure: MappedRpcFailure): NextResponse {
+/**
+ * Any refusal with a safe-to-return code and message. Wider than
+ * MappedRpcFailure on purpose: delivery can fail upstream of the database
+ * (502 provider refused or ambiguous, 503 not configured).
+ */
+export type RouteFailure = MappedRpcFailure | { status: 502 | 503; error: string; message: string };
+
+export function failureResponse(failure: RouteFailure): NextResponse {
   return NextResponse.json(
     { ok: false, error: failure.error, message: failure.message },
     { status: failure.status }

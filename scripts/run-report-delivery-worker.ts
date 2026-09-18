@@ -23,6 +23,7 @@
  */
 
 import { createClient } from "@supabase/supabase-js";
+import { publicSiteUrl } from "@/lib/seo/site";
 
 import {
   findDeliverableRequests,
@@ -96,14 +97,16 @@ function resolveConfig() {
   const autoSendEnabled =
     process.env.SNAPSHOT_AUTO_DELIVERY_ENABLED === "true";
 
-  const appBaseUrl = process.env.SNAPSHOT_PUBLIC_BASE_URL ?? "";
+  // Same origin as every other customer-email path (lib/seo/site.ts), so a
+  // report sent by this worker and one sent from the admin console link to
+  // the same host. Always resolves: unset falls back to the canonical host.
+  const appBaseUrl = publicSiteUrl();
   const apiKey = process.env.RESEND_API_KEY ?? "";
   const from = process.env.SNAPSHOT_EMAIL_FROM ?? "";
 
   // Validated only when it will actually be used, so the dry pipeline runs on
   // a host with no mail credentials at all.
   if (autoSendEnabled) {
-    if (!appBaseUrl) fail("SNAPSHOT_PUBLIC_BASE_URL is required when auto-delivery is enabled.");
     if (!apiKey) fail("RESEND_API_KEY is required when auto-delivery is enabled.");
     if (!from) fail("SNAPSHOT_EMAIL_FROM is required when auto-delivery is enabled.");
   }

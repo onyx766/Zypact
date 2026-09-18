@@ -15,8 +15,8 @@
  * enabled — email the link.
  *
  * Reuses the SAME environment surface as the report-delivery worker
- * (SNAPSHOT_AUTO_DELIVERY_ENABLED, SNAPSHOT_PUBLIC_BASE_URL, RESEND_API_KEY,
- * SNAPSHOT_EMAIL_FROM) rather than inventing a parallel one: it is the same
+ * (SNAPSHOT_AUTO_DELIVERY_ENABLED, NEXT_PUBLIC_SITE_URL via publicSiteUrl(),
+ * RESEND_API_KEY, SNAPSHOT_EMAIL_FROM) rather than inventing a parallel one: it is the same
  * provider, the same founder-operated decision about whether to auto-send,
  * and the same safe default (off) for a process that mails customers.
  *
@@ -27,6 +27,7 @@
  */
 
 import { createClient } from "@supabase/supabase-js";
+import { publicSiteUrl } from "@/lib/seo/site";
 
 import {
   findDeliverableInterventions,
@@ -91,12 +92,14 @@ function resolveConfig() {
   // auto-send off rather than accidentally on.
   const autoSendEnabled = process.env.SNAPSHOT_AUTO_DELIVERY_ENABLED === "true";
 
-  const appBaseUrl = process.env.SNAPSHOT_PUBLIC_BASE_URL ?? "";
+  // Same origin as the founder's send route and every other customer-email
+  // path (lib/seo/site.ts), so worker-sent and founder-sent cards link to the
+  // same host. Always resolves: unset falls back to the canonical host.
+  const appBaseUrl = publicSiteUrl();
   const apiKey = process.env.RESEND_API_KEY ?? "";
   const from = process.env.SNAPSHOT_EMAIL_FROM ?? "";
 
   if (autoSendEnabled) {
-    if (!appBaseUrl) fail("SNAPSHOT_PUBLIC_BASE_URL is required when auto-delivery is enabled.");
     if (!apiKey) fail("RESEND_API_KEY is required when auto-delivery is enabled.");
     if (!from) fail("SNAPSHOT_EMAIL_FROM is required when auto-delivery is enabled.");
   }

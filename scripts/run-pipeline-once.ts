@@ -27,6 +27,7 @@
 import { spawn } from "node:child_process";
 
 import { createClient } from "@supabase/supabase-js";
+import { publicSiteUrl } from "@/lib/seo/site";
 
 import { processProtocolReport } from "@/lib/reports/deliver-protocol-report";
 
@@ -117,7 +118,7 @@ async function main() {
       deliveryConfig: {
         apiKey: process.env.RESEND_API_KEY ?? "",
         from: process.env.SNAPSHOT_EMAIL_FROM ?? "",
-        appBaseUrl: process.env.SNAPSHOT_PUBLIC_BASE_URL ?? "",
+        appBaseUrl: publicSiteUrl(),
       },
     });
 

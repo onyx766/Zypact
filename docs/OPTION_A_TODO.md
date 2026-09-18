@@ -218,11 +218,15 @@ client and need staging to render. The plan below is kept for reference.
       crashed on them.
 - [x] Tested — `test:outcome-card-delivery` (43). The customer-email path had
       no tests before; see Phase 7.
-- [ ] **Recorded inconsistency, not fixed.** The worker builds the card link
-      from `SNAPSHOT_PUBLIC_BASE_URL`; the web send routes (snapshot report and
-      now Outcome Card) use `NEXT_PUBLIC_SITE_URL || https://zypact.com`. If the
-      two are set differently, a card sent by the worker and one sent by the
-      founder link to different hosts. Needs one decision and one variable.
+- [x] **Link origin unified — decided: `NEXT_PUBLIC_SITE_URL`.** All six
+      report/card link builders (both web send routes, `review-actions`, both
+      workers, `run-pipeline-once`) call `publicSiteUrl()` in
+      `lib/seo/site.ts`: call-time, trailing slash stripped, falling back to
+      `https://www.zypact.com`. `test:public-site-url` (22) fails if any path
+      drifts back. `SNAPSHOT_PUBLIC_BASE_URL` now builds email-verification
+      links only. **Value caution:** this variable also sets every SEO
+      canonical, so production should leave it unset (www), and staging must
+      set its own host or emailed staging links 404.
 - [ ] Show the comparison result with its interval and the non-causality footer
       — rendered by the existing `OutcomeCardView`; not re-verified here
 - [ ] Verify the four canonical statuses are the only ones rendered:
@@ -244,24 +248,32 @@ client and need staging to render. The plan below is kept for reference.
 
 ## Phase 7 — Tests
 
-- [ ] `lib/reports/deliver-outcome-card.ts` — **partly covered.**
-      `deliverSavedOutcomeCard` (the email path) is tested by
-      `test:outcome-card-delivery`. `processOutcomeCard`'s build half — reading
-      both phases, building, integrity, persisting — still has no test.
-- [ ] `lib/reports/deliver-protocol-report.ts` — **no tests exist**
-- [ ] Route-level auth coverage for every new internal route
+- [x] `lib/reports/deliver-outcome-card.ts` — **covered.** The email path by
+      `test:outcome-card-delivery` (43); the build half by
+      `test:outcome-card-build` (20), which runs the real evidence readers,
+      report and card builders and integrity combination against a fake
+      database. A mutation check (removing the abandoned-retest filter) makes
+      it fail, so it genuinely guards that fix.
+- [ ] `lib/reports/deliver-protocol-report.ts` — **no tests exist.** Baseline
+      path; not touched by this branch beyond the shared link origin.
+- [ ] Route-level auth through a real session — see Phase 2; verify on staging
+      with a non-founder account.
 - [ ] End-to-end on staging: register → approve → confirm → window → retest →
-      compare → card → deliver, driven entirely through the UI
+      compare → card → deliver, driven entirely through the UI. **Held with
+      Phase 4 step 4.**
 
 ---
 
 ## Phase 8 — Close out
 
-- [ ] Apply `0077` to staging, record it per the runbook
-- [ ] Update `CURRENT_STATUS.md` — §16 currently ends by stating the application
-      layer is absent; that claim must be revised, not left stale
-- [ ] Open the PR for `feat/m7-retest` (still unmerged; `main` at `589483c`)
-- [ ] Zypact-on-Zypact: run the full flow against Zypact's own project
+- [x] Apply `0077`, `0078`, `0079` to staging and record them — §16.1–16.3
+      (0079's post-apply verification still outstanding)
+- [x] Update `CURRENT_STATUS.md` — §17 supersedes §16's "application layer
+      absent", on this branch only
+- [ ] Open the PR for `feat/m7-retest` — description prepared; the founder
+      opens it (no GitHub action is taken on the founder's behalf)
+- [ ] Zypact-on-Zypact: run the full flow against Zypact's own project —
+      after the Phase 4 step 4 go-ahead
 
 ---
 

@@ -4,6 +4,7 @@ import { failureResponse, guardInterventionRoute } from "@/lib/interventions/rou
 import { sendReviewedOutcomeCard } from "@/lib/interventions/outcome-card-actions";
 import { invalidId, readJsonBody, validationResponse, type RouteContext } from "@/lib/interventions/route-handlers";
 import { UUID_PATTERN } from "@/lib/interventions/validate";
+import { publicSiteUrl } from "@/lib/seo/site";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,10 +21,9 @@ const ROUTE = "intervention-outcome-card-send";
  * `needs_review` requires acknowledgeReview. Goes through
  * deliverSavedOutcomeCard, the one function that emails a customer a card.
  *
- * The link base follows the existing web send route
- * (app/api/internal/snapshot-requests/[requestId]/send-report), NOT the
- * worker's SNAPSHOT_PUBLIC_BASE_URL — the two paths already differ there,
- * recorded in docs/OPTION_A_TODO.md rather than silently reconciled here.
+ * The link base is publicSiteUrl() — the same origin the workers and every
+ * other customer-email path use, so a card sent here and one sent by the
+ * worker cannot point at different hosts.
  */
 export async function POST(request: Request, context: RouteContext) {
   const guard = await guardInterventionRoute(ROUTE);
@@ -57,7 +57,7 @@ export async function POST(request: Request, context: RouteContext) {
     getReportServiceClient(),
     interventionId,
     { expectedArtifactId, expectedRevision, acknowledgeReview: body?.acknowledgeReview === true },
-    { apiKey, from, appBaseUrl: process.env.NEXT_PUBLIC_SITE_URL || "https://zypact.com" }
+    { apiKey, from, appBaseUrl: publicSiteUrl() }
   );
 
   console.info(

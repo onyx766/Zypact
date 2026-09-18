@@ -750,3 +750,54 @@ precondition block (abort if any baseline carries more than one non-abandoned
 retest) executed inside the same transaction and the apply succeeded, so that
 condition held — but the body-before check was not captured. Post-apply
 verification: *pending*.
+
+## 17. M7 application layer — built on `feat/m7-retest`, not merged, not deployed
+
+- **As of:** 2026-09-19
+- **Branch:** `feat/m7-retest`, based on `main` at `589483c`. Not merged.
+- **Plan and per-phase record:** [`OPTION_A_TODO.md`](OPTION_A_TODO.md)
+
+This supersedes §16's closing statement that the application layer is absent
+— **on this branch only.** `main` and every deployed environment are unchanged
+by it until the branch is merged and deployed.
+
+**Built.** A founder can, from `/admin/interventions`, register an
+intervention against a baseline, approve / reject / abandon it, confirm its
+implementation, authorize an early retest, create the retest protocol, queue
+its run, follow its progress, build the Outcome Card, review it, and send it.
+Every action is a founder route behind the `INTERVENTION_ADMIN_ENABLED` kill
+switch and the founder allowlist; every write is a `service_role` RPC with the
+project id taken from the stored row, never the request.
+
+**Schema added on this branch and applied to staging:** `0077` (reject,
+abandon, job cancellation), `0078` (register against baselines only), `0079`
+(one retest per intervention). Records: §16.1–16.3. Each passed a runtime
+contract against real PostgreSQL 16 first (52/52, 16/16, 19/19).
+
+**Two defects found and fixed while building it.** `0073` let a completed
+retest be followed by a second retest for the same intervention (fixed by
+`0079`). `deliver-outcome-card.ts` resolved an intervention's retest with no
+status filter, so after one abandonment it would have thrown on every
+delivery for that baseline (fixed alongside `0079`).
+
+**Customer links now have one origin.** Report and Outcome Card links, from the
+web app and the workers alike, come from `publicSiteUrl()`
+(`NEXT_PUBLIC_SITE_URL`, falling back to `https://www.zypact.com`).
+`SNAPSHOT_PUBLIC_BASE_URL` now builds email-verification links only.
+
+**What this does not establish.**
+
+- **No retest has ever run outside a test harness.** Phase 4 step 4 — the first
+  real retest attempt on staging, and with it the first `attempt_kind =
+  'retest'` written by the deployed worker — is held for an explicit founder
+  go-ahead, because the first attempt cannot be rolled back without deleting
+  evidence. Until it runs, no Outcome Card has been built from real data.
+- **No page has been opened in a browser.** The admin pages read through the
+  service-role client and cannot render without Supabase. Their logic is
+  covered by server-rendered component tests, not by visual inspection.
+- **The founder 401 / 404 paths through a real session are untested.** The
+  decision is unit-tested; the session plumbing is shared with the snapshot
+  routes.
+- **`test:snapshot-send-idempotency` fails, before and after this branch**
+  (identical 18 failures). It predates the revision-fenced send handler
+  (`a1f3f03`) and still posts empty bodies. Stale, not regressed.

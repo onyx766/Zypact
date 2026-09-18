@@ -115,16 +115,27 @@ Mirror `app/api/internal/snapshot-requests/[requestId]/*`.
       decision is unit-tested (`evaluateFounderAccess`); the session plumbing is
       shared with the snapshot routes. Verify on staging with a non-founder
       account.
-- [ ] **Decision needed — chained retests.** `register_intervention` accepts a
-      *completed retest* protocol, which would let `create_retest_protocol`
-      build a retest of a retest. The route refuses it (`not_a_baseline`); the
-      database does not. A small `0078` would enforce it there too.
+- [x] **Chained retests — decided: forbidden in the database too.** `0078`
+      makes `register_intervention` raise `protocol_is_not_a_baseline`, with a
+      precondition block that refuses to apply over an already-chained row.
+      Runtime contract `test:m7-0078-runtime` written, **not yet run**; not yet
+      applied to staging.
+- [x] Supporting evidence is checked at registration (D-009): every cited id
+      must be a completed baseline attempt of the same protocol. The database
+      stores evidence as opaque strings and cannot check this itself.
 
 ---
 
 ## Phase 3 — Intervention admin UI
 
-- [ ] `app/admin/interventions/` — list
+**Built** — `app/admin/interventions/` (list, stats, tabs, search, register
+drawer) and `app/admin/interventions/[interventionId]/` (claim, cited runs,
+baseline, lifecycle timeline, status-gated actions). `test:intervention-admin-ui`
+(36) renders both client components and checks every status offers exactly its
+moves. **Not verified in a browser** — the pages read through the service-role
+client and need staging to render. The plan below is kept for reference.
+
+- [x] `app/admin/interventions/` — list
   - filters on the five real statuses: `proposed`, `approved`, `implemented`,
     `rejected`, `abandoned`
   - derived eligibility column from `retest_eligibility()`, never a stored field:

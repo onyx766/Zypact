@@ -9,7 +9,7 @@
  * Three rules:
  *
  *   1. Every message the migrations can raise is mapped explicitly.
- *      `scripts/test-intervention-rpc-errors.ts` reads 0071-0077 and fails if
+ *      `scripts/test-intervention-rpc-errors.ts` reads 0071-0078 and fails if
  *      one is not — a new RAISE in a future migration cannot silently fall
  *      through to a generic 500.
  *   2. An unmapped error is a 500 whose body never echoes the database
@@ -99,6 +99,10 @@ export const RPC_ERROR_MAP: Readonly<Record<string, Entry>> = {
   },
 
   // ---- a precondition the methodology requires is not met ----
+  protocol_is_not_a_baseline: {
+    status: 409,
+    message: "That protocol is a retest. Interventions are registered against a baseline.",
+  },
   protocol_not_executable: {
     status: 409,
     message:

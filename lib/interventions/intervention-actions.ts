@@ -98,6 +98,40 @@ export async function registerIntervention(
     };
   }
 
+  // D-009: prompt-scoped claims use only supporting runs from that
+  // prompt/version. The database stores evidence as opaque strings and
+  // cannot check this, so it is checked here: every cited id must be a
+  // COMPLETED baseline attempt of THIS protocol. A run from another question,
+  // a failed attempt, or an invented id is refused rather than stored.
+  if (input.supportingEvidence.length > 0) {
+    const { data: cited, error: citeError } = await client
+      .from("protocol_attempts")
+      .select("id,protocol_id,attempt_kind,status")
+      .in("id", input.supportingEvidence);
+    if (citeError) throw citeError;
+    const valid = new Set(
+      ((cited ?? []) as Array<Record<string, unknown>>)
+        .filter(
+          (a) =>
+            a.protocol_id === input.protocolId &&
+            a.attempt_kind === "baseline" &&
+            a.status === "completed"
+        )
+        .map((a) => String(a.id))
+    );
+    const invalid = input.supportingEvidence.filter((id) => !valid.has(id));
+    if (invalid.length > 0) {
+      return {
+        ok: false,
+        failure: {
+          status: 400,
+          error: "evidence_not_from_this_baseline",
+          message: `${invalid.length} cited run${invalid.length === 1 ? " is" : "s are"} not a completed run of this baseline. Cite only runs from the question this intervention responds to.`,
+        },
+      };
+    }
+  }
+
   const { data, error } = await client.rpc("register_intervention", {
     p_project_id: p.project_id,
     p_protocol_id: input.protocolId,

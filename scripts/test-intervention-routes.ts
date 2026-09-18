@@ -161,9 +161,46 @@ async function main(): Promise<void> {
       !r.ok && r.failure.error === "not_a_baseline" && r.failure.status === 409);
     check("and the RPC is never called", rpcCalls.length === 0);
   }
+  const baselineProtocol = { id: BASELINE, project_id: PROJECT, status: "approved", baseline_protocol_id: null };
+  const goodAttempts = [
+    { id: "run-1", protocol_id: BASELINE, attempt_kind: "baseline", status: "completed" },
+    { id: "run-2", protocol_id: BASELINE, attempt_kind: "baseline", status: "completed" },
+  ];
+  {
+    // D-009: a run from ANOTHER protocol (another question) is refused.
+    const { client, rpcCalls } = fakeClient({
+      tables: {
+        protocols: [baselineProtocol],
+        protocol_attempts: [goodAttempts[0], { ...goodAttempts[1], protocol_id: RETEST }],
+      },
+    });
+    const r = await registerIntervention(client, input);
+    check("evidence from another protocol is refused",
+      !r.ok && r.failure.error === "evidence_not_from_this_baseline");
+    check("and the RPC is never called", rpcCalls.length === 0);
+  }
+  {
+    const { client } = fakeClient({
+      tables: {
+        protocols: [baselineProtocol],
+        protocol_attempts: [goodAttempts[0], { ...goodAttempts[1], status: "failed" }],
+      },
+    });
+    const r = await registerIntervention(client, input);
+    check("a failed attempt cannot be cited — it observed nothing",
+      !r.ok && r.failure.error === "evidence_not_from_this_baseline");
+  }
+  {
+    const { client } = fakeClient({
+      tables: { protocols: [baselineProtocol], protocol_attempts: [goodAttempts[0]] },
+    });
+    const r = await registerIntervention(client, input);
+    check("an id that is not an attempt at all is refused",
+      !r.ok && r.failure.message.startsWith("1 cited run is"));
+  }
   {
     const { client, rpcCalls } = fakeClient({
-      tables: { protocols: [{ id: BASELINE, project_id: PROJECT, status: "approved", baseline_protocol_id: null }] },
+      tables: { protocols: [baselineProtocol], protocol_attempts: goodAttempts },
       rpc: () => ({ data: [ivRow("proposed")], error: null }),
     });
     const r = await registerIntervention(client, input);
@@ -175,7 +212,7 @@ async function main(): Promise<void> {
   }
   {
     const { client } = fakeClient({
-      tables: { protocols: [{ id: BASELINE, project_id: PROJECT, status: "approved", baseline_protocol_id: null }] },
+      tables: { protocols: [baselineProtocol], protocol_attempts: goodAttempts },
       rpc: () => ({ data: null, error: { code: "23505", message: "duplicate key value violates unique constraint" } }),
     });
     const r = await registerIntervention(client, input);

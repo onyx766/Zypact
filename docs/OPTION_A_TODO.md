@@ -72,9 +72,16 @@ landing at that instant. Only a never-claimed `queued` job is cancelled.
 
 ## Phase 1 — Shared admin plumbing (blocks Phase 2)
 
-- [ ] Admin authorization helper — reuse whatever `app/api/internal/snapshot-requests/*`
-      already does; do not invent a second scheme
-- [ ] RPC error → HTTP mapping, with founder-readable text for each:
+- [x] Admin authorization helper — `requireFounderForRoute` in
+      `lib/auth/founder.ts`, same 401/503/404 semantics the snapshot routes
+      inline today (those routes are not migrated onto it in this change)
+- [x] Kill switch — `INTERVENTION_ADMIN_ENABLED` must be exactly `"true"` or
+      every intervention route answers 503. **Must be set on Vercel** before
+      the routes do anything.
+- [x] RPC error → HTTP mapping — `lib/interventions/rpc-errors.ts`.
+      `test:intervention-rpc-errors` reads 0071-0077 and fails if any raised
+      message is unmapped, or any mapped key is raised by nothing. The table
+      below was the plan; the module is now the authority:
 
 | RPC error | Meaning | Surface as |
 |---|---|---|
@@ -92,15 +99,26 @@ landing at that instant. Only a never-claimed `queued` job is cancelled.
 
 Mirror `app/api/internal/snapshot-requests/[requestId]/*`.
 
-- [ ] `POST /api/internal/interventions/register`
-- [ ] `POST /api/internal/interventions/[id]/approve`
-- [ ] `POST /api/internal/interventions/[id]/reject` *(needs 0077)*
-- [ ] `POST /api/internal/interventions/[id]/abandon` *(needs 0077)*
-- [ ] `POST /api/internal/interventions/[id]/confirm-implementation`
-- [ ] `POST /api/internal/interventions/[id]/authorize-early-retest`
-- [ ] `GET /api/internal/interventions` — list, joined to project + protocol
-- [ ] `GET /api/internal/interventions/[id]` — detail incl. `retest_eligibility()`
-- [ ] Auth test per route: unauthenticated → 401, wrong project → 404/403
+- [x] `POST /api/internal/interventions` — register (201)
+- [x] `POST /api/internal/interventions/[id]/approve`
+- [x] `POST /api/internal/interventions/[id]/reject`
+- [x] `POST /api/internal/interventions/[id]/abandon`
+- [x] `POST /api/internal/interventions/[id]/confirm-implementation`
+- [x] `POST /api/internal/interventions/[id]/authorize-early-retest`
+- [x] `GET /api/internal/interventions` — list, joined to project; eligibility
+      asked of `retest_eligibility()` for `implemented` rows only
+- [x] `GET /api/internal/interventions/[id]` — detail incl. `retest_eligibility()`
+- [x] Tested (`test:intervention-routes`, 39): project id taken from the stored
+      row, an empty RPC result reported as a refusal, the kill switch answering
+      503 before the body is read
+- [ ] **Not tested:** the 401 / 404 founder paths through a real session. The
+      decision is unit-tested (`evaluateFounderAccess`); the session plumbing is
+      shared with the snapshot routes. Verify on staging with a non-founder
+      account.
+- [ ] **Decision needed — chained retests.** `register_intervention` accepts a
+      *completed retest* protocol, which would let `create_retest_protocol`
+      build a retest of a retest. The route refuses it (`not_a_baseline`); the
+      database does not. A small `0078` would enforce it there too.
 
 ---
 

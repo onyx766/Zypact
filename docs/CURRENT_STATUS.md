@@ -693,3 +693,33 @@ exists, no Outcome Card exists. The worker remains `disabled/stopped`.
 stored but rendered nowhere, so the §5 condition of the founder sign-off remains
 open. A retest is now reachable on staging only by an operator issuing SQL
 directly. That is a capability, not a workflow.
+
+### 16.1 Migration 0077 applied to staging
+
+- **As of:** 2026-09-18
+- **Environment:** `zypact-staging`, Supabase SQL editor, one explicit transaction
+- **Runtime contract before apply:** `test:m7-0077-runtime` 52/52 against real PostgreSQL 16
+
+| Property | Result |
+|---|---|
+| `reject_intervention`, `abandon_intervention` | both present |
+| `_reject_registered_intervention_edit` | 1 overload, body carries `abandonment_is_immutable` |
+| `protocol_execution_jobs_status_check` | present, allows `cancelled` |
+| Check constraints listing job status values | exactly one; no stale pre-0077 duplicate |
+| New `interventions` columns | 5 of 5 |
+| Interventions on staging at apply time | 0 |
+| Jobs `claimed`/`running` at apply time | 0 |
+
+**Recorded weakness.** The pre-flight probe returned `reject_intervention` and
+`abandon_intervention` as already present, which is consistent with it having
+been run after the apply rather than before. The constraint-name check it
+carried (`protocol_execution_jobs_status_check` exists) is valid in either
+order, and the post-apply constraint listing independently rules out the
+failure it guarded against. The ordering is recorded as observed rather than
+as intended.
+
+A verification query initially counted 3 status-referencing check constraints
+against an expectation of 1. The query was too loose — it matched
+`claim_fields_check` and `needs_review_reason_pair_check`, which reference
+`status` without enumerating it. A full constraint listing confirmed exactly
+one enumerating check. The discrepancy was in the probe, not the schema.

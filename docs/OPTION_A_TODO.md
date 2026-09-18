@@ -36,16 +36,36 @@ structurally unreachable.** Any UI that offers a Reject button will fail.
   - requires non-empty reason (the constraint already demands it)
   - must not set `approved_by`/`approved_at` — `interventions_approval_pair_check`
     forbids it for `rejected`
-- [ ] **0077** — `abandon_intervention(p_intervention_id, p_project_id, p_abandoned_by, p_reason)`
+- [x] **0077** — `abandon_intervention(p_intervention_id, p_project_id, p_abandoned_by, p_reason)`
   - legal from `proposed`, `approved`, `implemented`
-  - releases the `interventions_one_live_per_protocol` partial unique index so a
-    replacement intervention can be registered — confirm this is the intended
-    escape hatch before building on it
-- [ ] Decide: does abandoning an `implemented` intervention invalidate an
-      already-created retest protocol? **Open question — needs a decision, not a
-      guess.** If yes, `0077` must say what happens to it.
+  - releases `interventions_one_live_per_protocol` and, by taking the live
+    retest protocol to `abandoned`, `protocols_one_live_retest_per_baseline`
+
+**Decision taken — abandonment is refused once the retest has started.** The
+line is drawn at "an attempt exists", not "a retest protocol exists": a
+protocol created but never run has observed nothing, so taking it down is
+administrative. Once a single attempt lands, stopping becomes a decision that
+could be informed by what that attempt returned, and an abandonment available
+at that point is the hole every unwelcome result leaves through.
+
+This is deliberately stricter than `authorize_early_retest`, which permits its
+deviation and records it. That asymmetry is the point: shortening a window
+happens *before* any retest data exists and cannot be steered by the result;
+abandoning mid-retest happens after, and can be. Refusing costs a handful of
+provider calls and yields an honest `inconclusive`, which is already canonical.
+
+A claimed or running job is refused on the same grounds — an attempt may be
+landing at that instant. Only a never-claimed `queued` job is cancelled.
+
+- [x] Job cancellation — `protocol_execution_jobs` gains `cancelled`, distinct
+      from `abandoned_exhausted` (which means retries ran out). Inert to every
+      existing path: 0050's claim predicate selects `queued` or an expired
+      lease, and the 0051/0056 terminal guards are reachable only by a worker
+      holding a lease.
+- [x] Runtime contract — `scripts/test-m7-0077-runtime-contract.ts`
+- [ ] **Run it**: `ZYPACT_M7_0077_RUNTIME_TEST=1 npm run test:m7-0077-runtime`
+      (needs Docker; not runnable on the Windows workstation)
 - [ ] Schema contract test (text-only, digest-pinned, per existing precedent)
-- [ ] Runtime contract test against disposable Postgres
 - [ ] Apply to staging via [`M7_STAGING_APPLY_RUNBOOK.md`](M7_STAGING_APPLY_RUNBOOK.md)
 
 ---

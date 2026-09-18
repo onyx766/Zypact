@@ -49,6 +49,7 @@
     "test:snapshot-artifact-cascade-contract": "tsx scripts/test-snapshot-artifact-cascade-contract.ts",
     "test:snapshot-approval-launches-baseline": "tsx scripts/test-snapshot-approval-launches-baseline.ts",
     "test:protocol-report": "tsx scripts/test-build-protocol-report.ts",
+    "test:detectable-change-disclosure": "tsx scripts/test-detectable-change-disclosure.ts",
     "test:protocol-integrity": "tsx scripts/test-protocol-integrity-signals.ts",
     "test:public-report": "tsx scripts/test-public-report-preview.ts",
     "test:landing-page": "tsx scripts/test-landing-page.ts",

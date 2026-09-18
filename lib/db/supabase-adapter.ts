@@ -1262,6 +1262,8 @@ interface ProtocolDbRow {
   status: string;
   approved_by: string | null;
   approved_at: string | null;
+  // 0075. Null for any protocol approved before that migration.
+  detectable_change_at_plan: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -1296,6 +1298,10 @@ function mapProtocol(r: ProtocolDbRow): Protocol {
     status: r.status as ProtocolStatus,
     approvedBy: r.approved_by,
     approvedAt: r.approved_at,
+    // `?? null` rather than a numeric default: a protocol approved before 0075
+    // has no disclosed value, and 0 would read as "any change is detectable",
+    // which is the opposite of the truth.
+    detectableChangeAtPlan: r.detectable_change_at_plan ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };

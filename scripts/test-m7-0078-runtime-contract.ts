@@ -217,12 +217,19 @@ async function main(): Promise<void> {
     };
 
     const REGPROC = "public.register_intervention(uuid,uuid,text,text,text,text,text,jsonb,text,text,text,timestamptz,integer)";
+    // pg_get_functiondef is multi-line and q() keeps only the first line (the
+    // CREATE header), so the match must happen in SQL and return one t/f. An
+    // earlier draft matched in TypeScript: the "carries the check" assertion
+    // failed on a correct body, and the "old body still in place" assertion
+    // passed vacuously, because the header line never contains either string.
+    const bodyHas0078 = (): string =>
+      q(`select pg_get_functiondef('${REGPROC}'::regprocedure) like '%protocol_is_not_a_baseline%';`);
     const blocked = applyOnce();
     check("the apply fails",
       blocked !== null && blocked.includes("0078 precondition failed"),
       blocked ? (blocked.split("\n").find((l) => l.includes("ERROR")) ?? "") : "applied");
     check("and changed nothing — the old body is still in place",
-      !q(`select pg_get_functiondef('${REGPROC}'::regprocedure);`).includes("protocol_is_not_a_baseline"));
+      bodyHas0078() === "f", `body carries 0078: ${bodyHas0078()}`);
 
     // Superuser cleanup of the fixture — exactly the manual resolution the
     // precondition message asks an operator for.
@@ -265,7 +272,7 @@ async function main(): Promise<void> {
     check("exactly one register_intervention overload",
       q(`select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='register_intervention';`) === "1");
     check("the live body carries the 0078 check",
-      q(`select pg_get_functiondef('${REGPROC}'::regprocedure);`).includes("protocol_is_not_a_baseline"));
+      bodyHas0078() === "t", `body carries 0078: ${bodyHas0078()}`);
     check("service_role can still execute it",
       q(`select count(*) from information_schema.role_routine_grants where routine_name='register_intervention' and grantee='service_role' and privilege_type='EXECUTE';`) === "1");
     check("no untrusted role can",

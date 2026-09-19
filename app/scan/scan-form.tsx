@@ -170,6 +170,16 @@ export function ScanForm({
 
   return (
     <>
+      <h2 className="scan-form-title">
+        Request your demo
+      </h2>
+
+      <p className="scan-form-lede">
+        Tell us a bit about yourself and your
+        question. We&rsquo;ll review it and be
+        in touch.
+      </p>
+
       <form
         className="scan-form"
         onSubmit={handleSubmit}
@@ -414,7 +424,7 @@ export function ScanForm({
         >
           {submitting
             ? "Submitting…"
-            : "Request Demo"}
+            : "Request demo"}
         </button>
 
         <p className="scan-privacy-note">

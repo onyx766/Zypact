@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 
 import { getDb } from "@/lib/db";
+import type { Protocol } from "@/lib/db/types";
 import {
   requireFounderForPage,
 } from "@/lib/auth/founder";
@@ -89,6 +90,81 @@ function percent(value: number): string {
 
 function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * Reads Δ_min out of `protocols.minimum_useful_change`, which is jsonb and
+ * therefore `unknown` on the way in. Returns null rather than guessing when
+ * the shape is not the one 0073 writes.
+ */
+function readMinimumUsefulChange(raw: unknown): number | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const value = (raw as { value?: unknown }).value;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * The sampling-power disclosure required by §5 of the signed-off
+ * OUTCOME_COMPARISON_PROPOSAL.
+ *
+ * This states what the approved plan is capable of detecting *before* any run
+ * happens. It is deliberately phrased as a limit rather than a capability: at
+ * the five-run default the value is 0.60, equal to Δ_min, which means a real
+ * change smaller than 60 points cannot be distinguished from noise no matter
+ * what the runs return.
+ */
+function DetectableChangeDisclosure({
+  protocol,
+}: {
+  protocol: Protocol | null;
+}) {
+  if (!protocol) {
+    return <span className="text-muted-foreground">—</span>;
+  }
+
+  if (protocol.detectableChangeAtPlan === null) {
+    return (
+      <>
+        <span className="text-muted-foreground">Not recorded</span>
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          This protocol was approved before the disclosure existed
+          (migration 0075). The value is not back-filled, because the
+          honest statement about a past approval is that it was not
+          disclosed — not a number computed after the fact.
+        </p>
+      </>
+    );
+  }
+
+  const deltaMin = readMinimumUsefulChange(protocol.minimumUsefulChange);
+  const atOrAboveDeltaMin =
+    deltaMin !== null && protocol.detectableChangeAtPlan >= deltaMin;
+
+  return (
+    <>
+      <span className={cn("font-medium", atOrAboveDeltaMin && "text-amber-500")}>
+        {percent(protocol.detectableChangeAtPlan)}
+      </span>{" "}
+      <span className="text-muted-foreground">
+        at {plural(protocol.plannedBaselineRuns, "planned run")}
+      </span>
+      <p className="mt-1.5 text-xs text-muted-foreground">
+        The smallest change this sampling plan could detect at all. A real
+        change smaller than this cannot be distinguished from noise at this
+        sample size.
+        {atOrAboveDeltaMin ? (
+          <>
+            {" "}
+            <span className="text-amber-500">
+              It is at or above Δ_min ({percent(deltaMin as number)}), so this
+              plan can only detect a change at least as large as the one
+              already agreed to be the minimum useful change.
+            </span>
+          </>
+        ) : null}
+      </p>
+    </>
+  );
 }
 
 /**
@@ -431,6 +507,22 @@ export default async function SnapshotRequestDetailPage({
 
   if (!request) {
     notFound();
+  }
+
+  // The approved baseline protocol, read only for the sampling-power
+  // disclosure below. Best-effort for the same reason as the review panel: a
+  // request that predates the protocol path has no protocol, and a read
+  // failure must not take the page down.
+  let protocol: Awaited<ReturnType<typeof db.getProtocol>> = null;
+  if (request.protocolId && request.projectId) {
+    try {
+      protocol = await db.getProtocol(
+        request.protocolId,
+        request.projectId
+      );
+    } catch {
+      protocol = null;
+    }
   }
 
   // Best-effort: the review surface must never take the whole page down. A
@@ -1072,6 +1164,16 @@ export default async function SnapshotRequestDetailPage({
               {request.protocolId
                 ? `${request.protocolId} (one baseline job queued for the existing worker)`
                 : "—"}
+            </DetailRow>
+
+            {/*
+              §5 of the signed-off OUTCOME_COMPARISON_PROPOSAL: the sampling
+              power of an approved plan must be visible at the point of
+              approval, before any run exists. Stamped by approve_protocol
+              (migration 0075); null for protocols approved before it.
+            */}
+            <DetailRow label="Detectable change at plan">
+              <DetectableChangeDisclosure protocol={protocol} />
             </DetailRow>
 
             <DetailRow label="Project ID">

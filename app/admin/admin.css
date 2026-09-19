@@ -23,8 +23,21 @@
   --zpa-blue: #7d97fb;
   --zpa-red: #f87171;
 
+  /* Fluid rhythm: the console is a single-screen tool, so spacing is sized
+     against the viewport instead of fixed pixels. Every clamp keeps a legible
+     floor on a short laptop and the original density on a large monitor. */
+  --zpa-pad-x: clamp(16px, 1.9vw, 34px);
+  --zpa-pad-y: clamp(14px, 2.1vh, 28px);
+  --zpa-gap: clamp(10px, 1.7vh, 22px);
+  --zpa-row-y: clamp(9px, 1.35vh, 16px);
+  --zpa-cell-x: clamp(11px, 0.95vw, 18px);
+  --zpa-control-h: clamp(36px, 4.4vh, 44px);
+
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
   background: var(--zpa-bg);
   color: var(--zpa-text);
   font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
@@ -55,22 +68,24 @@
   top: 0;
   display: flex;
   flex-direction: column;
-  flex: 0 0 244px;
-  width: 244px;
-  height: 100vh;
-  padding: 26px 16px 20px;
+  flex: 0 0 clamp(196px, 15vw, 244px);
+  width: clamp(196px, 15vw, 244px);
+  height: 100%;
+  padding: clamp(16px, 2.4vh, 26px) clamp(10px, 0.85vw, 16px)
+    clamp(14px, 1.8vh, 20px);
+  overflow-y: auto;
   border-right: 1px solid var(--zpa-line-soft);
   background: var(--zpa-panel);
 }
 
 .zpa-brand {
   padding: 0 10px;
-  margin-bottom: 30px;
+  margin-bottom: clamp(16px, 2.6vh, 30px);
 }
 
 .zpa-brand-name {
   margin: 0;
-  font-size: 19px;
+  font-size: clamp(16px, 1.9vh, 19px);
   font-weight: 700;
   letter-spacing: -0.02em;
 }
@@ -91,7 +106,7 @@
   display: flex;
   align-items: center;
   gap: 11px;
-  min-height: 40px;
+  min-height: clamp(33px, 4.2vh, 40px);
   padding: 0 12px;
   border: 1px solid transparent;
   border-radius: 10px;
@@ -137,14 +152,14 @@ a.zpa-nav-item:hover {
 
 .zpa-sidebar-foot {
   margin-top: auto;
-  padding-top: 20px;
+  padding-top: clamp(12px, 2vh, 20px);
 }
 
 .zpa-health {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 13px 14px;
+  padding: clamp(9px, 1.4vh, 13px) clamp(10px, 0.8vw, 14px);
   border: 1px solid var(--zpa-line);
   border-radius: 12px;
   background: var(--zpa-card);
@@ -181,8 +196,12 @@ a.zpa-nav-item:hover {
 /* ------------------------------------------------------------------- main */
 
 .zpa-main {
+  display: flex;
+  flex-direction: column;
   flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .zpa-topbar {
@@ -190,8 +209,9 @@ a.zpa-nav-item:hover {
   align-items: center;
   justify-content: flex-end;
   gap: 16px;
-  height: 72px;
-  padding: 0 36px;
+  flex: 0 0 auto;
+  height: clamp(50px, 6.2vh, 72px);
+  padding: 0 var(--zpa-pad-x);
   border-bottom: 1px solid var(--zpa-line-soft);
 }
 
@@ -200,8 +220,21 @@ a.zpa-nav-item:hover {
   color: var(--zpa-muted);
 }
 
+/**
+ * The page body owns the leftover height and hands it to the table card, so a
+ * long request list scrolls inside its own frame instead of scrolling the
+ * document. The vertical auto overflow here is a floor, not the normal path:
+ * it only engages when the viewport is too short for the fixed rows above the
+ * card to fit at their smallest clamped size.
+ */
 .zpa-content {
-  padding: 34px 36px 64px;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  gap: var(--zpa-gap);
+  min-height: 0;
+  padding: var(--zpa-pad-y) var(--zpa-pad-x);
+  overflow-y: auto;
 }
 
 /* ---------------------------------------------------------------- buttons */
@@ -211,7 +244,7 @@ a.zpa-nav-item:hover {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 38px;
+  min-height: clamp(30px, 3.7vh, 38px);
   padding: 0 15px;
   border: 1px solid var(--zpa-line);
   border-radius: 10px;
@@ -235,7 +268,7 @@ a.zpa-nav-item:hover {
 }
 
 .zpa-btn-primary {
-  min-height: 42px;
+  min-height: clamp(34px, 4.1vh, 42px);
   padding: 0 18px;
   border-color: transparent;
   background: var(--zpa-green);
@@ -260,7 +293,7 @@ a.zpa-nav-item:hover {
 }
 
 .zpa-btn-sm {
-  min-height: 34px;
+  min-height: clamp(27px, 3.3vh, 34px);
   padding: 0 13px;
   font-size: 12.5px;
 }
@@ -294,11 +327,12 @@ a.zpa-nav-item:hover {
   align-items: flex-start;
   justify-content: space-between;
   gap: 24px;
-  margin-bottom: 26px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
 }
 
 .zpa-eyebrow {
-  margin: 0 0 10px;
+  margin: 0 0 clamp(5px, 0.9vh, 10px);
   color: var(--zpa-dim);
   font-size: 11px;
   font-weight: 600;
@@ -308,25 +342,25 @@ a.zpa-nav-item:hover {
 
 .zpa-title {
   margin: 0;
-  font-size: 34px;
+  font-size: clamp(21px, 3vh, 34px);
   font-weight: 700;
   letter-spacing: -0.025em;
   line-height: 1.1;
 }
 
 .zpa-subtitle {
-  margin: 10px 0 0;
+  margin: clamp(4px, 0.8vh, 10px) 0 0;
   color: var(--zpa-muted);
-  font-size: 14px;
+  font-size: clamp(12.5px, 1.5vh, 14px);
 }
 
 /* ------------------------------------------------------------- stat cards */
 
 .zpa-stats {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-  margin-bottom: 26px;
+  grid-template-columns: repeat(auto-fit, minmax(186px, 1fr));
+  gap: clamp(9px, 1.1vw, 16px);
+  flex: 0 0 auto;
 }
 
 .zpa-stat {
@@ -334,7 +368,7 @@ a.zpa-nav-item:hover {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  padding: 20px 22px;
+  padding: clamp(11px, 1.7vh, 20px) clamp(13px, 1.2vw, 22px);
   border: 1px solid var(--zpa-line);
   border-radius: 14px;
   background: var(--zpa-card);
@@ -342,14 +376,14 @@ a.zpa-nav-item:hover {
 
 .zpa-stat-value {
   margin: 0;
-  font-size: 32px;
+  font-size: clamp(22px, 2.7vh, 32px);
   font-weight: 700;
   line-height: 1;
   letter-spacing: -0.03em;
 }
 
 .zpa-stat-label {
-  margin: 9px 0 0;
+  margin: clamp(4px, 0.7vh, 9px) 0 0;
   font-size: 12.5px;
   color: var(--zpa-muted);
 }
@@ -358,8 +392,9 @@ a.zpa-nav-item:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
-  height: 44px;
+  flex: 0 0 auto;
+  width: clamp(32px, 3.7vh, 44px);
+  height: clamp(32px, 3.7vh, 44px);
   border-radius: 999px;
   background: #1b1e22;
   color: var(--zpa-muted);
@@ -397,12 +432,15 @@ a.zpa-nav-item:hover {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 18px;
+  flex: 0 0 auto;
   flex-wrap: wrap;
 }
 
 .zpa-tabs {
-  display: inline-flex;
+  display: flex;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
   gap: 4px;
   padding: 4px;
   border: 1px solid var(--zpa-line);
@@ -410,7 +448,14 @@ a.zpa-nav-item:hover {
   background: var(--zpa-card);
 }
 
+/* The tab strip scrolls sideways on a narrow window rather than wrapping and
+   pushing the table down; its own scrollbar would be noise. */
+.zpa-tabs::-webkit-scrollbar {
+  display: none;
+}
+
 .zpa-tab {
+  flex: 0 0 auto;
   padding: 8px 13px;
   border: 0;
   border-radius: 9px;
@@ -453,9 +498,9 @@ a.zpa-nav-item:hover {
 }
 
 .zpa-search input {
-  width: 340px;
+  width: clamp(200px, 24vw, 340px);
   max-width: 46vw;
-  height: 44px;
+  height: var(--zpa-control-h);
   padding: 0 14px 0 40px;
   border: 1px solid var(--zpa-line);
   border-radius: 12px;
@@ -474,7 +519,7 @@ a.zpa-nav-item:hover {
 }
 
 .zpa-select {
-  height: 44px;
+  height: var(--zpa-control-h);
   padding: 0 34px 0 14px;
   border: 1px solid var(--zpa-line);
   border-radius: 12px;
@@ -496,6 +541,10 @@ a.zpa-nav-item:hover {
 /* ------------------------------------------------------------------ table */
 
 .zpa-card {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 160px;
   border: 1px solid var(--zpa-line);
   border-radius: 14px;
   background: var(--zpa-card);
@@ -503,17 +552,45 @@ a.zpa-nav-item:hover {
 }
 
 .zpa-table-scroll {
-  overflow-x: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #2e3238 transparent;
+}
+
+.zpa-table-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.zpa-table-scroll::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: #2e3238;
+  background-clip: content-box;
+}
+
+.zpa-table-scroll::-webkit-scrollbar-thumb:hover {
+  background: #3b4047;
+  background-clip: content-box;
+}
+
+.zpa-table-scroll::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .zpa-table {
   width: 100%;
-  min-width: 1080px;
+  min-width: 940px;
   border-collapse: collapse;
 }
 
 .zpa-table th {
-  padding: 14px 18px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: clamp(8px, 1.1vh, 14px) var(--zpa-cell-x);
   border-bottom: 1px solid var(--zpa-line);
   background: #0f1113;
   color: #767c85;
@@ -526,7 +603,7 @@ a.zpa-nav-item:hover {
 }
 
 .zpa-table td {
-  padding: 16px 18px;
+  padding: var(--zpa-row-y) var(--zpa-cell-x);
   border-bottom: 1px solid var(--zpa-line-soft);
   vertical-align: top;
   font-size: 13.5px;
@@ -552,11 +629,11 @@ a.zpa-nav-item:hover {
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 38px;
-  height: 38px;
+  width: clamp(30px, 3.5vh, 38px);
+  height: clamp(30px, 3.5vh, 38px);
   border: 1px solid var(--zpa-line);
   border-radius: 11px;
-  font-size: 15px;
+  font-size: clamp(13px, 1.6vh, 15px);
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -597,7 +674,7 @@ a.zpa-nav-item:hover {
 }
 
 .zpa-question {
-  max-width: 280px;
+  max-width: clamp(180px, 19vw, 280px);
   color: #c9ced5;
 }
 
@@ -626,7 +703,7 @@ a.zpa-nav-item:hover {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 7px 12px;
+  padding: clamp(4px, 0.7vh, 7px) clamp(8px, 0.6vw, 12px);
   border: 1px solid #2a2e33;
   border-radius: 10px;
   background: #191c20;
@@ -689,8 +766,8 @@ a.zpa-nav-item:hover {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 8px;
-  min-width: 150px;
+  gap: clamp(5px, 0.7vh, 8px);
+  min-width: 132px;
 }
 
 .zpa-action-note {
@@ -717,7 +794,7 @@ a.zpa-nav-item:hover {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-top: 16px;
+  flex: 0 0 auto;
   color: var(--zpa-muted);
   font-size: 13px;
 }
@@ -732,8 +809,8 @@ a.zpa-nav-item:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: clamp(28px, 3.4vh, 34px);
+  height: clamp(28px, 3.4vh, 34px);
   border: 1px solid var(--zpa-line);
   border-radius: 9px;
   background: var(--zpa-card);
@@ -761,7 +838,8 @@ a.zpa-nav-item:hover {
 /* ------------------------------------------------------------------ empty */
 
 .zpa-empty {
-  padding: 56px 24px;
+  margin: auto;
+  padding: clamp(24px, 5vh, 56px) 24px;
   text-align: center;
   color: var(--zpa-muted);
 }
@@ -780,23 +858,9 @@ a.zpa-nav-item:hover {
 
 /* ------------------------------------------------------------ narrow view */
 
-@media (max-width: 1180px) {
-  .zpa-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
 @media (max-width: 900px) {
   .zpa-sidebar {
     display: none;
-  }
-
-  .zpa-topbar {
-    padding: 0 20px;
-  }
-
-  .zpa-content {
-    padding: 24px 20px 56px;
   }
 
   .zpa-search input {
@@ -810,5 +874,20 @@ a.zpa-nav-item:hover {
 
   .zpa-search {
     flex: 1 1 auto;
+  }
+}
+
+@media (max-width: 620px) {
+  .zpa-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .zpa-toolbar {
+    gap: 10px;
+  }
+
+  .zpa-table-foot {
+    flex-wrap: wrap;
+    justify-content: center;
   }
 }

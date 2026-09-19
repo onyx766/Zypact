@@ -1,8 +1,10 @@
 # Outcome comparison and uncertainty — proposal
 
-- **Status: DRAFT. Not canonical. Nothing may be built on this until it is
-  signed off and promoted to a numbered decision in `DECISIONS.md`.**
+- **Status: SIGNED OFF by founder, 2026-09-16. §6 decisions resolved below;
+  to be promoted to numbered decision records in `DECISIONS.md` before the
+  comparison engine is built.**
 - **Drafted:** 2026-09-15
+- **Signed off:** 2026-09-16
 - **Decides:** how baseline and retest are compared, what counts as a minimum
   useful change, and when a result is `inconclusive` rather than
   `no_clear_change`
@@ -83,6 +85,11 @@ more. Every smaller real improvement is indistinguishable from noise and must
 be reported as `inconclusive`. That is a property of the sample size, not of
 the analysis, and no choice of statistic removes it.
 
+**Founder position (2026-09-16): consequence accepted for V1 pilots**, on the
+condition that §5 (power shown at approval) ships with the comparison engine
+and is not deferred. The limitation is acceptable only if it is disclosed
+before money is spent, never discovered afterwards.
+
 ## 4. Proposed status rules
 
 Let `Δ` be the observed difference, `[lo, hi]` its Newcombe 95% interval, and
@@ -92,7 +99,7 @@ Evaluated in order:
 
 1. **`inconclusive`** if any of:
    - readable runs in either phase fall below the declared floor
-     (proposed: fewer than 3, or fewer than 60% of that phase's plan);
+     (approved: fewer than 3, or fewer than 60% of that phase's plan);
    - question identity, protocol identity or provider configuration differs
      between phases without a recorded authorised deviation — comparability
      is broken and no status can be earned;
@@ -124,27 +131,43 @@ visible on the approval screen, before any money is spent — not surfaced
 months later as an `inconclusive` Outcome Card after the customer has waited
 through an observation window.
 
-Proposed: `approve_protocol` computes and stores the smallest detectable
+Approved: `approve_protocol` computes and stores the smallest detectable
 change for the approved plan, and the approval surface states plainly, e.g.
 *"This plan can detect a change of 60 points or more. A smaller change will
 return inconclusive."*
 
 This is a small addition and it converts the sample-size limitation from a
-disappointment into an informed, recorded choice.
+disappointment into an informed, recorded choice. **Per the founder position
+in §3, this section is a condition of the sign-off, not an optional
+enhancement.**
 
-## 6. What needs your decision
+## 6. Decisions — RESOLVED 2026-09-16
 
-1. **`Δ_min`** — a protocol parameter, per D-002, with no code default. At 5
-   runs per phase the only self-consistent value is **0.60**; anything smaller
-   makes every result `inconclusive` by construction.
-2. **The readable-run floor** for rule 1. Proposed: 3 runs, and at least 60%
-   of the plan.
-3. **Whether D-032's 5-run default stands.** Five runs buys a 60-point
-   detection threshold. Ten buys 40 points at twice the provider cost. This is
-   a commercial decision about what a pilot is worth, and it should be made
-   deliberately rather than inherited from the legacy `WORKER_RUNS=3`.
-4. **Whether `Δ_min` may differ between phases or protocols**, or is fixed for
-   V1 pilots.
+Founder sign-off. Each item below is to be promoted to a numbered decision
+record in `DECISIONS.md`; until then this section is the authoritative
+statement of the four choices.
+
+1. **`Δ_min` = 0.60 for all V1 pilot protocols.** Remains a protocol
+   parameter per D-002 with no code default; 0.60 is the approved value for
+   V1, chosen because it is the only value self-consistent with the 5-run
+   plan (decision 3). If decision 3 is revisited, this value must be
+   revisited with it — the two are a pair and must never be changed
+   independently.
+2. **Readable-run floor: approved as proposed.** A phase is comparable only
+   with at least 3 readable runs and at least 60% of that phase's planned
+   runs. Below either bound, the result is `inconclusive` by rule 1.
+3. **D-032's 5-run default stands for V1 pilots.** The 60-point detection
+   threshold is accepted as the honest capability of a V1 pilot, on two
+   conditions: (a) §5 ships with the comparison engine — the approval
+   surface must state the smallest detectable change before any spend is
+   authorised; (b) any pilot whose intervention is expected to produce a
+   movement smaller than 60 points must be offered a 10-run plan (40-point
+   threshold, roughly double provider cost) at approval time rather than
+   being silently run at 5. The default is a starting point, not a cap.
+4. **`Δ_min` is fixed across phases and across protocols for V1.** One value
+   (0.60), no per-protocol variation, no per-phase variation. Per-protocol
+   `Δ_min` may be introduced after V1 as its own decision record; introducing
+   it now adds a negotiable surface with no V1 customer to negotiate it.
 
 ## 7. What this proposal does not change
 
@@ -160,7 +183,7 @@ disappointment into an informed, recorded choice.
 ## 8. Related
 
 - Sample plans are protocol parameters, never magic numbers — D-002.
-- Five-run baseline default — D-032 (provisional).
+- Five-run baseline default — D-032 (provisional; confirmed for V1 by §6.3).
 - Outcome statuses and the non-causality footer — D-005, D-006, D-007.
 - Existing Wilson implementation — `lib/reports/build-protocol-report.ts`.
 - Retest execution is a separate job reusing the existing claim primitives —

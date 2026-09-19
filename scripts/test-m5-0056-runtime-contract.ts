@@ -130,8 +130,12 @@ async function main(): Promise<void> {
 
     const container = run("docker", ["ps", "--format", "{{.Names}}"]).split("\n").find((n) => n.startsWith("supabase_db_"));
     if (!container) throw new Error("no supabase_db container");
+    // `-t` suppresses result-set headers/footers, but psql still appends its
+    // own command-completion tag ("INSERT 0 1", …) on the next line for
+    // INSERT/UPDATE/DELETE, including with RETURNING — unlike a plain
+    // SELECT. Keep only the scalar's own line.
     const q = (sql: string) =>
-      execFileSync("docker", ["exec", container, "psql", "-U", "postgres", "-d", "postgres", "-tAc", sql], { encoding: "utf8" }).trim();
+      execFileSync("docker", ["exec", container, "psql", "-U", "postgres", "-d", "postgres", "-tAc", sql], { encoding: "utf8" }).trim().split("\n", 1)[0];
     const qFails = (sql: string): boolean => {
       try { q(sql); return false; } catch { return true; }
     };

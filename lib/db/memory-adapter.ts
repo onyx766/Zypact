@@ -1,5 +1,6 @@
 import { randomUUID, createHash } from "node:crypto";
 import { createPublicReportToken } from "@/lib/snapshot-requests/public-report-token";
+import { smallestDetectableChange } from "@/lib/reports/compare-protocols";
 import type {
   AdmitAndReserveAttemptInput,
   AdmitAndReserveAttemptResult,
@@ -1388,6 +1389,10 @@ export const memoryAdapter: DbAdapter = {
       status: "approved",
       approvedBy,
       approvedAt: now,
+      // 0069's SQL reaches approval through approve_protocol, so 0075's SET
+      // clause applies on this path too. Mirrored here with the same
+      // symmetric denominators.
+      detectableChangeAtPlan: smallestDetectableChange(5, 5),
       createdAt: now,
       updatedAt: now,
     };
@@ -3311,6 +3316,8 @@ export const memoryAdapter: DbAdapter = {
       status: "draft",
       approvedBy: null,
       approvedAt: null,
+      // Stamped at approval, not creation — mirrors 0075.
+      detectableChangeAtPlan: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -3358,6 +3365,13 @@ export const memoryAdapter: DbAdapter = {
       status: "approved",
       approvedBy: input.approvedBy,
       approvedAt: now,
+      // Mirrors 0075's SET clause, which passes planned_baseline_runs for both
+      // denominators — symmetric by construction for a baseline and a retest
+      // alike, so there is no phase branch here either.
+      detectableChangeAtPlan: smallestDetectableChange(
+        protocol.plannedBaselineRuns,
+        protocol.plannedBaselineRuns
+      ),
       updatedAt: now,
     };
     store.protocols.set(approved.id, approved);
@@ -3928,6 +3942,19 @@ export const memoryAdapter: DbAdapter = {
         perplexityCall: null,
         analysisCall: null,
       };
+    }
+
+    // M7/0074 — mirrors protocol_attempts_phase_matches_protocol, the real
+    // trigger that refuses an attempt whose kind contradicts its protocol's
+    // phase. Without this the memory adapter would silently accept what
+    // Postgres refuses, and the worker's own tests would stop being able to
+    // prove the guard actually matters.
+    const isRetestProtocol = protocol.baselineProtocolId !== null;
+    if (isRetestProtocol && input.attemptKind !== "retest") {
+      throw new Error("attempt_kind_must_be_retest_on_a_retest_protocol");
+    }
+    if (!isRetestProtocol && input.attemptKind === "retest") {
+      throw new Error("attempt_kind_retest_requires_a_retest_protocol");
     }
 
     // D-025: baselineOrdinal supplied in the SAME reservation as job_id

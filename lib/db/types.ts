@@ -1181,6 +1181,18 @@ export interface Protocol {
   status: ProtocolStatus;
   approvedBy: string | null;
   approvedAt: string | null;
+  /**
+   * The smallest change this protocol's sampling plan could detect at all,
+   * as a proportion in [0, 1], stamped by `approve_protocol` at the moment of
+   * approval (migration 0075) and null for protocols approved before it.
+   *
+   * This is a disclosure, not a result: it says what the plan is capable of
+   * seeing before any run happens. At the five-run default it is 0.60 — equal
+   * to Δ_min — meaning only a change of 60 points or more is detectable.
+   * §5 of the signed-off OUTCOME_COMPARISON_PROPOSAL requires it be visible
+   * wherever a protocol is approved.
+   */
+  detectableChangeAtPlan: number | null;
   createdAt: string;
   updatedAt: string;
 }

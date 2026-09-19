@@ -505,6 +505,136 @@ async function main(): Promise<void> {
     answerFromRawResponseBody(providerBody("   ")) === null
   );
 
+  // ======================================================================
+  // [9] M7/0074 — the worker sends `retest`, never `baseline`, for a
+  // retest protocol's attempts. The memory adapter mirrors the real
+  // protocol_attempts_phase_matches_protocol trigger (see
+  // lib/db/memory-adapter.ts), so a wrong literal here would be refused
+  // exactly as it would be by real Postgres, not merely mis-labelled.
+  // ======================================================================
+  console.log("\n[9] A retest protocol's attempts carry attempt_kind='retest'");
+  {
+    async function seedRetestJob(domain: string): Promise<{ projectId: string; retestProtocolId: string }> {
+      const project = await db.createProject({ domain, companyName: "Example Client" });
+      const question = await db.createBuyerQuestion({ projectId: project.id });
+      const version = await db.createBuyerQuestionVersion({
+        buyerQuestionId: question.id,
+        projectId: project.id,
+        versionNumber: 1,
+        promptText: "Which vendors handle X best?",
+        promptHash: "a".repeat(64),
+        intentType: "comparison",
+        commercialValue: 3,
+        winnability: 3,
+        priority: 10,
+        rationale: "fixture",
+        provenance: "founder_supplied",
+      });
+      await db.approveBuyerQuestionVersion({ versionId: version.id, projectId: project.id, approvedBy: APPROVER });
+
+      // The baseline. Approved but never enqueued: this test only needs it
+      // to exist as the row `baselineProtocolId` points at, exactly as
+      // create_retest_protocol (0073) would leave it after the retest is
+      // created — a live baseline is not re-run.
+      const baseline = await db.createProtocol({
+        ...PROTOCOL_FIXTURE,
+        plannedBaselineRuns: 1,
+        projectId: project.id,
+        buyerQuestionVersionId: version.id,
+      });
+      await db.approveProtocol({ protocolId: baseline.id, projectId: project.id, approvedBy: APPROVER });
+
+      // The retest — same question version, baselineProtocolId set, exactly
+      // as 0073's create_retest_protocol constructs one.
+      const retest = await db.createProtocol({
+        ...PROTOCOL_FIXTURE,
+        plannedBaselineRuns: 1,
+        baselineProtocolId: baseline.id,
+        projectId: project.id,
+        buyerQuestionVersionId: version.id,
+      });
+      await db.approveProtocol({ protocolId: retest.id, projectId: project.id, approvedBy: APPROVER });
+      await db.enqueueProtocolExecutionJob({ protocolId: retest.id, projectId: project.id });
+      return { projectId: project.id, retestProtocolId: retest.id };
+    }
+
+    const { projectId, retestProtocolId } = await seedRetestJob("retest-phase.test");
+    const fetchSpy = { calls: 0 };
+    const deps = makeDeps({ fetchSpy });
+    const health = new WorkerHealth(deps.now);
+    const results: IterationResult[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const r = await runOneIteration(deps, OPTS, health);
+      results.push(r);
+      if (r.outcome === "no_job") break;
+    }
+    check(
+      "the retest job reaches `completed`",
+      results.some((r) => r.outcome === "completed"),
+      results.map((r) => `${r.outcome}:${r.detail}`).join(" | ")
+    );
+    const attempts = await db.getProtocolAttempts(retestProtocolId, projectId);
+    check("at least one attempt was recorded", attempts.length > 0);
+    check(
+      "EVERY attempt on the retest protocol carries attempt_kind='retest', never 'baseline'",
+      attempts.length > 0 && attempts.every((a) => a.attemptKind === "retest"),
+      attempts.map((a) => a.attemptKind).join(",")
+    );
+
+    // The negative side: the memory adapter's guard fires the same way the
+    // real trigger would, for a caller that bypasses the worker entirely.
+    async function expectThrow(label: string, fn: () => Promise<unknown>): Promise<void> {
+      try {
+        await fn();
+        check(label, false, "did not throw");
+      } catch {
+        check(label, true);
+      }
+    }
+
+    // A fresh baseline-phase job, admitted with the wrong kind directly.
+    {
+      const { projectId: pid3 } = await seedJob("phase-guard-2.test");
+      const claim = await db.claimProtocolExecutionJob({ workerId: "phase-guard-2", leaseSeconds: 30 });
+      const job = must(claim.job, "claimed baseline job");
+      const claimToken = must(claim.claimToken, "claim token");
+      await expectThrow(
+        "admitting attempt_kind='retest' against a BASELINE protocol's job is refused",
+        () =>
+          db.admitAndReserveAttemptForJob({
+            jobId: job.id,
+            claimToken,
+            projectId: pid3,
+            attemptKind: "retest",
+            idempotencyKey: `${job.id}:baseline:${job.nextBaselineOrdinal}`,
+            perplexityReservedCostUsd: 0.02,
+            analysisReservedCostUsd: 0.02,
+          })
+      );
+    }
+
+    // A fresh retest-phase job, admitted with the wrong kind directly.
+    {
+      await seedRetestJob("phase-guard-3.test");
+      const claim = await db.claimProtocolExecutionJob({ workerId: "phase-guard-3", leaseSeconds: 30 });
+      const job = must(claim.job, "claimed retest job");
+      const claimToken = must(claim.claimToken, "claim token");
+      await expectThrow(
+        "admitting attempt_kind='baseline' against a RETEST protocol's job is refused",
+        () =>
+          db.admitAndReserveAttemptForJob({
+            jobId: job.id,
+            claimToken,
+            projectId: job.projectId,
+            attemptKind: "baseline",
+            idempotencyKey: `${job.id}:baseline:${job.nextBaselineOrdinal}`,
+            perplexityReservedCostUsd: 0.02,
+            analysisReservedCostUsd: 0.02,
+          })
+      );
+    }
+  }
+
   console.log(
     `\n${checks - failures}/${checks} checks passed. ` +
       (failures === 0 ? "M5-A worker loop contract PASSED." : "M5-A worker loop contract FAILED.")

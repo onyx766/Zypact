@@ -1,6 +1,14 @@
 import type { SourceCitation, SourceType } from "@/lib/schemas/probe-analysis.schema";
 import { sha256Hex } from "@/lib/evidence/hash";
 
+/**
+ * The one outbound Perplexity address. Exported so an operator preflight can
+ * probe exactly the path production uses, rather than a copy that could drift
+ * away from it. Every committed test injects its own `fetchImpl`, so this
+ * constant is the only thing that decides where a real call lands.
+ */
+export const PERPLEXITY_ENDPOINT = "https://api.perplexity.ai/v1/sonar";
+
 export interface PerplexitySearchResult {
   title?: string;
   url?: string;
@@ -270,7 +278,7 @@ export async function runPerplexityProbe(
   const startedAt = Date.now();
   let res: Response;
   try {
-    res = await fetcher("https://api.perplexity.ai/v1/sonar", {
+    res = await fetcher(PERPLEXITY_ENDPOINT, {
       method: "POST",
       headers: {
         "content-type": "application/json",

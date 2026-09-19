@@ -43,7 +43,7 @@ import "./protocol-report.css";
  * adds a claim the payload does not already support.
  */
 
-function percent(value: number): string {
+export function percent(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
 
@@ -70,7 +70,7 @@ function statusTone(status: string): "green" | "red" | "amber" | "neutral" {
 }
 
 /** The Zypact Z mark from public/zypact-logo.svg, recoloured for a dark ground. */
-function Brand() {
+export function Brand() {
   return (
     <span className="zpr-brand">
       <svg viewBox="30 36 128 128" aria-hidden="true">
@@ -92,7 +92,7 @@ function Brand() {
   );
 }
 
-function MetricCard({
+export function MetricCard({
   icon,
   label,
   value,
@@ -117,7 +117,7 @@ function MetricCard({
   );
 }
 
-function NoteCard({
+export function NoteCard({
   icon,
   title,
   items,

@@ -21,12 +21,31 @@ function normalize(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }
 
-const configured = process.env.NEXT_PUBLIC_SITE_URL;
-
-export const CANONICAL_SITE_URL: string =
-  configured && configured.trim() !== ""
+function resolveSiteUrl(configured: string | undefined): string {
+  return configured && configured.trim() !== ""
     ? normalize(configured)
     : FALLBACK_SITE_URL;
+}
+
+export const CANONICAL_SITE_URL: string = resolveSiteUrl(
+  process.env.NEXT_PUBLIC_SITE_URL
+);
+
+/**
+ * The same origin, read at call time rather than at module load.
+ *
+ * For links in customer email — report and Outcome Card deliveries, from the
+ * web routes and from the workers alike. Every one of those paths reads this,
+ * so a card sent by the worker and one sent by the founder can never point at
+ * different hosts. Call-time because the send paths have always read the
+ * variable per call, and their tests set it after import.
+ *
+ * On staging this must be the staging host: a link to the production host
+ * carries a staging token production has never seen, and answers 404.
+ */
+export function publicSiteUrl(): string {
+  return resolveSiteUrl(process.env.NEXT_PUBLIC_SITE_URL);
+}
 
 /** Absolute URL for a site-relative path. `canonicalUrl("/scan")`. */
 export function canonicalUrl(path = "/"): string {

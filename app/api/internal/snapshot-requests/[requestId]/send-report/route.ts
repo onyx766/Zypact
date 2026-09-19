@@ -5,6 +5,7 @@ import { getDb } from "@/lib/db";
 import { parsePublicSnapshotReport } from "@/lib/snapshot-requests/parse-public-report";
 import { sendClientSnapshotReport } from "@/lib/snapshot-requests/client-report-delivery";
 import { createSendReportHandler } from "@/lib/snapshot-requests/send-report-handler";
+import { publicSiteUrl } from "@/lib/seo/site";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -51,8 +52,7 @@ export const POST = createSendReportHandler({
   async sendReportEmail(input) {
     const apiKey = process.env.RESEND_API_KEY as string;
     const from = process.env.SNAPSHOT_EMAIL_FROM as string;
-    const appBaseUrl =
-      process.env.NEXT_PUBLIC_SITE_URL || "https://zypact.com";
+    const appBaseUrl = publicSiteUrl();
 
     // Parsed from the CLAIMED markdown the handler passed in. The artifact is
     // never re-read here: a replacement landing between the claim and this

@@ -13,6 +13,7 @@
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { publicSiteUrl } from "@/lib/seo/site";
 
 import {
   processProtocolReport,
@@ -186,13 +187,14 @@ export async function regenerateReport(
   requestId: string,
   options: { send: boolean }
 ): Promise<ProcessResult> {
-  const appBaseUrl = process.env.SNAPSHOT_PUBLIC_BASE_URL ?? "";
+  // Same origin as every other customer-email path (lib/seo/site.ts).
+  const appBaseUrl = publicSiteUrl();
   const apiKey = process.env.RESEND_API_KEY ?? "";
   const from = process.env.SNAPSHOT_EMAIL_FROM ?? "";
 
-  if (options.send && (!appBaseUrl || !apiKey || !from)) {
+  if (options.send && (!apiKey || !from)) {
     throw new Error(
-      "Delivery configuration is incomplete: SNAPSHOT_PUBLIC_BASE_URL, RESEND_API_KEY and SNAPSHOT_EMAIL_FROM are all required to send."
+      "Delivery configuration is incomplete: RESEND_API_KEY and SNAPSHOT_EMAIL_FROM are both required to send."
     );
   }
 

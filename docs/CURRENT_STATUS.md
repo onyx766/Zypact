@@ -748,8 +748,11 @@ so unlike 16.1 this record shows the intended order.
 **Recorded weakness.** No separate pre-flight probe was run. The migration's own
 precondition block (abort if any baseline carries more than one non-abandoned
 retest) executed inside the same transaction and the apply succeeded, so that
-condition held — but the body-before check was not captured. Post-apply
-verification: *pending*.
+condition held — but the body-before check was not captured.
+
+**Post-apply verification, 2026-09-19.** Founder-reported: one
+`create_retest_protocol` overload, body carrying the widened predicate. Reported
+rather than captured here; no screenshot is attached to this record.
 
 ## 17. M7 application layer — built on `feat/m7-retest`, not merged, not deployed
 
@@ -792,12 +795,15 @@ web app and the workers alike, come from `publicSiteUrl()`
   'retest'` written by the deployed worker — is held for an explicit founder
   go-ahead, because the first attempt cannot be rolled back without deleting
   evidence. Until it runs, no Outcome Card has been built from real data.
-- **No page has been opened in a browser.** The admin pages read through the
-  service-role client and cannot render without Supabase. Their logic is
-  covered by server-rendered component tests, not by visual inspection.
-- **The founder 401 / 404 paths through a real session are untested.** The
-  decision is unit-tested; the session plumbing is shared with the snapshot
-  routes.
+- **Browser and session checks: founder-reported, 2026-09-19.** The founder ran
+  the pages locally against `zypact-staging` (`npm run dev`, `.env.local`
+  pointing at the staging project) and reported every case as expected: the
+  admin pages render, a non-founder gets 404 and a signed-out request 401, the
+  kill switch returns 503, the intervention lifecycle behaves as designed, and
+  no retest attempt exists. Reported, not captured: no screenshots or query
+  output are attached to this record, and no automated test covers the session
+  paths. This is weaker evidence than the runtime contracts above and is
+  recorded as such.
 - **`test:snapshot-send-idempotency` fails, before and after this branch**
   (identical 18 failures). It predates the revision-fenced send handler
   (`a1f3f03`) and still posts empty bodies. Stale, not regressed.

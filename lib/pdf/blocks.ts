@@ -58,6 +58,9 @@ const SOURCE_STATUS_PRESENTATION: Record<
     label: "Does not support",
     color: COLORS.statusNegative,
   },
+  // "Resolved", not "Verified": the page came back, and that is all this
+  // says. Whether it backs the claim is a separate judgement.
+  reachable: { label: "Resolved", color: COLORS.statusNeutral },
   unreachable: { label: "Unreachable", color: COLORS.statusUnknown },
   not_checked: { label: "Not checked", color: COLORS.statusNeutral },
 };
@@ -361,19 +364,61 @@ function renderComparison(
   );
 }
 
+/**
+ * Splits text on `**bold**` and returns react-pdf children.
+ *
+ * Only paired double asterisks are treated as emphasis. An unpaired `**` is
+ * left exactly as it appears, because guessing at the author's intent is how
+ * a quotation stops being one.
+ */
+function markdownEmphasisChildren(
+  text: string,
+  ctx: BlockContext,
+  key: string,
+): (ReactElement | string)[] {
+  const parts: (ReactElement | string)[] = [];
+  const pattern = /\*\*([^*]+)\*\*/g;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  let index = 0;
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > cursor) parts.push(text.slice(cursor, match.index));
+    parts.push(
+      h(
+        ctx.pdf.Text,
+        { key: `${key}-b${index}`, style: { fontWeight: 700 } },
+        match[1],
+      ),
+    );
+    cursor = match.index + match[0].length;
+    index += 1;
+  }
+
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts.length > 0 ? parts : [text];
+}
+
 function renderVerbatim(
   block: Extract<PdfBlock, { kind: "verbatim" }>,
   ctx: BlockContext,
   key: string,
 ): ReactElement {
   const { Text, View } = ctx.pdf;
+
+  // The provider's exact text. Not trimmed, not reflowed, not shortened to
+  // fit: a quotation edited for layout is no longer evidence. The only
+  // transformation permitted is the provider's own Markdown emphasis, and
+  // only when the caller asks for it.
+  const body = block.renderMarkdownEmphasis
+    ? markdownEmphasisChildren(block.text, ctx, `${key}-md`)
+    : [block.text];
+
   return h(
     View,
     { key, style: ctx.styles.verbatim },
     h(Text, { style: ctx.styles.verbatimEyebrow }, block.label ?? "Verbatim"),
-    // The provider's exact text. Not trimmed, not reflowed, not shortened to
-    // fit: a quotation edited for layout is no longer evidence.
-    h(Text, { style: ctx.styles.verbatimText }, block.text),
+    h(Text, { style: ctx.styles.verbatimText }, ...body),
     block.attribution
       ? h(Text, { style: ctx.styles.verbatimAttribution }, block.attribution)
       : null,
@@ -398,6 +443,61 @@ function renderInterpretation(
   );
 }
 
+/**
+ * Characters that fit on one line of the URL column: about 373 points of
+ * width at 7.6pt Courier, whose advance is 0.6 em. Deliberately a little
+ * under the true maximum so a rounding error cannot push a line into the
+ * status column.
+ */
+const URL_CHARS_PER_LINE = 76;
+
+/**
+ * Hard-wraps a long URL at structural boundaries, using explicit newlines.
+ *
+ * Every automatic option here is wrong in a way that matters. Hyphenation is
+ * off document-wide (see `fonts.ts`), so a URL is one unbreakable token that
+ * runs straight through the status column. Turning hyphenation back on, or
+ * seeding the string with zero-width spaces, does produce breaks — but
+ * react-pdf renders a hyphen at the break, and since a hyphen is a legal URL
+ * character the printed address silently becomes a different address
+ * (`.../monitoring-best-practices` prints as `.../monitoring-best--` +
+ * `practices`). Truncating removes the reader's ability to check the source
+ * at all.
+ *
+ * Choosing the break points here avoids all of it: a newline is a hard break
+ * that react-pdf does not decorate, so every visible character is a
+ * character of the real URL and no character is added. Breaks are preferred
+ * after a path separator or similar boundary, and fall back to a hard cut
+ * only for an unbroken run longer than a line. The `Link` target keeps the
+ * untouched URL, so the link still resolves.
+ */
+function wrappableUrl(url: string, perLine = URL_CHARS_PER_LINE): string {
+  if (url.length <= perLine) return url;
+
+  const lines: string[] = [];
+  let rest = url;
+
+  while (rest.length > perLine) {
+    const window = rest.slice(0, perLine);
+    // Break AFTER the boundary character so it stays on the line it belongs
+    // to, matching how a reader reads a path.
+    const boundary = Math.max(
+      window.lastIndexOf("/"),
+      window.lastIndexOf("-"),
+      window.lastIndexOf("_"),
+      window.lastIndexOf("."),
+      window.lastIndexOf("&"),
+      window.lastIndexOf("?"),
+    );
+    const cut = boundary > perLine * 0.4 ? boundary + 1 : perLine;
+    lines.push(rest.slice(0, cut));
+    rest = rest.slice(cut);
+  }
+
+  if (rest.length > 0) lines.push(rest);
+  return lines.join("\n");
+}
+
 function renderSource(
   source: PdfSource,
   ctx: BlockContext,
@@ -417,7 +517,11 @@ function renderSource(
       source.title
         ? h(Text, { style: ctx.styles.sourceTitle }, source.title)
         : null,
-      h(Link, { src: source.url, style: ctx.styles.sourceUrl }, source.url),
+      h(
+        Link,
+        { src: source.url, style: ctx.styles.sourceUrl },
+        wrappableUrl(source.url),
+      ),
       source.note
         ? h(Text, { style: ctx.styles.sourceNote }, source.note)
         : null,

@@ -22,7 +22,9 @@
 
 import type { Style } from "@react-pdf/types";
 
-import { BRAND_SCALE, COLORS, LEADING, PAGE, SPACE, TYPE } from "./brand";
+import { BRAND_SCALE, COLORS, LEADING, PAGE, PAGE_HEIGHT, SPACE, TYPE } from "./brand";
+
+import type { PdfPageSize } from "./document";
 
 export const MONO_FAMILY = "Courier";
 
@@ -36,7 +38,17 @@ function sheet<T extends Record<string, Style>>(styles: T): T {
   return styles;
 }
 
-export function createStyles(fontFamily: string) {
+export function createStyles(
+  fontFamily: string,
+  pageSize: PdfPageSize = "A4",
+) {
+  /*
+   * The footer is pinned with `top`, not `bottom` — see PAGE_HEIGHT in
+   * brand.ts for why `bottom` cannot be used here.
+   */
+  const footerTop =
+    PAGE_HEIGHT[pageSize] - PAGE.footerOffset - PAGE.footerHeight;
+
   return sheet({
     /* ---------------------------------------------------------- pages */
     coverPage: {
@@ -137,9 +149,10 @@ export function createStyles(fontFamily: string) {
     },
     footer: {
       position: "absolute",
-      bottom: PAGE.footerOffset,
+      top: footerTop,
       left: PAGE.marginHorizontal,
       right: PAGE.marginHorizontal,
+      height: PAGE.footerHeight,
     },
     footerRule: { height: 0.75, backgroundColor: COLORS.rule, marginBottom: 6 },
     footerRow: { flexDirection: "row", justifyContent: "space-between" },

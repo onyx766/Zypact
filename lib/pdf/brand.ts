@@ -121,12 +121,38 @@ export const SPACE = {
  */
 export const PAGE = {
   marginTop: 58,
-  marginBottom: 54,
+  /**
+   * Must clear the footer: `footerOffset + footerHeight` measured up from the
+   * page edge, plus a gap, or body copy runs into the running footer.
+   */
+  marginBottom: 70,
   marginHorizontal: 54,
   /** Distance from the page edge to the running header baseline. */
   headerOffset: 28,
-  /** Distance from the page edge to the footer rule. */
+  /** Distance from the TOP of the page down to the footer rule. Derived. */
   footerOffset: 32,
+  /**
+   * Reserved height for the footer block: a hairline rule plus up to two
+   * lines of 7pt text. The footer is positioned by an explicit `top`, so it
+   * needs a known height to sit the right distance above the page edge.
+   */
+  footerHeight: 26,
+} as const;
+
+/**
+ * Page heights in points.
+ *
+ * Needed because the running footer is positioned with an explicit `top`
+ * rather than `bottom`. In react-pdf v4 a `fixed` + `position: "absolute"`
+ * element honours `top` but NOT `bottom`: with `bottom` the footer was laid
+ * out in document flow instead, landing at y≈5241 on a page 842 points tall
+ * — off the canvas on most pages, missing entirely on some, and 8 points
+ * from the top on the last one. `top` places it correctly on every page, and
+ * computing that `top` needs the page height.
+ */
+export const PAGE_HEIGHT = {
+  A4: 841.89,
+  LETTER: 792,
 } as const;
 
 /**

@@ -48,7 +48,21 @@ export interface PdfReportMeta {
    */
   methodologyLabel?: string;
 
-  /** Short handling line, e.g. "Prepared for Orbit. Not for redistribution." */
+  /**
+   * A compact version of `methodologyLabel` for the page footer.
+   *
+   * The cover can carry the full statement; the footer has room for about
+   * two lines at 7pt. When this is omitted the footer falls back to
+   * `methodologyLabel`, which may overflow the reserved height if it is
+   * long. Keep the scope words — the point of the footer is that a page
+   * separated from its cover still says what it is.
+   */
+  footerLabel?: string;
+
+  /**
+   * Short handling line, e.g. "Prepared for <client>. Not for
+   * redistribution."
+   */
   confidentiality?: string;
 
   /** Defaults to A4. */
@@ -93,13 +107,23 @@ export interface PdfComparisonColumn {
 /**
  * The outcome of checking one cited source.
  *
- * There is deliberately no default and no boolean. "Cited" and "verified to
- * support the claim" are different facts, and a model that lets the second be
- * inferred from the first is a model that will eventually overstate.
+ * There is deliberately no default and no boolean. "Cited", "resolves" and
+ * "verified to support the claim" are three different facts, and a model that
+ * lets a later one be inferred from an earlier one is a model that will
+ * eventually overstate.
+ *
+ * `reachable` is the one that earns its keep. Fetching a URL proves only that
+ * a page came back; it says nothing about whether that page backs the
+ * sentence it was attached to. Collapsing `reachable` into
+ * `verified_supports` would turn an HTTP status code into an editorial
+ * judgement nobody made, across however many sources were never read. Use
+ * `verified_supports` only where a person actually compared the page against
+ * the claim.
  */
 export type PdfSourceStatus =
   | "verified_supports"
   | "verified_does_not_support"
+  | "reachable"
   | "unreachable"
   | "not_checked";
 
@@ -138,6 +162,21 @@ export type PdfBlock =
       attribution?: string;
       /** Overrides the default "Verbatim" eyebrow. */
       label?: string;
+      /**
+       * Renders the provider's own `**...**` Markdown emphasis as bold type
+       * instead of printing the asterisks literally.
+       *
+       * Opt-in, and deliberately narrow. Providers that return Markdown
+       * intend those markers as emphasis, and showing them as emphasis is
+       * how the provider's own interface displays the same answer — printing
+       * `**LangSmith**` mid-sentence misrepresents the output as much as
+       * silently deleting the markers would. Only `**bold**` is interpreted;
+       * no word is added, removed, reordered or reflowed, and the exact
+       * bytes remain in the evidence file this text was read from.
+       *
+       * Leave it off for anything where the literal characters matter.
+       */
+      renderMarkdownEmphasis?: boolean;
     }
   | { kind: "interpretation"; text: string; label?: string }
   | { kind: "sources"; items: PdfSource[]; caption?: string }

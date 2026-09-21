@@ -189,7 +189,7 @@ function renderFooter(
 ): ReactElement {
   const { Text, View } = ctx.pdf;
   const { styles } = ctx;
-  const label = doc.meta.methodologyLabel ?? "";
+  const label = doc.meta.footerLabel ?? doc.meta.methodologyLabel ?? "";
 
   return h(
     View,
@@ -242,12 +242,26 @@ function renderSection(
     .map((block, blockIndex) => renderBlock(block, ctx, `${key}-b${blockIndex}`))
     .filter((element): element is ReactElement => element !== null);
 
+  const startsNewPage = section.startOnNewPage === true && index > 0;
+
+  /*
+   * Inter-section spacing hangs off the TOP of each section, never the
+   * bottom of the previous one.
+   *
+   * A trailing bottom margin is invisible until the section happens to end
+   * near a page boundary — then the margin alone spills onto the next page,
+   * the following section's `break` moves past it, and the document gains a
+   * page containing nothing but the running header and footer. Anchoring the
+   * gap to the top means a section always ends tight against its last block,
+   * so there is nothing left to spill. A section that starts its own page
+   * needs no gap at all, because the page margin already supplies one.
+   */
   return h(
     View,
     {
       key,
-      break: section.startOnNewPage === true && index > 0,
-      style: { marginBottom: 20 },
+      break: startsNewPage,
+      style: { marginTop: index === 0 || startsNewPage ? 0 : 22 },
     },
     header,
     h(View, { style: styles.sectionBody }, ...body),
@@ -274,7 +288,7 @@ function buildDocument(
   pdf: PdfRuntime,
 ): PdfDocumentElement {
   const { Document, Page } = pdf;
-  const styles: PdfStyles = createStyles(font.family);
+  const styles: PdfStyles = createStyles(font.family, doc.meta.pageSize ?? "A4");
   const ctx: BlockContext = { pdf, styles };
   const { meta } = doc;
 

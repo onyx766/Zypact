@@ -47,6 +47,8 @@ export interface AdhocAttempt {
   model: string | null;
   answer: string | null;
   citations: string[] | null;
+  /** Provider `search_results`. Shape is whatever the provider sent. */
+  searchResults?: unknown[] | null;
 }
 
 export interface AdhocEvidence {
@@ -69,6 +71,8 @@ export interface AdhocEvidence {
     term: string;
     attemptsMentioningInAnswer: number;
     attemptsMentioningInCitations: number;
+    /** Added in evidenceVersion 2. Absent in version 1 files. */
+    attemptsMentioningInRetrievedSources?: number;
   }>;
   presenceRate: {
     numerator: number;
@@ -176,6 +180,72 @@ function attemptForRun(
   return evidence.attempts.find(
     (attempt) => attempt.runOrdinal === run && attempt.outcome === "succeeded",
   );
+}
+
+const escapeRegex = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Word-boundary match, matching the probe script's own convention. */
+function mentions(text: string, term: string): boolean {
+  const trimmed = term.trim();
+  if (!trimmed) return false;
+  return new RegExp(
+    `(^|[^a-z0-9])${escapeRegex(trimmed)}([^a-z0-9]|$)`,
+    "i",
+  ).test(text);
+}
+
+function retrievedSourceText(searchResults: unknown[] | null | undefined): string {
+  if (!Array.isArray(searchResults)) return "";
+  const parts: string[] = [];
+  for (const entry of searchResults) {
+    if (!entry || typeof entry !== "object") continue;
+    const source = entry as { title?: unknown; snippet?: unknown; url?: unknown };
+    for (const field of [source.title, source.snippet, source.url]) {
+      if (typeof field === "string") parts.push(field);
+    }
+  }
+  return parts.join("\n");
+}
+
+export interface BrandPresence {
+  /** Successful runs whose answer named any brand term. */
+  inAnswer: number;
+  /** Successful runs citing a URL containing any brand term. */
+  inCitations: number;
+  /** Successful runs whose RETRIEVED sources contained any brand term. */
+  inRetrievedSources: number;
+  /** Successful runs — the denominator for all three. */
+  runs: number;
+}
+
+/**
+ * Counts RUNS in which any brand term appeared, per surface.
+ *
+ * Computed from the attempts rather than from `brandScan`, because
+ * `brandScan` is per-term: summing its counts across terms answers a
+ * question nobody asked and overflows the denominator. Four terms each
+ * matching all five runs summed to "20 of 5 runs" — nonsense that only
+ * stayed invisible here because every count was zero. A brand scanned under
+ * its name, its domain and a spelling variant is still one brand, so the
+ * unit has to be the run.
+ */
+export function brandPresence(
+  evidence: AdhocEvidence,
+  terms: string[],
+): BrandPresence {
+  const succeeded = evidence.attempts.filter((a) => a.outcome === "succeeded");
+  const any = (predicate: (attempt: AdhocAttempt) => string): number =>
+    succeeded.filter((attempt) =>
+      terms.some((term) => mentions(predicate(attempt), term)),
+    ).length;
+
+  return {
+    inAnswer: any((a) => a.answer ?? ""),
+    inCitations: any((a) => (a.citations ?? []).join("\n")),
+    inRetrievedSources: any((a) => retrievedSourceText(a.searchResults)),
+    runs: succeeded.length,
+  };
 }
 
 /**
@@ -324,15 +394,15 @@ function runParametersSection(input: BuildAdhocComparisonInput): PdfSection {
 function comparisonColumn(
   question: AdhocQuestionInput,
   subject: string,
+  terms: string[],
 ): PdfComparisonColumn {
   const { evidence } = question;
   const presence = evidence.presenceRate;
+  const found = brandPresence(evidence, terms);
 
   return {
     label: question.label,
-    highlight: presence
-      ? `${presence.numerator} / ${presence.denominator}`
-      : "—",
+    highlight: `${found.inAnswer} / ${found.runs}`,
     highlightCaption: `runs naming ${subject}`,
     rows: [
       { label: "Question asked", value: evidence.question.text },
@@ -342,15 +412,18 @@ function comparisonColumn(
         mono: true,
       },
       {
-        label: "Named in answer",
-        value: `${presence?.numerator ?? 0} of ${presence?.denominator ?? 0} runs`,
+        label: "Named in the answer",
+        value: `${found.inAnswer} of ${found.runs} runs`,
       },
       {
-        label: "Appeared in citations",
-        value: `${evidence.brandScan.reduce(
-          (total, term) => total + term.attemptsMentioningInCitations,
-          0,
-        )} of ${evidence.reconciliation.succeeded} runs`,
+        label: "Cited as a source",
+        value: `${found.inCitations} of ${found.runs} runs`,
+      },
+      {
+        // The one that distinguishes "never retrieved" from "retrieved and
+        // not used" — a far more actionable finding than either alone.
+        label: "Retrieved before answering",
+        value: `${found.inRetrievedSources} of ${found.runs} runs`,
       },
       {
         label: "95% interval (Wilson)",
@@ -385,12 +458,19 @@ function comparisonSection(input: BuildAdhocComparisonInput): PdfSection {
       {
         kind: "comparison",
         columns: [
-          comparisonColumn(first, input.subject),
-          comparisonColumn(second, input.subject),
+          comparisonColumn(first, input.subject, input.brandTermsScanned),
+          comparisonColumn(second, input.subject, input.brandTermsScanned),
         ],
         caption:
           "Both questions return the same presence result, and their intervals are identical. At five runs each, this comparison cannot separate the two questions on presence alone — the difference between them is in the kind of answer they produce, not in how often the brand appears.",
       },
+      /*
+       * The comparison bands fill a page on their own, so the table that
+       * follows starts a fresh one. Without the break it began with a few
+       * points of room left, split, and orphaned its final row and caption
+       * onto an otherwise empty page.
+       */
+      { kind: "pageBreak" },
       {
         kind: "heading",
         level: 2,
@@ -453,7 +533,9 @@ function verbatimSection(input: BuildAdhocComparisonInput): PdfSection {
     title: "What the surface actually said",
     standfirst:
       "One representative run per question, reproduced word for word as returned, with the provider's own Markdown emphasis shown as emphasis. The bracketed numbers are its citations. The reading beneath each answer is ours and is labelled as such.",
-    startOnNewPage: true,
+    // Deliberately flows on from the tools table rather than forcing a page.
+    // The table leaves half a page free, and a forced break there would buy
+    // whitespace at the cost of a page.
     blocks,
   };
 }

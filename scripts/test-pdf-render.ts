@@ -38,6 +38,7 @@ import {
   type PdfBlock,
   type PdfReportDocument,
 } from "@/lib/pdf";
+import { brandPresence } from "@/lib/pdf/reports/adhoc-comparison-report";
 
 let checks = 0;
 let failures = 0;
@@ -472,7 +473,104 @@ async function main(): Promise<void> {
     LOGO.markStroke,
   );
 
-  /* -- 8. It loads under the worker's actual runtime ---------------- */
+  /* -- 8. Brand presence counts RUNS, and sees retrieved sources ---- */
+
+  /*
+   * Two defects are pinned here, both of which produced a plausible-looking
+   * number rather than an error.
+   *
+   * Summing per-term counts overflowed the denominator: a brand scanned
+   * under its name, its domain and a spelling variant is still one brand, so
+   * three terms each matching both runs reported "6 of 2 runs".
+   *
+   * Scanning citation URLs alone missed any brand named in a retrieved
+   * source's title or snippet. A citation URL contains a brand's name only
+   * when the brand owns the domain, so the old scan systematically
+   * understated exactly those brands that get written about rather than
+   * linked to — and could not tell "never retrieved" from "retrieved and
+   * not used", which are different findings with different remedies.
+   */
+  const presenceEvidence = {
+    kind: "founder_operated_adhoc_probe",
+    generatedAt: "2026-09-22T00:00:00.000Z",
+    startedAt: "2026-09-22T00:00:00.000Z",
+    question: { text: "q", sha256: "0".repeat(64) },
+    transport: { endpoint: "https://example.invalid", requestedModel: "sonar" },
+    plan: { runs: 2, maxRetriesPerRun: 2, maxCalls: 6 },
+    reconciliation: {
+      attempted: 2,
+      succeeded: 2,
+      failed: 0,
+      retried: 0,
+      runsPlanned: 2,
+      runsWithAResult: 2,
+      accountedFor: true,
+    },
+    brandScan: [],
+    presenceRate: null,
+    attempts: [
+      {
+        attemptOrdinal: 1,
+        runOrdinal: 1,
+        outcome: "succeeded" as const,
+        startedAt: "2026-09-22T00:00:00.000Z",
+        completedAt: "2026-09-22T00:00:01.000Z",
+        latencyMs: 1000,
+        httpStatus: 200,
+        providerRequestId: null,
+        requestBodySha256: null,
+        responseBodySha256: null,
+        model: "sonar",
+        // Named in the answer, and present in a retrieved title — but the
+        // brand does NOT own any cited domain.
+        answer: "Acme Telemetry is one option.",
+        citations: ["https://example.com/roundup"],
+        searchResults: [
+          { title: "Best tools 2026: Acme Telemetry reviewed", url: "https://example.com/roundup" },
+        ],
+      },
+      {
+        attemptOrdinal: 2,
+        runOrdinal: 2,
+        outcome: "succeeded" as const,
+        startedAt: "2026-09-22T00:00:02.000Z",
+        completedAt: "2026-09-22T00:00:03.000Z",
+        latencyMs: 1000,
+        httpStatus: 200,
+        providerRequestId: null,
+        requestBodySha256: null,
+        responseBodySha256: null,
+        model: "sonar",
+        answer: "No relevant tool.",
+        citations: ["https://example.com/other"],
+        searchResults: [{ title: "Something else", url: "https://example.com/other" }],
+      },
+    ],
+  };
+
+  const presence = brandPresence(presenceEvidence, [
+    "Acme Telemetry",
+    "acmetelemetry.com",
+    "Acme",
+  ]);
+
+  check(
+    "brand presence counts runs, not term-matches summed across terms",
+    presence.inAnswer === 1 && presence.runs === 2,
+    `inAnswer=${presence.inAnswer} runs=${presence.runs} (3 terms match run 1; a sum would report 3)`,
+  );
+  check(
+    "a brand named only in a retrieved title is still counted as retrieved",
+    presence.inRetrievedSources === 1,
+    `inRetrievedSources=${presence.inRetrievedSources}`,
+  );
+  check(
+    "retrieved-but-not-cited is distinguishable from cited",
+    presence.inCitations === 0 && presence.inRetrievedSources === 1,
+    `cited=${presence.inCitations}, retrieved=${presence.inRetrievedSources} — the pair is what separates "never retrieved" from "retrieved and unused"`,
+  );
+
+  /* -- 9. It loads under the worker's actual runtime ---------------- */
 
   /*
    * The regression this guards is specific and easy to reintroduce. A static
@@ -495,7 +593,7 @@ async function main(): Promise<void> {
       : `exit ${child.status}: ${(child.stderr ?? "").trim().split("\n").slice(-3).join(" / ")}`,
   );
 
-  /* -- 9. Dates are UTC and locale-independent ---------------------- */
+  /* -- 10. Dates are UTC and locale-independent --------------------- */
 
   check(
     "dates render in UTC regardless of host locale",
@@ -503,7 +601,7 @@ async function main(): Promise<void> {
     formatUtcDate("2026-09-22T23:30:00.000Z"),
   );
 
-  /* -- 10. Leave the artifact somewhere a human can look at it ------ */
+  /* -- 11. Leave the artifact somewhere a human can look at it ------ */
 
   const outDir = process.argv.includes("--out")
     ? path.resolve(process.argv[process.argv.indexOf("--out") + 1])

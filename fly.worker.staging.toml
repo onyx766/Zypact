@@ -47,8 +47,11 @@ kill_timeout = 30
     timeout = "5s"
     grace_period = "10s"
 
+# `never`, not `no`: flyctl validates fly.toml against always | never |
+# on-failure. The behaviour is unchanged — the machine stays stopped after
+# every exit, and recovery is an explicit operator action.
 [[restart]]
-  policy = "no"
+  policy = "never"
 
 [[vm]]
   size = "shared-cpu-1x"

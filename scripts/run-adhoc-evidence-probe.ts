@@ -131,7 +131,52 @@ interface AttemptEvidence {
 interface BrandScan {
   term: string;
   attemptsMentioningInAnswer: number;
+  /** Matches against the citation URLs only. */
   attemptsMentioningInCitations: number;
+  /**
+   * Matches against the RETRIEVED source set — each search result's title,
+   * snippet and URL.
+   *
+   * This is not a refinement of the citation count; it answers a different
+   * question, and the difference is the most useful thing the scan produces.
+   * A citation URL contains a brand's name only when the brand owns the
+   * domain, so scanning URLs alone reports "Langfuse: 0 citations" for a run
+   * whose retrieved sources are titled "... Langfuse ...". That understates
+   * reach, and understates it selectively: it penalises exactly those brands
+   * that are written about rather than linked to.
+   *
+   * Read together the two counts separate two situations a client must not
+   * be allowed to confuse — the surface never retrieved you at all, versus
+   * the surface retrieved you and chose not to use you.
+   */
+  attemptsMentioningInRetrievedSources: number;
+}
+
+/** The fields of a Perplexity `search_results` entry that carry text. */
+interface RetrievedSource {
+  title?: unknown;
+  snippet?: unknown;
+  url?: unknown;
+}
+
+/**
+ * Flattens one attempt's retrieved sources into searchable text.
+ *
+ * Defensive about shape: `searchResults` is typed `unknown[]` because it is
+ * whatever the provider sent, and a scan that throws on an unexpected entry
+ * would lose a whole run's evidence over a formatting change.
+ */
+function retrievedSourceText(searchResults: unknown[] | null): string {
+  if (!Array.isArray(searchResults)) return "";
+  const parts: string[] = [];
+  for (const entry of searchResults) {
+    if (!entry || typeof entry !== "object") continue;
+    const source = entry as RetrievedSource;
+    for (const field of [source.title, source.snippet, source.url]) {
+      if (typeof field === "string") parts.push(field);
+    }
+  }
+  return parts.join("\n");
 }
 
 /* ------------------------------------------------------------------ */
@@ -401,6 +446,9 @@ async function main(): Promise<number> {
     attemptsMentioningInCitations: succeeded.filter((a) =>
       (a.citations ?? []).some((c) => mentions(c, term))
     ).length,
+    attemptsMentioningInRetrievedSources: succeeded.filter((a) =>
+      mentions(retrievedSourceText(a.searchResults), term)
+    ).length,
   }));
 
   const anyTermPresent = succeeded.filter((a) =>
@@ -409,7 +457,10 @@ async function main(): Promise<number> {
   const interval = brandTerms.length > 0 ? wilson95(anyTermPresent, succeeded.length) : null;
 
   const evidence = {
-    evidenceVersion: 1,
+    // 2 — `brandScan` gained `attemptsMentioningInRetrievedSources`. Version 1
+    // files remain readable; they simply lack that field, and a consumer must
+    // not infer "not retrieved" from its absence.
+    evidenceVersion: 2,
     kind: "founder_operated_adhoc_probe",
     generatedAt: new Date().toISOString(),
     startedAt: startedAtIso,
@@ -442,7 +493,8 @@ async function main(): Promise<number> {
       "One provider surface (Perplexity Sonar). Not representative of all AI assistants or all buyers.",
       "Founder-operated manual run. Not a registered protocol, not a pilot baseline, no reserved spend, no immutable database evidence.",
       "No causal claim. This shows what one surface answered at one moment, not why, and not any effect on a sale.",
-      "Term scanning is literal string matching on the answer text. It does not judge sentiment, accuracy or how favourably anything is described.",
+      "Term scanning is literal string matching. It does not judge sentiment, accuracy or how favourably anything is described, and it cannot tell a mention apart from a recommendation — a term present in the answer has been named, nothing more.",
+      "Answer, citation and retrieved-source counts measure three different things: what the answer said, which URLs it cited, and what the surface retrieved before answering. A term can be retrieved and never cited, or cited and never named in the answer.",
       "Provider answers are nondeterministic; repeated identical runs estimate a presence rate under that nondeterminism, not coverage across phrasings.",
     ],
   };
@@ -487,9 +539,14 @@ async function main(): Promise<number> {
       "",
       "The interval is wide at small sample sizes. Read it, not the point estimate.",
       "",
-      "| Term | Answers mentioning | Citations mentioning |",
-      "|---|---|---|",
-      ...brandScan.map((b) => `| ${b.term} | ${b.attemptsMentioningInAnswer}/${succeeded.length} | ${b.attemptsMentioningInCitations}/${succeeded.length} |`),
+      "| Term | Named in answer | In citation URLs | In retrieved sources |",
+      "|---|---|---|---|",
+      ...brandScan.map(
+        (b) =>
+          `| ${b.term} | ${b.attemptsMentioningInAnswer}/${succeeded.length} | ${b.attemptsMentioningInCitations}/${succeeded.length} | ${b.attemptsMentioningInRetrievedSources}/${succeeded.length} |`
+      ),
+      "",
+      "\"In retrieved sources\" counts the title, snippet and URL of everything the surface retrieved before answering. A term can be retrieved and never cited: retrieved-but-unused and never-retrieved are different findings and must not be reported as the same one.",
       ""
     );
   }

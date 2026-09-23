@@ -27,8 +27,13 @@ kill_timeout = 30
   NODE_ENV = "production"
   # Inert until a later authorisation explicitly enables live execution.
   WORKER_EXECUTION_MODE = "disabled"
-  WORKER_MAX_SLOTS_PER_CLAIM = "1"
-  WORKER_MAX_RUNTIME_SECONDS = "120"
+  # A slot is ONE baseline run (two paid calls), not one job. 7 is the
+  # protocol run_cap: a 5-run plan plus 2 retries finishes in one claim.
+  # The one-job bound is WORKER_EXIT_AFTER_CLAIMED_JOB, below. (D-036)
+  WORKER_MAX_SLOTS_PER_CLAIM = "7"
+  # 7 slots x (2 x 45 s provider timeout) + grace = ~640 s worst case; a
+  # measured 5-run baseline takes 91-102 s. (D-036)
+  WORKER_MAX_RUNTIME_SECONDS = "900"
   WORKER_PROVIDER_TIMEOUT_MS = "45000"
   WORKER_EXIT_AFTER_CLAIMED_JOB = "true"
   WORKER_MAX_THROTTLED_RETRIES = "0"

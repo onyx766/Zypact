@@ -250,8 +250,10 @@ function code(src: string, comment: string): string[] {
   const ENV = [
     ['NODE_ENV', 'production'],
     ['WORKER_EXECUTION_MODE', 'disabled'],
-    ['WORKER_MAX_SLOTS_PER_CLAIM', '1'],
-    ['WORKER_MAX_RUNTIME_SECONDS', '120'],
+    // D-036: a slot is one baseline run, and 7 is the protocol run_cap, so a
+    // job can finish inside the claim that started it.
+    ['WORKER_MAX_SLOTS_PER_CLAIM', '7'],
+    ['WORKER_MAX_RUNTIME_SECONDS', '900'],
     ['WORKER_PROVIDER_TIMEOUT_MS', '45000'],
     ['WORKER_EXIT_AFTER_CLAIMED_JOB', 'true'],
     ['WORKER_MAX_THROTTLED_RETRIES', '0'],
@@ -433,9 +435,33 @@ function code(src: string, comment: string): string[] {
       assert(`${env} never restarts a machine automatically`,
         lines.some((l) => /^policy\s*=\s*"never"$/.test(l)),
         lines.filter((l) => l.startsWith("policy")).join(" | "));
-      assert(`${env} claims at most one slot per claim`,
-        lines.includes('WORKER_MAX_SLOTS_PER_CLAIM = "1"'),
-        lines.filter((l) => l.startsWith("WORKER_MAX_SLOTS_PER_CLAIM")).join(" | "));
+      // This used to require exactly one slot per claim, on the reading that
+      // a slot was a job. It is one baseline RUN. A 5-run baseline under a
+      // one-slot claim ran once, then was closed `slot_budget_exhausted` and
+      // parked for review — so no production baseline could ever complete,
+      // and no report could ever be built from one (D-036).
+      //
+      // What a live config must guarantee instead is that its runtime can
+      // absorb every slot it permits, each slot at its worst case: two
+      // provider calls that both run to the timeout. A ceiling below that
+      // would let the deadline cut a job off mid-run, which is exactly the
+      // stranded state a one-start-one-job worker cannot recover from alone.
+      const intOf = (key: string): number => Number.parseInt(
+        (lines.find((l) => l.startsWith(`${key} =`))?.match(/"(\d+)"/) ?? [])[1] ?? "", 10);
+      const slots = intOf("WORKER_MAX_SLOTS_PER_CLAIM");
+      const runtimeMs = intOf("WORKER_MAX_RUNTIME_SECONDS") * 1000;
+      const timeoutMs = intOf("WORKER_PROVIDER_TIMEOUT_MS");
+      const graceMs = intOf("WORKER_GRACE_MS");
+      const worstCaseMs = slots * 2 * timeoutMs + graceMs;
+      assert(`${env} declares its slot, runtime, timeout and grace bounds`,
+        [slots, runtimeMs, timeoutMs, graceMs].every((n) => Number.isSafeInteger(n) && n > 0),
+        `${slots} / ${runtimeMs} / ${timeoutMs} / ${graceMs}`);
+      assert(`${env}'s runtime absorbs every permitted slot at its worst case`,
+        worstCaseMs < runtimeMs, `${worstCaseMs} ms needed vs ${runtimeMs} ms allowed`);
+      // A slot count below a 5-run plan is the defect itself, restated as a
+      // number, and it must not return.
+      assert(`${env} permits enough slots for a 5-run baseline to finish in one claim`,
+        slots >= 5, String(slots));
     }
 
     const body = lines.join("\n");

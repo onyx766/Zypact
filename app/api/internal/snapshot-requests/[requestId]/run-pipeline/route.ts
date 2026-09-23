@@ -1,12 +1,9 @@
-import { spawn } from "node:child_process";
-import { mkdirSync, openSync } from "node:fs";
-import { join } from "node:path";
-
 import { NextResponse } from "next/server";
 
 import { requireCurrentUser } from "@/lib/auth/current-user";
 import { isFounderEmail } from "@/lib/auth/founder";
 import { getReportServiceClient } from "@/lib/reports/service-client";
+import { startWorkerMachine } from "@/lib/worker-control/fly-machine";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,15 +14,21 @@ const UUID_PATTERN =
 /**
  * Starts the scan-and-report pipeline for one approved request.
  *
- * Detached child process, not inline work. The pipeline executes every
- * planned run of the request's own protocol (two paid provider calls per
- * run) and takes minutes; holding an HTTP request open for that
- * would hit request timeouts and, worse, tie a leased paid execution to the
- * lifetime of a web request that a browser can abandon at any moment.
+ * Starts the deployed worker; it does not run the work here. The pipeline
+ * executes every planned run of the request's own protocol (two paid
+ * provider calls per run) and takes minutes, so holding an HTTP request open
+ * for it would hit request timeouts and, worse, tie a leased paid execution
+ * to the lifetime of a web request a browser can abandon at any moment.
  *
- * Returns as soon as the child is spawned. Progress is observed by polling
- * the job row, which the worker updates as it goes — the same source of truth
- * the CLI path uses.
+ * It previously spawned a detached child process, which worked on a founder
+ * workstation and could not work anywhere else: the hosted runtime has a
+ * read-only filesystem, does not ship `scripts/` and has no `.env.local`, so
+ * the button failed before spawning anything. The job is claimed by the Fly
+ * worker instead, which is where every other paid execution already runs.
+ *
+ * Returns as soon as Fly accepts the start. Progress is observed by polling
+ * the job row, which the worker updates as it goes — the same source of
+ * truth the CLI path uses.
  */
 export async function POST(
   request: Request,
@@ -139,75 +142,36 @@ export async function POST(
         } (two paid provider calls each) and usually takes about 2 minutes per run.`
       : "Scan started. It executes the protocol's planned runs and usually takes a few minutes.";
 
-  let logFd: number;
-  const logDir = join(process.cwd(), ".pipeline-logs");
+  const start = await startWorkerMachine();
 
-  try {
-    mkdirSync(logDir, { recursive: true });
-    // Appended, never truncated: a re-run must not erase the record of the
-    // run that preceded it.
-    logFd = openSync(join(logDir, `${requestId}.log`), "a");
-  } catch {
+  if (!start.ok) {
+    // `not_configured` is the deployment's fault, not the request's, and 503
+    // says so: retrying this request cannot help until the worker variables
+    // are set.
     return NextResponse.json(
-      { ok: false, error: "Could not open a pipeline log file." },
-      { status: 500 }
+      { ok: false, error: start.detail },
+      { status: start.code === "not_configured" ? 503 : 502 }
     );
   }
 
-  try {
-    const child = spawn(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        "scripts/run-pipeline-once.ts",
-        "--request-id",
-        requestId,
-      ],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          // The child loads .env.local itself; the dev server's own
-          // environment is not a substitute for it.
-          DOTENV_CONFIG_PATH: ".env.local",
-          NODE_OPTIONS: "-r dotenv/config",
-        },
-        // Best-effort independence from this request's lifetime.
-        //
-        // NOT a guarantee on Windows: `taskkill /T` on the dev server walks
-        // the parent-pid tree and reaches a detached child anyway, and
-        // `start /b` keeps it in the same console Ctrl+C group. Both were
-        // measured to die. Survival is therefore treated as an optimization,
-        // not a property to rely on — the lease makes an interrupted run
-        // reclaimable, and the UI offers Resume when one is found stale.
-        detached: true,
-        windowsHide: true,
-        stdio: ["ignore", logFd, logFd],
-      }
-    );
-
-    child.unref();
-
+  // An already-running machine is not a second job. The worker claims one
+  // job and exits, so the honest answer is that this request is queued
+  // behind whatever it is doing now.
+  if (start.alreadyRunning) {
     return NextResponse.json(
       {
         ok: true,
         started: true,
-        pid: child.pid ?? null,
-        detail: startedDetail,
+        detail:
+          "The worker was already running. It finishes its current job, then stops; "
+          + "start it again to run this one.",
       },
       { status: 202 }
     );
-  } catch (error) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Could not start the pipeline.",
-      },
-      { status: 500 }
-    );
   }
+
+  return NextResponse.json(
+    { ok: true, started: true, detail: startedDetail },
+    { status: 202 }
+  );
 }

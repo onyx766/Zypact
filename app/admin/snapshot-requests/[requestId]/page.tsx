@@ -1248,9 +1248,13 @@ export default async function SnapshotRequestDetailPage({
             <p className="mt-1 text-sm text-muted-foreground">
               No persisted report is available yet.
             </p>
+            {/* This used to say the report would appear once "the approved
+                runner persists it". No deployed process builds a report: the
+                worker image ships the protocol worker alone. Waiting on that
+                sentence would wait forever, so it names the action instead. */}
             <p className="mt-1 text-sm text-muted-foreground">
-              The report will appear here after
-              the approved runner persists it.
+              Once the scan has finished, click Regenerate report in the
+              Founder review panel above to build it.
             </p>
           </section>
         )}

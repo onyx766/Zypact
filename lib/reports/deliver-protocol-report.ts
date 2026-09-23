@@ -330,11 +330,16 @@ export async function findDeliverableRequests(
 
   if (protocolIds.length === 0) return [];
 
+  // Both states, since 0080: saving a report moves a request to
+  // 'report_ready' (or keeps it 'approved' when the report is blocked). A
+  // query for 'approved' alone would lose every request the moment its
+  // first report was saved, and a saved-but-undelivered report is exactly
+  // the case this worker exists to finish.
   const { data: requests, error: requestError } = await client
     .from("snapshot_requests")
     .select("id,protocol_id,status")
     .in("protocol_id", protocolIds)
-    .eq("status", "approved")
+    .in("status", ["approved", "report_ready"])
     .limit(limit * 4);
 
   if (requestError) throw requestError;

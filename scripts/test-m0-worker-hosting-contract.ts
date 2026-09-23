@@ -294,9 +294,15 @@ function code(src: string, comment: string): string[] {
   // A bounded one-claim worker must remain stopped after every exit. An
   // automatic restart would create a fresh process lifetime and defeat both
   // the intrinsic total-runtime ceiling and WORKER_EXIT_AFTER_CLAIMED_JOB.
-  assert("[[restart]] declares policy = \"no\"",
-    lines.includes("[[restart]]") && lines.some((l) => /^policy\s*=\s*"no"$/.test(l)),
+  // `never` is fly.toml's spelling of that policy. `no` is the Machines API
+  // spelling, which flyctl rejects at config validation, so a file carrying
+  // it cannot be deployed at all.
+  assert("[[restart]] declares policy = \"never\"",
+    lines.includes("[[restart]]") && lines.some((l) => /^policy\s*=\s*"never"$/.test(l)),
     lines.filter((l) => l.startsWith("policy")).join(" | ") || "no policy");
+  assert("no restart policy uses the Machines API spelling `no`",
+    !lines.some((l) => /^policy\s*=\s*"no"$/.test(l)),
+    lines.filter((l) => l.startsWith("policy")).join(" | "));
   assert("no other restart policy is declared",
     lines.filter((l) => /^policy\s*=/.test(l)).length === 1);
 
@@ -345,39 +351,63 @@ function code(src: string, comment: string): string[] {
       && lines.some((l) => /^memory_mb\s*=\s*512$/.test(l)));
 }
 
-// ═══════════════════════════════════════ 4. the staging deployment config
+// ═══════════════════════════════════ 4. the deployable deployment configs
+//
+// Both environments are checked by the same contract, against the same inert
+// template. Bounds that differ between staging and production would mean a
+// staging demonstration establishes nothing about production behaviour, so
+// the only semantic difference either file may carry is its own identity.
 {
   const templateSrc = read("fly.worker.toml.template");
-  const stagingSrc = read("fly.worker.staging.toml");
   const templateLines = code(templateSrc, "#");
-  const stagingLines = code(stagingSrc, "#");
 
-  const appLines = stagingLines.filter((l) => /^app\s*=/.test(l));
-  const regionLines = stagingLines.filter((l) => /^primary_region\s*=/.test(l));
-  assert("staging names exactly the authorised Fly application",
-    appLines.length === 1 && appLines[0] === 'app = "zypact-protocol-worker-staging"',
-    appLines.join(" | ") || "absent");
-  assert("staging names exactly the authorised Fly region",
-    regionLines.length === 1 && regionLines[0] === 'primary_region = "iad"',
-    regionLines.join(" | ") || "absent");
-  assert("the app and region are the first two semantic lines, at top level",
-    stagingLines[0] === appLines[0] && stagingLines[1] === regionLines[0],
-    stagingLines.slice(0, 4).join(" | "));
+  const DEPLOYABLE = [
+    { env: "staging", file: "fly.worker.staging.toml", app: "zypact-protocol-worker-staging" },
+    { env: "production", file: "fly.worker.production.toml", app: "zypact-protocol-worker" },
+  ] as const;
 
-  const withoutIdentity = stagingLines.filter(
-    (l) => !/^app\s*=/.test(l) && !/^primary_region\s*=/.test(l),
-  );
-  assert("staging differs semantically from the inert template only by app and region",
-    withoutIdentity.join("\n") === templateLines.join("\n"),
-    `${withoutIdentity.length} staging lines vs ${templateLines.length} template lines`);
-  assert("staging remains explicitly execution-disabled",
-    stagingLines.filter((l) => l === 'WORKER_EXECUTION_MODE = "disabled"').length === 1);
+  const identities = new Set<string>();
 
-  const body = stagingLines.join("\n");
-  assert("staging carries no credential-shaped key",
-    !/(SERVICE_ROLE|API_KEY|_TOKEN|_SECRET|PERPLEXITY|OPENAI|ANTHROPIC|SUPABASE)/i.test(body));
-  assert("staging contains no stale claim that it is non-deployable",
-    !/deliberately\s+NOT\s+deployable|ABSENT ON PURPOSE|refuse to run|cannot create/i.test(stagingSrc));
+  for (const { env, file, app } of DEPLOYABLE) {
+    const src = read(file);
+    const lines = code(src, "#");
+
+    const appLines = lines.filter((l) => /^app\s*=/.test(l));
+    const regionLines = lines.filter((l) => /^primary_region\s*=/.test(l));
+    assert(`${env} names exactly the authorised Fly application`,
+      appLines.length === 1 && appLines[0] === `app = "${app}"`,
+      appLines.join(" | ") || "absent");
+    assert(`${env} names exactly the authorised Fly region`,
+      regionLines.length === 1 && regionLines[0] === 'primary_region = "iad"',
+      regionLines.join(" | ") || "absent");
+    assert(`${env}'s app and region are the first two semantic lines, at top level`,
+      lines[0] === appLines[0] && lines[1] === regionLines[0],
+      lines.slice(0, 4).join(" | "));
+
+    // Two environments must never name the same application: a deploy of one
+    // would then silently replace the other's running image.
+    assert(`${env}'s application name is not shared with another environment`,
+      !identities.has(appLines[0] ?? ""), appLines[0] ?? "absent");
+    identities.add(appLines[0] ?? "");
+
+    const withoutIdentity = lines.filter(
+      (l) => !/^app\s*=/.test(l) && !/^primary_region\s*=/.test(l),
+    );
+    assert(`${env} differs semantically from the inert template only by app and region`,
+      withoutIdentity.join("\n") === templateLines.join("\n"),
+      `${withoutIdentity.length} ${env} lines vs ${templateLines.length} template lines`);
+    assert(`${env} remains explicitly execution-disabled`,
+      lines.filter((l) => l === 'WORKER_EXECUTION_MODE = "disabled"').length === 1);
+
+    const body = lines.join("\n");
+    assert(`${env} carries no credential-shaped key`,
+      !/(SERVICE_ROLE|API_KEY|_TOKEN|_SECRET|PERPLEXITY|OPENAI|ANTHROPIC|SUPABASE)/i.test(body));
+    assert(`${env} contains no stale claim that it is non-deployable`,
+      !/deliberately\s+NOT\s+deployable|ABSENT ON PURPOSE|refuse to run|cannot create/i.test(src));
+  }
+
+  assert("the two deployable configs name different applications",
+    identities.size === DEPLOYABLE.length, [...identities].join(" | "));
 }
 
 // ═══════════════════════════════════════ 5. the repository wires it in
@@ -391,7 +421,7 @@ function code(src: string, comment: string): string[] {
   const wf = read(".github/workflows/m0-worker-execution-gate.yml");
   for (const p of [
     "Dockerfile.worker", ".dockerignore", "fly.worker.toml.template", "fly.worker.staging.toml",
-    "scripts/test-m0-worker-hosting-contract.ts",
+    "fly.worker.production.toml", "scripts/test-m0-worker-hosting-contract.ts",
   ]) {
     assert(`CI filters on \`${p}\``, wf.includes(`"${p}"`), p);
   }

@@ -1,0 +1,75 @@
+# Fly configuration for the protocol worker in PRODUCTION.
+#
+# This file names the production application and its region under D-033. It
+# is deployable, but deliberately inert: WORKER_EXECUTION_MODE remains
+# `disabled`, so deploying or starting this image cannot claim a job,
+# contact Supabase or call a paid provider. Enabling live execution is a
+# separate, separately authorised change to this file.
+#
+# Nothing here is a secret. The Supabase URL and project ref, the service-
+# role key, the Perplexity key and the analysis-provider key are absent and
+# belong in `fly secrets`, which stores them encrypted and refuses to read
+# them back.
+#
+# This machine is a WORKER. It has no `http_service`, no `[[services]]`, no
+# public port, no allocated IP address and no volume. The health endpoint is
+# reachable only by Fly's private health prober, which is why
+# WORKER_HEALTH_HOST is 0.0.0.0: a loopback bind would be unreachable by the
+# check below.
+#
+# Every value below is deliberately identical to fly.worker.staging.toml
+# apart from `app`. A worker whose bounds differ between staging and
+# production cannot have its production behaviour established by a staging
+# demonstration, so the two files are kept in step and a test asserts it.
+
+app = "zypact-protocol-worker"
+primary_region = "iad"
+
+kill_signal = "SIGTERM"
+# Seconds. WORKER_GRACE_MS stays strictly inside this shutdown window.
+kill_timeout = 30
+
+[build]
+  dockerfile = "Dockerfile.worker"
+
+[env]
+  NODE_ENV = "production"
+  # Inert until a later authorisation explicitly enables live execution.
+  WORKER_EXECUTION_MODE = "disabled"
+  WORKER_MAX_SLOTS_PER_CLAIM = "1"
+  WORKER_MAX_RUNTIME_SECONDS = "120"
+  WORKER_PROVIDER_TIMEOUT_MS = "45000"
+  WORKER_EXIT_AFTER_CLAIMED_JOB = "true"
+  WORKER_MAX_THROTTLED_RETRIES = "0"
+  # Required for Fly's private health prober to reach the process.
+  WORKER_HEALTH_HOST = "0.0.0.0"
+  WORKER_HEALTH_PORT = "8080"
+  WORKER_GRACE_MS = "10000"
+
+# It probes /readyz, not /healthz. Both answer 200 while the worker is
+# inert, but they diverge once execution is enabled: /healthz reports that
+# the process is alive, while /readyz answers 503 as soon as the worker has
+# stopped making progress inside WORKER_READY_STALE_MS.
+[checks]
+  [checks.readiness]
+    type = "http"
+    port = 8080
+    method = "GET"
+    path = "/readyz"
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "10s"
+
+# `never`, not `no`: flyctl validates fly.toml against always | never |
+# on-failure. A bounded one-claim worker must stay stopped after every exit.
+# An automatic restart would start a fresh process, reset the intrinsic
+# total-runtime ceiling and defeat WORKER_EXIT_AFTER_CLAIMED_JOB. Recovery
+# is an explicit operator action.
+[[restart]]
+  policy = "never"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512

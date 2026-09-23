@@ -361,14 +361,30 @@ function code(src: string, comment: string): string[] {
   const templateSrc = read("fly.worker.toml.template");
   const templateLines = code(templateSrc, "#");
 
+  // `mode` is the ONE value a deployable config may differ from the template
+  // by, beyond its own identity, and it is stated here rather than read from
+  // the file: a flip in either direction must break this contract and be
+  // argued for, never merged as a quiet edit to a toml.
   const DEPLOYABLE = [
-    { env: "staging", file: "fly.worker.staging.toml", app: "zypact-protocol-worker-staging" },
-    { env: "production", file: "fly.worker.production.toml", app: "zypact-protocol-worker" },
+    {
+      env: "staging", file: "fly.worker.staging.toml",
+      app: "zypact-protocol-worker-staging", mode: "disabled",
+    },
+    {
+      env: "production", file: "fly.worker.production.toml",
+      app: "zypact-protocol-worker", mode: "live", // D-034
+    },
   ] as const;
 
   const identities = new Set<string>();
 
-  for (const { env, file, app } of DEPLOYABLE) {
+  const MODE_LINE = /^WORKER_EXECUTION_MODE\s*=/;
+  const templateBounds = templateLines.filter((l) => !MODE_LINE.test(l));
+  assert("the template itself remains execution-disabled",
+    templateLines.filter((l) => l === 'WORKER_EXECUTION_MODE = "disabled"').length === 1,
+    templateLines.filter((l) => MODE_LINE.test(l)).join(" | ") || "absent");
+
+  for (const { env, file, app, mode } of DEPLOYABLE) {
     const src = read(file);
     const lines = code(src, "#");
 
@@ -390,14 +406,37 @@ function code(src: string, comment: string): string[] {
       !identities.has(appLines[0] ?? ""), appLines[0] ?? "absent");
     identities.add(appLines[0] ?? "");
 
-    const withoutIdentity = lines.filter(
-      (l) => !/^app\s*=/.test(l) && !/^primary_region\s*=/.test(l),
+    // Identity and mode aside, every BOUND must still be the template's.
+    // Those are what a staging demonstration establishes; a production file
+    // that quietly widened a runtime, a slot count or a retry ceiling would
+    // be a worker no rehearsal describes.
+    const bounds = lines.filter(
+      (l) => !/^app\s*=/.test(l) && !/^primary_region\s*=/.test(l) && !MODE_LINE.test(l),
     );
-    assert(`${env} differs semantically from the inert template only by app and region`,
-      withoutIdentity.join("\n") === templateLines.join("\n"),
-      `${withoutIdentity.length} ${env} lines vs ${templateLines.length} template lines`);
-    assert(`${env} remains explicitly execution-disabled`,
-      lines.filter((l) => l === 'WORKER_EXECUTION_MODE = "disabled"').length === 1);
+    assert(`${env} differs from the inert template only by app, region and execution mode`,
+      bounds.join("\n") === templateBounds.join("\n"),
+      `${bounds.length} ${env} bound lines vs ${templateBounds.length} template bound lines`);
+
+    assert(`${env} declares exactly one execution mode, and it is "${mode}"`,
+      lines.filter((l) => MODE_LINE.test(l)).length === 1
+        && lines.includes(`WORKER_EXECUTION_MODE = "${mode}"`),
+      lines.filter((l) => MODE_LINE.test(l)).join(" | ") || "absent");
+
+    // A live worker is bounded by these two values and nothing else. Without
+    // both, one operator start would no longer mean one job: the process
+    // would claim again after finishing, and a restart would hand it a fresh
+    // runtime ceiling. The mode is only safe to enable while they hold.
+    if (mode === "live") {
+      assert(`${env} exits after a single claimed job`,
+        lines.includes('WORKER_EXIT_AFTER_CLAIMED_JOB = "true"'),
+        lines.filter((l) => l.startsWith("WORKER_EXIT_AFTER_CLAIMED_JOB")).join(" | "));
+      assert(`${env} never restarts a machine automatically`,
+        lines.some((l) => /^policy\s*=\s*"never"$/.test(l)),
+        lines.filter((l) => l.startsWith("policy")).join(" | "));
+      assert(`${env} claims at most one slot per claim`,
+        lines.includes('WORKER_MAX_SLOTS_PER_CLAIM = "1"'),
+        lines.filter((l) => l.startsWith("WORKER_MAX_SLOTS_PER_CLAIM")).join(" | "));
+    }
 
     const body = lines.join("\n");
     assert(`${env} carries no credential-shaped key`,

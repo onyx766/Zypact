@@ -1,10 +1,11 @@
 # Fly configuration for the protocol worker in PRODUCTION.
 #
-# This file names the production application and its region under D-033. It
-# is deployable, but deliberately inert: WORKER_EXECUTION_MODE remains
-# `disabled`, so deploying or starting this image cannot claim a job,
-# contact Supabase or call a paid provider. Enabling live execution is a
-# separate, separately authorised change to this file.
+# This file names the production application and its region under D-033, and
+# enables live execution under D-034. Deploying it does not spend: a machine
+# is created stopped and claims nothing until an operator starts it, and it
+# stops again after one job. The bound that matters is not the mode but the
+# pair WORKER_EXIT_AFTER_CLAIMED_JOB = "true" and [[restart]] policy =
+# "never", which together make one start mean one job.
 #
 # Nothing here is a secret. The Supabase URL and project ref, the service-
 # role key, the Perplexity key and the analysis-provider key are absent and
@@ -18,9 +19,11 @@
 # check below.
 #
 # Every value below is deliberately identical to fly.worker.staging.toml
-# apart from `app`. A worker whose bounds differ between staging and
-# production cannot have its production behaviour established by a staging
-# demonstration, so the two files are kept in step and a test asserts it.
+# apart from `app` and WORKER_EXECUTION_MODE. A worker whose BOUNDS differed
+# between staging and production could not have its production behaviour
+# established by a staging demonstration; the execution mode is not a bound
+# but the authorisation to use them, and it is the only value the hosting
+# contract permits to differ per environment.
 
 app = "zypact-protocol-worker"
 primary_region = "iad"
@@ -34,8 +37,14 @@ kill_timeout = 30
 
 [env]
   NODE_ENV = "production"
-  # Inert until a later authorisation explicitly enables live execution.
-  WORKER_EXECUTION_MODE = "disabled"
+  # Live under D-034. This is the one line that permits paid provider calls,
+  # and it permits them only while a machine is running: the machine is
+  # created stopped, WORKER_EXIT_AFTER_CLAIMED_JOB ends the process after a
+  # single claimed job, and [[restart]] policy = "never" keeps it stopped
+  # afterwards. One operator start is therefore one job, and spending stays
+  # an explicit act. Reverting this line to "disabled" and redeploying is the
+  # documented stop.
+  WORKER_EXECUTION_MODE = "live"
   WORKER_MAX_SLOTS_PER_CLAIM = "1"
   WORKER_MAX_RUNTIME_SECONDS = "120"
   WORKER_PROVIDER_TIMEOUT_MS = "45000"

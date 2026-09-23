@@ -295,6 +295,23 @@ export function InterventionActionsPanel({
               {retest.attempts === 1 ? "" : "s"} recorded.
             </p>
           ) : null}
+          {/*
+            A queued job runs only when the worker is started, and the worker
+            stops again after one job. Without this the queue is visible and
+            unreachable from the console, which is how a retest sat at
+            "queued · 0 attempts" with nothing in the product able to move it.
+          */}
+          {retest && retest.jobStatus === "queued" ? (
+            <ConfirmAction
+              label="Run retest now" busyLabel="Starting…" icon={<Rocket size={16} />}
+              path={`${base}/run-retest`} disabled={off}
+              confirmText={
+                "Start the worker to run this retest?\n\nIt makes the paid provider calls the queued job " +
+                "describes, then stops. One start runs one job.\n\n" +
+                "The result appears here when it finishes, usually a few minutes."
+              }
+            />
+          ) : null}
           {eligibility.reason === "OBSERVATION_WINDOW_OPEN" && !eligibility.authorizedEarly ? (
             <ReasonAction
               label="Authorize early retest" icon={<TriangleAlert size={16} />} tone="outline" disabled={off}

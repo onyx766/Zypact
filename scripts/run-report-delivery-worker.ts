@@ -22,14 +22,12 @@
  *                                           [--limit N] [--interval-seconds N]
  */
 
-import { createClient } from "@supabase/supabase-js";
-import { publicSiteUrl } from "@/lib/seo/site";
-
+import { findDeliverableRequests } from "@/lib/reports/deliver-protocol-report";
 import {
-  findDeliverableRequests,
-  processProtocolReport,
-  type ProcessResult,
-} from "@/lib/reports/deliver-protocol-report";
+  processReportRequests,
+  resolveReportPassConfig,
+  type ReportPassConfig,
+} from "@/lib/reports/report-pass";
 
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -82,86 +80,14 @@ function parseArgs(argv: string[]) {
   return { once, requestId, limit, intervalSeconds };
 }
 
-function resolveConfig() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!url || !key) {
-    fail(
-      "Supabase service-role configuration is required. Run with DOTENV_CONFIG_PATH=.env.local."
-    );
-  }
-
-  // Exactly "true". An unset, empty, or misspelled value leaves auto-send
-  // off, so a typo can never start mailing customers.
-  const autoSendEnabled =
-    process.env.SNAPSHOT_AUTO_DELIVERY_ENABLED === "true";
-
-  // Same origin as every other customer-email path (lib/seo/site.ts), so a
-  // report sent by this worker and one sent from the admin console link to
-  // the same host. Always resolves: unset falls back to the canonical host.
-  const appBaseUrl = publicSiteUrl();
-  const apiKey = process.env.RESEND_API_KEY ?? "";
-  const from = process.env.SNAPSHOT_EMAIL_FROM ?? "";
-
-  // Validated only when it will actually be used, so the dry pipeline runs on
-  // a host with no mail credentials at all.
-  if (autoSendEnabled) {
-    if (!apiKey) fail("RESEND_API_KEY is required when auto-delivery is enabled.");
-    if (!from) fail("SNAPSHOT_EMAIL_FROM is required when auto-delivery is enabled.");
-  }
-
-  return {
-    client: createClient(url, key, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    }),
-    autoSendEnabled,
-    deliveryConfig: { apiKey, from, appBaseUrl },
-  };
+function resolveConfig(): ReportPassConfig {
+  const resolved = resolveReportPassConfig(process.env);
+  if (!resolved.ok) fail(`${resolved.reason} Run with DOTENV_CONFIG_PATH=.env.local.`);
+  return resolved.config;
 }
 
-/** Outcomes that mean a human needs to look. */
-const ATTENTION: ReadonlySet<ProcessResult["outcome"]> = new Set([
-  "held_blocked",
-  "delivery_ambiguous",
-  "delivery_rejected",
-  "delivery_claim_unavailable",
-]);
-
-async function runOnce(
-  config: ReturnType<typeof resolveConfig>,
-  requestIds: string[]
-): Promise<void> {
-  for (const requestId of requestIds) {
-    try {
-      const result = await processProtocolReport(requestId, {
-        client: config.client,
-        autoSendEnabled: config.autoSendEnabled,
-        deliveryConfig: config.deliveryConfig,
-      });
-
-      log("report_processed", {
-        requestId,
-        outcome: result.outcome,
-        integrityStatus: result.integrityStatus,
-        integrityReasonCount: result.integrityReasons.length,
-        artifactId: result.artifactId,
-        needsAttention: ATTENTION.has(result.outcome),
-        ...(result.detail ? { detail: result.detail } : {}),
-      });
-    } catch (error) {
-      // One bad request must not stop the batch.
-      log("report_failed", {
-        requestId,
-        message:
-          error instanceof Error
-            ? error.message
-            : typeof error === "object" && error
-              ? JSON.stringify(error)
-              : String(error),
-      });
-    }
-  }
+async function runOnce(config: ReportPassConfig, requestIds: string[]): Promise<void> {
+  await processReportRequests(config, requestIds, log);
 }
 
 async function main() {

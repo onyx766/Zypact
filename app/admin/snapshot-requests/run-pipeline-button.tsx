@@ -47,6 +47,16 @@ const ACTIVE_JOB = new Set(["claimed", "running"]);
  */
 const START_GRACE_MS = 90_000;
 
+function startNote(jobStatus: string | null): string {
+  if (jobStatus === "succeeded") {
+    return "The scan has finished. The worker builds the report when it stops, so refresh this page in a few minutes.";
+  }
+  if (jobStatus === null || jobStatus === "queued") {
+    return "No worker claimed the job within 90 seconds. Check the Fly worker logs for the reason.";
+  }
+  return `The job ended as '${jobStatus}'. Check the Fly worker logs for the reason.`;
+}
+
 export function RunPipelineButton({
   requestId,
   state,
@@ -218,13 +228,11 @@ export function RunPipelineButton({
         </span>
       ) : null}
 
-      {/* The click was accepted but no worker ever claimed the job. Said
-          plainly, because the alternative is a row that looks busy forever. */}
+      {/* The click was accepted but this row never saw the job running. Polls
+          are 6 s apart, so a job that finished between two of them looks the
+          same as one nobody claimed; the job's own status tells them apart. */}
       {graceExpired && !error ? (
-        <span className="zpa-action-note">
-          The run did not start — no worker claimed the job. Check
-          .pipeline-logs/ for the reason.
-        </span>
+        <span className="zpa-action-note">{startNote(state.jobStatus)}</span>
       ) : null}
 
       {error ? (

@@ -247,6 +247,45 @@ async function main(): Promise<void> {
       /row\.origin === "founder"[\s\S]{0,300}?Founder/.test(table));
   }
 
+  console.log("\n[7] the New audit form");
+  {
+    const panel = readFileSync(
+      path.join(process.cwd(), "app/admin/snapshot-requests/new-audit-panel.tsx"), "utf8");
+    const page = readFileSync(
+      path.join(process.cwd(), "app/admin/snapshot-requests/page.tsx"), "utf8");
+
+    check("the panel is rendered on the requests page",
+      /<NewAuditPanel \/>/.test(page) && /from "\.\/new-audit-panel"/.test(page));
+
+    // The route validates with the public form's strict zod schema, so the
+    // body must carry exactly these five keys. A missing one is a 400 the
+    // founder would have to decode from field errors; an extra one is a
+    // refusal outright.
+    for (const field of [
+      "contactName", "workEmail", "companyName", "websiteUrl", "buyerCategory",
+    ]) {
+      check(`the form collects ${field}`, panel.includes(field));
+    }
+    check("it posts exactly those five, and nothing else",
+      /body: JSON\.stringify\(values\)/.test(panel)
+        && /const EMPTY: Record<FieldKey, string> = \{[^}]*\}/.test(panel)
+        && (panel.match(/^\s{2}(contactName|workEmail|companyName|websiteUrl|buyerCategory): "",$/gm) ?? []).length === 5);
+
+    check("it posts to the founder route", /"\/api\/internal\/snapshot-requests"/.test(panel));
+    check("…and never to the public one",
+      !/"\/api\/snapshot-requests"/.test(panel));
+
+    check("field-level validation errors are surfaced",
+      /payload\?\.issues/.test(panel) && /zpa-field-error/.test(panel));
+    check("an active-domain conflict shows the server's own explanation",
+      /payload\?\.detail/.test(panel));
+    check("success goes to the review page, not to a scan",
+      /window\.location\.href = payload\.reviewPath/.test(panel)
+        && !/run-pipeline/.test(panel));
+    check("the panel says approval is still required before any charge",
+      /pending\s*\n?\s*approval[\s\S]{0,120}?approve it|nothing is scanned or charged/i.test(panel));
+  }
+
   console.log(`\n${passed}/${passed + failed} checks passed.${failed ? ` ${failed} FAILED.` : ""}\n`);
   if (failed > 0) process.exit(1);
 }

@@ -20,11 +20,18 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { evaluateReportIntegrity } from "@/lib/export/report-integrity";
+import {
+  evaluateReportIntegrity,
+  type ReportIntegrityCheckInput,
+  type ReportIntegrityResult,
+} from "@/lib/export/report-integrity";
 import { buildProtocolReport } from "@/lib/reports/build-protocol-report";
 import { readProtocolEvidence } from "@/lib/reports/read-protocol-evidence";
 import { readIntegritySignals } from "@/lib/reports/protocol-integrity-signals";
-import { renderProtocolReportMarkdown } from "@/lib/reports/render-protocol-report-markdown";
+import {
+  renderProtocolReportMarkdown,
+  renderProtocolShortReportMarkdown,
+} from "@/lib/reports/render-protocol-report-markdown";
 import { sendProtocolReportEmail } from "@/lib/reports/protocol-report-email";
 import { snapshotReportArtifactRevision } from "@/lib/snapshot-requests/report-artifact-revision";
 import { ClientReportDeliveryError, type ClientReportDeliveryConfig } from "@/lib/snapshot-requests/client-report-delivery";
@@ -96,6 +103,21 @@ async function loadRecipient(
   return { workEmail: row.work_email, companyName: row.company_name };
 }
 
+/**
+ * Both bodies are stored and either can be read, so both pass the gate. A
+ * `blocked` body blocks the artifact; otherwise the non-markdown signals,
+ * which are the same for both, decide.
+ */
+export function evaluateArtifactIntegrity(
+  fullMarkdown: string,
+  shortMarkdown: string,
+  signals: Omit<ReportIntegrityCheckInput, "markdown">
+): ReportIntegrityResult {
+  const full = evaluateReportIntegrity({ markdown: fullMarkdown, ...signals });
+  if (full.status === "blocked") return full;
+  return evaluateReportIntegrity({ markdown: shortMarkdown, ...signals });
+}
+
 export async function processProtocolReport(
   snapshotRequestId: string,
   deps: ProcessDeps
@@ -108,9 +130,14 @@ export async function processProtocolReport(
   );
   const payload = buildProtocolReport({ ...evidence, now: now() });
   const markdown = renderProtocolReportMarkdown(payload);
+  const shortMarkdown = renderProtocolShortReportMarkdown(payload);
 
   const signals = await readIntegritySignals(deps.client, payload);
-  const integrity = evaluateReportIntegrity({ markdown, ...signals });
+  const integrity = evaluateArtifactIntegrity(
+    markdown,
+    shortMarkdown,
+    signals
+  );
 
   const stamp = payload.generatedAt.replace(/[:.]/g, "-");
 
@@ -120,9 +147,9 @@ export async function processProtocolReport(
       p_request_id: payload.snapshotRequestId,
       p_project_id: payload.projectId,
       p_full_markdown: markdown,
-      p_short_markdown: markdown,
+      p_short_markdown: shortMarkdown,
       p_full_filename: `protocol-report-${stamp}.md`,
-      p_short_filename: `protocol-report-${stamp}.md`,
+      p_short_filename: `protocol-report-short-${stamp}.md`,
       p_generated_at: payload.generatedAt,
       p_payload: payload,
       p_integrity_status: integrity.status,
@@ -191,7 +218,7 @@ export async function processProtocolReport(
     };
   }
 
-  const revision = snapshotReportArtifactRevision(markdown, markdown);
+  const revision = snapshotReportArtifactRevision(markdown, shortMarkdown);
 
   const { data: begun, error: beginError } = await deps.client.rpc(
     "begin_snapshot_report_delivery",

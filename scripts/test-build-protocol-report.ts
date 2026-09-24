@@ -25,7 +25,13 @@ import {
   type EvidenceAttemptInput,
   type EvidenceResultInput,
 } from "@/lib/reports/protocol-report-types";
-import { renderProtocolReportMarkdown } from "@/lib/reports/render-protocol-report-markdown";
+import {
+  renderProtocolReportMarkdown,
+  renderProtocolShortReportMarkdown,
+} from "@/lib/reports/render-protocol-report-markdown";
+import { evaluateArtifactIntegrity } from "@/lib/reports/deliver-protocol-report";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 let failures = 0;
 function check(label: string, condition: boolean): void {
@@ -528,6 +534,191 @@ console.log("\nmarkdown projection");
   for (const banned of ["won the", "lost the", "visibility score"]) {
     check(`markdown omits "${banned}"`, !lower.includes(banned));
   }
+}
+
+console.log("\nshort projection: same figures, less detail");
+{
+  // A realistic 5-run baseline with a failure, an unreadable run, and more
+  // named brands than the short report lists.
+  const payload = buildProtocolReport(
+    input({
+      protocol: { ...input().protocol, plannedBaselineRuns: 5 },
+      attempts: [
+        attempt({ id: "a1", baselineOrdinal: 1, probeRunId: "p1" }),
+        attempt({ id: "a2", baselineOrdinal: 2, probeRunId: "p2" }),
+        attempt({
+          id: "a3",
+          baselineOrdinal: 3,
+          probeRunId: "p3",
+          status: "failed",
+          terminationReason: "provider_timeout",
+        }),
+        attempt({ id: "a4", baselineOrdinal: 4, probeRunId: "p4" }),
+        attempt({ id: "a5", baselineOrdinal: 5, probeRunId: "p5" }),
+      ],
+      results: [
+        result({
+          probeRunId: "p1",
+          clientMentioned: true,
+          competitorsMentioned: ["Beta", "Gamma", "Delta"],
+        }),
+        result({
+          probeRunId: "p2",
+          clientMentioned: false,
+          competitorsMentioned: ["Beta", "Epsilon", "Zeta"],
+        }),
+        result({
+          probeRunId: "p4",
+          clientMentioned: true,
+          competitorsMentioned: ["Beta", "Gamma"],
+        }),
+      ],
+    })
+  );
+
+  const full = renderProtocolReportMarkdown(payload);
+  const short = renderProtocolShortReportMarkdown(payload);
+
+  check("short differs from full", short !== full);
+  check(
+    "short is materially shorter (under 60% of full)",
+    short.length < full.length * 0.6
+  );
+
+  check("keeps the exact question text", short.includes("best tool for X?"));
+  check(
+    "states the same numerator and denominator",
+    short.includes("2 of 3 readable runs")
+  );
+  const interval = payload.observation.interval!;
+  check(
+    "states the same interval as the full report",
+    short.includes(
+      `95% interval ${Math.round(interval.low * 100)}% to ${Math.round(
+        interval.high * 100
+      )}%`
+    ) &&
+      full.includes(
+        `${Math.round(interval.low * 100)}% to ${Math.round(
+          interval.high * 100
+        )}%`
+      )
+  );
+  check(
+    "keeps failed and unreadable runs visible",
+    short.includes("5 planned") &&
+      short.includes("1 failed") &&
+      short.includes("1 without a readable result") &&
+      short.includes("3 counted in the rate")
+  );
+  check(
+    "keeps every uncertainty note",
+    payload.uncertainty.every((note) => short.includes(note))
+  );
+  check(
+    "keeps every limitation",
+    payload.limitations.every((note) => short.includes(note))
+  );
+
+  check("drops the run-by-run table", !short.includes("Run-by-run"));
+  check(
+    "drops evidence hashes",
+    !short.includes(payload.question.hash.slice(0, 12)) &&
+      !short.includes("a".repeat(16))
+  );
+  check("drops integrity notes", !short.includes("Integrity notes"));
+
+  check(
+    "lists the top three brands",
+    short.includes("- Beta — 3 of 3") && short.includes("- Gamma — 2 of 3")
+  );
+  check(
+    "points to the rest instead of listing them",
+    short.includes("and 2 more, listed in the full report")
+  );
+  check(
+    "keeps the non-displacement caveat",
+    short.includes("not evidence that a brand displaced you")
+  );
+
+  const lower = short.toLowerCase();
+  for (const banned of ["won the", "lost the", "visibility score"]) {
+    check(`short omits "${banned}"`, !lower.includes(banned));
+  }
+}
+
+console.log("\nshort projection: honest edge states");
+{
+  const empty = renderProtocolShortReportMarkdown(
+    buildProtocolReport(
+      input({
+        attempts: [attempt({ id: "a1", baselineOrdinal: 1, status: "failed" })],
+        results: [],
+      })
+    )
+  );
+  check("empty result is not a zero", empty.includes("not a zero"));
+  check("no interval is invented", !empty.includes("95% interval"));
+
+  const payload = buildProtocolReport(
+    input({
+      attempts: [attempt({ id: "a1", baselineOrdinal: 1, probeRunId: "p1" })],
+      results: [result({ probeRunId: "p1" })],
+    })
+  );
+  const unreconciled = renderProtocolShortReportMarkdown({
+    ...payload,
+    reconciliation: { ...payload.reconciliation, accountedFor: false },
+  });
+  check(
+    "non-reconciling counts are flagged",
+    unreconciled.includes("Attempt counts do not reconcile")
+  );
+}
+
+console.log("\nboth stored bodies pass the integrity gate");
+{
+  const signals = {
+    hasApprovedProtocol: true,
+    hasApprovedSamplePlan: true,
+    hasPaidCallReservation: true,
+    hasCompleteEvidenceHashes: true,
+  };
+  const clean = "# report";
+  const legacy = "**lost prompt groups**: 2";
+
+  check(
+    "clean bodies pass",
+    evaluateArtifactIntegrity(clean, clean, signals).status ===
+      "integrity_passed"
+  );
+  check(
+    "a legacy verdict in the short body blocks the artifact",
+    evaluateArtifactIntegrity(clean, legacy, signals).status === "blocked"
+  );
+  check(
+    "a legacy verdict in the full body blocks the artifact",
+    evaluateArtifactIntegrity(legacy, clean, signals).status === "blocked"
+  );
+  check(
+    "missing signals still hold for review",
+    evaluateArtifactIntegrity(clean, clean, {}).status === "needs_review"
+  );
+
+  // The revision must hash the body actually stored as short, or the
+  // delivery claim is refused against the database's own computation.
+  const worker = readFileSync(
+    path.join(process.cwd(), "lib", "reports", "deliver-protocol-report.ts"),
+    "utf8"
+  );
+  check(
+    "the short body is stored as the short report",
+    worker.includes("p_short_markdown: shortMarkdown")
+  );
+  check(
+    "the delivery revision covers both bodies",
+    worker.includes("snapshotReportArtifactRevision(markdown, shortMarkdown)")
+  );
 }
 
 console.log(

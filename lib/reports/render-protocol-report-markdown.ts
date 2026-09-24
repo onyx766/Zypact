@@ -174,3 +174,113 @@ export function renderProtocolReportMarkdown(
 
   return lines.join("\n");
 }
+
+/** Brands listed in the short report before deferring to the full one. */
+const SHORT_REPORT_COMPETITOR_LIMIT = 3;
+
+/**
+ * The short projection of the same payload.
+ *
+ * Every figure is read from the payload the full report renders, so the two
+ * can differ in detail but never in a number. What is dropped is audit
+ * detail: the run-by-run table, evidence hashes, question metadata, and the
+ * integrity notes. What is kept is everything a reader needs to not
+ * over-read the result — the exact question, the rate with its interval,
+ * the failed and excluded attempts behind it, and every uncertainty and
+ * limitation note.
+ */
+export function renderProtocolShortReportMarkdown(
+  payload: ProtocolReportPayload
+): string {
+  const { subject, question, protocol, reconciliation, observation } =
+    payload;
+
+  const lines: string[] = [];
+
+  lines.push(`# AI Answer Snapshot (summary) — ${subject.companyName}`);
+  lines.push("");
+  lines.push(`Website: ${subject.websiteUrl}`);
+  lines.push(`Generated: ${payload.generatedAt}`);
+  lines.push(
+    `Surface: ${protocol.provider} (${protocol.surface}), model ${protocol.model}`
+  );
+  lines.push("");
+
+  lines.push("## The question");
+  lines.push("");
+  lines.push("> " + question.text.split("\n").join("\n> "));
+  lines.push("");
+
+  lines.push("## What was observed");
+  lines.push("");
+
+  if (observation.rate === null) {
+    lines.push(
+      "No run produced a readable provider result, so no rate is reported. This is an empty result, not a zero."
+    );
+  } else {
+    const interval = observation.interval
+      ? ` (95% interval ${percent(observation.interval.low)} to ${percent(
+          observation.interval.high
+        )})`
+      : "";
+    lines.push(
+      `**${protocol.primaryMetric}:** ${observation.numerator} of ${observation.denominator} readable runs, ${percent(
+        observation.rate
+      )}${interval}.`
+    );
+  }
+  lines.push("");
+
+  // One line in place of the reconciliation list. Failed and excluded
+  // attempts stay visible, because a short report that showed only the
+  // readable runs would quietly shrink the denominator.
+  lines.push(
+    `Runs: ${reconciliation.planned} planned, ${reconciliation.attempted} attempted, ${reconciliation.failed} failed, ${reconciliation.excludedByReview} excluded after review, ${reconciliation.excludedNoResult} without a readable result, ${observation.denominator} counted in the rate.`
+  );
+  if (!reconciliation.accountedFor) {
+    lines.push("");
+    lines.push(
+      "Attempt counts do not reconcile. This report is incomplete and must not be delivered without review."
+    );
+  }
+  lines.push("");
+
+  if (payload.competitorsObserved.length > 0) {
+    const shown = payload.competitorsObserved.slice(
+      0,
+      SHORT_REPORT_COMPETITOR_LIMIT
+    );
+    const remaining =
+      payload.competitorsObserved.length - shown.length;
+
+    lines.push("## Other brands named");
+    lines.push("");
+    for (const competitor of shown) {
+      lines.push(
+        `- ${competitor.name} — ${competitor.runsMentionedIn} of ${observation.denominator} readable run(s)`
+      );
+    }
+    if (remaining > 0) {
+      lines.push(`- and ${remaining} more, listed in the full report`);
+    }
+    lines.push("");
+    lines.push(
+      "Being named is not evidence that a brand displaced you or won a sale."
+    );
+    lines.push("");
+  }
+
+  lines.push("## Read this with care");
+  lines.push("");
+  for (const note of payload.uncertainty) lines.push(`- ${note}`);
+  for (const note of payload.limitations) lines.push(`- ${note}`);
+  lines.push("");
+
+  lines.push(
+    "The full report has the run-by-run results, the evidence hash for each run, and the complete attempt reconciliation."
+  );
+  lines.push("");
+
+  return lines.join("\n");
+}

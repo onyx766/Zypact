@@ -9,7 +9,7 @@
  *
  * Usage:
  *   npx tsx -r dotenv/config scripts/render-protocol-report.ts \
- *     --request-id <uuid> [--json] [--out <file.md>]
+ *     --request-id <uuid> [--json] [--short] [--out <file.md>]
  *
  * Credentials come from the environment. This repository keeps them in
  * `.env.local`, which plain `dotenv/config` does not load by default, so
@@ -24,7 +24,10 @@ import { createClient } from "@supabase/supabase-js";
 import { buildProtocolReport } from "@/lib/reports/build-protocol-report";
 import { processProtocolReport } from "@/lib/reports/deliver-protocol-report";
 import { readProtocolEvidence } from "@/lib/reports/read-protocol-evidence";
-import { renderProtocolReportMarkdown } from "@/lib/reports/render-protocol-report-markdown";
+import {
+  renderProtocolReportMarkdown,
+  renderProtocolShortReportMarkdown,
+} from "@/lib/reports/render-protocol-report-markdown";
 
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -37,6 +40,7 @@ function fail(message: string): never {
 function parseArgs(argv: string[]) {
   let requestId = "";
   let json = false;
+  let short = false;
   let persist = false;
   let out: string | undefined;
 
@@ -47,6 +51,8 @@ function parseArgs(argv: string[]) {
       i += 1;
     } else if (arg === "--json") {
       json = true;
+    } else if (arg === "--short") {
+      short = true;
     } else if (arg === "--persist") {
       persist = true;
     } else if (arg === "--out") {
@@ -61,7 +67,7 @@ function parseArgs(argv: string[]) {
     fail("--request-id must be a valid UUID.");
   }
 
-  return { requestId, json, persist, out };
+  return { requestId, json, short, persist, out };
 }
 
 async function main() {
@@ -121,7 +127,9 @@ async function main() {
     return;
   }
 
-  const markdown = renderProtocolReportMarkdown(payload);
+  const markdown = args.short
+    ? renderProtocolShortReportMarkdown(payload)
+    : renderProtocolReportMarkdown(payload);
 
   if (args.out) {
     const outPath = resolve(args.out);

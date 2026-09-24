@@ -32,6 +32,7 @@ export interface RequestRow {
   workEmail: string;
   buyerQuestion: string;
   status: string;
+  origin: "public_form" | "founder";
   progressStage: string | null;
   createdAt: string;
   createdDate: string;
@@ -49,6 +50,14 @@ type FilterKey =
   | "rejected";
 
 type SortKey = "newest" | "oldest" | "company";
+
+/**
+ * Origin is a separate axis from status, so it is a separate control rather
+ * than another status tab: "founder" and "approved" describe different things
+ * about the same row, and folding them into one tab strip would make the
+ * counts read as if they were alternatives.
+ */
+type OriginKey = "all" | "public_form" | "founder";
 
 type Tone = "green" | "amber" | "blue" | "red" | "neutral";
 
@@ -151,19 +160,39 @@ function matchesFilter(row: RequestRow, filter: FilterKey): boolean {
 
 export function RequestsTable({ rows }: { rows: RequestRow[] }) {
   const [filter, setFilter] = useState<FilterKey>("all");
+  const [origin, setOrigin] = useState<OriginKey>("all");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortKey>("newest");
   const [page, setPage] = useState(1);
 
+  // Counted over the origin-filtered rows, so the status tabs describe what
+  // the table is actually about to show rather than the whole list.
+  const scoped = useMemo(
+    () =>
+      origin === "all"
+        ? rows
+        : rows.filter((row) => row.origin === origin),
+    [rows, origin]
+  );
+
   const counts = useMemo(
     () => ({
-      all: rows.length,
-      approved: rows.filter((row) => row.status === "approved").length,
-      pending_verification: rows.filter(
+      all: scoped.length,
+      approved: scoped.filter((row) => row.status === "approved").length,
+      pending_verification: scoped.filter(
         (row) => row.status === "pending_verification"
       ).length,
-      delivered: rows.filter((row) => row.pipeline.delivered).length,
-      rejected: rows.filter((row) => row.status === "rejected").length,
+      delivered: scoped.filter((row) => row.pipeline.delivered).length,
+      rejected: scoped.filter((row) => row.status === "rejected").length,
+    }),
+    [scoped]
+  );
+
+  const originCounts = useMemo(
+    () => ({
+      all: rows.length,
+      public_form: rows.filter((row) => row.origin === "public_form").length,
+      founder: rows.filter((row) => row.origin === "founder").length,
     }),
     [rows]
   );
@@ -171,7 +200,7 @@ export function RequestsTable({ rows }: { rows: RequestRow[] }) {
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
 
-    const matched = rows.filter((row) => {
+    const matched = scoped.filter((row) => {
       if (!matchesFilter(row, filter)) return false;
       if (needle === "") return true;
 
@@ -196,7 +225,7 @@ export function RequestsTable({ rows }: { rows: RequestRow[] }) {
     });
 
     return sorted;
-  }, [rows, filter, query, sort]);
+  }, [scoped, filter, query, sort]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
@@ -281,6 +310,25 @@ export function RequestsTable({ rows }: { rows: RequestRow[] }) {
         </div>
 
         <div className="zpa-toolbar-right">
+          <select
+            className="zpa-select"
+            value={origin}
+            onChange={(event) =>
+              apply(setOrigin)(event.target.value as OriginKey)
+            }
+            aria-label="Filter by origin"
+          >
+            <option value="all">
+              All origins ({originCounts.all})
+            </option>
+            <option value="public_form">
+              Public form ({originCounts.public_form})
+            </option>
+            <option value="founder">
+              Founder-created ({originCounts.founder})
+            </option>
+          </select>
+
           <label className="zpa-search">
             <Search size={16} strokeWidth={1.9} />
             <input
@@ -363,6 +411,14 @@ export function RequestsTable({ rows }: { rows: RequestRow[] }) {
                     </td>
 
                     <td>
+                      {row.origin === "founder" ? (
+                        <span
+                          className="zpa-origin-tag"
+                          title="Created by the founder, not submitted through the public form"
+                        >
+                          Founder
+                        </span>
+                      ) : null}
                       {row.contactName ? (
                         <div className="zpa-contact-name">
                           {row.contactName}

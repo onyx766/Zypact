@@ -172,6 +172,7 @@ async function main() {
       protocolId: null,
       // Never approved, so no founder competitor frame exists.
       competitors: [],
+      origin: "public_form",
       id: "old-active-request",
       workEmail: "old@example.com",
       normalizedEmail: "old@example.com",

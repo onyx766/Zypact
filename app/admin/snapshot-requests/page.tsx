@@ -104,6 +104,7 @@ export default async function SnapshotRequestsAdminPage() {
       // predates that framing (see lib/db/types.ts).
       buyerQuestion: request.buyerCategory,
       status: request.status,
+      origin: request.origin,
       progressStage: request.progressStage,
       createdAt: request.createdAt,
       createdDate: parts.date,

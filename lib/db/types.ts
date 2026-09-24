@@ -865,6 +865,8 @@ export type SnapshotRequestLimitCode =
   | "active_domain"
   | "ip_daily";
 
+export type SnapshotRequestOrigin = "public_form" | "founder";
+
 export class SnapshotRequestLimitError extends Error {
   readonly code: SnapshotRequestLimitCode;
 
@@ -897,6 +899,14 @@ export interface SnapshotRequest {
    */
   buyerCategory: string;
   status: SnapshotRequestStatus;
+  /**
+   * How the request was created (migration 0081). `public_form` is every row
+   * that came through the guarded RPC, including all rows that predate the
+   * column; `founder` is one the founder created for a prospect who never
+   * filled in the form. Kept distinct so admin counts do not mix customer
+   * demand with founder-initiated work.
+   */
+  origin: SnapshotRequestOrigin;
   requestIpHash: string | null;
   projectId: string | null;
   progressStage: SnapshotProgressStage | null;
@@ -1036,6 +1046,24 @@ export interface CreateSnapshotRequestInput {
   normalizedDomain: string;
   buyerCategory: string;
   requestIpHash?: string | null;
+}
+
+/**
+ * A founder-created audit (migration 0081).
+ *
+ * Deliberately not `CreateSnapshotRequestInput`: there is no `requestIpHash`,
+ * because the founder's own address is not the abuse signal that column
+ * exists to carry, and passing one would put a misleading value in a row
+ * every other reader interprets as a public submitter's network.
+ */
+export interface CreateFounderSnapshotRequestInput {
+  workEmail: string;
+  normalizedEmail: string;
+  companyName: string;
+  contactName?: string | null;
+  websiteUrl: string;
+  normalizedDomain: string;
+  buyerCategory: string;
 }
 
 export interface IssueSnapshotRequestVerificationInput {
@@ -2631,6 +2659,16 @@ export interface DbAdapter {
   ): Promise<SnapshotRequest | null>;
   createSnapshotRequest(
     input: CreateSnapshotRequestInput
+  ): Promise<SnapshotRequest>;
+  /**
+   * Founder-created audit (migration 0081). Skips the public form's abuse
+   * throttles and lands on `pending_approval`; still throws
+   * `SnapshotRequestLimitError("active_domain")` when that domain already has
+   * an audit in flight, and still requires founder approval before any paid
+   * provider call.
+   */
+  createFounderSnapshotRequest(
+    input: CreateFounderSnapshotRequestInput
   ): Promise<SnapshotRequest>;
   issueSnapshotRequestVerification(
     input: IssueSnapshotRequestVerificationInput

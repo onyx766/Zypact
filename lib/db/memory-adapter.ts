@@ -22,6 +22,7 @@ import type {
   CreateBuyerQuestionVersionInput,
   CreateProjectInput,
   CreateProtocolInput,
+  CreateFounderSnapshotRequestInput,
   CreateSnapshotRequestInput,
   DatasetBatch,
   DatasetBatchInput,
@@ -997,7 +998,70 @@ export const memoryAdapter: DbAdapter = {
       normalizedDomain: input.normalizedDomain,
       buyerCategory: input.buyerCategory,
       status: "pending_verification",
+      origin: "public_form",
       requestIpHash: input.requestIpHash ?? null,
+      projectId: null,
+      progressStage: null,
+      progressUpdatedAt: null,
+      approvedAt: null,
+      approvedBy: null,
+      protocolId: null,
+      claimedBy: null,
+      claimToken: null,
+      leaseExpiresAt: null,
+      attemptCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    store.snapshotRequests.set(row.id, row);
+    return { ...row };
+  },
+
+  /**
+   * Mirrors migration 0081: the three public-form throttles do not apply,
+   * the active-domain conflict still does, and the row lands on
+   * `pending_approval` with no verification step.
+   */
+  async createFounderSnapshotRequest(
+    input: CreateFounderSnapshotRequestInput
+  ): Promise<SnapshotRequest> {
+    const store = getStore();
+
+    const ACTIVE: ReadonlySet<SnapshotRequest["status"]> = new Set([
+      "pending_verification",
+      "verified",
+      "pending_approval",
+      "approved",
+      "queued",
+      "running",
+      "quality_review",
+      "needs_founder_review",
+    ]);
+
+    for (const existing of store.snapshotRequests.values()) {
+      if (
+        existing.normalizedDomain === input.normalizedDomain &&
+        ACTIVE.has(existing.status)
+      ) {
+        throw new SnapshotRequestLimitError("active_domain");
+      }
+    }
+
+    const now = new Date().toISOString();
+    const row: SnapshotRequest = {
+      competitors: [],
+      id: randomUUID(),
+      workEmail: input.workEmail,
+      normalizedEmail: input.normalizedEmail,
+      companyName: input.companyName,
+      contactName: input.contactName ?? null,
+      websiteUrl: input.websiteUrl,
+      normalizedDomain: input.normalizedDomain,
+      buyerCategory: input.buyerCategory,
+      status: "pending_approval",
+      origin: "founder",
+      requestIpHash: null,
       projectId: null,
       progressStage: null,
       progressUpdatedAt: null,

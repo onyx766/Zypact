@@ -32,6 +32,7 @@ import type {
   CreateBuyerQuestionVersionInput,
   CreateProjectInput,
   CreateProtocolInput,
+  CreateFounderSnapshotRequestInput,
   CreateSnapshotRequestInput,
   DatasetBatch,
   DatasetBatchInput,
@@ -216,6 +217,7 @@ interface SnapshotRequestDbRow {
   normalized_domain: string;
   buyer_category: string;
   status: string;
+  origin?: string | null;
   request_ip_hash: string | null;
   project_id: string | null;
   progress_stage: string | null;
@@ -739,6 +741,11 @@ function mapSnapshotRequest(r: SnapshotRequestDbRow): SnapshotRequest {
     normalizedDomain: r.normalized_domain,
     buyerCategory: r.buyer_category,
     status: r.status as SnapshotRequest["status"],
+    // Defaulted here, not assumed: a row read before migration 0081 is
+    // applied has no such column, and every one of those came from the
+    // public form.
+    origin:
+      r.origin === "founder" ? "founder" : "public_form",
     requestIpHash: r.request_ip_hash,
     projectId: r.project_id,
     progressStage:
@@ -1917,6 +1924,36 @@ export const supabaseAdapter: DbAdapter = {
       }
 
       throw error ?? new Error("createSnapshotRequest failed");
+    }
+
+    return mapSnapshotRequest(data);
+  },
+
+  async createFounderSnapshotRequest(
+    input: CreateFounderSnapshotRequestInput
+  ): Promise<SnapshotRequest> {
+    const { data, error } = await getClient()
+      .rpc("create_snapshot_request_as_founder", {
+        p_work_email: input.workEmail,
+        p_normalized_email: input.normalizedEmail,
+        p_company_name: input.companyName,
+        p_website_url: input.websiteUrl,
+        p_normalized_domain: input.normalizedDomain,
+        p_buyer_category: input.buyerCategory,
+        p_contact_name: input.contactName ?? null,
+      })
+      .single<SnapshotRequestDbRow>();
+
+    if (error || !data) {
+      // The only limit this function raises is the active-domain conflict;
+      // the shared mapper is reused so its code keeps one spelling.
+      const limitCode = snapshotLimitCodeFromError(error);
+
+      if (limitCode) {
+        throw new SnapshotRequestLimitError(limitCode);
+      }
+
+      throw error ?? new Error("createFounderSnapshotRequest failed");
     }
 
     return mapSnapshotRequest(data);

@@ -4,6 +4,7 @@ import { FOUNDER_ADMIN_PATH } from "@/lib/auth/safe-next-path";
 import { getReportServiceClient } from "@/lib/reports/service-client";
 import { loadPipelineRowStates } from "@/lib/reports/pipeline-row-state";
 import { AdminShell, type AdminHealth } from "../admin-shell";
+import { NewAuditPanel } from "./new-audit-panel";
 import { RequestsTable, type RequestRow } from "./requests-table";
 
 export const dynamic = "force-dynamic";
@@ -134,6 +135,8 @@ export default async function SnapshotRequestsAdminPage() {
             customers.
           </p>
         </div>
+
+        <NewAuditPanel />
       </div>
 
       <RequestsTable rows={rows} />

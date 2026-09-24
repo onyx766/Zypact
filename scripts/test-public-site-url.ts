@@ -41,7 +41,7 @@ const DELIVERY_PATHS = [
   "app/api/internal/snapshot-requests/[requestId]/send-report/route.ts",
   "app/api/internal/interventions/[interventionId]/outcome-card/send/route.ts",
   "lib/reports/review-actions.ts",
-  "scripts/run-report-delivery-worker.ts",
+  "lib/reports/report-pass.ts",
   "scripts/run-outcome-card-worker.ts",
   "scripts/run-pipeline-once.ts",
 ];

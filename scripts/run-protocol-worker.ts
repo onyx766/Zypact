@@ -250,10 +250,11 @@ async function runLive(cfg: LiveWorkerConfig): Promise<void> {
         import("@/lib/protocol-worker/lifecycle"),
         import("@/lib/protocol-worker/worker"),
         import("@/lib/protocol-worker/health"),
+        import("@/lib/reports/report-pass"),
       ]),
     run: async ([
       { getDb }, { runPerplexityProbe }, callModel, { sleep }, { runWorkerLoop },
-      { WorkerHealth, idleProofEvent },
+      { WorkerHealth, idleProofEvent }, { runReportPass },
     ], adopt) => {
       const analysis: AnalysisTransport = {
         prepare: (call) =>
@@ -341,6 +342,22 @@ async function runLive(cfg: LiveWorkerConfig): Promise<void> {
       }, healthRef);
 
       log("worker_stopped", { ...health.snapshot() });
+
+      // One report pass once the scan loop has stopped, so a finished scan
+      // becomes a report without a second process. It calls no paid
+      // provider and runs inside the same runtime ceiling. The loop never
+      // sets `signal.aborted` itself, so a set flag means SIGINT, SIGTERM or
+      // the runtime deadline asked this process to stop: then it starts no
+      // new work, and the next run's pass picks the reports up.
+      if (signal.aborted) {
+        log("report_pass_skipped", { reason: "stop_requested", executionEnabled: true });
+      } else {
+        await runReportPass({
+          env: process.env,
+          log: (event, fields = {}) => log(event, { ...fields, executionEnabled: true }),
+          shouldStop: () => signal.aborted,
+        });
+      }
     },
     });
   } finally {

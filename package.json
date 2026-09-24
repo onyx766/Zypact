@@ -64,6 +64,7 @@
     "test:protocol-integrity": "tsx scripts/test-protocol-integrity-signals.ts",
     "test:public-report": "tsx scripts/test-public-report-preview.ts",
     "test:landing-page": "tsx scripts/test-landing-page.ts",
+    "test:intervention-page": "tsx scripts/test-intervention-page.ts",
     "test:send-report-fencing": "tsx scripts/test-send-report-fencing.ts",
     "test:seo": "tsx scripts/test-seo-contract.ts",
     "verify:live-seo": "tsx scripts/verify-live-seo.ts",

@@ -126,7 +126,11 @@ export const DISALLOWED_PATH_PREFIXES: readonly string[] = [
 ] as const;
 
 /** Public, indexable pages. The sitemap is exactly this list. */
-export const INDEXABLE_PATHS: readonly string[] = ["/", "/scan"] as const;
+export const INDEXABLE_PATHS: readonly string[] = [
+  "/",
+  "/scan",
+  "/perplexity-content-change-test",
+] as const;
 
 const redirectByPath = new Map(
   LEGACY_REDIRECTS.map((entry) => [entry.from, entry.to])

@@ -2,8 +2,9 @@ import type { Config } from "tailwindcss";
 import tailwindcssAnimate from "tailwindcss-animate";
 
 /**
- * `content` is deliberately limited to the marketing page at app/page.tsx, its
- * components, and the founder console under app/admin. Utilities only apply
+ * `content` is deliberately limited to the marketing pages (app/page.tsx and
+ * /perplexity-content-change-test), their components, and the founder console
+ * under app/admin. Utilities only apply
  * inside a `.v2-root` element (see `important` below), so an admin page opts in
  * by rendering inside AdminThemeRoot; admin pages that do not stay on their own
  * stylesheets. The remaining legacy pages (/scan, /report, /projects) are
@@ -26,6 +27,7 @@ const config: Config = {
   important: ".v2-root",
   content: [
     "./app/page.tsx",
+    "./app/perplexity-content-change-test/**/*.{ts,tsx}",
     "./components/ui/**/*.{ts,tsx}",
     "./components/marketing/**/*.{ts,tsx}",
     "./app/admin/**/*.{ts,tsx}",

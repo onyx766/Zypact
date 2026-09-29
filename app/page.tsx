@@ -5,15 +5,26 @@ import {
   Check,
   ClipboardList,
   Database,
+  MinusCircle,
   Repeat,
   Search,
   ShieldCheck,
+  TrendingDown,
+  TrendingUp,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { EvidenceDashboard } from "@/components/marketing/evidence-dashboard";
+import {
+  CheckItem,
+  IconTile,
+  PanelCard,
+  SectionHeading,
+  SectionLabel,
+  StepItem,
+  toneAt,
+} from "@/components/marketing/section-kit";
 import { SiteHeader } from "@/components/marketing/site-header";
 import { ZypactWordmark } from "@/components/marketing/zypact-mark";
 import { ThemeRoot } from "@/components/theme-root";
@@ -68,10 +79,12 @@ function getJsonLd() {
   };
 }
 
-const heroProof = [
-  "Approved protocol",
-  "Exact evidence",
-  "Honest outcomes",
+/** Hero chips. Short enough to stay on one line each at phone width. */
+const heroChips = [
+  { label: "Approved protocol", icon: ShieldCheck },
+  { label: "Exact evidence", icon: Database },
+  { label: "Prompt-scoped", icon: Search },
+  { label: "Registered retest", icon: Repeat },
 ] as const;
 
 const guarantees = [
@@ -85,19 +98,19 @@ const guarantees = [
 
 const steps = [
   {
-    number: "1",
+    number: 1,
     title: "Approve",
     icon: ClipboardList,
     copy: "Fix the question, surface, sampling plan, limits and decision rule before any paid provider call.",
   },
   {
-    number: "2",
+    number: 2,
     title: "Observe",
     icon: Search,
     copy: "Run the bounded Perplexity baseline and preserve every request, response and source exactly.",
   },
   {
-    number: "3",
+    number: 3,
     title: "Retest",
     icon: Repeat,
     copy: "Register one change, wait out the observation window, then ask the same question again.",
@@ -127,19 +140,52 @@ const features = [
   },
 ] as const;
 
+/**
+ * The four outcome statuses, shown with equal visual weight.
+ *
+ * This occupies the band the approved design gives to headline metrics. It
+ * deliberately carries no adoption or performance numbers: V1 is pre-pilot, so
+ * any such figure would be invented. These are the real, auditable results a
+ * retest can produce, and presenting them evenly is itself the claim — none is
+ * the "good" outcome the product is steering toward.
+ */
 const outcomes = [
-  "Increase observed",
-  "Decrease observed",
-  "No clear change",
-  "Inconclusive",
+  {
+    label: "Increase observed",
+    icon: TrendingUp,
+    copy: "The retest shows more presence for the same question.",
+  },
+  {
+    label: "Decrease observed",
+    icon: TrendingDown,
+    copy: "The retest shows less presence for the same question.",
+  },
+  {
+    label: "No clear change",
+    icon: MinusCircle,
+    copy: "Movement stays inside the uncertainty the protocol allows.",
+  },
+  {
+    label: "Inconclusive",
+    icon: ClipboardList,
+    copy: "Evidence cannot support a direction, and says so plainly.",
+  },
+] as const;
+
+/** What the engagement actually fixes. Process commitments, not outcomes. */
+const impactPoints = [
+  "One commercially important buyer question, agreed before anything runs",
+  "Exact provider evidence, preserved insert-only and inspectable",
+  "Failed and excluded attempts kept visible in the denominator",
+  "An honest outcome, including when nothing clearly changed",
 ] as const;
 
 /**
  * Canonical V1 delivery gates. `blocked` never delivers.
  *
- * Tones are the shared status tokens rather than the previous fixed hexes, so
- * the three gates keep their contrast in both themes and match the status
- * colours the founder console already uses for the same three states.
+ * Tones are the shared status tokens rather than fixed hexes, so the three
+ * gates keep their contrast in both themes and match the status colours the
+ * founder console already uses for the same three states.
  */
 const deliveryGates = [
   {
@@ -237,87 +283,100 @@ export default function LandingPage() {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(getJsonLd()) }}
       />
 
-      <div className="min-h-screen bg-surface-subtle">
+      <div className="min-h-screen bg-background">
         <SiteHeader />
 
         {/* -------------------------------------------------------------- Hero */}
-        <section className="relative overflow-hidden bg-surface-subtle">
+        <section className="relative isolate overflow-hidden">
+          {/*
+            Ambient glow behind the hero. `isolate` on the section keeps the
+            negative z-index from escaping behind the page background.
+          */}
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 right-0 hidden w-[30%] bg-panel lg:block"
-          >
-            {/* Gradient stops read the theme tokens, so the panel keeps its
-                depth in dark mode instead of being two fixed light-mode greens. */}
-            <div className="absolute inset-0 bg-[radial-gradient(120%_80%_at_20%_0%,hsl(var(--primary)/0.45),transparent_60%),radial-gradient(90%_70%_at_90%_100%,hsl(var(--panel)/0.9),transparent_55%)]" />
-          </div>
+            className="pointer-events-none absolute inset-x-0 -top-40 -z-10 h-[520px] bg-[radial-gradient(60%_60%_at_50%_0%,hsl(var(--primary)/0.16),transparent_70%)]"
+          />
 
-          <div className="shell relative grid items-center gap-14 pb-24 pt-16 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] lg:gap-10 lg:pb-28 lg:pt-20">
+          <div className="shell grid items-center gap-12 pb-16 pt-12 sm:pb-20 sm:pt-16 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] lg:gap-14 lg:pb-28 lg:pt-20">
             <div className="max-w-xl">
               <Badge>Evidence-backed diagnostic</Badge>
 
-              <h1 className="mt-6 text-[44px] font-extrabold leading-[1.04] tracking-tightest sm:text-[56px]">
+              <h1 className="mt-5 text-balance text-[34px] font-extrabold leading-[1.06] tracking-tightest sm:text-[46px] lg:text-[56px]">
                 Turn AI answers
                 <br />
-                into evidence
+                <span className="text-primary">into evidence</span>
               </h1>
 
-              <p className="mt-6 max-w-md text-[15px] leading-relaxed text-muted-foreground">
+              <p className="mt-5 max-w-md text-pretty text-[15px] leading-relaxed text-muted-foreground sm:text-[16px]">
                 Zypact records how Perplexity answers one commercially important
                 buyer question, preserves the exact evidence, and checks the
                 same question again after one registered change.
               </p>
 
-              <div className="mt-9 flex flex-wrap items-center gap-3">
-                <Button asChild size="lg">
+              {/* Buttons go full-width on phones so neither becomes a tap target
+                  narrower than the thumb that has to hit it. */}
+              <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+                <Button asChild size="lg" className="w-full sm:w-auto">
                   <a href={DEMO_URL}>
                     Request demo
                     <ArrowRight className="h-4 w-4" strokeWidth={2.25} />
                   </a>
                 </Button>
-                <Button asChild size="lg" variant="outline">
+                <Button
+                  asChild
+                  size="lg"
+                  variant="outline"
+                  className="w-full sm:w-auto"
+                >
                   <a href="#how-it-works">See the method</a>
                 </Button>
               </div>
 
-              <ul className="mt-9 flex flex-wrap items-center gap-x-7 gap-y-3">
-                {heroProof.map((item) => (
-                  <li key={item} className="flex items-center gap-2">
-                    <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full bg-primary text-primary-foreground">
-                      <Check className="h-2.5 w-2.5" strokeWidth={3.5} />
-                    </span>
-                    <span className="text-[13px] font-medium">{item}</span>
+              <ul className="mt-8 flex flex-wrap gap-2">
+                {heroChips.map((chip) => (
+                  <li
+                    key={chip.label}
+                    className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-2 text-[12px] font-semibold tracking-tight text-foreground/80"
+                  >
+                    <chip.icon
+                      className="h-3.5 w-3.5 shrink-0 text-primary"
+                      strokeWidth={2}
+                      aria-hidden="true"
+                    />
+                    {chip.label}
                   </li>
                 ))}
               </ul>
 
-              <p className="mt-7 text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+              <p className="mt-6 text-[11px] font-semibold uppercase leading-relaxed tracking-[0.1em] text-muted-foreground">
                 Perplexity Sonar only · One approved question · Automated after
                 approval · No guaranteed outcome
               </p>
             </div>
 
-            <div id="evidence" className="scroll-mt-24 lg:translate-x-6">
+            <div id="evidence" className="scroll-mt-24">
               <EvidenceDashboard />
             </div>
           </div>
         </section>
 
         {/* ---------------------------------------------------- Guarantee strip */}
-        <section className="border-y border-border bg-background">
-          <div className="shell flex flex-col gap-8 py-10 lg:flex-row lg:items-center lg:gap-14">
+        <section className="border-y border-border bg-surface-subtle">
+          <div className="shell flex flex-col gap-6 py-8 lg:flex-row lg:items-center lg:gap-12">
             <p className="shrink-0 text-[11px] font-semibold uppercase leading-[1.5] tracking-[0.12em] text-muted-foreground">
               What every V1
               <br className="hidden lg:block" /> engagement fixes
             </p>
-            <ul className="flex flex-1 flex-wrap items-center justify-between gap-x-6 gap-y-5">
+            <ul className="grid flex-1 grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:flex lg:flex-wrap lg:items-center lg:justify-between">
               {guarantees.map((item) => (
                 <li
                   key={item.label}
-                  className="flex items-center gap-2 whitespace-nowrap text-[14px] font-semibold tracking-tight text-foreground/80"
+                  className="flex items-center gap-2 text-[13px] font-semibold tracking-tight text-foreground/80 sm:text-[14px] lg:whitespace-nowrap"
                 >
                   <item.icon
                     className="h-[17px] w-[17px] shrink-0 text-primary"
                     strokeWidth={1.9}
+                    aria-hidden="true"
                   />
                   {item.label}
                 </li>
@@ -326,170 +385,204 @@ export default function LandingPage() {
           </div>
         </section>
 
-        {/* ------------------------------------------------------ How it works */}
+        {/* ---------------------------------------------------------- Features */}
         <section
-          id="how-it-works"
-          className="scroll-mt-20 bg-surface-subtle py-20 lg:py-24"
+          id="features"
+          className="scroll-mt-20 bg-background py-16 sm:py-20 lg:py-24"
         >
-          <div className="shell grid gap-14 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] lg:gap-16">
-            <div className="max-w-sm">
-              <Badge>How it works</Badge>
-              <h2 className="mt-6 text-[34px] font-extrabold leading-[1.1] tracking-tightest sm:text-[38px]">
-                From one question
-                <br />
-                to an honest outcome
-              </h2>
-              <p className="mt-5 text-[15px] leading-relaxed text-muted-foreground">
-                Nothing runs until the question, limits, sampling plan and
-                observation window are approved. After that the controlled
-                baseline runs automatically.
-              </p>
-              <Button asChild variant="outline" className="mt-8 h-11 px-5">
-                <a href="#scope">Scope and limits</a>
-              </Button>
-            </div>
+          <div className="shell">
+            <SectionHeading
+              label="Why Zypact"
+              title={
+                <>
+                  Everything you need for
+                  <br className="hidden sm:block" /> one defensible decision
+                </>
+              }
+              lede="Narrow by design, and auditable end to end."
+            />
 
-            <div className="relative grid gap-10 sm:grid-cols-3 sm:gap-6">
-              <div
-                aria-hidden="true"
-                className="absolute left-[16.6%] right-[16.6%] top-[21px] hidden h-px bg-border sm:block"
-              />
-              {steps.map((step) => (
-                <div key={step.title} className="sm:text-center">
-                  <span className="relative z-10 flex h-[42px] w-[42px] items-center justify-center rounded-full bg-accent text-[13px] font-bold text-accent-foreground sm:mx-auto">
-                    {step.number}
-                  </span>
-                  <step.icon
-                    className="mt-7 h-6 w-6 text-primary sm:mx-auto"
-                    strokeWidth={1.6}
-                  />
-                  <h3 className="mt-4 text-[17px] font-bold tracking-tight">
-                    {step.title}
+            <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:mt-14 lg:grid-cols-4">
+              {features.map((feature, index) => (
+                <PanelCard key={feature.title} className="flex flex-col">
+                  <IconTile icon={feature.icon} tone={toneAt(index)} />
+                  <h3 className="mt-5 text-[15px] font-bold tracking-tight">
+                    {feature.title}
                   </h3>
                   <p className="mt-2.5 text-[13px] leading-relaxed text-muted-foreground">
-                    {step.copy}
+                    {feature.copy}
                   </p>
-                </div>
+                </PanelCard>
               ))}
             </div>
           </div>
         </section>
 
-        {/* ---------------------------------------------------------- Features */}
-        <section
-          id="features"
-          className="scroll-mt-20 bg-background py-20 lg:py-24"
-        >
-          <div className="shell">
-            <div className="flex flex-col gap-8 sm:flex-row sm:items-start sm:justify-between">
-              <div className="max-w-lg">
-                <Badge>What you get</Badge>
-                <h2 className="mt-6 text-[34px] font-extrabold leading-[1.1] tracking-tightest sm:text-[38px]">
-                  Everything you need
-                  <br />
-                  for one defensible decision
-                </h2>
-                <p className="mt-5 text-[15px] leading-relaxed text-muted-foreground">
-                  Narrow by design, and auditable end to end.
-                </p>
-              </div>
-              <Button
-                asChild
-                variant="outline"
-                className="h-11 shrink-0 px-5 sm:mt-11"
-              >
-                <a href="#scope">Read the scope</a>
-              </Button>
+        {/* ------------------------------------------------------- Real impact */}
+        <section className="border-y border-border bg-surface-subtle py-16 sm:py-20 lg:py-24">
+          <div className="shell grid gap-10 lg:grid-cols-2 lg:items-center lg:gap-16">
+            <div>
+              <SectionLabel>What you actually get</SectionLabel>
+              <h2 className="mt-5 text-balance text-[27px] font-extrabold leading-[1.15] tracking-tightest sm:text-[33px] lg:text-[38px]">
+                A result you can put
+                <br className="hidden sm:block" /> in front of anyone
+              </h2>
+              <p className="mt-4 text-pretty text-[14px] leading-relaxed text-muted-foreground sm:text-[15px]">
+                Every number on the report links back to the provider evidence
+                that produced it, so a sceptical reader can follow the whole
+                chain rather than take the conclusion on trust.
+              </p>
+
+              <ul className="mt-7 grid gap-3.5">
+                {impactPoints.map((point) => (
+                  <CheckItem key={point} icon={Check}>
+                    {point}
+                  </CheckItem>
+                ))}
+              </ul>
             </div>
 
-            <div className="mt-14 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-              {features.map((feature) => (
-                <Card key={feature.title} className="bg-card">
-                  <CardContent className="p-6 pt-6">
-                    <feature.icon
-                      className="h-[22px] w-[22px] text-primary"
-                      strokeWidth={1.7}
+            {/*
+              The approved design puts a lifestyle photo and a "+32% engagement"
+              stat card here. Both are replaced: the figure would be an invented
+              causal claim, which the methodology forbids outright. The delivery
+              gates are the honest equivalent — they tell a prospect what will
+              and will not reach them, which is the reassurance the slot is for.
+            */}
+            <PanelCard className="bg-card/60 p-5 sm:p-7">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                What reaches you, and when
+              </p>
+              <dl className="mt-5 grid gap-3">
+                {deliveryGates.map((gate) => (
+                  <div
+                    key={gate.status}
+                    className="rounded-xl border border-border bg-background p-4"
+                  >
+                    <dt className="flex items-center gap-2.5 font-mono text-[12px] font-semibold tracking-tight">
+                      <span
+                        className={`h-2 w-2 shrink-0 rounded-full ${gate.tone}`}
+                        aria-hidden="true"
+                      />
+                      {gate.status}
+                    </dt>
+                    <dd className="mt-2 text-[12.5px] leading-relaxed text-muted-foreground">
+                      {gate.copy}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </PanelCard>
+          </div>
+        </section>
+
+        {/* ------------------------------------------------- Outcome band */}
+        <section
+          id="outcomes"
+          className="scroll-mt-20 bg-background py-16 sm:py-20 lg:py-24"
+        >
+          <div className="shell">
+            <SectionHeading
+              label="Outcome statuses"
+              title="Every retest ends in one of four results"
+              lede="Presented with equal weight. Incomplete or inconsistent evidence fails closed, and nothing is delivered as certainty it cannot support."
+            />
+
+            <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {outcomes.map((outcome, index) => (
+                <PanelCard key={outcome.label}>
+                  <IconTile icon={outcome.icon} tone={toneAt(index)} />
+                  <p className="mt-5 text-[15px] font-bold tracking-tight">
+                    {outcome.label}
+                  </p>
+                  <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
+                    {outcome.copy}
+                  </p>
+                </PanelCard>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* ------------------------------------------------------ How it works */}
+        <section
+          id="how-it-works"
+          className="scroll-mt-20 border-y border-border bg-surface-subtle py-16 sm:py-20 lg:py-24"
+        >
+          <div className="shell">
+            <SectionHeading
+              label="How it works"
+              title="From one question to an honest outcome"
+              lede="Nothing runs until the question, limits, sampling plan and observation window are approved. After that the controlled baseline runs automatically."
+            />
+
+            <div className="mt-12 grid gap-8 sm:grid-cols-3 sm:gap-6 lg:mt-14">
+              {steps.map((step, index) => (
+                <div key={step.title} className="relative">
+                  <StepItem
+                    number={step.number}
+                    icon={step.icon}
+                    tone={toneAt(index)}
+                    title={step.title}
+                    copy={step.copy}
+                  />
+                  {/* Connector, drawn only between steps and only once they sit
+                      side by side. */}
+                  {index < steps.length - 1 ? (
+                    <ArrowRight
+                      aria-hidden="true"
+                      className="absolute -right-3 top-4 hidden h-4 w-4 text-muted-foreground/50 sm:block"
+                      strokeWidth={2}
                     />
-                    <h3 className="mt-6 text-[15px] font-bold tracking-tight">
-                      {feature.title}
-                    </h3>
-                    <p className="mt-2.5 text-[13px] leading-relaxed text-muted-foreground">
-                      {feature.copy}
-                    </p>
-                  </CardContent>
-                </Card>
+                  ) : null}
+                </div>
               ))}
             </div>
 
-            {/* Methodology boundary — required on any client-facing surface. */}
-            <div
-              id="scope"
-              className="mt-16 grid scroll-mt-20 gap-10 rounded-xl border border-border bg-surface-muted p-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:p-10"
-            >
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                  Scope and limits
-                </p>
-                <h3 className="mt-4 text-[22px] font-bold leading-snug tracking-tight">
-                  What V1 does not claim
-                </h3>
-                <p className="mt-4 text-[13px] leading-relaxed text-muted-foreground">
-                  Perplexity Sonar is the only live V1 surface, and it is
-                  presented as a directional proxy rather than the whole
-                  AI-search market. V1 produces no market-wide score, no
-                  multi-model coverage, no guaranteed recommendation, and no
-                  causal or revenue attribution. Observed movement is not proof
-                  of causality or revenue impact.
-                </p>
-              </div>
-              <div id="outcomes" className="scroll-mt-20">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                  Every retest ends in one of four statuses
-                </p>
-                <ul className="mt-4 grid gap-2.5 sm:grid-cols-2">
-                  {outcomes.map((outcome) => (
-                    <li
-                      key={outcome}
-                      className="flex items-center gap-2.5 rounded-lg border border-border bg-background px-3.5 py-3 text-[13px] font-semibold tracking-tight"
-                    >
-                      <span
-                        className="h-1.5 w-1.5 rounded-full bg-primary"
-                        aria-hidden="true"
-                      />
-                      {outcome}
-                    </li>
-                  ))}
-                </ul>
-                <p className="mt-4 text-[12px] leading-relaxed text-muted-foreground">
-                  Incomplete or inconsistent evidence fails closed. Nothing is
-                  delivered as certainty it cannot support.
-                </p>
-              </div>
+            <div className="mt-12 flex justify-center">
+              <Button asChild variant="outline" className="w-full sm:w-auto">
+                <a href="#scope">Scope and limits</a>
+              </Button>
+            </div>
+          </div>
+        </section>
 
-              {/* Delivery gates decide what reaches the client, and when. */}
-              <div className="lg:col-span-2">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                  What reaches you, and when
-                </p>
-                <dl className="mt-4 grid gap-4 sm:grid-cols-3">
-                  {deliveryGates.map((gate) => (
-                    <div
-                      key={gate.status}
-                      className="rounded-lg border border-border bg-background p-4"
-                    >
-                      <dt className="flex items-center gap-2 font-mono text-[12px] font-semibold tracking-tight">
-                        <span
-                          className={`h-2 w-2 shrink-0 rounded-full ${gate.tone}`}
-                          aria-hidden="true"
-                        />
-                        {gate.status}
-                      </dt>
-                      <dd className="mt-2 text-[12px] leading-relaxed text-muted-foreground">
-                        {gate.copy}
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
+        {/* ---------------------------------------------------- Scope and limits */}
+        <section
+          id="scope"
+          className="scroll-mt-20 bg-background py-16 sm:py-20 lg:py-24"
+        >
+          <div className="shell">
+            <div className="rounded-2xl border border-border bg-surface-muted p-6 sm:p-8 lg:p-12">
+              <div className="grid gap-10 lg:grid-cols-2 lg:gap-16">
+                <div>
+                  <SectionLabel>Scope and limits</SectionLabel>
+                  <h2 className="mt-5 text-[22px] font-bold leading-snug tracking-tight sm:text-[26px]">
+                    What V1 does not claim
+                  </h2>
+                  <p className="mt-4 text-pretty text-[13.5px] leading-relaxed text-muted-foreground sm:text-[14px]">
+                    Perplexity Sonar is the only live V1 surface, and it is
+                    presented as a directional proxy rather than the whole
+                    AI-search market. V1 produces no market-wide score, no
+                    multi-model coverage, no guaranteed recommendation, and no
+                    causal or revenue attribution. Observed movement is not proof
+                    of causality or revenue impact.
+                  </p>
+                </div>
+
+                <div>
+                  <SectionLabel>Fails closed</SectionLabel>
+                  <h3 className="mt-5 text-[22px] font-bold leading-snug tracking-tight sm:text-[26px]">
+                    When the evidence will not support a conclusion
+                  </h3>
+                  <p className="mt-4 text-pretty text-[13.5px] leading-relaxed text-muted-foreground sm:text-[14px]">
+                    Incomplete or inconsistent evidence fails closed. A partial
+                    or unsafe result is reviewed or blocked, not delivered as
+                    certainty. Failed and excluded attempts stay visible in the
+                    denominator rather than being quietly dropped to make a
+                    cleaner number.
+                  </p>
+                </div>
               </div>
             </div>
           </div>
@@ -498,38 +591,39 @@ export default function LandingPage() {
         {/* --------------------------------------------------------------- FAQ */}
         <section
           id="faq"
-          className="scroll-mt-20 bg-surface-subtle py-20 lg:py-24"
+          className="scroll-mt-20 border-t border-border bg-surface-subtle py-16 sm:py-20 lg:py-24"
         >
-          <div className="shell grid gap-12 lg:grid-cols-[minmax(0,0.72fr)_minmax(0,1.28fr)] lg:gap-16">
-            <div className="max-w-sm">
-              <Badge>Due diligence</Badge>
-              <h2 className="mt-6 text-[34px] font-extrabold leading-[1.1] tracking-tightest sm:text-[38px]">
-                What V1 does
-                <br />
-                and does not claim
-              </h2>
-              <p className="mt-5 text-[15px] leading-relaxed text-muted-foreground">
-                Clear boundaries are part of the product. A partial or unsafe
-                result is reviewed or blocked, not delivered as certainty.
-              </p>
+          <div className="shell grid gap-10 lg:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)] lg:gap-16">
+            <div className="lg:sticky lg:top-24 lg:self-start">
+              <SectionHeading
+                align="left"
+                label="Due diligence"
+                title={
+                  <>
+                    What V1 does
+                    <br className="hidden sm:block" /> and does not claim
+                  </>
+                }
+                lede="Clear boundaries are part of the product. A partial or unsafe result is reviewed or blocked, not delivered as certainty."
+              />
             </div>
 
             <div className="divide-y divide-border border-y border-border">
               {faqs.map((faq, index) => (
-                <details key={faq.question} className="group py-4">
-                  <summary className="flex cursor-pointer list-none items-center gap-4 text-[15px] font-semibold tracking-tight">
-                    <span className="font-mono text-[11px] text-muted-foreground">
+                <details key={faq.question} className="group py-1">
+                  <summary className="flex cursor-pointer list-none items-center gap-3 py-4 text-[14px] font-semibold tracking-tight sm:gap-4 sm:text-[15px]">
+                    <span className="hidden font-mono text-[11px] text-muted-foreground sm:inline">
                       {String(index + 1).padStart(2, "0")}
                     </span>
-                    <span className="flex-1">{faq.question}</span>
+                    <span className="flex-1 text-pretty">{faq.question}</span>
                     <span
                       aria-hidden="true"
-                      className="text-[18px] font-normal text-muted-foreground transition-transform group-open:rotate-45"
+                      className="shrink-0 text-[18px] font-normal text-muted-foreground transition-transform group-open:rotate-45"
                     >
                       +
                     </span>
                   </summary>
-                  <p className="mt-3 pl-[calc(0.75rem+1rem)] text-[13px] leading-relaxed text-muted-foreground">
+                  <p className="pb-4 text-[13px] leading-relaxed text-muted-foreground sm:pl-[calc(0.75rem+1rem)] sm:text-[13.5px]">
                     {faq.answer}
                   </p>
                 </details>
@@ -539,30 +633,49 @@ export default function LandingPage() {
         </section>
 
         {/* --------------------------------------------------------- Final CTA */}
-        <section className="bg-panel">
-          <div className="shell flex flex-col gap-8 py-16 lg:flex-row lg:items-center lg:justify-between lg:py-20">
-            <div>
-              <Badge variant="onDark">Ready to get started?</Badge>
-              <h2 className="mt-6 max-w-2xl text-[30px] font-extrabold leading-[1.15] tracking-tightest text-panel-foreground sm:text-[36px]">
-                Bring one buyer question worth examining.
-              </h2>
-              <p className="mt-4 max-w-xl text-[14px] leading-relaxed text-panel-muted">
-                Requesting a demo does not approve a protocol or start an AI
-                call.
-              </p>
+        <section className="bg-background px-4 py-16 sm:px-6 sm:py-20">
+          <div className="mx-auto max-w-[1200px]">
+            {/*
+              The approved design uses a blue-to-purple gradient banner. Rebuilt
+              on the theme tokens so it holds its contrast on a dark page, with
+              the copy sitting on `panel` rather than on the gradient itself.
+            */}
+            <div className="relative isolate overflow-hidden rounded-3xl border border-border bg-panel px-6 py-12 sm:px-10 sm:py-14 lg:px-14">
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(90%_140%_at_0%_0%,hsl(var(--primary)/0.35),transparent_60%),radial-gradient(80%_140%_at_100%_100%,hsl(var(--chart-4)/0.32),transparent_60%)]"
+              />
+
+              <div className="flex flex-col gap-8 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <Badge variant="onDark">Ready to get started?</Badge>
+                  <h2 className="mt-5 max-w-2xl text-balance text-[26px] font-extrabold leading-[1.15] tracking-tightest text-panel-foreground sm:text-[32px] lg:text-[36px]">
+                    Bring one buyer question worth examining.
+                  </h2>
+                  <p className="mt-4 max-w-xl text-pretty text-[14px] leading-relaxed text-panel-muted">
+                    Requesting a demo does not approve a protocol or start an AI
+                    call.
+                  </p>
+                </div>
+                <Button
+                  asChild
+                  size="lg"
+                  variant="onDark"
+                  className="w-full shrink-0 sm:w-auto"
+                >
+                  <a href={DEMO_URL}>
+                    Request demo
+                    <ArrowRight className="h-4 w-4" strokeWidth={2.25} />
+                  </a>
+                </Button>
+              </div>
             </div>
-            <Button asChild size="lg" variant="onDark">
-              <a href={DEMO_URL}>
-                Request demo
-                <ArrowRight className="h-4 w-4" strokeWidth={2.25} />
-              </a>
-            </Button>
           </div>
         </section>
 
         {/* ------------------------------------------------------------ Footer */}
-        <footer className="bg-background">
-          <div className="shell grid gap-12 py-16 lg:grid-cols-[minmax(0,1.4fr)_repeat(3,minmax(0,1fr))]">
+        <footer className="border-t border-border bg-background">
+          <div className="shell grid gap-10 py-14 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.4fr)_repeat(3,minmax(0,1fr))]">
             <div>
               <ZypactWordmark className="text-primary" />
               <p className="mt-4 text-[13px] text-muted-foreground">

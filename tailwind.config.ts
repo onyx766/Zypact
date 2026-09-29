@@ -11,8 +11,9 @@ import tailwindcssAnimate from "tailwindcss-animate";
  * utility is prefixed with `.v2-root`, so scanning a legacy file cannot restyle
  * it. Utilities only take effect inside a `.v2-root` element, which a page opts
  * into by rendering inside `ThemeRoot` (components/theme-root.tsx) or
- * `AdminThemeRoot`. The legacy pages (/scan, /report, /projects) render outside
- * one and keep their app/globals.css styling untouched.
+ * `AdminThemeRoot`. The remaining legacy pages (/report, /projects and the
+ * other app/globals.css routes) render outside one and keep that styling
+ * untouched.
  *
  * The only cost of the wider globs is a larger generated stylesheet.
  */

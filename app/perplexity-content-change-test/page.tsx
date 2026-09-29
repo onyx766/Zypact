@@ -63,7 +63,12 @@ const lookFor = [
 
 export default function PerplexityContentChangeTestPage() {
   return (
-    <ThemeRoot>
+    // Light is pinned, not inherited. This page IS a registered intervention
+    // ("Page created"), and its observation window is open — Sep 24 to Oct 9,
+    // 2026. Rendering it dark with the rest of the marketing site would change
+    // the artifact under observation partway through the measurement. Adopt
+    // the site theme only once the window has closed and the retest is done.
+    <ThemeRoot theme="light">
       <div className="min-h-screen bg-surface-subtle">
         <header className="border-b border-border bg-surface-subtle">
           <div className="shell flex h-[68px] items-center justify-between gap-8">

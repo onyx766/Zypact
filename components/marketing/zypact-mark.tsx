@@ -3,10 +3,17 @@ import { cn } from "@/lib/utils";
 /**
  * Inline version of public/zypact-logo.svg (symbol only) so the mark can inherit
  * currentColor for light and dark surfaces. The wordmark is set in type.
+ *
+ * `dotFill` paints the three joint circles so they read as punched out of the
+ * surface behind the mark, which means it has to match that surface. It
+ * defaults to the theme background token rather than a fixed white, so the
+ * dots follow light and dark instead of staying a pale rectangle on a dark
+ * page. A caller sitting on a different surface passes that surface's token —
+ * see SiteHeader, which sits on `surface-subtle`.
  */
 export function ZypactMark({
   className,
-  dotFill = "#FFFFFF",
+  dotFill = "hsl(var(--background))",
 }: {
   className?: string;
   dotFill?: string;

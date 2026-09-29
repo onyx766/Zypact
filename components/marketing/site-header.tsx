@@ -26,7 +26,10 @@ export function SiteHeader() {
     <header className="sticky top-0 z-50 border-b border-transparent bg-surface-subtle/85 backdrop-blur-md">
       <div className="shell flex h-[68px] items-center justify-between gap-8">
         <div className="flex items-center gap-10">
-          <ZypactWordmark className="text-primary" dotFill="#FAFBFA" />
+          <ZypactWordmark
+            className="text-primary"
+            dotFill="hsl(var(--surface-subtle))"
+          />
           <nav aria-label="Primary" className="hidden items-center gap-8 md:flex">
             {navLinks.map((link) => (
               <a

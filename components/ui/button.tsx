@@ -9,15 +9,24 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
+        /*
+         * Hover is an opacity step on the token rather than the former fixed
+         * `bg-brand-600`, which was a light-mode green and left the dark-mode
+         * button with no visible hover state at all.
+         */
         default:
-          "bg-primary text-primary-foreground shadow-card hover:bg-brand-600",
+          "bg-primary text-primary-foreground shadow-card hover:bg-primary/90",
         outline:
-          "border border-border bg-background text-foreground shadow-card hover:bg-muted",
+          "border border-border bg-background text-foreground shadow-card hover:bg-muted hover:text-foreground",
         secondary:
-          "bg-secondary text-secondary-foreground hover:bg-accent",
-        ghost: "text-foreground hover:bg-muted",
+          "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+        ghost: "text-foreground hover:bg-muted hover:text-foreground",
+        /* Part of the standard shadcn variant set; registry components assume it. */
+        destructive:
+          "bg-destructive text-destructive-foreground shadow-card hover:bg-destructive/90",
+        /* For use on an inverted `bg-panel` section. */
         onDark:
-          "bg-background text-primary shadow-card hover:bg-brand-50",
+          "bg-panel-foreground text-panel shadow-card hover:bg-panel-foreground/90",
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {

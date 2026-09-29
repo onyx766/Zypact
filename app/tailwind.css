@@ -9,47 +9,203 @@
 @tailwind utilities;
 
 /*
- * shadcn/ui token layer.
+ * ===========================================================================
+ * shadcn/ui token contract — the interface 21st.dev components are authored
+ * against.
+ * ===========================================================================
  *
- * Scoped to .v2-root rather than :root because the root layout also loads
- * app/globals.css and app/landing-v1.css for the legacy routes. Preflight is
- * disabled in tailwind.config.ts and re-implemented below under the same scope,
- * so nothing here can restyle /scan, /report or /projects.
+ * 21st.dev is a registry, not a theme: "many authors, many styles, and the
+ * code is copied into your repo". Its components carry no palette of their own
+ * and inherit the host project's tokens, so "use the 21st.dev theme" means
+ * publishing the *standard* variable contract under the *standard* names.
+ * Anything pasted from the registry then adopts Zypact's palette on arrival.
  *
- * The `.v2-root` class name is load-bearing: it is the `important` selector in
- * tailwind.config.ts and the opt-in hook used by AdminThemeRoot. Renaming it
- * means changing both, plus app/admin/theme.tsx and app/admin/admin-theme.css.
+ * WHY THESE LIVE ON `:root` WHILE THE RESET STAYS SCOPED
+ * -----------------------------------------------------
+ * Custom properties are inert. Declaring `--background` styles nothing by
+ * itself — only a rule that *reads* it does. Every such rule is either a
+ * Tailwind utility (scoped under `.v2-root` by the `important` strategy in
+ * tailwind.config.ts) or a component in components/ui. Verified: no legacy
+ * stylesheet — globals.css, landing-v1.css, admin.css, interventions.css,
+ * protocol-report.css — declares or reads a single one of these names.
+ *
+ * So the tokens are global (pasted components find them anywhere) while the
+ * preflight further down stays scoped to `.v2-root` (legacy /scan, /report and
+ * /projects keep their own element styling). Those two facts are independent,
+ * and conflating them is what would break those pages.
+ *
+ * DARK-FIRST, LIGHT AVAILABLE
+ * ---------------------------
+ * `:root` holds the light values and `.dark` the dark ones, which is the
+ * convention every registry component and every `dark:` variant assumes.
+ * Rendering dark *by default* is a separate concern, handled by ThemeRoot in
+ * components/theme-root.tsx applying `.dark` unless asked for light — so the
+ * app is dark-first without the token contract being inverted.
+ *
+ * Base palette is neutral (as the registry is authored against); Zypact's
+ * green stays as `--primary` and `--accent` so brand identity survives. In
+ * dark mode `--primary` becomes the established #00DDB4 marketing accent,
+ * because a 17%-lightness green is unreadable on a near-black background.
+ *
+ * Values are HSL channel triplets without `hsl()`, so Tailwind's
+ * `<alpha-value>` wiring in tailwind.config.ts can apply opacity modifiers
+ * (`bg-primary/10`). Keep that format.
  */
-.v2-root {
+
+:root {
   --background: 0 0% 100%;
-  --foreground: 160 16% 8%;
+  --foreground: 240 10% 4%;
 
   --card: 0 0% 100%;
-  --card-foreground: 160 16% 8%;
+  --card-foreground: 240 10% 4%;
 
   --popover: 0 0% 100%;
-  --popover-foreground: 160 16% 8%;
+  --popover-foreground: 240 10% 4%;
 
+  /* Zypact brand green. */
   --primary: 162 68% 17%;
   --primary-foreground: 0 0% 100%;
 
-  --secondary: 160 20% 96%;
-  --secondary-foreground: 162 68% 17%;
+  --secondary: 240 5% 96%;
+  --secondary-foreground: 240 6% 10%;
 
-  --muted: 160 20% 96%;
-  --muted-foreground: 160 6% 40%;
+  --muted: 240 5% 96%;
+  --muted-foreground: 240 4% 46%;
 
-  --accent: 154 33% 92%;
+  /* Soft brand tint rather than neutral, so accents stay recognisably Zypact. */
+  --accent: 155 30% 94%;
   --accent-foreground: 162 68% 17%;
 
   --destructive: 0 72% 45%;
   --destructive-foreground: 0 0% 100%;
 
-  --border: 156 12% 90%;
-  --input: 156 12% 90%;
+  --border: 240 6% 90%;
+  --input: 240 6% 90%;
   --ring: 162 68% 17%;
 
+  /* Status tokens. Previously declared only by the founder console; global now
+   * so any surface can use bg-success / text-warning / border-info. */
+  --success: 145 63% 32%;
+  --warning: 32 92% 38%;
+  --info: 222 76% 50%;
+
+  /*
+   * Page surfaces. Previously fixed hexes in tailwind.config.ts, which is why
+   * `bg-surface-subtle` could not follow the theme. Variable-driven now, so
+   * every existing `surface-*` class flips with no markup change.
+   */
+  --surface: 0 0% 100%;
+  --surface-subtle: 150 12% 98%;
+  --surface-muted: 152 18% 96%;
+
+  /*
+   * Deliberately dark inverted panels (hero side panel, final CTA), formerly
+   * `bg-brand-800` / `bg-brand-900`. Tokenised so they stay *distinguishable*
+   * in dark mode instead of collapsing into the background.
+   */
+  --panel: 162 68% 12%;
+  --panel-foreground: 0 0% 100%;
+  --panel-muted: 155 28% 76%;
+
+  /* Chart tokens — part of the standard contract; registry chart components
+   * read chart-1..5 directly. See the dataviz palette note in the PR. */
+  --chart-1: 162 68% 30%;
+  --chart-2: 173 58% 39%;
+  --chart-3: 197 37% 34%;
+  --chart-4: 43 74% 49%;
+  --chart-5: 27 78% 52%;
+
+  /* Sidebar tokens — required by shadcn/21st.dev dashboard and sidebar blocks. */
+  --sidebar: 150 12% 98%;
+  --sidebar-foreground: 240 10% 4%;
+  --sidebar-primary: 162 68% 17%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 155 30% 94%;
+  --sidebar-accent-foreground: 162 68% 17%;
+  --sidebar-border: 240 6% 90%;
+  --sidebar-ring: 162 68% 17%;
+
   --radius: 0.75rem;
+}
+
+.dark {
+  --background: 240 10% 4%;
+  --foreground: 0 0% 98%;
+
+  --card: 240 6% 7%;
+  --card-foreground: 0 0% 98%;
+
+  --popover: 240 6% 8%;
+  --popover-foreground: 0 0% 98%;
+
+  /*
+   * #00DDB4 — the accent the dark marketing surface already used as
+   * `--di-teal` in globals.css. Reused here so dark mode has one brand accent
+   * rather than two competing greens.
+   */
+  --primary: 169 100% 43%;
+  --primary-foreground: 172 90% 8%;
+
+  --secondary: 240 4% 12%;
+  --secondary-foreground: 0 0% 98%;
+
+  --muted: 240 4% 12%;
+  --muted-foreground: 240 5% 65%;
+
+  --accent: 170 40% 12%;
+  --accent-foreground: 169 80% 72%;
+
+  --destructive: 0 72% 58%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 240 4% 16%;
+  --input: 240 4% 20%;
+  --ring: 169 100% 43%;
+
+  --success: 145 60% 55%;
+  --warning: 38 92% 60%;
+  --info: 225 90% 72%;
+
+  --surface: 240 10% 4%;
+  --surface-subtle: 240 8% 6%;
+  --surface-muted: 240 6% 9%;
+
+  /* Lifted off the background and green-tinted, so an inverted panel still
+   * reads as a panel against a near-black page. */
+  --panel: 172 34% 9%;
+  --panel-foreground: 0 0% 98%;
+  --panel-muted: 169 25% 68%;
+
+  --chart-1: 169 100% 43%;
+  --chart-2: 160 60% 45%;
+  --chart-3: 30 80% 55%;
+  --chart-4: 280 65% 60%;
+  --chart-5: 340 75% 55%;
+
+  --sidebar: 240 6% 7%;
+  --sidebar-foreground: 0 0% 98%;
+  --sidebar-primary: 169 100% 43%;
+  --sidebar-primary-foreground: 172 90% 8%;
+  --sidebar-accent: 240 4% 12%;
+  --sidebar-accent-foreground: 0 0% 98%;
+  --sidebar-border: 240 4% 16%;
+  --sidebar-ring: 169 100% 43%;
+}
+
+/*
+ * app/globals.css paints `h1`, `h2` and `a:hover` with `var(--heading)`, a
+ * fixed near-black. The scoped preflight below resets their size, weight and
+ * margin but deliberately not their colour, so that rule still lands — and on
+ * a dark background it renders invisible text.
+ *
+ * Repointing `--heading` at the theme foreground fixes every such heading at
+ * once. It is declared HERE, on `.v2-root`, and NOT on `:root`: globals.css
+ * declares `--heading` at `:root` too, and tailwind.css is imported after it,
+ * so a `:root` declaration would win and restyle the legacy pages that depend
+ * on the fixed value.
+ */
+.v2-root {
+  --heading: hsl(var(--foreground));
 }
 
 /*
@@ -154,6 +310,16 @@
     cursor: pointer;
     text-transform: none;
     background-image: none;
+  }
+
+  /*
+   * Placeholders inherit the input's colour by default, which reads as a real
+   * value rather than a hint. Registry form components assume the shadcn
+   * behaviour, so it is reset here alongside the rest of the preflight.
+   */
+  .v2-root :where(input, textarea)::placeholder {
+    color: hsl(var(--muted-foreground));
+    opacity: 1;
   }
 
   .v2-root :where(img, svg, video, canvas) {

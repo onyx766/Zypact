@@ -16,6 +16,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { EvidenceDashboard } from "@/components/marketing/evidence-dashboard";
 import { SiteHeader } from "@/components/marketing/site-header";
 import { ZypactWordmark } from "@/components/marketing/zypact-mark";
+import { ThemeRoot } from "@/components/theme-root";
 import { CANONICAL_SITE_URL } from "@/lib/seo/site";
 
 // One canonical origin for the whole site, so the homepage cannot advertise
@@ -133,21 +134,27 @@ const outcomes = [
   "Inconclusive",
 ] as const;
 
-/** Canonical V1 delivery gates. `blocked` never delivers. */
+/**
+ * Canonical V1 delivery gates. `blocked` never delivers.
+ *
+ * Tones are the shared status tokens rather than the previous fixed hexes, so
+ * the three gates keep their contrast in both themes and match the status
+ * colours the founder console already uses for the same three states.
+ */
 const deliveryGates = [
   {
     status: "integrity_passed",
-    tone: "bg-brand-600",
+    tone: "bg-success",
     copy: "Outcome Card and report delivered automatically.",
   },
   {
     status: "needs_review",
-    tone: "bg-[#E0A33C]",
+    tone: "bg-warning",
     copy: "Exception held for founder review before delivery.",
   },
   {
     status: "blocked",
-    tone: "bg-[#CF4B3B]",
+    tone: "bg-destructive",
     copy: "No conclusion or report delivered as certainty.",
   },
 ] as const;
@@ -224,7 +231,7 @@ const footerColumns = [
 
 export default function LandingPage() {
   return (
-    <div className="v2-root">
+    <ThemeRoot>
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(getJsonLd()) }}
@@ -237,9 +244,11 @@ export default function LandingPage() {
         <section className="relative overflow-hidden bg-surface-subtle">
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 right-0 hidden w-[30%] bg-brand-900 lg:block"
+            className="pointer-events-none absolute inset-y-0 right-0 hidden w-[30%] bg-panel lg:block"
           >
-            <div className="absolute inset-0 bg-[radial-gradient(120%_80%_at_20%_0%,rgba(47,132,103,0.55),transparent_60%),radial-gradient(90%_70%_at_90%_100%,rgba(4,27,20,0.9),transparent_55%)]" />
+            {/* Gradient stops read the theme tokens, so the panel keeps its
+                depth in dark mode instead of being two fixed light-mode greens. */}
+            <div className="absolute inset-0 bg-[radial-gradient(120%_80%_at_20%_0%,hsl(var(--primary)/0.45),transparent_60%),radial-gradient(90%_70%_at_90%_100%,hsl(var(--panel)/0.9),transparent_55%)]" />
           </div>
 
           <div className="shell relative grid items-center gap-14 pb-24 pt-16 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] lg:gap-10 lg:pb-28 lg:pt-20">
@@ -530,14 +539,14 @@ export default function LandingPage() {
         </section>
 
         {/* --------------------------------------------------------- Final CTA */}
-        <section className="bg-brand-800">
+        <section className="bg-panel">
           <div className="shell flex flex-col gap-8 py-16 lg:flex-row lg:items-center lg:justify-between lg:py-20">
             <div>
               <Badge variant="onDark">Ready to get started?</Badge>
-              <h2 className="mt-6 max-w-2xl text-[30px] font-extrabold leading-[1.15] tracking-tightest text-white sm:text-[36px]">
+              <h2 className="mt-6 max-w-2xl text-[30px] font-extrabold leading-[1.15] tracking-tightest text-panel-foreground sm:text-[36px]">
                 Bring one buyer question worth examining.
               </h2>
-              <p className="mt-4 max-w-xl text-[14px] leading-relaxed text-brand-200">
+              <p className="mt-4 max-w-xl text-[14px] leading-relaxed text-panel-muted">
                 Requesting a demo does not approve a protocol or start an AI
                 call.
               </p>
@@ -555,7 +564,7 @@ export default function LandingPage() {
         <footer className="bg-background">
           <div className="shell grid gap-12 py-16 lg:grid-cols-[minmax(0,1.4fr)_repeat(3,minmax(0,1fr))]">
             <div>
-              <ZypactWordmark className="text-primary" dotFill="#FFFFFF" />
+              <ZypactWordmark className="text-primary" />
               <p className="mt-4 text-[13px] text-muted-foreground">
                 Evidence, not estimates.
               </p>
@@ -591,6 +600,6 @@ export default function LandingPage() {
           </div>
         </footer>
       </div>
-    </div>
+    </ThemeRoot>
   );
 }

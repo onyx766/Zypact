@@ -2,13 +2,20 @@ import type { Config } from "tailwindcss";
 import tailwindcssAnimate from "tailwindcss-animate";
 
 /**
- * `content` is deliberately limited to the marketing pages (app/page.tsx and
- * /perplexity-content-change-test), their components, and the founder console
- * under app/admin. Utilities only apply
- * inside a `.v2-root` element (see `important` below), so an admin page opts in
- * by rendering inside AdminThemeRoot; admin pages that do not stay on their own
- * stylesheets. The remaining legacy pages (/scan, /report, /projects) are
- * styled by app/globals.css and must not be scanned.
+ * `content` covers the whole app and component tree so that UI copied in from
+ * the 21st.dev registry generates its utilities wherever it is dropped. Before,
+ * only four paths were scanned, so a pasted component outside them rendered
+ * completely unstyled — the utilities were never emitted.
+ *
+ * Widening is safe *because* of the `important` strategy below: every generated
+ * utility is prefixed with `.v2-root`, so scanning a legacy file cannot restyle
+ * it. Utilities only take effect inside a `.v2-root` element, which a page opts
+ * into by rendering inside `ThemeRoot` (components/theme-root.tsx) or
+ * `AdminThemeRoot`. The remaining legacy pages (/report, /projects and the
+ * other app/globals.css routes) render outside one and keep that styling
+ * untouched.
+ *
+ * The only cost of the wider globs is a larger generated stylesheet.
  */
 const config: Config = {
   darkMode: ["class"],
@@ -26,11 +33,9 @@ const config: Config = {
    */
   important: ".v2-root",
   content: [
-    "./app/page.tsx",
-    "./app/perplexity-content-change-test/**/*.{ts,tsx}",
-    "./components/ui/**/*.{ts,tsx}",
-    "./components/marketing/**/*.{ts,tsx}",
-    "./app/admin/**/*.{ts,tsx}",
+    "./app/**/*.{ts,tsx}",
+    "./components/**/*.{ts,tsx}",
+    "./lib/**/*.{ts,tsx}",
   ],
   corePlugins: {
     // Preflight is applied manually and scoped to .v2-root in app/tailwind.css
@@ -85,10 +90,52 @@ const config: Config = {
           DEFAULT: "hsl(var(--popover) / <alpha-value>)",
           foreground: "hsl(var(--popover-foreground) / <alpha-value>)",
         },
-        /* Status tokens, defined by the founder console theme only. */
+        /* Status tokens. Declared globally in app/tailwind.css. */
         success: "hsl(var(--success) / <alpha-value>)",
         warning: "hsl(var(--warning) / <alpha-value>)",
         info: "hsl(var(--info) / <alpha-value>)",
+        /*
+         * Chart and sidebar tokens complete the standard shadcn contract.
+         * Registry chart components read `chart-1..5` and registry dashboard /
+         * sidebar blocks read `sidebar-*` by name, so a paste fails without
+         * them. See the dataviz guidance before using the chart ramp for a real
+         * visualization — these are a starting palette, not a validated one.
+         */
+        chart: {
+          1: "hsl(var(--chart-1) / <alpha-value>)",
+          2: "hsl(var(--chart-2) / <alpha-value>)",
+          3: "hsl(var(--chart-3) / <alpha-value>)",
+          4: "hsl(var(--chart-4) / <alpha-value>)",
+          5: "hsl(var(--chart-5) / <alpha-value>)",
+        },
+        sidebar: {
+          DEFAULT: "hsl(var(--sidebar) / <alpha-value>)",
+          foreground: "hsl(var(--sidebar-foreground) / <alpha-value>)",
+          primary: "hsl(var(--sidebar-primary) / <alpha-value>)",
+          "primary-foreground":
+            "hsl(var(--sidebar-primary-foreground) / <alpha-value>)",
+          accent: "hsl(var(--sidebar-accent) / <alpha-value>)",
+          "accent-foreground":
+            "hsl(var(--sidebar-accent-foreground) / <alpha-value>)",
+          border: "hsl(var(--sidebar-border) / <alpha-value>)",
+          ring: "hsl(var(--sidebar-ring) / <alpha-value>)",
+        },
+        /*
+         * Inverted panels (hero side panel, final CTA). Previously written as
+         * fixed `bg-brand-800` / `bg-brand-900`, which stayed the same colour in
+         * dark mode and collapsed into the background.
+         */
+        panel: {
+          DEFAULT: "hsl(var(--panel) / <alpha-value>)",
+          foreground: "hsl(var(--panel-foreground) / <alpha-value>)",
+          muted: "hsl(var(--panel-muted) / <alpha-value>)",
+        },
+        /*
+         * The brand ramp stays a set of fixed hexes on purpose: it is the
+         * Zypact identity scale, not a theme surface, and is referenced by the
+         * logo and by brand-specific accents. Theme-following surfaces use the
+         * `surface`, `panel` and shadcn tokens instead.
+         */
         brand: {
           50: "#F2F8F5",
           100: "#E3F0EA",
@@ -102,16 +149,28 @@ const config: Config = {
           900: "#07291E",
           950: "#041B14",
         },
+        /*
+         * Variable-driven rather than the previous fixed hexes, so every
+         * existing `bg-surface-subtle` / `bg-surface-muted` in the marketing
+         * pages follows the active theme with no markup change.
+         */
         surface: {
-          DEFAULT: "#FFFFFF",
-          subtle: "#FAFBFA",
-          muted: "#F5F8F6",
+          DEFAULT: "hsl(var(--surface) / <alpha-value>)",
+          subtle: "hsl(var(--surface-subtle) / <alpha-value>)",
+          muted: "hsl(var(--surface-muted) / <alpha-value>)",
         },
       },
+      /*
+       * `xl` and `2xl` are added because registry components routinely use
+       * `rounded-xl` / `rounded-2xl` and expect them to scale with `--radius`
+       * rather than sit at Tailwind's fixed defaults.
+       */
       borderRadius: {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
+        xl: "calc(var(--radius) + 4px)",
+        "2xl": "calc(var(--radius) + 8px)",
       },
       fontFamily: {
         sans: [

@@ -10,7 +10,13 @@ const badgeVariants = cva(
       variant: {
         default: "bg-accent text-accent-foreground",
         outline: "border border-border bg-background text-muted-foreground",
-        onDark: "bg-white/10 text-brand-100",
+        secondary: "bg-secondary text-secondary-foreground",
+        destructive: "bg-destructive text-destructive-foreground",
+        /*
+         * Token-driven rather than the former `text-brand-100`, a fixed pale
+         * green that lost contrast against the dark-mode panel.
+         */
+        onDark: "bg-panel-foreground/10 text-panel-muted",
       },
       size: {
         default: "px-3 py-1.5 text-[11px]",

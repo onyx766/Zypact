@@ -4,6 +4,7 @@ import { ArrowRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ZypactWordmark } from "@/components/marketing/zypact-mark";
+import { ThemeRoot } from "@/components/theme-root";
 import { canonicalUrl } from "@/lib/seo/site";
 
 // Registered intervention: this page's copy is frozen by the client. Any edit
@@ -62,11 +63,14 @@ const lookFor = [
 
 export default function PerplexityContentChangeTestPage() {
   return (
-    <div className="v2-root">
+    <ThemeRoot>
       <div className="min-h-screen bg-surface-subtle">
         <header className="border-b border-border bg-surface-subtle">
           <div className="shell flex h-[68px] items-center justify-between gap-8">
-            <ZypactWordmark className="text-primary" dotFill="#FAFBFA" />
+            <ZypactWordmark
+              className="text-primary"
+              dotFill="hsl(var(--surface-subtle))"
+            />
             <Button asChild>
               <a href={SCAN_URL}>Test one buyer question</a>
             </Button>
@@ -185,9 +189,9 @@ export default function PerplexityContentChangeTestPage() {
             </section>
           </article>
 
-          <section className="bg-brand-800">
+          <section className="bg-panel">
             <div className="shell flex flex-col gap-8 py-16 lg:flex-row lg:items-center lg:justify-between lg:py-20">
-              <h2 className="max-w-2xl text-[30px] font-extrabold leading-[1.15] tracking-tightest text-white sm:text-[36px]">
+              <h2 className="max-w-2xl text-[30px] font-extrabold leading-[1.15] tracking-tightest text-panel-foreground sm:text-[36px]">
                 Test one buyer question
               </h2>
               <Button asChild size="lg" variant="onDark">
@@ -202,11 +206,11 @@ export default function PerplexityContentChangeTestPage() {
 
         <footer className="bg-background">
           <div className="shell flex flex-col gap-2 py-6 sm:flex-row sm:items-center sm:justify-between">
-            <ZypactWordmark className="text-primary" dotFill="#FFFFFF" />
+            <ZypactWordmark className="text-primary" />
             <p className="text-[12px] text-muted-foreground">© 2026 Zypact</p>
           </div>
         </footer>
       </div>
-    </div>
+    </ThemeRoot>
   );
 }

@@ -1,10 +1,33 @@
 import type { Metadata } from "next";
-import type { ReactNode } from "react";
+import {
+  ArrowLeft,
+  BarChart3,
+  Check,
+  ClipboardList,
+  Database,
+  FileSearch,
+  Info,
+  Repeat,
+  Search,
+  ShieldCheck,
+} from "lucide-react";
+
+import { Badge } from "@/components/ui/badge";
+import {
+  CheckItem,
+  IconTile,
+  PanelCard,
+  SectionHeading,
+  StepItem,
+  toneAt,
+} from "@/components/marketing/section-kit";
+import { ZypactWordmark } from "@/components/marketing/zypact-mark";
+import { ThemeRoot } from "@/components/theme-root";
+
 import { ScanForm } from "./scan-form";
 
 export const metadata: Metadata = {
-  title:
-    "Request a Zypact V1 demo",
+  title: "Request a Zypact V1 demo",
   description:
     "Request access to Zypact's controlled, automated buyer-question diagnostic and registered retest on Perplexity Sonar.",
   alternates: {
@@ -12,149 +35,218 @@ export const metadata: Metadata = {
   },
 };
 
-const FEATURES: Array<{
-  title: string;
-  desc: string;
-  icon: ReactNode;
-}> = [
+/** What the engagement delivers. Process commitments, never outcomes. */
+const HIGHLIGHTS = [
+  "One commercially important buyer question, agreed before anything runs",
+  "Exact provider evidence, preserved insert-only and inspectable",
+  "A registered retest of the same question after one recorded change",
+  "An auditable report where every number links to its supporting evidence",
+] as const;
+
+const SUMMARY = [
   {
     title: "One buyer question",
     desc: "Focus on one commercially meaningful question.",
-    icon: (
-      <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5Z" />
-    ),
+    icon: FileSearch,
   },
   {
     title: "Reviewed before any AI call",
     desc: "We review your question and protocol first.",
-    icon: <path d="M12 2 4 5v6c0 5 3.4 9 8 11 4.6-2 8-6 8-11V5l-8-3Z" />,
+    icon: ShieldCheck,
   },
   {
     title: "Evidence-backed result",
     desc: "A controlled run with exact evidence and integrity checks.",
-    icon: (
-      <>
-        <path d="M7 3h7l4 4v14H7Z" />
-        <path d="M14 3v4h4" />
-        <path d="M9.5 13h5" />
-        <path d="M9.5 16.5h5" />
-      </>
-    ),
+    icon: Database,
   },
-];
+] as const;
+
+/**
+ * The three stages between a request and a result.
+ *
+ * The approved design shows a product preview beside this with a cross-platform
+ * comparison and a single "overall visibility" percentage. Neither is built:
+ * Perplexity Sonar is the only live V1 surface, and a universal visibility
+ * number is exactly the claim the methodology forbids. These stages describe
+ * what actually happens instead.
+ */
+const STAGES = [
+  {
+    number: 1,
+    title: "Submit a buyer question",
+    icon: ClipboardList,
+    copy: "Share one real question a prospective customer might ask when comparing products like yours.",
+  },
+  {
+    number: 2,
+    title: "Run a controlled baseline",
+    icon: Search,
+    copy: "After the question and protocol are approved, the bounded Perplexity Sonar baseline runs automatically.",
+  },
+  {
+    number: 3,
+    title: "Review evidence and results",
+    icon: BarChart3,
+    copy: "Read the prompt-scoped observations with the exact provider evidence behind every one of them.",
+  },
+] as const;
 
 export default function ScanPage() {
-  const enabled =
-    process.env
-      .SNAPSHOT_PUBLIC_FORM_ENABLED ===
-    "true";
+  const enabled = process.env.SNAPSHOT_PUBLIC_FORM_ENABLED === "true";
 
   return (
-    <main className="scan-page">
-      <header className="header">
-        <a href="/" className="wordmark">
-          Zypact
-        </a>
+    <ThemeRoot>
+      <div className="min-h-screen bg-background">
+        <header className="border-b border-border/60">
+          <div className="shell flex h-[64px] items-center justify-between gap-6 sm:h-[68px]">
+            <ZypactWordmark
+              className="text-primary"
+              dotFill="hsl(var(--background))"
+            />
 
-        <a
-          href="/"
-          className="scan-back-link"
-        >
-          Back to website
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M5 12h14" />
-            <path d="m13 6 6 6-6 6" />
-          </svg>
-        </a>
-      </header>
-
-      <section className="scan-shell">
-        <div className="scan-intro">
-          <p className="eyebrow scan-eyebrow">
-            Zypact V1 · Controlled automation
-          </p>
-
-          <h1>
-            See how your company appears in
-            an AI buyer answer.
-          </h1>
-
-          <p className="scan-intro-copy">
-            Bring one commercially important buyer
-            question. Zypact reviews the question
-            and protocol first. After approval, the
-            controlled Perplexity Sonar baseline
-            runs automatically and preserves the
-            evidence.
-          </p>
-
-          <p className="scan-intro-note">
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
+            <a
+              href="/"
+              className="inline-flex items-center gap-2 rounded-md text-[13px] font-semibold text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:text-[14px]"
             >
-              <circle cx="12" cy="12" r="9" />
-              <path d="M12 16v-5" />
-              <path d="M12 8h.01" />
-            </svg>
-            <span>
-              Submitting this form does not start
-              an AI call.
-            </span>
-          </p>
+              <ArrowLeft className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
+              Back to website
+            </a>
+          </div>
+        </header>
 
-          <ul className="scan-summary">
-            {FEATURES.map((feature) => (
-              <li key={feature.title}>
-                <span className="scan-summary-icon">
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
+        <main>
+          {/* ------------------------------------------------------------ Hero */}
+          <section className="relative isolate overflow-hidden">
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-x-0 -top-40 -z-10 h-[520px] bg-[radial-gradient(60%_60%_at_50%_0%,hsl(var(--primary)/0.14),transparent_70%)]"
+            />
+
+            <div className="shell grid gap-10 py-12 sm:py-16 lg:grid-cols-[minmax(0,1fr)_minmax(0,0.92fr)] lg:gap-14 lg:py-20">
+              {/* -------------------------------------------------- Left column */}
+              <div className="max-w-xl">
+                <Badge>See Zypact in action</Badge>
+
+                <p className="mt-6 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+                  Zypact V1 · Controlled automation
+                </p>
+
+                <h1 className="mt-4 text-balance text-[32px] font-extrabold leading-[1.07] tracking-tightest sm:text-[42px] lg:text-[48px]">
+                  Request a Zypact demo
+                </h1>
+
+                <p className="mt-5 text-pretty text-[15px] leading-relaxed text-muted-foreground sm:text-[16px]">
+                  See how your company appears in an AI buyer answer. Bring one
+                  commercially important buyer question. Zypact reviews the
+                  question and protocol first. After approval, the controlled
+                  Perplexity Sonar baseline runs automatically and preserves the
+                  evidence.
+                </p>
+
+                <ul className="mt-7 grid gap-3.5">
+                  {HIGHLIGHTS.map((point) => (
+                    <CheckItem key={point} icon={Check}>
+                      {point}
+                    </CheckItem>
+                  ))}
+                </ul>
+
+                <p className="mt-7 flex items-start gap-2.5 rounded-xl border border-info/30 bg-info/10 px-4 py-3 text-[13px] font-semibold leading-relaxed text-foreground">
+                  <Info
+                    className="mt-0.5 h-4 w-4 shrink-0 text-info"
+                    strokeWidth={2}
                     aria-hidden="true"
-                  >
-                    {feature.icon}
-                  </svg>
-                </span>
-                <span>
-                  <span className="scan-summary-title">
-                    {feature.title}
-                  </span>
-                  <span className="scan-summary-desc">
-                    {feature.desc}
-                  </span>
-                </span>
-              </li>
-            ))}
-          </ul>
+                  />
+                  <span>Submitting this form does not start an AI call.</span>
+                </p>
 
-          <p className="scan-caveat">
-            V1 surface: Perplexity Sonar only.
-            No market-wide score, causal promise,
-            or revenue attribution.
-          </p>
-        </div>
+                <ul className="mt-8 grid gap-4 border-t border-border pt-7 sm:grid-cols-3 lg:grid-cols-1 lg:gap-3.5">
+                  {SUMMARY.map((item, index) => (
+                    <li key={item.title} className="flex items-start gap-3">
+                      <IconTile
+                        icon={item.icon}
+                        tone={toneAt(index)}
+                        className="h-9 w-9 rounded-lg"
+                      />
+                      <span className="min-w-0">
+                        <span className="block text-[13.5px] font-bold tracking-tight">
+                          {item.title}
+                        </span>
+                        <span className="mt-0.5 block text-[12.5px] leading-relaxed text-muted-foreground">
+                          {item.desc}
+                        </span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
 
-        <div className="scan-card">
-          <ScanForm enabled={enabled} />
-        </div>
-      </section>
-    </main>
+                <p className="mt-7 border-t border-border pt-5 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                  V1 surface: Perplexity Sonar only. No market-wide score,
+                  causal promise, or revenue attribution.
+                </p>
+              </div>
+
+              {/* ------------------------------------------------- Right column */}
+              <div className="lg:sticky lg:top-8 lg:self-start">
+                <PanelCard className="p-5 sm:p-7 lg:p-8">
+                  <ScanForm enabled={enabled} />
+                </PanelCard>
+              </div>
+            </div>
+          </section>
+
+          {/* ---------------------------------------------------- How it works */}
+          <section className="border-t border-border bg-surface-subtle py-16 sm:py-20">
+            <div className="shell">
+              <SectionHeading
+                label="How it works"
+                title="From question to insights in three steps"
+                lede="Nothing runs until the question and protocol are approved. After that, the controlled baseline runs automatically."
+              />
+
+              <div className="mt-12 grid gap-8 sm:grid-cols-3 sm:gap-6">
+                {STAGES.map((stage, index) => (
+                  <PanelCard key={stage.title}>
+                    <StepItem
+                      number={stage.number}
+                      icon={stage.icon}
+                      tone={toneAt(index)}
+                      title={stage.title}
+                      copy={stage.copy}
+                    />
+                  </PanelCard>
+                ))}
+              </div>
+
+              {/*
+                The approved design closes this page with client logos and a
+                named testimonial. Both are left out until there are real ones
+                to show — a pre-pilot product cannot borrow credibility it has
+                not earned. The scope boundary does that work honestly instead.
+              */}
+              <PanelCard className="mt-12 flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-6">
+                <IconTile icon={Repeat} tone="teal" />
+                <p className="text-pretty text-[13.5px] leading-relaxed text-muted-foreground">
+                  Every retest ends in one of four statuses — increase observed,
+                  decrease observed, no clear change, or inconclusive. Zypact
+                  guarantees the agreed process and evidence contract, not a
+                  favorable model response.
+                </p>
+              </PanelCard>
+            </div>
+          </section>
+        </main>
+
+        <footer className="border-t border-border bg-background">
+          <div className="shell flex flex-col gap-2 py-6 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-[12px] text-muted-foreground">
+              Perplexity Sonar V1 · Automated after approval · No guaranteed
+              outcome
+            </p>
+            <p className="text-[12px] text-muted-foreground">© 2026 Zypact</p>
+          </div>
+        </footer>
+      </div>
+    </ThemeRoot>
   );
 }

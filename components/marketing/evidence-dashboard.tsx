@@ -21,10 +21,17 @@ import { ZypactMark } from "@/components/marketing/zypact-mark";
 
 const TOTAL_RUNS = 14;
 
+/*
+ * Segment colours are the shared status tokens, so the donut keeps its contrast
+ * in dark mode and encodes the three attempt dispositions with the same colours
+ * the founder console and the landing delivery gates use. The mapping is
+ * semantic (preserved / retried / excluded), not a categorical ramp, so it
+ * deliberately stays green-amber-red rather than moving to the chart tokens.
+ */
 const segments = [
-  { label: "Preserved", value: 12, color: "#0E4A38" },
-  { label: "Retried", value: 1, color: "#E0A33C" },
-  { label: "Excluded", value: 1, color: "#CF4B3B" },
+  { label: "Preserved", value: 12, color: "hsl(var(--success))" },
+  { label: "Retried", value: 1, color: "hsl(var(--warning))" },
+  { label: "Excluded", value: 1, color: "hsl(var(--destructive))" },
 ] as const;
 
 const RADIUS = 42;
@@ -56,7 +63,7 @@ function Donut() {
           cy="50"
           r={RADIUS}
           fill="none"
-          stroke="#EDF2EF"
+          stroke="hsl(var(--muted))"
           strokeWidth="11"
         />
         {segments.map((segment) => {
@@ -99,7 +106,7 @@ export function EvidenceDashboard() {
         {/* Sidebar */}
         <div className="border-r border-border bg-surface-subtle p-3 sm:p-4">
           <div className="mb-5 flex items-center gap-2 px-1.5 pt-1 text-primary">
-            <ZypactMark className="h-5 w-5" dotFill="#FAFBFA" />
+            <ZypactMark className="h-5 w-5" dotFill="hsl(var(--surface-subtle))" />
             <span className="text-[13px] font-bold tracking-tightest">
               Zypact
             </span>

@@ -95,7 +95,10 @@ export default function ScanPage() {
   const enabled = process.env.SNAPSHOT_PUBLIC_FORM_ENABLED === "true";
 
   return (
-    <ThemeRoot>
+    // Light, matching the landing page every CTA arrives from. Dark also left
+    // the two section headings unreadable: app/globals.css paints h2/h3 with a
+    // fixed near-black `--heading` that the scoped preflight does not reset.
+    <ThemeRoot theme="light">
       <div className="min-h-screen bg-background">
         <header className="border-b border-border/60">
           <div className="shell flex h-[64px] items-center justify-between gap-6 sm:h-[68px]">

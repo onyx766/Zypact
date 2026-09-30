@@ -5,6 +5,7 @@ import {
   Check,
   ClipboardList,
   Database,
+  FileCheck,
   MinusCircle,
   Repeat,
   Search,
@@ -15,6 +16,10 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  ExampleAnswer,
+  RetestComparison,
+} from "@/components/marketing/answer-evidence";
 import { EvidenceDashboard } from "@/components/marketing/evidence-dashboard";
 import {
   CheckItem,
@@ -115,6 +120,12 @@ const steps = [
     icon: Repeat,
     copy: "Register one change, wait out the observation window, then ask the same question again.",
   },
+  {
+    number: 4,
+    title: "Review outcome",
+    icon: FileCheck,
+    copy: "Read the Outcome Card: what moved, what the evidence supports, and what it cannot.",
+  },
 ] as const;
 
 const features = [
@@ -170,6 +181,14 @@ const outcomes = [
     icon: ClipboardList,
     copy: "Evidence cannot support a direction, and says so plainly.",
   },
+] as const;
+
+/** What the approved protocol fixes before any paid call. */
+const protocolPoints = [
+  "Prompt-scoped measurement, never a market-wide score",
+  "Exact provider evidence, with the sources the answer cited",
+  "Controlled, registered retests of the same approved question",
+  "Honest outcomes, including the uncertainty the sample allows",
 ] as const;
 
 /** What the engagement actually fixes. Process commitments, not outcomes. */
@@ -267,17 +286,17 @@ const footerColumns = [
     ],
   },
   {
-    heading: "Account",
+    heading: "Get started",
     links: [
-      { label: "Sign in", href: "/login" },
       { label: "Request demo", href: DEMO_URL },
+      { label: "See the method", href: "#how-it-works" },
     ],
   },
 ] as const;
 
 export default function LandingPage() {
   return (
-    <ThemeRoot>
+    <ThemeRoot theme="light">
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(getJsonLd()) }}
@@ -382,6 +401,35 @@ export default function LandingPage() {
                 </li>
               ))}
             </ul>
+          </div>
+        </section>
+
+        {/* ------------------------------------------------- Approved protocol */}
+        <section className="bg-background py-16 sm:py-20 lg:py-24">
+          <div className="shell grid gap-10 lg:grid-cols-2 lg:items-center lg:gap-16">
+            <div>
+              <SectionLabel>An approved protocol</SectionLabel>
+              <h2 className="mt-5 text-balance text-[27px] font-extrabold leading-[1.15] tracking-tightest sm:text-[33px] lg:text-[38px]">
+                A repeatable way to observe
+                <br className="hidden sm:block" /> what one AI surface answers
+              </h2>
+              <p className="mt-4 text-pretty text-[14px] leading-relaxed text-muted-foreground sm:text-[15px]">
+                The question, the surface, the sampling plan and the decision
+                rule are fixed and versioned before anything runs — so the
+                baseline and the retest are comparable rather than merely
+                sequential.
+              </p>
+
+              <ul className="mt-7 grid gap-3.5">
+                {protocolPoints.map((point) => (
+                  <CheckItem key={point} icon={Check}>
+                    {point}
+                  </CheckItem>
+                ))}
+              </ul>
+            </div>
+
+            <ExampleAnswer />
           </div>
         </section>
 
@@ -516,7 +564,7 @@ export default function LandingPage() {
               lede="Nothing runs until the question, limits, sampling plan and observation window are approved. After that the controlled baseline runs automatically."
             />
 
-            <div className="mt-12 grid gap-8 sm:grid-cols-3 sm:gap-6 lg:mt-14">
+            <div className="mt-12 grid gap-8 sm:grid-cols-2 sm:gap-6 lg:mt-14 lg:grid-cols-4">
               {steps.map((step, index) => (
                 <div key={step.title} className="relative">
                   <StepItem
@@ -531,7 +579,7 @@ export default function LandingPage() {
                   {index < steps.length - 1 ? (
                     <ArrowRight
                       aria-hidden="true"
-                      className="absolute -right-3 top-4 hidden h-4 w-4 text-muted-foreground/50 sm:block"
+                      className="absolute -right-3 top-4 hidden h-4 w-4 text-muted-foreground/50 lg:block"
                       strokeWidth={2}
                     />
                   ) : null}
@@ -544,6 +592,36 @@ export default function LandingPage() {
                 <a href="#scope">Scope and limits</a>
               </Button>
             </div>
+          </div>
+        </section>
+
+        {/* --------------------------------------------------- Retest comparison */}
+        <section className="bg-background py-16 sm:py-20 lg:py-24">
+          <div className="shell grid gap-10 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] lg:items-center lg:gap-16">
+            <div>
+              <SectionLabel>Registered retest</SectionLabel>
+              <h2 className="mt-5 text-balance text-[27px] font-extrabold leading-[1.15] tracking-tightest sm:text-[33px] lg:text-[38px]">
+                The same question,
+                <br className="hidden sm:block" /> asked again on purpose
+              </h2>
+              <p className="mt-4 text-pretty text-[14px] leading-relaxed text-muted-foreground sm:text-[15px]">
+                A retest is only meaningful if nothing else moved. Zypact holds
+                the question and protocol identical, records the one change that
+                was made, waits out the observation window, then reports what
+                the evidence will and will not support.
+              </p>
+
+              <div className="mt-8">
+                <Button asChild size="lg" className="w-full sm:w-auto">
+                  <a href={DEMO_URL}>
+                    Request demo
+                    <ArrowRight className="h-4 w-4" strokeWidth={2.25} />
+                  </a>
+                </Button>
+              </div>
+            </div>
+
+            <RetestComparison />
           </div>
         </section>
 

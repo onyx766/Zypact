@@ -46,15 +46,13 @@ export function SiteHeader() {
           </nav>
         </div>
 
+        {/*
+          No sign-in link. The founder console entrance is allowlisted and V1
+          creates no customer account, so a public sign-in button would send
+          every visitor to a door that will not open for them. Results reach
+          customers through their own secure report link instead.
+        */}
         <div className="flex items-center gap-2 sm:gap-2.5">
-          <Button
-            asChild
-            variant="ghost"
-            size="sm"
-            className="hidden sm:inline-flex"
-          >
-            <a href="/login">Sign in</a>
-          </Button>
           <Button asChild size="sm" className="rounded-full px-4">
             <a href="/scan">Request demo</a>
           </Button>
@@ -91,13 +89,6 @@ export function SiteHeader() {
               {link.label}
             </a>
           ))}
-          <a
-            href="/login"
-            onClick={() => setOpen(false)}
-            className="py-3.5 text-[15px] font-medium text-muted-foreground sm:hidden"
-          >
-            Sign in
-          </a>
         </nav>
       </div>
     </header>

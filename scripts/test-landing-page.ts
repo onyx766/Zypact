@@ -56,6 +56,29 @@ async function main(): Promise<void> {
   check("delivery gate meaning is not colour-only", pageSource.includes("{gate.status}") && pageSource.includes('aria-hidden="true"'));
 
   check("hero product preview is labelled synthetic", flat.includes("Synthetic example") && flat.includes("not a live Perplexity probe"));
+
+  /*
+   * The approved design fills these two slots with a customer logo wall, named
+   * testimonials, a share-of-voice tile and a "+600%" lift badge. Each is
+   * either invented social proof or a claim METHODOLOGY §19 forbids, so the
+   * slots carry evidence panels instead. These guards exist because the
+   * pressure to restore the original mock is a recurring one.
+   */
+  const answerEvidenceSource = readFileSync("components/marketing/answer-evidence.tsx", "utf8");
+  check("example answer names the only live surface", flat.includes("Perplexity Sonar") && flat.includes("Approved question"));
+  check("example answer shows the sources the answer cited", flat.includes("Sources cited in this answer"));
+  check("cited domains stay in the reserved example TLD", /\.example</.test(html) && !/techcrunch|linkedin|crunchbase/i.test(html));
+  check("retest pair reports counts against a denominator", flat.includes("of 15 preserved runs") && !/\+\s?\d+\s?%/.test(flat));
+  check("retest pair shows what the sample can detect", flat.includes("Smallest change 15 runs can detect"));
+  check("retest pair refuses the causal claim", flat.includes("It does not claim the change caused the movement"));
+  check("both evidence panels are labelled synthetic", (answerEvidenceSource.match(/Synthetic/g) ?? []).length >= 2);
+
+  /*
+   * `/login` is the allowlisted founder console entrance and V1 creates no
+   * customer account, so no public marketing surface may advertise a sign-in.
+   */
+  check("public pages advertise no sign-in", !/sign in/i.test(flat) && !/href=["']\/login["']/.test(html));
+  check("header carries no founder-console link", !headerSource.includes("/login"));
   check("excluded attempts stay in the denominator", flat.includes("Failed and excluded attempts stay visible in the denominator"));
   check("preview reports attempt reconciliation, not a headline score", ["Preserved", "Retried", "Excluded"].every((label) => flat.includes(label)));
   check("no universal visibility score is claimed", flat.includes("No universal score, no market-wide claim"));

@@ -49,6 +49,15 @@ At that audited commit:
 - the worker claim/lease/fencing path already exists and should be evaluated for reuse;
 - the public customer workflow, evidence contract, report semantics, and retest do not yet satisfy the canonical V1.
 
+**That snapshot is 2026-08-16 and is now far behind `main`.** It is kept because
+it is what the documentation reset was reconciled against, not because it
+describes the repository. Measured on `main` at `d2f4cdf` on 2026-09-30: **81**
+migrations through `0081`, **176** files matching `scripts/test-*.ts`, and
+**88** `test:*` plus **3** `verify:*` commands. The M7 retest and Outcome Card
+application layer is merged. See [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md)
+section 18, which supersedes every inventory figure above and in sections 3, 7,
+12, 13 and 15 of that file.
+
 Do not infer deployed migration state, worker health, or production parity from repository files. M0 verifies those separately.
 
 ## Standard local checks

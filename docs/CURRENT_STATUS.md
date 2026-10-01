@@ -807,3 +807,117 @@ web app and the workers alike, come from `publicSiteUrl()`
 - **`test:snapshot-send-idempotency` fails, before and after this branch**
   (identical 18 failures). It predates the revision-fenced send handler
   (`a1f3f03`) and still posts empty bodies. Stale, not regressed.
+
+## 18. Reconciled repository and deployment state
+
+- **As of:** 2026-09-30
+- **`main` at:** `d2f4cdf` ("Rebuild the public pages light, on evidence instead of invented proof", #60)
+- **Method:** read-only inspection of the tracked tree, `git` history, and three
+  independent code traces of the baseline, retest and report/delivery paths. No
+  database was probed, no provider was called, no deployment was inspected.
+- **Scope:** this section supersedes the inventory figures in sections 3, 7, 12,
+  13 and 15, and corrects section 17's merge status. It does not rewrite them.
+
+### 18.1 Measured inventory
+
+| Item | Value on `d2f4cdf` |
+|---|---|
+| SQL migrations | 81, `0001_init.sql` through `0081_snapshot_request_origin_and_founder_creation.sql`, no gaps |
+| Test source files | 176 matching `scripts/test-*.ts` |
+| Registered commands | 88 `test:*`, 3 `verify:*` |
+
+Section 15.2 recorded 69 migrations and 57 registered commands on the then
+unmerged `fix/v1-customer-flow`. Both are superseded.
+
+### 18.2 Section 17 is corrected: M7 is merged
+
+Section 17 records the M7 application layer as built on `feat/m7-retest`, "Not
+merged." That branch is now an ancestor of `main`, as are
+`fix/v1-customer-flow` and `feat/enable-live-production-worker`. Migrations
+`0071`-`0079` (interventions, observation window, retest protocol creation,
+retest phase integrity, detectable change, Outcome Card artifacts, rejection and
+abandonment, baseline-only registration, one retest per intervention) are in
+`main`, together with `0080` and `0081`.
+
+### 18.3 What is wired end to end, in code
+
+Both halves of the V1 workflow exist on `main` and are connected. Traced
+function by function:
+
+- **Baseline.** `/scan` → `create_snapshot_request_guarded` → email verification
+  → `consume_snapshot_request_verification` → founder approval →
+  `approve_and_launch_snapshot_baseline` (project, buyer question, question
+  version, protocol, `approve_protocol`, `enqueue_protocol_execution_job`, all in
+  one transaction) → worker claim → `admit_and_reserve_attempt_for_job` →
+  Perplexity → `record_provider_call_receipt_for_job` → OpenAI analysis →
+  `persist_probe_result_for_job` → `runReportPass` → `save_protocol_report_artifact`
+  → `/report/[secureToken]`.
+- **Retest.** `/admin/interventions` → `register_intervention` →
+  `approve_intervention` → `confirm_intervention_implementation` →
+  `retest_eligibility` → `create_retest_protocol` →
+  `enqueue_protocol_execution_job` → worker (which branches on
+  `baselineProtocolId` to label the attempt `retest`) → `compareProtocols` →
+  `save_outcome_card_artifact` → `/outcome-card/[secureToken]`.
+
+No stub, simulated-provider path or unimplemented branch was found on either
+route. `ZYPACT_MOCK_MODE` must be exactly `"off"` for the worker to start live,
+and the Perplexity leg never reads it.
+
+### 18.4 What has actually run, and what has not
+
+- **Baseline, live, proven.** D-036 records production evidence: a completed run
+  takes a median of 18 s (p90 22 s), and three 5-run baselines completed in 91 s,
+  93 s and 102 s.
+- **Retest, never run.** D-034 states that no retest has run outside a test
+  harness. [`OPTION_A_TODO.md`](OPTION_A_TODO.md) still carries the UI-driven
+  end-to-end run as unchecked, held for an explicit founder go-ahead. No
+  Outcome Card has been built from real data.
+
+### 18.5 Open findings
+
+1. **Execution is founder-triggered, and the public copy says otherwise.** The
+   approve route contains no worker start; a founder must press Run pipeline,
+   which calls `startWorkerMachine()`. `app/page.tsx` and `app/scan/page.tsx`
+   both tell the reader the baseline "runs automatically" after approval. One of
+   the two must change. Changing the copy is the smaller act; wiring approval to
+   a machine start changes who can cause paid spend and would need its own
+   decision record.
+2. **The job claim is not scoped.** `claim_protocol_execution_job` takes the
+   oldest eligible job globally, so a start intended for one request can claim
+   another. `claim_protocol_execution_job_by_id` (0059) exists and
+   `runWorkerLoop` never calls it — a wired-but-unused safety barrier. Latent
+   while only one job is ever queued.
+3. **`blocked` is unreachable on the V1 path.** `reportExposesLegacyVerdictAsTruth`
+   is four regexes matching legacy `won/partial/lost` aggregates;
+   `renderProtocolShortReportMarkdown` emits none of them. The practical states
+   are `integrity_passed` and `needs_review`. The four `blocked` guards —
+   orchestrator, send handler, migration 0080's status transition, and the public
+   page allowlist — are correct and currently dormant.
+4. **The integrity classifier implements 4 of METHODOLOGY §16's 14 gates**, by
+   its own header. M1-A full-request-body hashing is deliberately not required,
+   because the worker records `absent` on every row.
+5. **The founder "Send report" button emails a degraded message.** It parses
+   protocol short-report markdown with `parsePublicSnapshotReport`, a legacy
+   parser looking for strings the protocol renderer never emits, so its
+   placeholder fallbacks fire. The review panel's "Send to requester" path uses
+   `sendProtocolReportEmail` and is correct. Two templates, one artifact.
+6. **`needs_review` is one click from delivery.** The Send report button carries
+   no acknowledgement step, while the Outcome Card path requires
+   `acknowledgeReview`. The asymmetry appears unintentional.
+7. **Protocol deviations cannot be recorded after implementation is confirmed.**
+   `confirm_intervention_implementation` returns without acting unless status is
+   `approved` (0071), and it is the only writer of `protocol_deviations`. A
+   confounder discovered during an open observation window therefore has no
+   product surface. See [`SELF_TEST_PERPLEXITY_CONTENT_CHANGE.md`](SELF_TEST_PERPLEXITY_CONTENT_CHANGE.md).
+8. **D-036's slot fix is not yet in effect.** It states that the change takes
+   effect only when the production config is redeployed; until then the machine
+   keeps `WORKER_MAX_SLOTS_PER_CLAIM = 1`, under which no 5-run baseline or
+   retest can complete.
+
+### 18.6 Recording gap
+
+Nothing was recorded in this file between 2026-09-19 and this entry, while pull
+requests #48 through #60 landed on `main` — including the merge of the entire M7
+application layer, the production worker going live under D-034, and three
+decisions (D-034, D-035, D-036). Section 15.7's process finding asked for a
+record written at the time the change happens. That did not occur here either.

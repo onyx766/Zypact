@@ -17,6 +17,7 @@ Operational and sequencing context:
 
 - [`docs/PILOT_RUNBOOK.md`](docs/PILOT_RUNBOOK.md)
 - [`docs/ROADMAP.md`](docs/ROADMAP.md)
+- [`docs/WORKER_DEPLOY_RUNBOOK.md`](docs/WORKER_DEPLOY_RUNBOOK.md)
 
 If an archived file, code comment, UI label, prompt, test fixture, or old estimate conflicts with the active canonical package, the canonical package controls the intended V1. Existing code still containing a legacy behavior is evidence of work to assess; it is not permission to repeat that behavior.
 

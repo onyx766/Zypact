@@ -912,7 +912,9 @@ and the Perplexity leg never reads it.
 8. **D-036's slot fix is not yet in effect.** It states that the change takes
    effect only when the production config is redeployed; until then the machine
    keeps `WORKER_MAX_SLOTS_PER_CLAIM = 1`, under which no 5-run baseline or
-   retest can complete.
+   retest can complete. The redeploy procedure, and the drift check that is the
+   only way to confirm the bounds actually landed, are recorded in
+   [`WORKER_DEPLOY_RUNBOOK.md`](WORKER_DEPLOY_RUNBOOK.md).
 
 ### 18.6 Recording gap
 

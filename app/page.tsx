@@ -3,6 +3,7 @@ import {
   ArrowRight,
   BarChart3,
   Check,
+  ChevronDown,
   ClipboardList,
   Database,
   FileCheck,
@@ -675,33 +676,41 @@ export default function LandingPage() {
             <div className="lg:sticky lg:top-24 lg:self-start">
               <SectionHeading
                 align="left"
-                label="Due diligence"
+                label="FAQ"
                 title={
                   <>
-                    What V1 does
-                    <br className="hidden sm:block" /> and does not claim
+                    Frequently asked
+                    <br className="hidden sm:block" /> questions
                   </>
                 }
                 lede="Clear boundaries are part of the product. A partial or unsafe result is reviewed or blocked, not delivered as certainty."
               />
             </div>
 
-            <div className="divide-y divide-border border-y border-border">
-              {faqs.map((faq, index) => (
-                <details key={faq.question} className="group py-1">
-                  <summary className="flex cursor-pointer list-none items-center gap-3 py-4 text-[14px] font-semibold tracking-tight sm:gap-4 sm:text-[15px]">
-                    <span className="hidden font-mono text-[11px] text-muted-foreground sm:inline">
-                      {String(index + 1).padStart(2, "0")}
-                    </span>
+            {/*
+              One bordered card per question, as the approved design shows,
+              rather than the hairline-divided rows this previously used. Still
+              a native <details>, so it opens with no JavaScript and keeps the
+              built-in disclosure semantics for assistive technology.
+            */}
+            <div className="grid gap-3">
+              {faqs.map((faq) => (
+                <details
+                  key={faq.question}
+                  className="group rounded-xl border border-border bg-card px-4 transition-colors hover:border-primary/30 sm:px-5"
+                >
+                  {/* `list-none` alone leaves Safari's disclosure triangle, so
+                      the marker is hidden explicitly, as the admin accordions
+                      and every legacy stylesheet here already do. */}
+                  <summary className="flex cursor-pointer list-none items-center gap-4 py-4 text-[14px] font-semibold tracking-tight [&::-webkit-details-marker]:hidden sm:text-[15px]">
                     <span className="flex-1 text-pretty">{faq.question}</span>
-                    <span
+                    <ChevronDown
                       aria-hidden="true"
-                      className="shrink-0 text-[18px] font-normal text-muted-foreground transition-transform group-open:rotate-45"
-                    >
-                      +
-                    </span>
+                      className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180"
+                      strokeWidth={2}
+                    />
                   </summary>
-                  <p className="pb-4 text-[13px] leading-relaxed text-muted-foreground sm:pl-[calc(0.75rem+1rem)] sm:text-[13.5px]">
+                  <p className="pb-4 pr-8 text-[13px] leading-relaxed text-muted-foreground sm:text-[13.5px]">
                     {faq.answer}
                   </p>
                 </details>

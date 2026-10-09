@@ -118,14 +118,34 @@ function world(opts: {
   retestDropHashOn?: number;
   withAbandonedRetest?: boolean;
   noLiveRetest?: boolean;
-  noMinimumUsefulChange?: boolean;
+  retestWithoutMinimumUsefulChange?: boolean;
+  oldBaselineWithoutPlanFields?: boolean;
+  baselineWithDifferentPlanFields?: boolean;
 } = {}) {
   const b = runs(BASE, "baseline", opts.basePresent ?? 1);
   const r = runs(RETEST, "retest", opts.retestPresent ?? 5, { dropHashOn: opts.retestDropHashOn });
   const baseline = protocolRow(BASE, null, "completed");
-  if (opts.noMinimumUsefulChange) baseline.minimum_useful_change = null;
+  // A baseline approved before these migrations carries neither column:
+  // `minimum_useful_change` is stamped by 0073 onto the retest it creates,
+  // and 0075 added `detectable_change_at_plan` without backfilling. This is
+  // the shape of every audit older than M7, not an exotic case.
+  if (opts.oldBaselineWithoutPlanFields) {
+    baseline.minimum_useful_change = null;
+    baseline.detectable_change_at_plan = null;
+  }
+  // Values that could only have come from the baseline row. The default
+  // fixture gives both phases the same numbers, which is exactly why reading
+  // the wrong row went unnoticed; these make the source observable.
+  if (opts.baselineWithDifferentPlanFields) {
+    baseline.minimum_useful_change = { value: 0.3, comparison_method: "newcombe_95", source: "baseline_row" };
+    baseline.detectable_change_at_plan = 0.3;
+  }
   const protocols: Row[] = [baseline];
-  if (!opts.noLiveRetest) protocols.push(protocolRow(RETEST, BASE, "completed"));
+  if (!opts.noLiveRetest) {
+    const retest = protocolRow(RETEST, BASE, "completed");
+    if (opts.retestWithoutMinimumUsefulChange) retest.minimum_useful_change = null;
+    protocols.push(retest);
+  }
   if (opts.withAbandonedRetest) protocols.push(protocolRow(OLD_RETEST, BASE, "abandoned"));
   return fakeDb({
     interventions: [{
@@ -226,13 +246,55 @@ async function main(): Promise<void> {
     ["an approved (not implemented) intervention", { ivStatus: "approved" }],
     ["an abandoned intervention", { ivStatus: "abandoned" }],
     ["a baseline with only an abandoned retest", { noLiveRetest: true, withAbandonedRetest: true }],
-    ["a baseline with no minimum useful change", { noMinimumUsefulChange: true }],
+    ["a retest with no minimum useful change", { retestWithoutMinimumUsefulChange: true }],
   ] as const) {
     const { client, calls } = world(opts);
     const r = await processOutcomeCard(IV, deps(client));
     check(`${label}: not ready, blocked, nothing saved`,
       r.outcome === "intervention_not_ready" && r.integrityStatus === "blocked" && saved(calls) === undefined,
       r.outcome);
+  }
+
+  /* ═══════════ 5. the plan fields come from the RETEST protocol ═══════════ */
+  console.log("\n[5] Delta_min and the planned threshold are read from the retest");
+  {
+    // The production shape that blocked intervention 79e21c3d: a baseline
+    // predating 0073/0075 holds null in both columns while the retest it
+    // spawned carries { value: 0.6 }. Reading the baseline blocked the card
+    // for an audit whose evidence was complete and correct.
+    const { client, calls } = world({ oldBaselineWithoutPlanFields: true });
+    const r = await processOutcomeCard(IV, deps(client));
+    const payload = saved(calls)?.p_payload as Record<string, any> | undefined;
+    check("an older baseline with null plan fields no longer blocks the card",
+      r.outcome !== "intervention_not_ready" && payload !== undefined, r.outcome);
+    check("delta_min is the retest's 0.6, not the baseline's null",
+      payload?.comparison?.minimumUsefulChange === 0.6, String(payload?.comparison?.minimumUsefulChange));
+    check("the planned threshold is the retest's, not the baseline's null",
+      payload?.detectableChangeAtPlan === 0.6, String(payload?.detectableChangeAtPlan));
+  }
+  {
+    // Both rows populated but disagreeing. Only the retest's numbers may
+    // appear; the default fixture gives the two phases identical values, so
+    // without this the query could read either row and still pass.
+    const { client, calls } = world({ baselineWithDifferentPlanFields: true });
+    await processOutcomeCard(IV, deps(client));
+    const payload = saved(calls)?.p_payload as Record<string, any> | undefined;
+    check("with both rows set, delta_min is the retest's 0.6 and never the baseline's 0.3",
+      payload?.comparison?.minimumUsefulChange === 0.6, String(payload?.comparison?.minimumUsefulChange));
+    check("and the planned threshold is the retest's 0.6, never the baseline's 0.3",
+      payload?.detectableChangeAtPlan === 0.6, String(payload?.detectableChangeAtPlan));
+  }
+  {
+    // The card's visible power sentence is computed from the readable runs
+    // (`smallestDetectableChange`), not from the stamped column — so it must
+    // survive a baseline that carries nothing at all.
+    const { client, calls } = world({ oldBaselineWithoutPlanFields: true });
+    await processOutcomeCard(IV, deps(client));
+    const markdown = String(saved(calls)?.p_markdown ?? "");
+    check("the card still states the smallest change this sample could separate",
+      /Smallest change this sample could have separated from zero: /.test(markdown));
+    check("and still declares delta_min to the reader",
+      /Minimum useful change \(\u0394_min\), declared before this retest ran: /.test(markdown));
   }
 
   console.log(`\n${passed}/${passed + failed} checks passed.${failed ? ` ${failed} FAILED.` : ""}\n`);

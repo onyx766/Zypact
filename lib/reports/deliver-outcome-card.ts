@@ -205,16 +205,29 @@ export async function processOutcomeCard(
   }
   const retestProtocolId = (retestRow as Record<string, any>).id as string;
 
-  const { data: baselineProtoRow, error: baselineProtoError } = await deps.client
+  // Both columns belong to the RETEST protocol, not the baseline. 0073 stamps
+  // `minimum_useful_change` onto the retest row as it inserts it, and approves
+  // that row through `approve_protocol` — which 0075 made the only writer of
+  // `detectable_change_at_plan`. A baseline approved before 0075 existed holds
+  // null in both, because 0075 deliberately did not backfill, so reading them
+  // from the baseline blocked the card for every audit older than that
+  // migration while the error below correctly named the retest.
+  //
+  // Nothing is lost when both rows are populated: 0073 gives the retest the
+  // baseline's own run count, and 0075 computes the figure as
+  // `_smallest_detectable_change(n, n)` — "symmetric by construction for both
+  // a baseline and a retest protocol", in its own words — so the two rows
+  // agree by construction rather than by coincidence.
+  const { data: retestProtoRow, error: retestProtoError } = await deps.client
     .from("protocols")
     .select("minimum_useful_change,detectable_change_at_plan")
-    .eq("id", interventionRow.protocol_id)
+    .eq("id", retestProtocolId)
     .maybeSingle();
 
-  if (baselineProtoError) throw baselineProtoError;
+  if (retestProtoError) throw retestProtoError;
 
-  const baselineProto = baselineProtoRow as Record<string, any> | null;
-  const minimumUsefulChange = baselineProto?.minimum_useful_change?.value;
+  const retestProto = retestProtoRow as Record<string, any> | null;
+  const minimumUsefulChange = retestProto?.minimum_useful_change?.value;
   if (typeof minimumUsefulChange !== "number") {
     return {
       ...base,
@@ -266,7 +279,7 @@ export async function processOutcomeCard(
     retest: retestPayload,
     intervention: toInterventionSummary(interventionRow),
     minimumUsefulChange,
-    detectableChangeAtPlan: baselineProto?.detectable_change_at_plan ?? null,
+    detectableChangeAtPlan: retestProto?.detectable_change_at_plan ?? null,
     now: now(),
   });
   const markdown = renderOutcomeCardMarkdown(card);

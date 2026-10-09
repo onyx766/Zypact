@@ -92,8 +92,10 @@ export interface OutcomeCardPayload {
    * The threshold disclosed at approval time (0075's
    * `protocols.detectable_change_at_plan`), before any evidence existed.
    * Purely informational — never an input to `comparison`, which is always
-   * computed from the ACTUAL readable runs. Null for a baseline approved
-   * before 0075 existed.
+   * computed from the ACTUAL readable runs. Read from the RETEST protocol,
+   * which 0073 approves through `approve_protocol` and so always carries it;
+   * a baseline approved before 0075 existed holds null, because that
+   * migration did not backfill. Still null if the retest itself predates it.
    */
   detectableChangeAtPlan: number | null;
 

@@ -421,6 +421,16 @@ export default function LandingPage() {
                 sequential.
               </p>
 
+              <p className="mt-5 text-[14px] leading-relaxed">
+                <a
+                  href="/perplexity-content-change-test"
+                  className="font-semibold text-primary underline-offset-4 hover:underline"
+                >
+                  See how Zypact tests whether a content change moved the same
+                  Perplexity buyer question
+                </a>
+              </p>
+
               <ul className="mt-7 grid gap-3.5">
                 {protocolPoints.map((point) => (
                   <CheckItem key={point} icon={Check}>

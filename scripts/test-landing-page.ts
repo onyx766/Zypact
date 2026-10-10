@@ -46,6 +46,7 @@ async function main(): Promise<void> {
   check("Tailwind marketing root renders", html.includes('class="v2-root"'));
   check("approved headline renders", flat.includes("Turn AI answers") && flat.includes("into evidence"));
   check("primary CTA keeps the protected request route", flat.includes("Request demo") && /href=["']\/scan["']/.test(html));
+  check("homepage contextually links the Perplexity change-test page", /href=["']\/perplexity-content-change-test["']/.test(html) && flat.includes("See how Zypact tests whether a content change moved the same Perplexity buyer question"));
   check("scroll chapters have real anchors", ["evidence", "how-it-works", "features", "scope", "outcomes", "faq"].every((id) => html.includes(`id="${id}"`)));
   check("nav placeholders are absent", !/href=["']#["']/.test(html));
 

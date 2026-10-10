@@ -115,7 +115,8 @@
     "test:worker-start": "tsx scripts/test-worker-start-control.ts",
     "test:0080-report-ready": "tsx scripts/test-0080-report-ready-contract.ts",
     "test:report-pass": "tsx scripts/test-report-pass.ts",
-    "test:0081-founder-audits": "tsx scripts/test-0081-founder-created-audits.ts"
+    "test:0081-founder-audits": "tsx scripts/test-0081-founder-created-audits.ts",
+    "test:founder-baseline-control": "tsx scripts/test-founder-baseline-control.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.3.3",

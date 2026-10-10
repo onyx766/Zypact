@@ -5,6 +5,10 @@ import { getReportServiceClient } from "@/lib/reports/service-client";
 import { loadPipelineRowStates } from "@/lib/reports/pipeline-row-state";
 import { AdminShell, type AdminHealth } from "../admin-shell";
 import { NewAuditPanel } from "./new-audit-panel";
+import {
+  FounderBaselinePanel,
+  type FounderBaselineRow,
+} from "./founder-baseline-panel";
 import { RequestsTable, type RequestRow } from "./requests-table";
 
 export const dynamic = "force-dynamic";
@@ -68,10 +72,125 @@ function summarizeHealth(rows: RequestRow[]): AdminHealth {
   };
 }
 
+async function loadFounderBaselines(): Promise<FounderBaselineRow[]> {
+  const client = getReportServiceClient();
+
+  const [{ data: jobs, error: jobsError }, { data: attached, error: attachedError }] =
+    await Promise.all([
+      client
+        .from("protocol_execution_jobs")
+        .select(
+          "id,project_id,protocol_id,status,attempt_count,max_attempts,next_baseline_ordinal,created_at"
+        )
+        .order("created_at", { ascending: false })
+        .limit(20),
+      client
+        .from("snapshot_requests")
+        .select("protocol_id")
+        .not("protocol_id", "is", null),
+    ]);
+
+  if (jobsError || attachedError) {
+    throw jobsError ?? attachedError ?? new Error("Could not load baseline jobs");
+  }
+
+  const attachedIds = new Set(
+    (attached ?? [])
+      .map((row: Record<string, any>) => row.protocol_id)
+      .filter((value: unknown): value is string => typeof value === "string")
+  );
+
+  const candidateJobs = (jobs ?? []).filter(
+    (row: Record<string, any>) =>
+      typeof row.protocol_id === "string" && !attachedIds.has(row.protocol_id)
+  );
+
+  if (candidateJobs.length === 0) return [];
+
+  const protocolIds = Array.from(
+    new Set(candidateJobs.map((row: Record<string, any>) => row.protocol_id))
+  );
+
+  const { data: protocols, error: protocolsError } = await client
+    .from("protocols")
+    .select(
+      "id,project_id,buyer_question_version_id,baseline_protocol_id,status,planned_baseline_runs,planned_retest_runs,run_cap,retry_cap,spend_cap_usd"
+    )
+    .in("id", protocolIds);
+
+  if (protocolsError) throw protocolsError;
+
+  const baselineProtocols = (protocols ?? []).filter(
+    (row: Record<string, any>) => row.baseline_protocol_id === null
+  );
+
+  if (baselineProtocols.length === 0) return [];
+
+  const versions = Array.from(
+    new Set(
+      baselineProtocols
+        .map((row: Record<string, any>) => row.buyer_question_version_id)
+        .filter((value: unknown): value is string => typeof value === "string")
+    )
+  );
+
+  const { data: questionVersions, error: versionsError } = await client
+    .from("buyer_question_versions")
+    .select("id,version_number,prompt_text,prompt_hash")
+    .in("id", versions);
+
+  if (versionsError) throw versionsError;
+
+  const protocolById = new Map(
+    baselineProtocols.map((row: Record<string, any>) => [row.id, row])
+  );
+  const versionById = new Map(
+    (questionVersions ?? []).map((row: Record<string, any>) => [row.id, row])
+  );
+
+  return candidateJobs.flatMap((job: Record<string, any>) => {
+    const protocol = protocolById.get(job.protocol_id);
+    if (!protocol) return [];
+
+    const version = versionById.get(protocol.buyer_question_version_id);
+    if (!version) return [];
+
+    return [
+      {
+        jobId: String(job.id),
+        protocolId: String(protocol.id),
+        projectId: String(job.project_id),
+        questionVersion: Number(version.version_number),
+        buyerQuestion: String(version.prompt_text),
+        promptHash: String(version.prompt_hash),
+        plannedRuns: Number(protocol.planned_baseline_runs),
+        runCap: Number(protocol.run_cap),
+        retryCap: Number(protocol.retry_cap),
+        spendCapUsd: Number(protocol.spend_cap_usd),
+        jobStatus: String(job.status),
+        attemptCount: Number(job.attempt_count),
+        nextBaselineOrdinal:
+          job.next_baseline_ordinal === null
+            ? null
+            : Number(job.next_baseline_ordinal),
+        protocolStatus: String(protocol.status),
+        createdAt: String(job.created_at),
+      },
+    ];
+  });
+}
+
 export default async function SnapshotRequestsAdminPage() {
   const user = await requireFounderForPage(FOUNDER_ADMIN_PATH);
 
   const requests = await getDb().listSnapshotRequests(100);
+
+  let founderBaselines: FounderBaselineRow[] = [];
+  try {
+    founderBaselines = await loadFounderBaselines();
+  } catch {
+    founderBaselines = [];
+  }
 
   // Best-effort: the list must still render if the pipeline read fails, so a
   // transient error costs the run buttons, not the whole admin page.
@@ -138,6 +257,8 @@ export default async function SnapshotRequestsAdminPage() {
 
         <NewAuditPanel />
       </div>
+
+      <FounderBaselinePanel rows={founderBaselines} />
 
       <RequestsTable rows={rows} />
     </AdminShell>

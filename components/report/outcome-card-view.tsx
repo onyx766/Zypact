@@ -1,28 +1,41 @@
 import {
+  BarChart3,
   BookOpen,
   Calendar,
+  CircleHelp,
+  ClipboardCheck,
   ExternalLink,
   FileText,
+  Hash,
   Info,
   Lock,
+  MessageSquare,
+  Scale,
   ShieldCheck,
   TrendingDown,
   TrendingUp,
-  Minus,
-  CircleHelp,
+  TriangleAlert,
+  type LucideIcon,
 } from "lucide-react";
+import type { ReactNode } from "react";
 
-import type { OutcomeCardPayload } from "@/lib/reports/outcome-card-types";
+import type { OutcomeCardPayload, OutcomeCardPhase } from "@/lib/reports/outcome-card-types";
 import { NON_CAUSALITY_FOOTER } from "@/lib/reports/outcome-card-types";
 import { Brand, NoteCard, percent } from "./protocol-report-view";
 import { CopyHashButton } from "./copy-hash-button";
 
 import "./protocol-report.css";
+import "./outcome-card.css";
 
 /**
  * Client view for the canonical Outcome Card. Same discipline as
  * ProtocolReportView: renders the stored payload directly, no parsing, no
  * re-derivation.
+ *
+ * Every picture here is drawn from numbers the payload already states in
+ * words beside it. The payload carries counts per phase, not per-run rows, so
+ * the run markers are a count ("k of n"), deliberately unnumbered: numbering
+ * them would present independent samples as an ordered series.
  *
  * The permanent non-causality footer (D-006) is written here as a LITERAL
  * string, exactly as render-outcome-card-markdown.ts already does — not
@@ -32,14 +45,45 @@ import "./protocol-report.css";
  * type, still gets the footer from this file.
  */
 
+type Tone = "green" | "red" | "amber" | "neutral";
+
+/**
+ * `reading` restates the comparison rule that produced the status and nothing
+ * more. It must stay true for every input that can yield that status, which
+ * is why none of these sentences mentions the intervention.
+ */
 const STATUS_COPY: Record<
   OutcomeCardPayload["comparison"]["status"],
-  { label: string; tone: "green" | "red" | "amber" | "neutral"; icon: typeof TrendingUp }
+  { label: string; tone: Tone; icon: LucideIcon; reading: string }
 > = {
-  increase_observed: { label: "Increase observed", tone: "green", icon: TrendingUp },
-  decrease_observed: { label: "Decrease observed", tone: "red", icon: TrendingDown },
-  no_clear_change: { label: "No clear change", tone: "neutral", icon: Minus },
-  inconclusive: { label: "Inconclusive", tone: "amber", icon: CircleHelp },
+  increase_observed: {
+    label: "Increase observed",
+    tone: "green",
+    icon: TrendingUp,
+    reading:
+      "The retest rate is above the baseline rate by at least the minimum useful change, and the interval on the difference stays above zero.",
+  },
+  decrease_observed: {
+    label: "Decrease observed",
+    tone: "red",
+    icon: TrendingDown,
+    reading:
+      "The retest rate is below the baseline rate by at least the minimum useful change, and the interval on the difference stays below zero.",
+  },
+  no_clear_change: {
+    label: "No clear change",
+    tone: "neutral",
+    icon: Scale,
+    reading:
+      "The runs do not show a difference of at least the minimum useful change that this sample can separate from noise.",
+  },
+  inconclusive: {
+    label: "Inconclusive",
+    tone: "amber",
+    icon: CircleHelp,
+    reading:
+      "The evidence cannot support a direction. The recorded reasons are listed under the comparison method below.",
+  },
 };
 
 function signedPercent(value: number): string {
@@ -47,31 +91,127 @@ function signedPercent(value: number): string {
   return pct > 0 ? `+${pct}%` : `${pct}%`;
 }
 
+/** `page_created` -> `Page created`. Stored codes stay stored; only the display changes. */
+function sentenceCase(value: string): string {
+  const spaced = value.replace(/_/g, " ").trim();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+/** Normalised to UTC before formatting, so an offset timestamp is never mislabelled. */
+function utcMinute(iso: string | null): string | null {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const normalised = date.toISOString();
+  return `${normalised.slice(0, 10)} ${normalised.slice(11, 16)} UTC`;
+}
+
+/** Position on a 0..1 track, as a CSS percentage. */
+function at(value: number): string {
+  return `${Math.min(100, Math.max(0, value * 100))}%`;
+}
+
+/** Position on a -1..+1 track, as a CSS percentage. */
+function atSigned(value: number): string {
+  return at((value + 1) / 2);
+}
+
+function SectionHead({
+  step,
+  icon: Icon,
+  title,
+  aside,
+}: {
+  step: number;
+  icon: LucideIcon;
+  title: string;
+  aside?: ReactNode;
+}) {
+  return (
+    <div className="zoc-head">
+      <div className="zoc-head-main">
+        <span className="zoc-head-icon" aria-hidden="true">
+          <Icon size={18} strokeWidth={1.9} />
+        </span>
+        <h2 className="zoc-head-title">
+          {step}. {title}
+        </h2>
+      </div>
+      {aside}
+    </div>
+  );
+}
+
+function Fact({ label, wide, children }: { label: string; wide?: boolean; children: ReactNode }) {
+  return (
+    <div className={wide ? "zoc-fact is-wide" : "zoc-fact"}>
+      <dt>{label}</dt>
+      <dd>{children}</dd>
+    </div>
+  );
+}
+
 function PhaseCard({
   label,
-  numerator,
-  denominator,
-  plannedRuns,
-  interval,
+  tone,
+  phase,
+  companyName,
 }: {
   label: string;
-  numerator: number;
-  denominator: number;
-  plannedRuns: number;
-  interval: { low: number; high: number } | null;
+  tone: "baseline" | "retest";
+  phase: OutcomeCardPhase;
+  companyName: string;
 }) {
-  const rateLabel = denominator > 0 ? percent(numerator / denominator) : "Not measured";
+  const { numerator, denominator, plannedRuns, interval } = phase;
+  const measured = denominator > 0;
+  const notNamed = Math.max(0, denominator - numerator);
+  const notReadable = Math.max(0, plannedRuns - denominator);
+
   return (
-    <article className="zpr-card zpr-phase-card">
-      <p className="zpr-phase-title">{label}</p>
-      <p className="zpr-metric-value">{rateLabel}</p>
-      <p className="zpr-metric-hint">
-        {numerator} of {denominator} readable run{denominator === 1 ? "" : "s"} · {plannedRuns} planned
+    <article className={`zoc-phase tone-${tone}`}>
+      <p className="zoc-phase-top">
+        <span className="zoc-phase-key" aria-hidden="true" />
+        {label}
       </p>
-      {interval ? (
-        <p className="zpr-metric-hint">
-          95% Wilson interval: {percent(interval.low)}–{percent(interval.high)}
-        </p>
+
+      <p className="zoc-rate">{measured ? percent(numerator / denominator) : "Not measured"}</p>
+      <p className="zoc-phase-count">
+        {numerator} of {denominator} readable run{denominator === 1 ? "" : "s"} named {companyName}
+        {" · "}
+        {plannedRuns} planned
+      </p>
+
+      {/* The sentence above is the accessible statement; the markers repeat it. */}
+      <div className="zoc-dots" aria-hidden="true">
+        {Array.from({ length: numerator }, (_, i) => (
+          <span key={`named-${i}`} className="zoc-dot is-named" />
+        ))}
+        {Array.from({ length: notNamed }, (_, i) => (
+          <span key={`absent-${i}`} className="zoc-dot is-absent" />
+        ))}
+        {Array.from({ length: notReadable }, (_, i) => (
+          <span key={`unreadable-${i}`} className="zoc-dot is-unreadable" />
+        ))}
+      </div>
+
+      {measured && interval ? (
+        <>
+          <div className="zoc-track" aria-hidden="true">
+            <span
+              className="zoc-range"
+              style={{ left: at(interval.low), width: at(interval.high - interval.low) }}
+            />
+            <span className="zoc-point" style={{ left: at(numerator / denominator) }} />
+          </div>
+          <div className="zoc-scale" aria-hidden="true">
+            <span>0%</span>
+            <span>50%</span>
+            <span>100%</span>
+          </div>
+          <p className="zoc-phase-interval">
+            95% Wilson interval: {percent(interval.low)}–{percent(interval.high)}
+          </p>
+        </>
       ) : null}
     </article>
   );
@@ -82,6 +222,14 @@ export function OutcomeCardView({ payload }: { payload: OutcomeCardPayload }) {
   const status = STATUS_COPY[comparison.status];
   const StatusIcon = status.icon;
   const generatedLabel = payload.generatedAt.slice(0, 10);
+
+  const frozenAt = utcMinute(intervention.approvedAt);
+  const implementedAt = utcMinute(intervention.implementedAt);
+  const windowOpens = utcMinute(intervention.observationWindowOpensAt);
+  const windowCloses = utcMinute(intervention.observationWindowClosesAt);
+  const hasDeviation = Boolean(intervention.protocolDeviations || intervention.earlyRetestReason);
+  const anyUnreadable =
+    baseline.plannedRuns > baseline.denominator || retest.plannedRuns > retest.denominator;
 
   return (
     <main className="zpr-root">
@@ -135,146 +283,248 @@ export function OutcomeCardView({ payload }: { payload: OutcomeCardPayload }) {
       </section>
 
       <div className="zpr-shell">
-        <section className="zpr-card zpr-question">
-          <div>
-            <p className="zpr-label">The registered question</p>
-            <p className="zpr-question-text">{question.text}</p>
-            <p className="zpr-question-sub">
-              The SAME question and version on both the baseline and the
-              retest. Intent {question.intentType}, provenance{" "}
-              <strong>{question.provenance}</strong>.
-            </p>
-          </div>
+        <div className="zoc-sheet">
+          {/* ------------------------------------------------ 1. Question */}
+          <section className="zoc-section">
+            <SectionHead step={1} icon={MessageSquare} title="Registered question" />
 
-          <div className="zpr-hash">
-            <p className="zpr-label">Prompt hash</p>
-            <div className="zpr-hash-row">
-              <span className="zpr-hash-value">{question.hash}</span>
-              <CopyHashButton value={question.hash} />
+            <div className="zoc-question-grid">
+              <div>
+                <p className="zoc-question-text">{question.text}</p>
+                <p className="zoc-sub">
+                  The same question and version on both the baseline and the
+                  retest. Intent: {sentenceCase(question.intentType).toLowerCase()}.
+                  Provenance: {sentenceCase(question.provenance).toLowerCase()}.
+                </p>
+              </div>
+
+              <div className="zoc-hash">
+                <div className="zoc-hash-top">
+                  <p className="zpr-label">
+                    <Hash size={12} strokeWidth={2.2} aria-hidden="true" /> Prompt hash
+                  </p>
+                  <CopyHashButton value={question.hash} />
+                </div>
+                {/* The full value, never truncated: it is the identity both phases are checked against. */}
+                <p className="zoc-hash-value">{question.hash}</p>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <section className="zpr-card">
-          <p className="zpr-label">The registered intervention</p>
-          <p className="zpr-question-text" style={{ marginTop: 8 }}>
-            {intervention.hypothesis}
-          </p>
-          <p className="zpr-question-sub">
-            <strong>Expected mechanism:</strong> {intervention.expectedMechanism}
-          </p>
-          <p className="zpr-question-sub">
-            <strong>Action:</strong> {intervention.actionType} — {intervention.actionTarget}
-          </p>
-          <p className="zpr-question-sub">
-            <strong>Owner:</strong> {intervention.owner}
-          </p>
-          {intervention.observationWindowOpensAt && intervention.observationWindowClosesAt ? (
-            <p className="zpr-question-sub">
-              <strong>Observation window:</strong>{" "}
-              {intervention.observationWindowOpensAt.slice(0, 10)} →{" "}
-              {intervention.observationWindowClosesAt.slice(0, 10)}
-            </p>
-          ) : null}
-          {intervention.earlyRetestReason ? (
-            <p className="zpr-deviation-note">
-              This retest ran before the observation window closed, under a
-              recorded authorised deviation: {intervention.earlyRetestReason}
-            </p>
-          ) : null}
-        </section>
+          {/* -------------------------------------------- 2. Intervention */}
+          <section className="zoc-section">
+            <SectionHead step={2} icon={FileText} title="Registered intervention" />
 
-        <section>
-          <p className="zpr-label">What each phase observed</p>
-          <div className="zpr-phase-row">
-            <PhaseCard
-              label="Baseline"
-              numerator={baseline.numerator}
-              denominator={baseline.denominator}
-              plannedRuns={baseline.plannedRuns}
-              interval={baseline.interval}
+            <p className="zoc-hypothesis">{intervention.hypothesis}</p>
+
+            <dl className="zoc-facts">
+              <Fact label="Expected mechanism" wide>
+                {intervention.expectedMechanism}
+              </Fact>
+              <Fact label="Action" wide>
+                {sentenceCase(intervention.actionType)} —{" "}
+                <span className="zoc-target">{intervention.actionTarget}</span>
+              </Fact>
+              <Fact label="Owner">{intervention.owner}</Fact>
+              {frozenAt ? <Fact label="Claim frozen">{frozenAt}</Fact> : null}
+              {implementedAt ? <Fact label="Implemented">{implementedAt}</Fact> : null}
+              {windowOpens && windowCloses ? (
+                <Fact label="Observation window">
+                  {windowOpens} → {windowCloses}
+                </Fact>
+              ) : null}
+            </dl>
+
+            {hasDeviation ? (
+              <div className="zoc-callout" role="note">
+                <TriangleAlert size={18} strokeWidth={2} aria-hidden="true" />
+                <div>
+                  <p className="zoc-callout-title">Recorded deviations</p>
+                  {intervention.protocolDeviations ? (
+                    <p className="zoc-callout-body">{intervention.protocolDeviations}</p>
+                  ) : null}
+                  {intervention.earlyRetestReason ? (
+                    <p className="zoc-callout-body">
+                      This retest ran before the observation window closed,
+                      under a recorded authorised deviation:{" "}
+                      {intervention.earlyRetestReason}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+          </section>
+
+          {/* -------------------------------------------------- 3. Phases */}
+          <section className="zoc-section">
+            <SectionHead
+              step={3}
+              icon={BarChart3}
+              title="What each phase observed"
+              aside={
+                <ul className="zoc-legend">
+                  <li>
+                    <span className="zoc-dot is-named" aria-hidden="true" /> Named
+                  </li>
+                  <li>
+                    <span className="zoc-dot is-absent" aria-hidden="true" /> Not named
+                  </li>
+                  {anyUnreadable ? (
+                    <li>
+                      <span className="zoc-dot is-unreadable" aria-hidden="true" /> Planned, not
+                      readable
+                    </li>
+                  ) : null}
+                </ul>
+              }
             />
-            <PhaseCard
-              label="Retest"
-              numerator={retest.numerator}
-              denominator={retest.denominator}
-              plannedRuns={retest.plannedRuns}
-              interval={retest.interval}
-            />
-          </div>
-        </section>
 
-        <section className="zpr-card" style={{ marginTop: 16 }}>
-          <p className="zpr-label">Outcome</p>
-          <div className={`zpr-outcome-badge tone-${status.tone}`} style={{ marginTop: 10 }}>
-            <StatusIcon size={17} strokeWidth={2.2} />
-            {status.label}
-          </div>
+            <div className="zoc-phases">
+              <PhaseCard
+                label="Baseline"
+                tone="baseline"
+                phase={baseline}
+                companyName={subject.companyName}
+              />
+              <PhaseCard
+                label="Retest"
+                tone="retest"
+                phase={retest}
+                companyName={subject.companyName}
+              />
+            </div>
+          </section>
 
-          <div style={{ marginTop: 16, display: "grid", gap: 6 }}>
-            {comparison.delta !== null ? (
-              <p className="zpr-metric-hint">
-                Observed change: {signedPercent(comparison.delta)} (retest minus baseline)
-              </p>
-            ) : null}
-            {comparison.interval ? (
-              <p className="zpr-metric-hint">
-                95% interval on the difference (Newcombe): {signedPercent(comparison.interval.low)} to{" "}
-                {signedPercent(comparison.interval.high)}
-              </p>
-            ) : null}
-            <p className="zpr-metric-hint">
-              Minimum useful change (Δ_min), declared before this retest ran:{" "}
-              {percent(comparison.minimumUsefulChange)}
-            </p>
-            {comparison.smallestDetectableChange !== null ? (
-              <p className="zpr-metric-hint">
-                Smallest change this sample could have separated from zero:{" "}
-                {percent(comparison.smallestDetectableChange)}
-              </p>
-            ) : null}
-          </div>
-        </section>
+          {/* ------------------------------------------------- 4. Outcome */}
+          <section className="zoc-section">
+            <SectionHead step={4} icon={ClipboardCheck} title="Outcome" />
 
-        <div className="zpr-notes">
-          <NoteCard
-            icon={
-              <span className="zpr-icon">
-                <ShieldCheck size={21} strokeWidth={1.9} />
-              </span>
-            }
-            title="How certain this is"
-            items={payload.uncertainty}
-          />
-          <NoteCard
-            tone="purple"
-            icon={
-              <span className="zpr-icon tone-purple">
-                <BookOpen size={21} strokeWidth={1.9} />
-              </span>
-            }
-            title="What this does not tell you"
-            items={payload.limitations}
-          />
-          <NoteCard
-            tone="blue"
-            icon={
-              <span className="zpr-icon tone-blue">
-                <FileText size={21} strokeWidth={1.9} />
-              </span>
-            }
-            title="Comparison method"
-            items={[
-              `Newcombe's hybrid-score 95% interval, built from a Wilson interval on each phase.`,
-              `Every reason recorded with this comparison: ${
-                comparison.reasons.length > 0 ? comparison.reasons.join("; ") : "none."
-              }`,
-            ]}
-          />
+            <div className={`zoc-outcome tone-${status.tone}`}>
+              <div className="zoc-outcome-main">
+                <span className="zoc-outcome-icon" aria-hidden="true">
+                  <StatusIcon size={30} strokeWidth={1.8} />
+                </span>
+                <div>
+                  <p className="zoc-outcome-label">{status.label}</p>
+                  <p className="zoc-outcome-reading">{status.reading}</p>
+                </div>
+              </div>
+
+              <dl className="zoc-stats">
+                {comparison.delta !== null ? (
+                  <div>
+                    <dt>Observed change (retest minus baseline)</dt>
+                    <dd>{signedPercent(comparison.delta)}</dd>
+                  </div>
+                ) : null}
+                {comparison.interval ? (
+                  <div>
+                    <dt>95% interval on the difference (Newcombe)</dt>
+                    <dd>
+                      {signedPercent(comparison.interval.low)} to{" "}
+                      {signedPercent(comparison.interval.high)}
+                    </dd>
+                  </div>
+                ) : null}
+                <div>
+                  <dt>Minimum useful change, declared before the retest ran</dt>
+                  <dd>{percent(comparison.minimumUsefulChange)}</dd>
+                </div>
+                {comparison.smallestDetectableChange !== null ? (
+                  <div>
+                    <dt>Smallest change this sample could separate from zero</dt>
+                    <dd>{percent(comparison.smallestDetectableChange)}</dd>
+                  </div>
+                ) : null}
+                {payload.detectableChangeAtPlan !== null ? (
+                  <div>
+                    <dt>Detectable change disclosed at approval</dt>
+                    <dd>{percent(payload.detectableChangeAtPlan)}</dd>
+                  </div>
+                ) : null}
+              </dl>
+
+              {comparison.delta !== null && comparison.interval ? (
+                <div className="zoc-diff" aria-hidden="true">
+                  <div className="zoc-track">
+                    <span
+                      className="zoc-range"
+                      style={{
+                        left: atSigned(comparison.interval.low),
+                        width: at((comparison.interval.high - comparison.interval.low) / 2),
+                      }}
+                    />
+                    <span
+                      className="zoc-min"
+                      style={{ left: atSigned(-comparison.minimumUsefulChange) }}
+                    />
+                    <span
+                      className="zoc-min"
+                      style={{ left: atSigned(comparison.minimumUsefulChange) }}
+                    />
+                    <span className="zoc-zero" />
+                    <span className="zoc-point" style={{ left: atSigned(comparison.delta) }} />
+                  </div>
+                  <div className="zoc-scale">
+                    <span>−100%</span>
+                    <span>0</span>
+                    <span>+100%</span>
+                  </div>
+                  <p className="zoc-diff-key">
+                    Point: observed change. Band: 95% interval. Vertical
+                    marks: minimum useful change (±
+                    {percent(comparison.minimumUsefulChange)}).
+                  </p>
+                </div>
+              ) : null}
+            </div>
+          </section>
+
+          {/* ------------------------------------------------- 5. Context */}
+          <section className="zoc-section">
+            <SectionHead step={5} icon={BookOpen} title="How to read this" />
+
+            <div className="zpr-notes">
+              <NoteCard
+                icon={
+                  <span className="zpr-icon">
+                    <ShieldCheck size={21} strokeWidth={1.9} />
+                  </span>
+                }
+                title="How certain this is"
+                items={payload.uncertainty}
+              />
+              <NoteCard
+                tone="purple"
+                icon={
+                  <span className="zpr-icon tone-purple">
+                    <BookOpen size={21} strokeWidth={1.9} />
+                  </span>
+                }
+                title="What this does not tell you"
+                items={payload.limitations}
+              />
+              <NoteCard
+                tone="blue"
+                icon={
+                  <span className="zpr-icon tone-blue">
+                    <FileText size={21} strokeWidth={1.9} />
+                  </span>
+                }
+                title="Comparison method"
+                items={[
+                  `Newcombe's hybrid-score 95% interval, built from a Wilson interval on each phase.`,
+                  `Every reason recorded with this comparison: ${
+                    comparison.reasons.length > 0 ? comparison.reasons.join("; ") : "none."
+                  }`,
+                ]}
+              />
+            </div>
+
+            {/* Literal text, not payload.nonCausalityFooter — see the file header. */}
+            <p className="zpr-permanent-footer">{NON_CAUSALITY_FOOTER}</p>
+          </section>
         </div>
-
-        {/* Literal text, not payload.nonCausalityFooter — see the file header. */}
-        <p className="zpr-permanent-footer">{NON_CAUSALITY_FOOTER}</p>
       </div>
 
       <footer className="zpr-footer">

@@ -103,6 +103,7 @@
     "test:m7-0074-schema": "tsx scripts/test-m7-0074-schema-contract.ts",
     "test:m7-runtime": "tsx scripts/test-m7-runtime-contract.ts",
     "test:compare-protocols": "tsx scripts/test-compare-protocols.ts",
+    "test:outcome-card-view": "tsx scripts/test-outcome-card-view.ts",
     "test:m7-0075-schema": "tsx scripts/test-m7-0075-schema-contract.ts",
     "test:m7-0075-runtime": "tsx scripts/test-m7-0075-runtime-contract.ts",
     "test:outcome-card": "tsx scripts/test-build-outcome-card.ts",

@@ -172,7 +172,8 @@ type Transition =
   | { rpc: "reject_intervention"; verb: "rejected"; reason: string }
   | { rpc: "abandon_intervention"; verb: "abandoned"; reason: string }
   | { rpc: "authorize_early_retest"; verb: "authorized for an early retest"; reason: string }
-  | { rpc: "confirm_intervention_implementation"; verb: "confirmed as implemented"; confirm: ConfirmInput };
+  | { rpc: "confirm_intervention_implementation"; verb: "confirmed as implemented"; confirm: ConfirmInput }
+  | { rpc: "record_intervention_deviation"; verb: "given a deviation note"; note: string };
 
 function argsFor(t: Transition, id: string, projectId: string, actor: string): Record<string, unknown> {
   switch (t.rpc) {
@@ -193,6 +194,8 @@ function argsFor(t: Transition, id: string, projectId: string, actor: string): R
         p_artifact_sha256: t.confirm.artifactSha256,
         p_deviations: t.confirm.deviations,
       };
+    case "record_intervention_deviation":
+      return { p_intervention_id: id, p_project_id: projectId, p_recorded_by: actor, p_note: t.note };
   }
 }
 
@@ -238,9 +241,18 @@ export const authorizeEarlyRetest = (c: SupabaseClient, id: string, actor: strin
 export const confirmImplementation = (c: SupabaseClient, id: string, actor: string, confirm: ConfirmInput, u?: OnUnmapped) =>
   transition(c, id, actor, { rpc: "confirm_intervention_implementation", verb: "confirmed as implemented", confirm }, u);
 
+/**
+ * Records a deviation found after implementation (migration 0082). Accepted
+ * only while the intervention is 'implemented'; any other status returns zero
+ * rows and is reported as an invalid transition, like every action above.
+ */
+export const recordDeviation = (c: SupabaseClient, id: string, actor: string, note: string, u?: OnUnmapped) =>
+  transition(c, id, actor, { rpc: "record_intervention_deviation", verb: "given a deviation note", note }, u);
+
 // ---------------------------------------------------------------------------
 // reads for the admin screens
 // ---------------------------------------------------------------------------
+
 
 export interface Eligibility extends EligibilityPresentation {
   reason: string;

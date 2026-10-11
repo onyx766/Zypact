@@ -72,6 +72,10 @@ export const RPC_ERROR_MAP: Readonly<Record<string, Entry>> = {
     status: 400,
     message: "The abandonment request was incomplete.",
   },
+  invalid_record_intervention_deviation_args: {
+    status: 400,
+    message: "The deviation request was incomplete.",
+  },
   invalid_approve_protocol_args: {
     status: 400,
     message: "The protocol approval request was incomplete.",
@@ -90,6 +94,15 @@ export const RPC_ERROR_MAP: Readonly<Record<string, Entry>> = {
     status: 400,
     message:
       "Say why the retest is starting before the observation window closes. This is recorded permanently as a deviation.",
+  },
+
+  deviation_needs_note: {
+    status: 400,
+    message: "Describe the deviation before recording it.",
+  },
+  deviation_note_too_long: {
+    status: 400,
+    message: "A deviation note can be at most 4000 characters.",
   },
 
   // ---- the thing referred to does not exist ----
@@ -140,6 +153,10 @@ export const RPC_ERROR_MAP: Readonly<Record<string, Entry>> = {
   abandonment_is_immutable: {
     status: 409,
     message: "An abandonment is permanent and cannot be changed or reversed.",
+  },
+  intervention_deviation_is_immutable: {
+    status: 409,
+    message: "A recorded deviation is permanent and cannot be edited or removed.",
   },
 
   // ---- 0074's phase trigger: a worker-path invariant, never a founder input ----

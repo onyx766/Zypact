@@ -227,7 +227,10 @@ export function OutcomeCardView({ payload }: { payload: OutcomeCardPayload }) {
   const implementedAt = utcMinute(intervention.implementedAt);
   const windowOpens = utcMinute(intervention.observationWindowOpensAt);
   const windowCloses = utcMinute(intervention.observationWindowClosesAt);
-  const hasDeviation = Boolean(intervention.protocolDeviations || intervention.earlyRetestReason);
+  const lateDeviations = intervention.lateDeviations ?? [];
+  const hasDeviation = Boolean(
+    intervention.protocolDeviations || intervention.earlyRetestReason || lateDeviations.length > 0
+  );
   const anyUnreadable =
     baseline.plannedRuns > baseline.denominator || retest.plannedRuns > retest.denominator;
 
@@ -350,6 +353,18 @@ export function OutcomeCardView({ payload }: { payload: OutcomeCardPayload }) {
                       {intervention.earlyRetestReason}
                     </p>
                   ) : null}
+                  {lateDeviations.map((deviation) => (
+                    <p key={`${deviation.recordedAt}-${deviation.note}`} className="zoc-callout-body">
+                      <span className="zoc-callout-when">
+                        Recorded {utcMinute(deviation.recordedAt)},{" "}
+                        {deviation.afterRetestBegan
+                          ? "after the retest had begun"
+                          : "before the retest began"}
+                        .
+                      </span>{" "}
+                      {deviation.note}
+                    </p>
+                  ))}
                 </div>
               </div>
             ) : null}

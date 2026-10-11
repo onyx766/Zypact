@@ -7,6 +7,7 @@ import { requireFounderForPage } from "@/lib/auth/founder";
 import { getReportServiceClient } from "@/lib/reports/service-client";
 import { readEligibility, readIntervention } from "@/lib/interventions/intervention-actions";
 import { readBaselineContext, readCitedRuns } from "@/lib/interventions/admin-reads";
+import { readDeviationLedger } from "@/lib/interventions/deviation-ledger";
 import { readRetestProgress, type RetestProgress } from "@/lib/interventions/retest-actions";
 import { readOutcomeCard, type StoredOutcomeCard } from "@/lib/interventions/outcome-card-actions";
 import { OutcomeCardView } from "@/components/report/outcome-card-view";
@@ -206,12 +207,13 @@ export default async function InterventionDetailPage({
   const iv = await readIntervention(client, interventionId);
   if (!iv) notFound();
 
-  const [eligibility, baseline, citedRuns, retest, card] = await Promise.all([
+  const [eligibility, baseline, citedRuns, retest, card, deviations] = await Promise.all([
     readEligibility(client, iv),
     readBaselineContext(client, iv.protocolId),
     readCitedRuns(client, iv.supportingEvidence),
     readRetestProgress(client, iv),
     readOutcomeCard(client, iv.id),
+    readDeviationLedger(client, iv),
   ]);
 
   // Same precondition the worker and generateOutcomeCard enforce: a card is
@@ -386,6 +388,25 @@ export default async function InterventionDetailPage({
                     {iv.earlyRetestReason}
                   </TimelineItem>
                 ) : null}
+                {deviations.map((deviation) => (
+                  <TimelineItem
+                    key={deviation.id}
+                    when={deviation.recordedAt}
+                    tone="warning"
+                    title={`Deviation recorded — ${
+                      deviation.retestAttemptsAtRecord > 0
+                        ? "after the retest had begun"
+                        : "before the retest began"
+                    }`}
+                  >
+                    {deviation.note}
+                    {deviation.cardDeliveredAtRecord ? (
+                      <span className="mt-1 block text-xs text-muted-foreground">
+                        Recorded after the Outcome Card was delivered. The delivered card does not contain this note.
+                      </span>
+                    ) : null}
+                  </TimelineItem>
+                ))}
                 {iv.abandonedAt ? (
                   <TimelineItem when={iv.abandonedAt} title="Abandoned" tone="neutral">{iv.abandonedReason}</TimelineItem>
                 ) : null}
@@ -415,6 +436,7 @@ export default async function InterventionDetailPage({
                     }
                   : null
               }
+              cardDelivered={card?.deliveredAt != null}
               actionsEnabled={interventionAdminEnabled()}
             />
 

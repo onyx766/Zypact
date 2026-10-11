@@ -181,6 +181,18 @@ export function parseReasonBody(body: unknown, label: string): Validated<string>
 }
 
 // ---------------------------------------------------------------------------
+// record a deviation after implementation
+// ---------------------------------------------------------------------------
+
+/** Body: { note }. The same 4000-character ceiling migration 0082 enforces. */
+export function parseDeviationBody(body: unknown): Validated<string> {
+  if (!isObject(body)) return fail("invalid_body", "The request body must be a JSON object.");
+  const note = requiredText(body, "note", "A deviation note", LONG_TEXT);
+  if (!note.ok) return { ok: false, error: "note_required", message: note.message };
+  return note;
+}
+
+// ---------------------------------------------------------------------------
 // confirm implementation
 // ---------------------------------------------------------------------------
 

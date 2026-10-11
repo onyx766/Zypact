@@ -923,3 +923,68 @@ requests #48 through #60 landed on `main` — including the merge of the entire 
 application layer, the production worker going live under D-034, and three
 decisions (D-034, D-035, D-036). Section 15.7's process finding asked for a
 record written at the time the change happens. That did not occur here either.
+
+## 19. First registered retest run, and migration 0082 (repository only)
+
+- **As of:** 2026-10-11
+- **Scope:** what the first real retest established, and what 0082 adds. This
+  section closes finding 7 of section 18.5 in the repository only.
+
+### 19.1 The first retest ran
+
+Section 18.4 recorded that no retest had run outside a test harness. That is
+superseded. On 2026-10-09, after the observation window closed at 20:46 UTC,
+the Zypact-on-Zypact intervention's retest was created, queued and run from
+the founder console against the production worker. The job succeeded with five
+readable attempts, the Outcome Card was built and delivered.
+
+Result: 0 of 5 baseline runs and 0 of 5 retest runs named the brand, status
+`no_clear_change`, difference interval -43% to +43%, minimum useful change and
+smallest detectable change both 60%. Every figure matches the table in
+[`SELF_TEST_PERPLEXITY_CONTENT_CHANGE.md`](SELF_TEST_PERPLEXITY_CONTENT_CHANGE.md)
+section 2, which was produced by executing the comparison engine beforehand.
+
+Founder-reported from the console and the delivered card; no database probe
+was made for this record.
+
+Two operational faults appeared on the day, neither in the measurement:
+
+- the console's Run retest control was refused by Fly (`FLY_API_TOKEN` on the
+  web host rejected), and
+- three Outcome Card emails were refused by the mail provider with HTTP 422
+  because `SNAPSHOT_EMAIL_FROM` held two addresses joined together. The code
+  checks only that the value is non-empty.
+
+### 19.2 Migration 0082 — deviations recorded after implementation
+
+`0082_m7_post_implementation_deviations.sql` adds an insert-only ledger,
+`intervention_deviations`, and one RPC, `record_intervention_deviation`. It is
+**in the repository only. It has been applied to no environment.**
+
+- A note is accepted only while the intervention is `implemented`.
+- The database stamps who recorded it, when, how many retest attempts already
+  existed, and whether the Outcome Card had already been delivered.
+- The ledger cannot be updated, deleted or truncated by any role.
+- `protocol_deviations` is not written by this path, and the comparison engine
+  does not read the ledger, so a note cannot change an outcome status.
+- A delivered card stays immutable. A note recorded after delivery is in the
+  ledger and is not on the delivered artifact; the console says so.
+
+Application code reads the ledger through `readDeviationLedger`, which treats
+a missing table as "no deviations", so deploying the code before applying the
+migration does not break card building. Recording a note before the migration
+is applied fails with an internal error and writes nothing.
+
+| Command | Result |
+|---|---|
+| `ZYPACT_M7_0082_RUNTIME_TEST=1 npm run test:m7-0082-runtime` | 57/57 on a disposable PostgreSQL 16 cluster, all 82 migrations applied verbatim |
+| `npm run test:intervention-routes` | 56/56 |
+| `npm run test:intervention-rpc-errors` | 101/101 |
+| `npm run test:outcome-card` | 40/40 |
+| `npm run test:outcome-card-view` | 43/43 |
+
+The runtime harness needs no Docker: it creates its own cluster with `initdb`
+on a loopback port and removes it afterwards.
+
+**Not established:** the founder console control has not been exercised in a
+browser, and nothing has been demonstrated on staging.

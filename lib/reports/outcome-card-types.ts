@@ -50,6 +50,20 @@ export interface OutcomeCardIntervention {
   earlyRetestReason: string | null;
   observationWindowOpensAt: string | null;
   observationWindowClosesAt: string | null;
+  /**
+   * Deviations recorded after implementation (0082's ledger), as they stood
+   * when this card was built. Optional so a card built before 0082 still
+   * narrows. Disclosure only: the comparison never reads these, so a note
+   * written after a retest cannot change an outcome status.
+   */
+  lateDeviations?: OutcomeCardLateDeviation[];
+}
+
+export interface OutcomeCardLateDeviation {
+  note: string;
+  recordedAt: string;
+  /** True when the retest already held at least one attempt as the note was written. */
+  afterRetestBegan: boolean;
 }
 
 /** One phase's evidence summary — baseline or retest, same shape either way. */

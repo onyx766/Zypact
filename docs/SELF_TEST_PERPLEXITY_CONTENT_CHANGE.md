@@ -1,6 +1,6 @@
 # Zypact-on-Zypact self-test — registered intervention record
 
-- **Status:** Observation window OPEN. Retest not yet run.
+- **Status:** Retest run 2026-10-09. Outcome `no_clear_change` (0 of 5 baseline, 0 of 5 retest). Card delivered.
 - **Opened:** 2026-09-24 · **Window closes:** 2026-10-09
 - **Audited company:** Zypact (www.zypact.com) — the audited brand and the
   operator are the same party, which is itself a limitation, recorded in §6.
@@ -102,7 +102,13 @@ which returns without acting unless the intervention's status is `approved`
 already confirmed and the status is `implemented`. The deviations field is
 therefore closed to every product surface.
 
-Three options, none yet chosen:
+**Update, 2026-10-11:** option 3 is now built as migration `0082` and the
+founder console's "Record a deviation" control. It is applied to no
+environment yet. This intervention's card was delivered on 2026-10-09, so a
+note recorded now is kept in the ledger and shown in the console, stamped as
+recorded after delivery, and does not appear on the delivered card.
+
+Three options, as they stood before the retest:
 
 1. **Carry the note outside the artifact**, in the covering text when the result
    is presented. Zero risk; the note is not in the Outcome Card.

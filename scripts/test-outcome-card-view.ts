@@ -119,6 +119,20 @@ function main(): void {
   check("early-retest reason renders", deviated.includes("Customer requested the retest two days early."));
   check("recorded reasons render", deviated.includes("PLAN_UNDERPOWERED_FOR_MINIMUM_USEFUL_CHANGE"));
 
+  const late = textOf(render(outcomeCardFixture({
+    intervention: {
+      lateDeviations: [
+        { note: "Homepage rebuilt on day 5.", recordedAt: "2026-01-08T10:00:00+00:00", afterRetestBegan: false },
+        { note: "FAQ restyled after the run.", recordedAt: "2026-01-18T22:30:00+00:00", afterRetestBegan: true },
+      ],
+    },
+  })));
+  check("a late deviation alone opens the deviation block", late.includes("Recorded deviations"));
+  check("a note written before the retest says so",
+    /Recorded 2026-01-08 10:00 UTC, before the retest began\s?\. Homepage rebuilt on day 5\./.test(late));
+  check("a note written after the retest began says so",
+    /Recorded 2026-01-18 22:30 UTC, after the retest had begun\s?\. FAQ restyled after the run\./.test(late));
+
   console.log("[6] Run markers equal the stated counts");
   const markers = (html: string) => {
     // The legend repeats one marker of each kind; the phase strips hold the rest.

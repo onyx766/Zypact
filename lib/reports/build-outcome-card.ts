@@ -27,6 +27,7 @@ import {
   NON_CAUSALITY_FOOTER,
   OUTCOME_CARD_VERSION,
   type OutcomeCardIntervention,
+  type OutcomeCardLateDeviation,
   type OutcomeCardPayload,
   type OutcomeCardPhase,
 } from "@/lib/reports/outcome-card-types";
@@ -140,6 +141,20 @@ function buildUncertainty(
   return notes;
 }
 
+/**
+ * One late deviation as a sentence. Says when it was written relative to the
+ * retest, because a confounder noted after the result was visible reads
+ * differently from one noted before, and the reader is owed the difference.
+ */
+export function describeLateDeviation(deviation: OutcomeCardLateDeviation): string {
+  const when = new Date(deviation.recordedAt);
+  const stamp = Number.isNaN(when.getTime())
+    ? deviation.recordedAt
+    : `${when.toISOString().slice(0, 10)} ${when.toISOString().slice(11, 16)} UTC`;
+  const phase = deviation.afterRetestBegan ? "after the retest had begun" : "before the retest began";
+  return `Deviation recorded ${stamp}, ${phase}: ${deviation.note}`;
+}
+
 function buildLimitations(
   baseline: ProtocolReportPayload,
   intervention: OutcomeCardIntervention
@@ -157,6 +172,9 @@ function buildLimitations(
     notes.push(
       `The retest ran before the observation window closed, under a recorded authorised deviation: ${intervention.earlyRetestReason}`
     );
+  }
+  for (const deviation of intervention.lateDeviations ?? []) {
+    notes.push(describeLateDeviation(deviation));
   }
 
   return notes;

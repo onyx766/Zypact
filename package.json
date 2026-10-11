@@ -54,6 +54,7 @@
     "test:m7-0077-runtime": "tsx scripts/test-m7-0077-runtime-contract.ts",
     "test:m7-0078-runtime": "tsx scripts/test-m7-0078-runtime-contract.ts",
     "test:m7-0079-runtime": "tsx scripts/test-m7-0079-runtime-contract.ts",
+    "test:m7-0082-runtime": "tsx scripts/test-m7-0082-runtime-contract.ts",
     "test:intervention-rpc-errors": "tsx scripts/test-intervention-rpc-errors.ts",
     "test:intervention-routes": "tsx scripts/test-intervention-routes.ts",
     "test:intervention-admin-ui": "tsx scripts/test-intervention-admin-ui.ts",

@@ -166,7 +166,8 @@ function ConfirmAction({
 }
 
 export function InterventionActionsPanel({
-  interventionId, status, hasEvidence, hasObservationWindow, eligibility, retest = null, actionsEnabled,
+  interventionId, status, hasEvidence, hasObservationWindow, eligibility, retest = null,
+  cardDelivered = false, actionsEnabled,
 }: {
   interventionId: string;
   status: string;
@@ -174,6 +175,7 @@ export function InterventionActionsPanel({
   hasObservationWindow: boolean;
   eligibility: Eligibility;
   retest?: RetestState;
+  cardDelivered?: boolean;
   actionsEnabled: boolean;
 }) {
   const [approving, setApproving] = useState(false);
@@ -320,6 +322,20 @@ export function InterventionActionsPanel({
               onSubmit={(reason) => post(`${base}/authorize-early-retest`, { reason })}
             />
           ) : null}
+          {/*
+            Confounders are found during the window, after implementation is
+            already confirmed. Before 0082 nothing could record one here.
+          */}
+          <ReasonAction
+            label="Record a deviation" icon={<TriangleAlert size={16} />} tone="outline" disabled={off}
+            warning={
+              cardDelivered
+                ? "Permanent: it cannot be edited or removed. The Outcome Card has already been delivered and will not show this note; it is kept in this record."
+                : "Permanent: it cannot be edited or removed. It is stamped with the time and whether the retest had begun, and appears on the Outcome Card the next time the card is built."
+            }
+            placeholder="What changed outside the registered intervention, and when"
+            onSubmit={(note) => post(`${base}/deviations`, { note })}
+          />
           {abandon}
         </>
       ) : null}

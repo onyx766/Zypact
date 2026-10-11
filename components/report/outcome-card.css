@@ -200,6 +200,11 @@
   white-space: pre-wrap;
 }
 
+.zpr-root .zoc-callout-when {
+  color: var(--zpr-amber);
+  font-weight: 600;
+}
+
 /* ----------------------------------------------------------------- phases */
 
 .zpr-root .zoc-legend {

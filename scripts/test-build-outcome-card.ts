@@ -307,6 +307,44 @@ async function main(): Promise<void> {
   }
 
   // ======================================================================
+  // [5b] A deviation recorded after implementation (0082) discloses and
+  //      does nothing else.
+  // ======================================================================
+  console.log("\n[5b] A late deviation is disclosed and cannot change the comparison");
+  {
+    const late = [
+      { note: "Homepage rebuilt on day 5.", recordedAt: "2026-09-29T10:00:00+00:00", afterRetestBegan: false },
+      { note: "FAQ restyled on day 8.", recordedAt: "2026-10-09T22:30:00+00:00", afterRetestBegan: true },
+    ];
+    const plain = card();
+    const withLate = card({ intervention: { ...INTERVENTION, lateDeviations: late } });
+    check("the comparison is identical with and without late deviations",
+      JSON.stringify(withLate.comparison) === JSON.stringify(plain.comparison));
+    check("each late deviation appears in limitations with its time and phase",
+      withLate.limitations.includes("Deviation recorded 2026-09-29 10:00 UTC, before the retest began: Homepage rebuilt on day 5.") &&
+      withLate.limitations.includes("Deviation recorded 2026-10-09 22:30 UTC, after the retest had begun: FAQ restyled on day 8."));
+    check("the rendered markdown carries them too",
+      renderOutcomeCardMarkdown(withLate).includes("after the retest had begun: FAQ restyled on day 8."));
+    check("no late deviation, no extra limitation",
+      plain.limitations.every((line) => !line.startsWith("Deviation recorded")));
+
+    // The laundering case: a note typed after the result must not be able to
+    // turn an undisclosed identity mismatch into a computed direction.
+    const baseline = phaseReport({ protocolId: "id-b", presentCount: 0, totalRuns: 5, model: "sonar" });
+    const retest = phaseReport({ protocolId: "id-r", presentCount: 5, totalRuns: 5, model: "sonar-pro" });
+    const laundered = buildOutcomeCard({
+      projectId: "proj-1", baseline, retest,
+      intervention: { ...INTERVENTION, lateDeviations: [{ note: "The model changed between phases.", recordedAt: "2026-10-09T22:30:00+00:00", afterRetestBegan: true }] },
+      minimumUsefulChange: 0.6, now: NOW,
+    });
+    check("a late note does not disclose away an identity mismatch",
+      laundered.comparison.status === "inconclusive" &&
+      laundered.comparison.reasons.includes("PROTOCOL_IDENTITY_MISMATCH_UNDISCLOSED"));
+    check("the late note is still shown on that card",
+      laundered.limitations.some((line) => line.includes("The model changed between phases.")));
+  }
+
+  // ======================================================================
   // [6] An early-retest deviation is surfaced, not hidden.
   // ======================================================================
   console.log("\n[6] An authorised early retest is disclosed, not concealed");

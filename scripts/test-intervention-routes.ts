@@ -20,6 +20,7 @@ delete process.env.INTERVENTION_ADMIN_ENABLED;
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   abandonIntervention,
+  recordDeviation,
   approveIntervention,
   confirmImplementation,
   listInterventions,
@@ -27,7 +28,8 @@ import {
   registerIntervention,
   rejectIntervention,
 } from "@/lib/interventions/intervention-actions";
-import { parseConfirmBody, parseReasonBody, parseRegisterBody } from "@/lib/interventions/validate";
+import { parseConfirmBody, parseDeviationBody, parseReasonBody, parseRegisterBody } from "@/lib/interventions/validate";
+import { readDeviationLedger } from "@/lib/interventions/deviation-ledger";
 import { transitionHandler } from "@/lib/interventions/route-handlers";
 
 let passed = 0;
@@ -270,6 +272,79 @@ async function main(): Promise<void> {
     });
     check("confirm passes evidence as an object, as 0072 requires",
       typeof rpcCalls[0]?.args.p_evidence === "object" && !Array.isArray(rpcCalls[0]?.args.p_evidence));
+  }
+
+  /* ═══════════ 3b. deviations after implementation (0082) ═══════════ */
+  console.log("\n[3b] Recording a deviation after implementation");
+  {
+    const { client, rpcCalls } = fakeClient({
+      tables: { interventions: [ivRow("implemented")] },
+      rpc: () => ({ data: [ivRow("implemented")], error: null }),
+    });
+    const r = await recordDeviation(client, IV, ACTOR, "Homepage rebuilt on day 5.");
+    check("it calls record_intervention_deviation", rpcCalls[0]?.name === "record_intervention_deviation");
+    check("the project comes from the stored row, and the actor and note are passed",
+      rpcCalls[0]?.args.p_project_id === PROJECT && rpcCalls[0]?.args.p_recorded_by === ACTOR &&
+      rpcCalls[0]?.args.p_note === "Homepage rebuilt on day 5.");
+    check("a returned row is a success", r.ok);
+  }
+  {
+    const { client } = fakeClient({
+      tables: { interventions: [ivRow("approved")] },
+      rpc: () => ({ data: [], error: null }),
+    });
+    const r = await recordDeviation(client, IV, ACTOR, "too early");
+    check("an intervention that is not implemented is refused, not silently accepted",
+      !r.ok && r.failure.error === "invalid_transition" && r.failure.message.includes("'approved'"));
+  }
+  {
+    const { client } = fakeClient({
+      tables: { interventions: [ivRow("implemented")] },
+      rpc: () => ({ data: null, error: { code: "22023", message: "deviation_note_too_long" } }),
+    });
+    const r = await recordDeviation(client, IV, ACTOR, "x");
+    check("the database's length refusal is mapped",
+      !r.ok && r.failure.error === "deviation_note_too_long" && r.failure.status === 400);
+  }
+  {
+    check("a body without a note is refused", !parseDeviationBody({}).ok && !parseDeviationBody({ note: "   " }).ok);
+    check("a non-object body is refused", !parseDeviationBody("note").ok);
+    const ok = parseDeviationBody({ note: "  Homepage rebuilt.  " });
+    check("the note is trimmed", ok.ok && ok.value === "Homepage rebuilt.");
+    check("a note over 4000 characters is refused before the database is asked",
+      !parseDeviationBody({ note: "x".repeat(4001) }).ok);
+  }
+  {
+    const { client } = fakeClient({
+      tables: {
+        intervention_deviations: [
+          { id: "d1", intervention_id: IV, project_id: PROJECT, note: "n1", recorded_by: ACTOR, recorded_at: "2026-10-01T00:00:00Z", retest_attempts_at_record: 0, card_delivered_at_record: false },
+          { id: "d2", intervention_id: IV, project_id: PROJECT, note: "n2", recorded_by: ACTOR, recorded_at: "2026-10-10T00:00:00Z", retest_attempts_at_record: 5, card_delivered_at_record: true },
+          { id: "d3", intervention_id: IV, project_id: OTHER_PROJECT, note: "foreign", recorded_by: ACTOR, recorded_at: "2026-10-10T00:00:00Z", retest_attempts_at_record: 0, card_delivered_at_record: false },
+        ],
+      },
+    });
+    const rows = await readDeviationLedger(client, { id: IV, projectId: PROJECT });
+    check("the ledger read is scoped to the intervention's own project",
+      rows.length === 2 && rows.every((r) => r.note !== "foreign"));
+    check("the database's state stamps are carried through",
+      rows[1].retestAttemptsAtRecord === 5 && rows[1].cardDeliveredAtRecord === true && rows[0].cardDeliveredAtRecord === false);
+  }
+  {
+    const failing = (code: string) => ({
+      from: () => {
+        const q: Record<string, unknown> = {};
+        q.select = () => q; q.eq = () => q; q.order = () => q;
+        q.then = (resolve: (v: unknown) => unknown) => resolve({ data: null, error: { code, message: "x" } });
+        return q;
+      },
+    }) as unknown as SupabaseClient;
+    check("an environment without the ledger table reads as no deviations",
+      (await readDeviationLedger(failing("42P01"), { id: IV, projectId: PROJECT })).length === 0 &&
+      (await readDeviationLedger(failing("PGRST205"), { id: IV, projectId: PROJECT })).length === 0);
+    let threw = false;
+    try { await readDeviationLedger(failing("42501"), { id: IV, projectId: PROJECT }); } catch { threw = true; }
+    check("any other read failure throws, and is never reported as 'no deviations'", threw);
   }
 
   /* ═══════════ 4. eligibility reads ═══════════ */

@@ -133,3 +133,30 @@ export function mapInterventionRow(r: Row): Intervention {
     updatedAt: str(r.updated_at),
   };
 }
+
+/**
+ * One row of 0082's insert-only deviation ledger. The two state fields are
+ * computed by the database when the note is written, never by a caller.
+ */
+export interface InterventionDeviation {
+  id: string;
+  note: string;
+  recordedBy: string;
+  recordedAt: string;
+  /** Retest attempts that already existed when this note was written. */
+  retestAttemptsAtRecord: number;
+  /** True when the Outcome Card had already been delivered, so it cannot contain this note. */
+  cardDeliveredAtRecord: boolean;
+}
+
+export function mapDeviationRow(r: Record<string, unknown>): InterventionDeviation {
+  return {
+    id: str(r.id),
+    note: str(r.note),
+    recordedBy: str(r.recorded_by),
+    recordedAt: str(r.recorded_at),
+    retestAttemptsAtRecord:
+      typeof r.retest_attempts_at_record === "number" ? r.retest_attempts_at_record : 0,
+    cardDeliveredAtRecord: r.card_delivered_at_record === true,
+  };
+}

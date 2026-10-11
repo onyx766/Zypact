@@ -1,7 +1,7 @@
 /**
  * Phase 1 — the intervention route plumbing.
  *
- * The centrepiece is section [1]. It reads migrations 0071-0078 from disk,
+ * The centrepiece is section [1]. It reads migrations 0071-0078 and 0082 from disk,
  * extracts every `message = '...'` they can raise, and fails if any is
  * missing from RPC_ERROR_MAP. A future migration that adds a RAISE without
  * a matching entry breaks this test instead of reaching a founder as a
@@ -32,7 +32,7 @@ function check(label: string, condition: boolean, detail?: string): void {
 }
 
 const MIGRATIONS = path.join(process.cwd(), "supabase", "migrations");
-const M7_RANGE = /^007[1-8]_.*\.sql$/;
+const M7_RANGE = /^(007[1-8]|0082)_.*\.sql$/;
 
 function raisedMessages(): Map<string, string> {
   const found = new Map<string, string>();
@@ -52,7 +52,7 @@ function raisedMessages(): Map<string, string> {
 console.log("\nIntervention route plumbing (Phase 1)\n");
 
 /* ═══════════ 1. every raised message is mapped ═══════════ */
-console.log("[1] Every message 0071-0078 can raise is mapped");
+console.log("[1] Every message 0071-0078 and 0082 can raise is mapped");
 const raised = raisedMessages();
 check("found the M7 migrations and their messages", raised.size >= 25, `found ${raised.size}`);
 for (const [message, file] of raised) {
@@ -62,7 +62,7 @@ for (const [message, file] of raised) {
 // The reverse direction: a map entry no migration raises is dead, and dead
 // entries hide typos — a misspelt key would pass every other check here.
 for (const key of Object.keys(RPC_ERROR_MAP)) {
-  check(`not stale: ${key}`, raised.has(key), "in RPC_ERROR_MAP but raised by no migration in 0071-0078");
+  check(`not stale: ${key}`, raised.has(key), "in RPC_ERROR_MAP but raised by no migration in 0071-0078 or 0082");
 }
 
 /* ═══════════ 2. mapping behaviour ═══════════ */

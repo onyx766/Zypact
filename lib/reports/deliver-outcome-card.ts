@@ -27,7 +27,11 @@ import { buildOutcomeCard } from "@/lib/reports/build-outcome-card";
 import { renderOutcomeCardMarkdown } from "@/lib/reports/render-outcome-card-markdown";
 import { evaluateOutcomeCardIntegrity } from "@/lib/reports/outcome-card-integrity";
 import { sendOutcomeCardEmail } from "@/lib/reports/outcome-card-email";
-import type { OutcomeCardIntervention } from "@/lib/reports/outcome-card-types";
+import type {
+  OutcomeCardIntervention,
+  OutcomeCardLateDeviation,
+} from "@/lib/reports/outcome-card-types";
+import { readDeviationLedger } from "@/lib/interventions/deviation-ledger";
 import { ClientReportDeliveryError, type ClientReportDeliveryConfig } from "@/lib/snapshot-requests/client-report-delivery";
 
 export type OutcomeCardDeliveryOutcome =
@@ -89,7 +93,10 @@ interface InterventionRow {
   observation_window_closes_at: string | null;
 }
 
-function toInterventionSummary(row: InterventionRow): OutcomeCardIntervention {
+function toInterventionSummary(
+  row: InterventionRow,
+  lateDeviations: OutcomeCardLateDeviation[]
+): OutcomeCardIntervention {
   return {
     hypothesis: row.hypothesis,
     expectedMechanism: row.expected_mechanism,
@@ -102,6 +109,9 @@ function toInterventionSummary(row: InterventionRow): OutcomeCardIntervention {
     earlyRetestReason: row.early_retest_reason,
     observationWindowOpensAt: row.observation_window_opens_at,
     observationWindowClosesAt: row.observation_window_closes_at,
+    // Omitted rather than empty when there are none, so a card with no late
+    // deviation hashes to the same revision it did before 0082.
+    ...(lateDeviations.length > 0 ? { lateDeviations } : {}),
   };
 }
 
@@ -273,11 +283,24 @@ export async function processOutcomeCard(
   );
   const retestPayload = buildProtocolReport({ ...retestEvidence, now: now() });
 
+  // Read at build time, so the card carries the ledger as it stood when this
+  // revision was made. A note added later needs a rebuild to appear, and a
+  // delivered card is never rebuilt.
+  const ledger = await readDeviationLedger(deps.client, {
+    id: interventionRow.id,
+    projectId: interventionRow.project_id,
+  });
+  const lateDeviations: OutcomeCardLateDeviation[] = ledger.map((row) => ({
+    note: row.note,
+    recordedAt: row.recordedAt,
+    afterRetestBegan: row.retestAttemptsAtRecord > 0,
+  }));
+
   const card = buildOutcomeCard({
     projectId: interventionRow.project_id,
     baseline: baselinePayload,
     retest: retestPayload,
-    intervention: toInterventionSummary(interventionRow),
+    intervention: toInterventionSummary(interventionRow, lateDeviations),
     minimumUsefulChange,
     detectableChangeAtPlan: retestProto?.detectable_change_at_plan ?? null,
     now: now(),

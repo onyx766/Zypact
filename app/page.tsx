@@ -272,6 +272,8 @@ const footerColumns = [
   {
     heading: "Product",
     links: [
+      { label: "About Zypact", href: "/about" },
+      { label: "Methodology", href: "/method" },
       { label: "How it works", href: "#how-it-works" },
       { label: "What you get", href: "#features" },
       { label: "Evidence", href: "#evidence" },
@@ -281,6 +283,8 @@ const footerColumns = [
   {
     heading: "Method",
     links: [
+      { label: "About Zypact", href: "/about" },
+      { label: "Methodology", href: "/method" },
       { label: "Scope and limits", href: "#scope" },
       { label: "Outcome statuses", href: "#outcomes" },
       { label: "FAQ", href: "#faq" },
@@ -290,7 +294,7 @@ const footerColumns = [
     heading: "Get started",
     links: [
       { label: "Request demo", href: DEMO_URL },
-      { label: "See the method", href: "#how-it-works" },
+      { label: "See the method", href: "/method" },
     ],
   },
 ] as const;

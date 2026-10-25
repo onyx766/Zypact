@@ -473,7 +473,10 @@ async function main(): Promise<void> {
     );
     check(
       "[H] la libération est dans un finally interne: succès, timeout, arrêt, erreur HTTP, réponse vide et throw",
-      /\} finally \{[\s\S]{0,600}?deadline\.dispose\(\);\n\s*\}\n\s*const rec = await deps\.db\.recordProviderCallReceiptForJob/.test(prov)
+      // Between the finally and the receipt, only lines with no `await`: the
+      // measured-cost read (6f2346e) is synchronous and sits there, but no
+      // I/O may run between releasing the clock and the receipt.
+      /\} finally \{[\s\S]{0,600}?deadline\.dispose\(\);\n\s*\}\n(?:(?![^\n]*\bawait\b)[^\n]*\n){0,20}?\s*const rec = await deps\.db\.recordProviderCallReceiptForJob/.test(prov)
     );
     check(
       "[H] exactement un dispose() par leg, jamais deux",

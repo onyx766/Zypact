@@ -7,8 +7,6 @@ import { Button } from "@/components/ui/button";
 import { ZypactWordmark } from "@/components/marketing/zypact-mark";
 
 const navLinks = [
-  { label: "About", href: "/about" },
-  { label: "Method", href: "/method" },
   { label: "How it works", href: "#how-it-works" },
   { label: "What you get", href: "#features" },
   { label: "Evidence", href: "#evidence" },

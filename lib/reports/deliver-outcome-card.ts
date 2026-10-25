@@ -27,6 +27,10 @@ import { renderProtocolReportMarkdown } from "@/lib/reports/render-protocol-repo
 import { buildOutcomeCard } from "@/lib/reports/build-outcome-card";
 import { renderOutcomeCardMarkdown } from "@/lib/reports/render-outcome-card-markdown";
 import { evaluateOutcomeCardIntegrity } from "@/lib/reports/outcome-card-integrity";
+import {
+  evaluateServedProviderComparability,
+  readServedProviderFingerprints,
+} from "@/lib/reports/served-provider-comparability";
 import { sendOutcomeCardEmail } from "@/lib/reports/outcome-card-email";
 import type { OutcomeCardIntervention } from "@/lib/reports/outcome-card-types";
 import { ClientReportDeliveryError, type ClientReportDeliveryConfig } from "@/lib/snapshot-requests/client-report-delivery";
@@ -106,19 +110,22 @@ function toInterventionSummary(row: InterventionRow): OutcomeCardIntervention {
   };
 }
 
-async function loadRecipientForProject(
+async function loadRecipientForBaseline(
   client: SupabaseClient,
-  projectId: string
+  projectId: string,
+  baselineProtocolId: string
 ): Promise<{ workEmail: string; companyName: string } | null> {
-  // A project is created once per approved snapshot request in the current
-  // founder-operated V1 flow (approve_and_launch_snapshot_baseline). Most
-  // recent by created_at, defensively, in case that ever stops being 1:1.
+  // The recipient is whoever requested THIS card's baseline. Taking the
+  // project's most recent request instead stopped being safe once one
+  // project held several baselines: a standalone founder baseline (#66) has
+  // no request, so the newest request in its project belonged to a
+  // different audit, and its address would have received this card. No
+  // request for the baseline means no recipient, and nothing is sent.
   const { data, error } = await client
     .from("snapshot_requests")
     .select("work_email,company_name,created_at")
     .eq("project_id", projectId)
-    .order("created_at", { ascending: false })
-    .limit(1)
+    .eq("protocol_id", baselineProtocolId)
     .maybeSingle();
 
   if (error) throw error;
@@ -286,9 +293,11 @@ export async function processOutcomeCard(
 
   const baselineMarkdown = renderProtocolReportMarkdown(baselinePayload);
   const retestMarkdown = renderProtocolReportMarkdown(retestPayload);
-  const [baselineSignals, retestSignals] = await Promise.all([
+  const [baselineSignals, retestSignals, baselineServed, retestServed] = await Promise.all([
     readIntegritySignals(deps.client, baselinePayload),
     readIntegritySignals(deps.client, retestPayload),
+    readServedProviderFingerprints(deps.client, interventionRow.protocol_id),
+    readServedProviderFingerprints(deps.client, retestProtocolId),
   ]);
 
   const integrity = evaluateOutcomeCardIntegrity({
@@ -297,6 +306,7 @@ export async function processOutcomeCard(
     retestMarkdown,
     retestSignals,
     interventionRegisteredAndImplemented: interventionRow.status === "implemented",
+    servedProvider: evaluateServedProviderComparability(baselineServed, retestServed),
   });
 
   const { data: savedData, error: saveError } = await deps.client.rpc(
@@ -360,6 +370,7 @@ export async function processOutcomeCard(
     {
       interventionId,
       projectId: interventionRow.project_id,
+      baselineProtocolId: interventionRow.protocol_id,
       artifactId,
       publicToken,
       revision: revisionData as string,
@@ -383,6 +394,8 @@ export async function processOutcomeCard(
 export interface SavedOutcomeCardDelivery {
   interventionId: string;
   projectId: string;
+  /** The intervention's baseline. Its own snapshot request names the recipient. */
+  baselineProtocolId: string;
   artifactId: string;
   publicToken: string;
   /**
@@ -447,12 +460,17 @@ export async function deliverSavedOutcomeCard(
   card: SavedOutcomeCardDelivery,
   deps: Pick<OutcomeCardProcessDeps, "client" | "deliveryConfig" | "sendEmail">
 ): Promise<SavedOutcomeCardDeliveryResult> {
-  const recipient = await loadRecipientForProject(deps.client, card.projectId);
+  const recipient = await loadRecipientForBaseline(
+    deps.client,
+    card.projectId,
+    card.baselineProtocolId
+  );
   if (!recipient) {
     return {
       outcome: "delivery_rejected",
       messageId: null,
-      detail: "No usable recipient address for this project.",
+      detail:
+        "No snapshot request with a usable address started this card's baseline, so it has no recipient. Nothing was sent.",
     };
   }
 

@@ -72,6 +72,7 @@ export const LEGACY_REDIRECTS: readonly LegacyRedirect[] = [
  */
 export const LEGACY_GONE: readonly string[] = [
   // Old marketing pages.
+  "/about",
   "/security",
   "/how-it-works",
   "/contact",
@@ -127,8 +128,6 @@ export const DISALLOWED_PATH_PREFIXES: readonly string[] = [
 /** Public, indexable pages. The sitemap is exactly this list. */
 export const INDEXABLE_PATHS: readonly string[] = [
   "/",
-  "/about",
-  "/method",
   "/scan",
   "/perplexity-content-change-test",
 ] as const;

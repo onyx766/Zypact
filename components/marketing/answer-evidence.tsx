@@ -234,7 +234,7 @@ export function RetestComparison() {
           increase_observed
         </span>
         <p className="text-[11px] leading-relaxed text-muted-foreground">
-          Synthetic illustration: smallest detectable change at {PRESERVED_RUNS} equal runs: {DETECTABLE_CHANGE}
+          Smallest change {PRESERVED_RUNS} runs can detect: {DETECTABLE_CHANGE}
         </p>
       </div>
 

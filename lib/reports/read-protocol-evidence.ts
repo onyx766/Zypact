@@ -92,6 +92,14 @@ async function readProtocolEvidenceCore(
     `Protocol ${protocolId} was not found.`
   ) as Record<string, any>;
 
+  // Every caller passes the project it resolved identity from. A protocol
+  // from another project would put that project's runs under this subject.
+  if (proto.project_id !== projectId) {
+    throw new ProtocolEvidenceError(
+      `Protocol ${protocolId} does not belong to project ${projectId}.`
+    );
+  }
+
   const { data: version, error: versionError } = await client
     .from("buyer_question_versions")
     .select("*")
@@ -227,6 +235,123 @@ export async function readProtocolEvidence(
     websiteUrl: req.website_url,
     normalizedDomain: req.normalized_domain,
   });
+}
+
+/** A bare lowercase hostname, as `projects.domain` stores it. */
+const PROJECT_DOMAIN_PATTERN =
+  /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+const BASELINE_PROTOCOL_STATUSES = new Set(["approved", "active", "completed"]);
+
+/**
+ * Reads evidence for an intervention's BASELINE protocol, whichever
+ * supported path created it.
+ *
+ *   - Public or founder-created audit: a `snapshot_requests` row carries
+ *     the protocol id. Read through `readProtocolEvidence`, unchanged.
+ *   - Standalone founder baseline (#66): no request exists. The subject
+ *     comes from the `projects` row instead, which is not a substitute but
+ *     the identity the worker measured against — it sends
+ *     `project.companyName ?? project.domain` as the brand for every
+ *     attempt (lib/protocol-worker/worker.ts). The same fallback is used
+ *     here, so the report filters exactly the brand the analysis looked for.
+ *
+ * Either way the protocol must be an approved baseline of this project. A
+ * retest, a draft, an abandoned protocol, another project's protocol, or a
+ * project whose domain is not a plain hostname throws
+ * `ProtocolEvidenceError` rather than producing a card on unverified
+ * identity. No row is written.
+ *
+ * `websiteUrl` holds the bare domain on the standalone path: `projects` has
+ * no URL column, and a scheme or `www.` added here would be a guess.
+ */
+export async function readBaselineProtocolEvidence(
+  client: SupabaseClient,
+  baselineProtocolId: string,
+  projectId: string
+): Promise<BuildProtocolReportInput> {
+  const { data: protocol, error: protocolError } = await client
+    .from("protocols")
+    .select("id,project_id,baseline_protocol_id,status")
+    .eq("id", baselineProtocolId)
+    .maybeSingle();
+
+  if (protocolError) throw protocolError;
+
+  const proto = required(
+    protocol,
+    `Baseline protocol ${baselineProtocolId} was not found.`
+  ) as Record<string, any>;
+
+  if (proto.project_id !== projectId) {
+    throw new ProtocolEvidenceError(
+      `Baseline protocol ${baselineProtocolId} does not belong to project ${projectId}.`
+    );
+  }
+  if (proto.baseline_protocol_id !== null) {
+    throw new ProtocolEvidenceError(
+      `Protocol ${baselineProtocolId} is a retest, not a baseline.`
+    );
+  }
+  if (!BASELINE_PROTOCOL_STATUSES.has(proto.status)) {
+    throw new ProtocolEvidenceError(
+      `Baseline protocol ${baselineProtocolId} is '${proto.status}', not an approved baseline.`
+    );
+  }
+
+  const { data: request, error: requestError } = await client
+    .from("snapshot_requests")
+    .select("id,project_id")
+    .eq("protocol_id", baselineProtocolId)
+    .maybeSingle();
+
+  if (requestError) throw requestError;
+
+  if (request) {
+    const req = request as Record<string, any>;
+    if (req.project_id !== projectId) {
+      throw new ProtocolEvidenceError(
+        `Snapshot request ${req.id} for baseline ${baselineProtocolId} belongs to another project.`
+      );
+    }
+    return readProtocolEvidence(client, req.id);
+  }
+
+  const { data: project, error: projectError } = await client
+    .from("projects")
+    .select("id,company_name,domain")
+    .eq("id", projectId)
+    .maybeSingle();
+
+  if (projectError) throw projectError;
+
+  const proj = required(
+    project,
+    `Project ${projectId} was not found.`
+  ) as Record<string, any>;
+
+  const domain =
+    typeof proj.domain === "string" ? proj.domain.trim().toLowerCase() : "";
+  if (!PROJECT_DOMAIN_PATTERN.test(domain)) {
+    throw new ProtocolEvidenceError(
+      `Project ${projectId} has no plain hostname as its domain, so the baseline's subject cannot be verified.`
+    );
+  }
+
+  const companyName =
+    typeof proj.company_name === "string" && proj.company_name.trim()
+      ? proj.company_name.trim()
+      : domain;
+
+  // No request id exists on this path. As for a retest, the protocol's own
+  // id fills the field; buildOutcomeCard never reads it.
+  return readProtocolEvidenceCore(
+    client,
+    baselineProtocolId,
+    projectId,
+    baselineProtocolId,
+    { companyName, websiteUrl: domain, normalizedDomain: domain }
+  );
 }
 
 /**

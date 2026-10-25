@@ -18,7 +18,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { buildProtocolReport } from "@/lib/reports/build-protocol-report";
 import {
-  readProtocolEvidence,
+  ProtocolEvidenceError,
+  readBaselineProtocolEvidence,
   readRetestProtocolEvidence,
 } from "@/lib/reports/read-protocol-evidence";
 import { readIntegritySignals } from "@/lib/reports/protocol-integrity-signals";
@@ -238,39 +239,38 @@ export async function processOutcomeCard(
     };
   }
 
-  // The baseline's `subject` (company name, website, domain) lives on the
-  // snapshot_request that spawned it — the reverse direction of the lookup
-  // readProtocolEvidence already does (request.protocol_id -> protocol).
-  const { data: originatingRequest, error: originatingRequestError } = await deps.client
-    .from("snapshot_requests")
-    .select("id")
-    .eq("protocol_id", interventionRow.protocol_id)
-    .maybeSingle();
-
-  if (originatingRequestError) throw originatingRequestError;
-
-  if (!originatingRequest) {
+  // The baseline's `subject` (company name, website, domain) comes from the
+  // snapshot_request that spawned it, or — for a standalone founder baseline,
+  // which has none — from the project the worker measured it against.
+  // readBaselineProtocolEvidence verifies the protocol is an approved
+  // baseline of this project either way; anything it cannot verify blocks
+  // the card here, before anything is built or saved.
+  let baselineEvidence: Awaited<ReturnType<typeof readBaselineProtocolEvidence>>;
+  let retestEvidence: Awaited<ReturnType<typeof readRetestProtocolEvidence>>;
+  try {
+    baselineEvidence = await readBaselineProtocolEvidence(
+      deps.client,
+      interventionRow.protocol_id,
+      interventionRow.project_id
+    );
+    retestEvidence = await readRetestProtocolEvidence(
+      deps.client,
+      retestProtocolId,
+      interventionRow.project_id,
+      baselineEvidence.subject
+    );
+  } catch (error) {
+    if (!(error instanceof ProtocolEvidenceError)) throw error;
     return {
       ...base,
       outcome: "intervention_not_ready",
       integrityStatus: "blocked",
-      integrityReasons: ["The baseline protocol has no originating snapshot request — cannot read its subject."],
-      detail: "No snapshot_requests row has protocol_id equal to this intervention's baseline.",
+      integrityReasons: ["The baseline or retest evidence could not be tied to this intervention's project."],
+      detail: error.message,
     };
   }
 
-  const baselineEvidence = await readProtocolEvidence(
-    deps.client,
-    (originatingRequest as Record<string, any>).id as string
-  );
   const baselinePayload = buildProtocolReport({ ...baselineEvidence, now: now() });
-
-  const retestEvidence = await readRetestProtocolEvidence(
-    deps.client,
-    retestProtocolId,
-    interventionRow.project_id,
-    baselinePayload.subject
-  );
   const retestPayload = buildProtocolReport({ ...retestEvidence, now: now() });
 
   const card = buildOutcomeCard({

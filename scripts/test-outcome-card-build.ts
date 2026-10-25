@@ -90,9 +90,16 @@ function protocolRow(id: string, baselineId: string | null, status: string): Row
 }
 
 /** Five completed runs for one protocol; `present` of them mention the brand. */
-function runs(protocolId: string, kind: "baseline" | "retest", present: number, opts: { dropHashOn?: number } = {}) {
+function runs(
+  protocolId: string,
+  kind: "baseline" | "retest",
+  present: number,
+  opts: { dropHashOn?: number; responseIdPrefix?: string; dropReceiptOn?: number } = {}
+) {
   const attempts: Row[] = [];
   const results: Row[] = [];
+  const calls: Row[] = [];
+  const receipts: Row[] = [];
   for (let i = 1; i <= 5; i += 1) {
     const pr = `${kind}-probe-${protocolId.slice(0, 4)}-${i}`;
     attempts.push({
@@ -108,8 +115,21 @@ function runs(protocolId: string, kind: "baseline" | "retest", present: number, 
       raw_probe_request_sha256: "e".repeat(64), full_request_body_capture: "captured",
       provider_model: "sonar", provider_latency_ms: 900,
     });
+    const attemptId = `${kind}-attempt-${protocolId.slice(0, 4)}-${i}`;
+    const callId = `${kind}-call-${protocolId.slice(0, 4)}-${i}`;
+    calls.push({ id: callId, protocol_attempt_id: attemptId, call_kind: "perplexity" });
+    calls.push({ id: `${callId}-analysis`, protocol_attempt_id: attemptId, call_kind: "analysis" });
+    if (opts.dropReceiptOn !== i) {
+      receipts.push({
+        external_call_id: callId, outcome: "success",
+        raw_response_body: JSON.stringify({
+          id: `${opts.responseIdPrefix ?? "resp_"}${i}`, model: "sonar", object: "chat.completion",
+          choices: [{ message: { content: "answer" } }],
+        }),
+      });
+    }
   }
-  return { attempts, results };
+  return { attempts, results, calls, receipts };
 }
 
 function world(opts: {
@@ -131,9 +151,16 @@ function world(opts: {
   baselineStatus?: string;
   retestProjectId?: string;
   baselineMissing?: boolean;
+  /** "resp_" (default) or e.g. "" for the Sonar-style ids 055c3514's baseline returned. */
+  baselineResponseIdPrefix?: string;
+  retestDropReceiptOn?: number;
+  retestStatus?: string;
 } = {}) {
-  const b = runs(BASE, "baseline", opts.basePresent ?? 1);
-  const r = runs(RETEST, "retest", opts.retestPresent ?? 5, { dropHashOn: opts.retestDropHashOn });
+  const b = runs(BASE, "baseline", opts.basePresent ?? 1, { responseIdPrefix: opts.baselineResponseIdPrefix });
+  const r = runs(RETEST, "retest", opts.retestPresent ?? 5, {
+    dropHashOn: opts.retestDropHashOn,
+    dropReceiptOn: opts.retestDropReceiptOn,
+  });
   const baseline = protocolRow(BASE, opts.baselineIsRetestOf ?? null, opts.baselineStatus ?? "completed");
   if (opts.baselineProjectId) baseline.project_id = opts.baselineProjectId;
   // A baseline approved before these migrations carries neither column:
@@ -153,7 +180,7 @@ function world(opts: {
   }
   const protocols: Row[] = opts.baselineMissing ? [] : [baseline];
   if (!opts.noLiveRetest) {
-    const retest = protocolRow(RETEST, BASE, "completed");
+    const retest = protocolRow(RETEST, BASE, opts.retestStatus ?? "completed");
     if (opts.retestWithoutMinimumUsefulChange) retest.minimum_useful_change = null;
     if (opts.retestProjectId) retest.project_id = opts.retestProjectId;
     protocols.push(retest);
@@ -183,6 +210,8 @@ function world(opts: {
     ],
     protocol_attempts: [...b.attempts, ...r.attempts],
     probe_results: [...b.results, ...r.results],
+    protocol_external_calls: [...b.calls, ...r.calls],
+    provider_call_receipts: [...b.receipts, ...r.receipts],
   });
 }
 
@@ -375,6 +404,39 @@ async function main(): Promise<void> {
       r.outcome === "intervention_not_ready" && r.integrityStatus === "blocked" && saved(calls) === undefined,
       `${r.outcome}: ${r.detail ?? ""}`);
   }
+  console.log("\n[8] What the provider served is compared across phases");
+  {
+    // Production stores both of intervention a313e28e's protocols as
+    // `approved`, the only status report-integrity's M4 precondition passes.
+    const { client } = world({ baselineStatus: "approved", retestStatus: "approved", standaloneBaseline: true });
+    const r = await processOutcomeCard(IV, deps(client));
+    check("identically served phases add no provider reason",
+      !r.integrityReasons.some((x) => x.startsWith("Provider:")), r.integrityReasons.join(" | "));
+    check("a standalone baseline shaped like production passes integrity", r.integrityStatus === "integrity_passed",
+      `${r.integrityStatus}: ${r.integrityReasons.join(" | ")}`);
+  }
+  {
+    // Intervention 055c3514's shape: same request, Sonar-style ids in the
+    // baseline, resp_ ids in the retest.
+    const { client, calls } = world({
+      baselineResponseIdPrefix: "pplx-", basePresent: 0, retestPresent: 5,
+      baselineStatus: "approved", retestStatus: "approved",
+    });
+    const r = await processOutcomeCard(IV, deps(client));
+    check("a provider-side change between phases holds the card for review",
+      r.integrityStatus === "needs_review" && r.integrityReasons.some((x) => x.startsWith("Provider:")),
+      `${r.integrityStatus}: ${r.integrityReasons.join(" | ")}`);
+    check("the held card is saved with that status, and nothing is sent",
+      saved(calls)?.p_integrity_status === "needs_review" && !calls.some((c) => c.name === "begin_outcome_card_delivery"));
+  }
+  {
+    const { client } = world({ retestDropReceiptOn: 2, baselineStatus: "approved", retestStatus: "approved" });
+    const r = await processOutcomeCard(IV, deps(client));
+    check("a counted retest attempt with no provider receipt holds the card for review",
+      r.integrityStatus === "needs_review" && r.integrityReasons.some((x) => x.startsWith("Provider:")),
+      `${r.integrityStatus}: ${r.integrityReasons.join(" | ")}`);
+  }
+
   console.log(`\n${passed}/${passed + failed} checks passed.${failed ? ` ${failed} FAILED.` : ""}\n`);
   if (failed > 0) process.exit(1);
 }

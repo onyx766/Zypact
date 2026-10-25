@@ -38,6 +38,14 @@ export interface EvaluateOutcomeCardIntegrityInput {
    * for.
    */
   interventionRegisteredAndImplemented: boolean;
+  /**
+   * Whether the provider served both phases the same way, judged from its
+   * stored responses (served-provider-comparability.ts). Not comparable is
+   * needs_review, not blocked: the evidence is intact and may still be worth
+   * reading, but no one may be sent a comparison across a provider change
+   * without a person reading the reason first.
+   */
+  servedProvider: { comparable: boolean; detail: string };
 }
 
 /** blocked > needs_review > integrity_passed. */
@@ -75,6 +83,11 @@ export function evaluateOutcomeCardIntegrity(
     reasons.push(
       "Intervention: not confirmed approved and implemented. An Outcome Card must not be produced for an intervention that was never registered end to end."
     );
+  }
+
+  if (!input.servedProvider.comparable) {
+    status = worseOf(status, "needs_review");
+    reasons.push(`Provider: ${input.servedProvider.detail}`);
   }
 
   if (status === "integrity_passed") return { status, reasons: [] };

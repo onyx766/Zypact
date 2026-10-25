@@ -72,6 +72,7 @@ const IV = "44444444-4444-4444-8444-444444444444";
 const BASE = "22222222-2222-4222-8222-222222222222";
 const RETEST = "33333333-3333-4333-8333-333333333333";
 const OLD_RETEST = "66666666-6666-4666-8666-666666666666";
+const OTHER_PROJECT = "55555555-5555-4555-8555-555555555555";
 const BQV = "99999999-9999-4999-8999-999999999999";
 const HASH = "c".repeat(64);
 
@@ -89,9 +90,16 @@ function protocolRow(id: string, baselineId: string | null, status: string): Row
 }
 
 /** Five completed runs for one protocol; `present` of them mention the brand. */
-function runs(protocolId: string, kind: "baseline" | "retest", present: number, opts: { dropHashOn?: number } = {}) {
+function runs(
+  protocolId: string,
+  kind: "baseline" | "retest",
+  present: number,
+  opts: { dropHashOn?: number; responseIdPrefix?: string; dropReceiptOn?: number } = {}
+) {
   const attempts: Row[] = [];
   const results: Row[] = [];
+  const calls: Row[] = [];
+  const receipts: Row[] = [];
   for (let i = 1; i <= 5; i += 1) {
     const pr = `${kind}-probe-${protocolId.slice(0, 4)}-${i}`;
     attempts.push({
@@ -107,8 +115,21 @@ function runs(protocolId: string, kind: "baseline" | "retest", present: number, 
       raw_probe_request_sha256: "e".repeat(64), full_request_body_capture: "captured",
       provider_model: "sonar", provider_latency_ms: 900,
     });
+    const attemptId = `${kind}-attempt-${protocolId.slice(0, 4)}-${i}`;
+    const callId = `${kind}-call-${protocolId.slice(0, 4)}-${i}`;
+    calls.push({ id: callId, protocol_attempt_id: attemptId, call_kind: "perplexity" });
+    calls.push({ id: `${callId}-analysis`, protocol_attempt_id: attemptId, call_kind: "analysis" });
+    if (opts.dropReceiptOn !== i) {
+      receipts.push({
+        external_call_id: callId, outcome: "success",
+        raw_response_body: JSON.stringify({
+          id: `${opts.responseIdPrefix ?? "resp_"}${i}`, model: "sonar", object: "chat.completion",
+          choices: [{ message: { content: "answer" } }],
+        }),
+      });
+    }
   }
-  return { attempts, results };
+  return { attempts, results, calls, receipts };
 }
 
 function world(opts: {
@@ -121,10 +142,27 @@ function world(opts: {
   retestWithoutMinimumUsefulChange?: boolean;
   oldBaselineWithoutPlanFields?: boolean;
   baselineWithDifferentPlanFields?: boolean;
+  /** A #66 standalone baseline: no snapshot_requests row points at it. */
+  standaloneBaseline?: boolean;
+  projectRow?: Row | null;
+  requestProjectId?: string;
+  baselineProjectId?: string;
+  baselineIsRetestOf?: string;
+  baselineStatus?: string;
+  retestProjectId?: string;
+  baselineMissing?: boolean;
+  /** "resp_" (default) or e.g. "" for the Sonar-style ids 055c3514's baseline returned. */
+  baselineResponseIdPrefix?: string;
+  retestDropReceiptOn?: number;
+  retestStatus?: string;
 } = {}) {
-  const b = runs(BASE, "baseline", opts.basePresent ?? 1);
-  const r = runs(RETEST, "retest", opts.retestPresent ?? 5, { dropHashOn: opts.retestDropHashOn });
-  const baseline = protocolRow(BASE, null, "completed");
+  const b = runs(BASE, "baseline", opts.basePresent ?? 1, { responseIdPrefix: opts.baselineResponseIdPrefix });
+  const r = runs(RETEST, "retest", opts.retestPresent ?? 5, {
+    dropHashOn: opts.retestDropHashOn,
+    dropReceiptOn: opts.retestDropReceiptOn,
+  });
+  const baseline = protocolRow(BASE, opts.baselineIsRetestOf ?? null, opts.baselineStatus ?? "completed");
+  if (opts.baselineProjectId) baseline.project_id = opts.baselineProjectId;
   // A baseline approved before these migrations carries neither column:
   // `minimum_useful_change` is stamped by 0073 onto the retest it creates,
   // and 0075 added `detectable_change_at_plan` without backfilling. This is
@@ -140,10 +178,11 @@ function world(opts: {
     baseline.minimum_useful_change = { value: 0.3, comparison_method: "newcombe_95", source: "baseline_row" };
     baseline.detectable_change_at_plan = 0.3;
   }
-  const protocols: Row[] = [baseline];
+  const protocols: Row[] = opts.baselineMissing ? [] : [baseline];
   if (!opts.noLiveRetest) {
-    const retest = protocolRow(RETEST, BASE, "completed");
+    const retest = protocolRow(RETEST, BASE, opts.retestStatus ?? "completed");
     if (opts.retestWithoutMinimumUsefulChange) retest.minimum_useful_change = null;
+    if (opts.retestProjectId) retest.project_id = opts.retestProjectId;
     protocols.push(retest);
   }
   if (opts.withAbandonedRetest) protocols.push(protocolRow(OLD_RETEST, BASE, "abandoned"));
@@ -161,13 +200,18 @@ function world(opts: {
       id: BQV, prompt_text: "Which SOC 2 tool?", prompt_hash: HASH, version_number: 1, intent_type: "shortlist",
       provenance: "customer_supplied", approved_at: "2026-09-01T00:00:00Z",
     }],
-    snapshot_requests: [{
+    snapshot_requests: opts.standaloneBaseline ? [] : [{
       id: "req-1", company_name: "Fixture Co", website_url: "https://fixture.example",
-      normalized_domain: "fixture.example", project_id: PROJECT, protocol_id: BASE, status: "report_ready",
-      work_email: "buyer@fixture.example", created_at: "2026-09-01T00:00:00Z",
+      normalized_domain: "fixture.example", project_id: opts.requestProjectId ?? PROJECT, protocol_id: BASE,
+      status: "report_ready", work_email: "buyer@fixture.example", created_at: "2026-09-01T00:00:00Z",
     }],
+    projects: opts.projectRow === null ? [] : [
+      opts.projectRow ?? { id: PROJECT, company_name: "Project Co", domain: "project.example" },
+    ],
     protocol_attempts: [...b.attempts, ...r.attempts],
     probe_results: [...b.results, ...r.results],
+    protocol_external_calls: [...b.calls, ...r.calls],
+    provider_call_receipts: [...b.receipts, ...r.receipts],
   });
 }
 
@@ -295,6 +339,102 @@ async function main(): Promise<void> {
       /Smallest change this sample could have separated from zero: /.test(markdown));
     check("and still declares delta_min to the reader",
       /Minimum useful change \(\u0394_min\), declared before this retest ran: /.test(markdown));
+  }
+
+  /* ═══════════ 6. which baselines can be tied to the intervention ═══════════ */
+  console.log("\n[6] Baselines with and without an originating snapshot request");
+  {
+    const { client, calls } = world();
+    const r = await processOutcomeCard(IV, deps(client));
+    const payload = saved(calls)?.p_payload as Record<string, any> | undefined;
+    check("a baseline with a matching snapshot_request still builds", payload !== undefined, r.outcome);
+    check("and its subject is still the request's, not the project's",
+      payload?.subject?.companyName === "Fixture Co" && payload?.subject?.websiteUrl === "https://fixture.example",
+      JSON.stringify(payload?.subject));
+  }
+  {
+    // The production shape of intervention a313e28e: baseline 19736653 was
+    // run from the #66 standalone control, so no snapshot_requests row has
+    // its protocol_id.
+    const { client, calls } = world({ standaloneBaseline: true });
+    const r = await processOutcomeCard(IV, deps(client));
+    const s = saved(calls);
+    const payload = s?.p_payload as Record<string, any> | undefined;
+    check("a standalone baseline with no snapshot_request now builds a card",
+      r.outcome !== "intervention_not_ready" && payload !== undefined, `${r.outcome}: ${r.detail ?? ""}`);
+    check("its subject is the project the worker measured against",
+      payload?.subject?.companyName === "Project Co" && payload?.subject?.normalizedDomain === "project.example",
+      JSON.stringify(payload?.subject));
+    check("the website is the bare domain, never an invented URL",
+      payload?.subject?.websiteUrl === "project.example", String(payload?.subject?.websiteUrl));
+    check("it saves the intervention's own baseline and its live retest",
+      s?.p_baseline_protocol_id === BASE && s?.p_retest_protocol_id === RETEST);
+    check("the integrity gate still runs on both phases",
+      typeof s?.p_integrity_status === "string" && s?.p_integrity_status === r.integrityStatus);
+    check("no snapshot_request or other row is written to make it fit",
+      calls.every((c) => c.name === "save_outcome_card_artifact"), calls.map((c) => c.name).join(","));
+  }
+  {
+    const { client, calls } = world({ standaloneBaseline: true, projectRow: { id: PROJECT, company_name: null, domain: "Project.Example" } });
+    await processOutcomeCard(IV, deps(client));
+    const payload = saved(calls)?.p_payload as Record<string, any> | undefined;
+    check("with no company name, the subject falls back to the domain, as the worker's brand did",
+      payload?.subject?.companyName === "project.example", String(payload?.subject?.companyName));
+  }
+
+  console.log("\n[7] Unverifiable or mismatched baselines stay blocked, and nothing is saved");
+  for (const [label, opts] of [
+    ["a standalone baseline whose project row is missing", { standaloneBaseline: true, projectRow: null }],
+    ["a standalone baseline whose project domain is not a hostname",
+      { standaloneBaseline: true, projectRow: { id: PROJECT, company_name: "Project Co", domain: "https://project.example/x" } }],
+    ["a standalone baseline whose project has no domain",
+      { standaloneBaseline: true, projectRow: { id: PROJECT, company_name: "Project Co", domain: "" } }],
+    ["a baseline protocol belonging to another project", { baselineProjectId: OTHER_PROJECT }],
+    ["a baseline protocol that is itself a retest", { baselineIsRetestOf: OLD_RETEST }],
+    ["a baseline protocol that was never approved", { baselineStatus: "draft" }],
+    ["a baseline protocol that was abandoned", { baselineStatus: "abandoned" }],
+    ["a snapshot_request for the baseline that belongs to another project", { requestProjectId: OTHER_PROJECT }],
+    ["a retest protocol belonging to another project", { retestProjectId: OTHER_PROJECT }],
+    // The live retest names BASE, but no protocol row with that id exists.
+    ["a baseline id that names no protocol row", { standaloneBaseline: true, baselineMissing: true }],
+  ] as const) {
+    const { client, calls } = world(opts);
+    const r = await processOutcomeCard(IV, deps(client));
+    check(`${label}: blocked, nothing saved`,
+      r.outcome === "intervention_not_ready" && r.integrityStatus === "blocked" && saved(calls) === undefined,
+      `${r.outcome}: ${r.detail ?? ""}`);
+  }
+  console.log("\n[8] What the provider served is compared across phases");
+  {
+    // Production stores both of intervention a313e28e's protocols as
+    // `approved`, the only status report-integrity's M4 precondition passes.
+    const { client } = world({ baselineStatus: "approved", retestStatus: "approved", standaloneBaseline: true });
+    const r = await processOutcomeCard(IV, deps(client));
+    check("identically served phases add no provider reason",
+      !r.integrityReasons.some((x) => x.startsWith("Provider:")), r.integrityReasons.join(" | "));
+    check("a standalone baseline shaped like production passes integrity", r.integrityStatus === "integrity_passed",
+      `${r.integrityStatus}: ${r.integrityReasons.join(" | ")}`);
+  }
+  {
+    // Intervention 055c3514's shape: same request, Sonar-style ids in the
+    // baseline, resp_ ids in the retest.
+    const { client, calls } = world({
+      baselineResponseIdPrefix: "pplx-", basePresent: 0, retestPresent: 5,
+      baselineStatus: "approved", retestStatus: "approved",
+    });
+    const r = await processOutcomeCard(IV, deps(client));
+    check("a provider-side change between phases holds the card for review",
+      r.integrityStatus === "needs_review" && r.integrityReasons.some((x) => x.startsWith("Provider:")),
+      `${r.integrityStatus}: ${r.integrityReasons.join(" | ")}`);
+    check("the held card is saved with that status, and nothing is sent",
+      saved(calls)?.p_integrity_status === "needs_review" && !calls.some((c) => c.name === "begin_outcome_card_delivery"));
+  }
+  {
+    const { client } = world({ retestDropReceiptOn: 2, baselineStatus: "approved", retestStatus: "approved" });
+    const r = await processOutcomeCard(IV, deps(client));
+    check("a counted retest attempt with no provider receipt holds the card for review",
+      r.integrityStatus === "needs_review" && r.integrityReasons.some((x) => x.startsWith("Provider:")),
+      `${r.integrityStatus}: ${r.integrityReasons.join(" | ")}`);
   }
 
   console.log(`\n${passed}/${passed + failed} checks passed.${failed ? ` ${failed} FAILED.` : ""}\n`);

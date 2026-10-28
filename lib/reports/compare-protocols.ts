@@ -64,6 +64,16 @@ export interface CompareProtocolsInput {
    * (0073 stamps `minimum_useful_change.value` at creation).
    */
   minimumUsefulChange: number;
+  /**
+   * PR #3 — whether both phases were measured the same way, from the
+   * execution evidence (lib/reports/measurement-fingerprint.ts). Anything
+   * but `compatible` makes the result `inconclusive`, and a recorded
+   * deviation does NOT override it: a disclosed change of protocol settings
+   * is something a reader can weigh, but a different measuring instrument
+   * makes the two numbers incomparable. Optional only so this pure engine
+   * stays usable on its own; the Outcome Card always supplies it.
+   */
+  measurementCompatibility?: { status: "compatible" | "incompatible" | "unverifiable"; detail?: string };
 }
 
 export interface NewcombeInterval {
@@ -217,6 +227,22 @@ export function compareProtocols(input: CompareProtocolsInput): CompareProtocols
     // Disclosed, so the comparison proceeds — but the deviation is surfaced,
     // never silently absorbed into a clean-looking number.
     reasons.push(`CONFIGURATION_DEVIATION_DISCLOSED: ${recordedDeviationNote}`);
+  }
+
+  const measurement = input.measurementCompatibility;
+  if (measurement && measurement.status !== "compatible") {
+    return {
+      status: "inconclusive",
+      delta: null,
+      interval: null,
+      intervalMethod: "newcombe_95",
+      minimumUsefulChange,
+      smallestDetectableChange: null,
+      reasons: [
+        ...reasons,
+        `MEASUREMENT_${measurement.status.toUpperCase()}${measurement.detail ? `: ${measurement.detail}` : ""}`,
+      ],
+    };
   }
 
   const baselineUnderpowered = !phaseMeetsFloor(baseline);

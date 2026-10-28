@@ -1,5 +1,6 @@
 import type { SourceCitation, SourceType } from "@/lib/schemas/probe-analysis.schema";
 import { sha256Hex } from "@/lib/evidence/hash";
+import { PERPLEXITY_SONAR_ENDPOINT } from "@/lib/probes/endpoints";
 
 /**
  * The one outbound Perplexity address. Exported so an operator preflight can
@@ -7,7 +8,7 @@ import { sha256Hex } from "@/lib/evidence/hash";
  * away from it. Every committed test injects its own `fetchImpl`, so this
  * constant is the only thing that decides where a real call lands.
  */
-export const PERPLEXITY_ENDPOINT = "https://api.perplexity.ai/v1/sonar";
+export const PERPLEXITY_ENDPOINT = PERPLEXITY_SONAR_ENDPOINT;
 
 export interface PerplexitySearchResult {
   title?: string;

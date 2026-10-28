@@ -28,9 +28,9 @@ import { buildOutcomeCard } from "@/lib/reports/build-outcome-card";
 import { renderOutcomeCardMarkdown } from "@/lib/reports/render-outcome-card-markdown";
 import { evaluateOutcomeCardIntegrity } from "@/lib/reports/outcome-card-integrity";
 import {
-  evaluateServedProviderComparability,
-  readServedProviderFingerprints,
-} from "@/lib/reports/served-provider-comparability";
+  evaluateMeasurementCompatibility,
+  readPhaseMeasurement,
+} from "@/lib/reports/measurement-fingerprint";
 import { sendOutcomeCardEmail } from "@/lib/reports/outcome-card-email";
 import type { OutcomeCardIntervention } from "@/lib/reports/outcome-card-types";
 import { ClientReportDeliveryError, type ClientReportDeliveryConfig } from "@/lib/snapshot-requests/client-report-delivery";
@@ -280,12 +280,22 @@ export async function processOutcomeCard(
   const baselinePayload = buildProtocolReport({ ...baselineEvidence, now: now() });
   const retestPayload = buildProtocolReport({ ...retestEvidence, now: now() });
 
+  // PR #3 — read BEFORE the card is built: compatibility decides the
+  // outcome itself (anything but compatible is inconclusive), not only
+  // whether a person must read the card.
+  const [baselineMeasurement, retestMeasurement] = await Promise.all([
+    readPhaseMeasurement(deps.client, interventionRow.protocol_id, interventionRow.project_id),
+    readPhaseMeasurement(deps.client, retestProtocolId, interventionRow.project_id),
+  ]);
+  const measurementCompatibility = evaluateMeasurementCompatibility(baselineMeasurement, retestMeasurement);
+
   const card = buildOutcomeCard({
     projectId: interventionRow.project_id,
     baseline: baselinePayload,
     retest: retestPayload,
     intervention: toInterventionSummary(interventionRow),
     minimumUsefulChange,
+    measurementCompatibility,
     detectableChangeAtPlan: retestProto?.detectable_change_at_plan ?? null,
     now: now(),
   });
@@ -293,11 +303,9 @@ export async function processOutcomeCard(
 
   const baselineMarkdown = renderProtocolReportMarkdown(baselinePayload);
   const retestMarkdown = renderProtocolReportMarkdown(retestPayload);
-  const [baselineSignals, retestSignals, baselineServed, retestServed] = await Promise.all([
+  const [baselineSignals, retestSignals] = await Promise.all([
     readIntegritySignals(deps.client, baselinePayload),
     readIntegritySignals(deps.client, retestPayload),
-    readServedProviderFingerprints(deps.client, interventionRow.protocol_id),
-    readServedProviderFingerprints(deps.client, retestProtocolId),
   ]);
 
   const integrity = evaluateOutcomeCardIntegrity({
@@ -306,7 +314,9 @@ export async function processOutcomeCard(
     retestMarkdown,
     retestSignals,
     interventionRegisteredAndImplemented: interventionRow.status === "implemented",
-    servedProvider: evaluateServedProviderComparability(baselineServed, retestServed),
+    measurement: measurementCompatibility.status === "compatible"
+      ? { comparable: true, detail: "" }
+      : { comparable: false, detail: measurementCompatibility.detail },
   });
 
   const { data: savedData, error: saveError } = await deps.client.rpc(

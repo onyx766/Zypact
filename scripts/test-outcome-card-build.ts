@@ -94,18 +94,20 @@ function runs(
   protocolId: string,
   kind: "baseline" | "retest",
   present: number,
-  opts: { dropHashOn?: number; responseIdPrefix?: string; dropReceiptOn?: number } = {}
+  opts: { dropHashOn?: number; responseIdPrefix?: string; dropReceiptOn?: number; requestedModel?: string } = {}
 ) {
   const attempts: Row[] = [];
   const results: Row[] = [];
   const calls: Row[] = [];
   const receipts: Row[] = [];
+  const requests: Row[] = [];
+  const analysisReceipts: Row[] = [];
   for (let i = 1; i <= 5; i += 1) {
     const pr = `${kind}-probe-${protocolId.slice(0, 4)}-${i}`;
     attempts.push({
       id: `${kind}-attempt-${protocolId.slice(0, 4)}-${i}`, protocol_id: protocolId, attempt_kind: kind,
       status: "completed", baseline_ordinal: i, probe_run_id: pr, retry_of_attempt_id: null,
-      termination_reason: null, reserved_cost_usd: 0.01,
+      termination_reason: null, reserved_cost_usd: 0.01, project_id: PROJECT,
     });
     results.push({
       probe_run_id: pr, client_mentioned: i <= present, client_position: i <= present ? "#2" : null,
@@ -117,19 +119,40 @@ function runs(
     });
     const attemptId = `${kind}-attempt-${protocolId.slice(0, 4)}-${i}`;
     const callId = `${kind}-call-${protocolId.slice(0, 4)}-${i}`;
-    calls.push({ id: callId, protocol_attempt_id: attemptId, call_kind: "perplexity" });
-    calls.push({ id: `${callId}-analysis`, protocol_attempt_id: attemptId, call_kind: "analysis" });
+    calls.push({ id: callId, protocol_attempt_id: attemptId, call_kind: "perplexity", project_id: PROJECT });
+    calls.push({ id: `${callId}-analysis`, protocol_attempt_id: attemptId, call_kind: "analysis", project_id: PROJECT });
+    // The exact bodies production stores (external_call_requests, 0056): the
+    // question differs per run only in content, never in configuration.
+    requests.push({
+      external_call_id: callId, project_id: PROJECT,
+      request_body: JSON.stringify({
+        model: opts.requestedModel ?? "sonar", messages: [{ role: "user", content: `Which SOC 2 tool? (run ${i})` }],
+        temperature: 0.2, max_tokens: 1200, stream: false, web_search_options: { search_mode: "web" },
+      }),
+    });
+    requests.push({
+      external_call_id: `${callId}-analysis`, project_id: PROJECT,
+      request_body: JSON.stringify({
+        model: "gpt-4o-2024-08-06", temperature: 0, response_format: { type: "json_object" },
+        messages: [{ role: "system", content: "Analyse the answer." }, { role: "user", content: `answer ${i}` }],
+      }),
+    });
+    analysisReceipts.push({
+      external_call_id: `${callId}-analysis`, project_id: PROJECT, outcome: "success",
+      model_returned: "gpt-4o-2024-08-06",
+    });
     if (opts.dropReceiptOn !== i) {
       receipts.push({
-        external_call_id: callId, outcome: "success",
+        external_call_id: callId, outcome: "success", project_id: PROJECT,
         raw_response_body: JSON.stringify({
           id: `${opts.responseIdPrefix ?? "resp_"}${i}`, model: "sonar", object: "chat.completion",
           choices: [{ message: { content: "answer" } }],
+          search_results: [{ url: "https://x.example", title: "x" }],
         }),
       });
     }
   }
-  return { attempts, results, calls, receipts };
+  return { attempts, results, calls, receipts, requests, analysisReceipts };
 }
 
 function world(opts: {
@@ -212,6 +235,8 @@ function world(opts: {
     probe_results: [...b.results, ...r.results],
     protocol_external_calls: [...b.calls, ...r.calls],
     provider_call_receipts: [...b.receipts, ...r.receipts],
+    external_call_requests: [...b.requests, ...r.requests],
+    analysis_call_receipts: [...b.analysisReceipts, ...r.analysisReceipts],
   });
 }
 
@@ -404,14 +429,14 @@ async function main(): Promise<void> {
       r.outcome === "intervention_not_ready" && r.integrityStatus === "blocked" && saved(calls) === undefined,
       `${r.outcome}: ${r.detail ?? ""}`);
   }
-  console.log("\n[8] What the provider served is compared across phases");
+  console.log("\n[8] How each phase was measured is compared before the outcome");
   {
     // Production stores both of intervention a313e28e's protocols as
     // `approved`, the only status report-integrity's M4 precondition passes.
     const { client } = world({ baselineStatus: "approved", retestStatus: "approved", standaloneBaseline: true });
     const r = await processOutcomeCard(IV, deps(client));
     check("identically served phases add no provider reason",
-      !r.integrityReasons.some((x) => x.startsWith("Provider:")), r.integrityReasons.join(" | "));
+      !r.integrityReasons.some((x) => x.startsWith("Measurement:")), r.integrityReasons.join(" | "));
     check("a standalone baseline shaped like production passes integrity", r.integrityStatus === "integrity_passed",
       `${r.integrityStatus}: ${r.integrityReasons.join(" | ")}`);
   }
@@ -424,16 +449,23 @@ async function main(): Promise<void> {
     });
     const r = await processOutcomeCard(IV, deps(client));
     check("a provider-side change between phases holds the card for review",
-      r.integrityStatus === "needs_review" && r.integrityReasons.some((x) => x.startsWith("Provider:")),
+      r.integrityStatus === "needs_review" && r.integrityReasons.some((x) => x.startsWith("Measurement:")),
       `${r.integrityStatus}: ${r.integrityReasons.join(" | ")}`);
     check("the held card is saved with that status, and nothing is sent",
       saved(calls)?.p_integrity_status === "needs_review" && !calls.some((c) => c.name === "begin_outcome_card_delivery"));
+    // PR #3: the outcome itself is no longer computed across the change.
+    const payload = saved(calls)?.p_payload as Record<string, any> | undefined;
+    check("and 0/5 → 5/5 across that change is inconclusive, never an increase",
+      payload?.comparison?.status === "inconclusive", String(payload?.comparison?.status));
+    check("with the measurement reason recorded on the comparison",
+      (payload?.comparison?.reasons ?? []).some((x: string) => x.startsWith("MEASUREMENT_INCOMPATIBLE")),
+      JSON.stringify(payload?.comparison?.reasons));
   }
   {
     const { client } = world({ retestDropReceiptOn: 2, baselineStatus: "approved", retestStatus: "approved" });
     const r = await processOutcomeCard(IV, deps(client));
     check("a counted retest attempt with no provider receipt holds the card for review",
-      r.integrityStatus === "needs_review" && r.integrityReasons.some((x) => x.startsWith("Provider:")),
+      r.integrityStatus === "needs_review" && r.integrityReasons.some((x) => x.startsWith("Measurement:")),
       `${r.integrityStatus}: ${r.integrityReasons.join(" | ")}`);
   }
 

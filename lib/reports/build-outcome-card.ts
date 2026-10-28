@@ -30,6 +30,7 @@ import {
   type OutcomeCardPayload,
   type OutcomeCardPhase,
 } from "@/lib/reports/outcome-card-types";
+import type { MeasurementCompatibility } from "@/lib/reports/measurement-fingerprint";
 
 export interface BuildOutcomeCardInput {
   projectId: string;
@@ -42,6 +43,12 @@ export interface BuildOutcomeCardInput {
    * own row at creation; the caller reads it from there.
    */
   minimumUsefulChange: number;
+  /**
+   * PR #3 — whether both phases were measured the same way. Required: a card
+   * cannot be built without stating it, and anything but `compatible`
+   * makes the outcome `inconclusive` (compare-protocols.ts).
+   */
+  measurementCompatibility: MeasurementCompatibility;
   /**
    * 0075's `protocols.detectable_change_at_plan` from the BASELINE row.
    * Informational only. Null for a baseline approved before 0075 existed.
@@ -183,6 +190,7 @@ export function buildOutcomeCard(input: BuildOutcomeCardInput): OutcomeCardPaylo
     retestIdentity: identityOf(input.retest),
     recordedDeviationNote: input.intervention.protocolDeviations,
     minimumUsefulChange: input.minimumUsefulChange,
+    measurementCompatibility: input.measurementCompatibility,
   });
 
   const card: OutcomeCardPayload = {

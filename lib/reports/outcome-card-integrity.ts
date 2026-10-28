@@ -39,13 +39,14 @@ export interface EvaluateOutcomeCardIntegrityInput {
    */
   interventionRegisteredAndImplemented: boolean;
   /**
-   * Whether the provider served both phases the same way, judged from its
-   * stored responses (served-provider-comparability.ts). Not comparable is
-   * needs_review, not blocked: the evidence is intact and may still be worth
-   * reading, but no one may be sent a comparison across a provider change
-   * without a person reading the reason first.
+   * Whether both phases were measured the same way — the full execution
+   * fingerprint (measurement-fingerprint.ts), which includes what the
+   * provider served. Not comparable is needs_review, not blocked: the
+   * evidence is intact and worth reading, and the outcome itself is already
+   * forced to `inconclusive`, but no one may be sent a card across a
+   * measurement change without a person reading the reason first.
    */
-  servedProvider: { comparable: boolean; detail: string };
+  measurement: { comparable: boolean; detail: string };
 }
 
 /** blocked > needs_review > integrity_passed. */
@@ -85,9 +86,9 @@ export function evaluateOutcomeCardIntegrity(
     );
   }
 
-  if (!input.servedProvider.comparable) {
+  if (!input.measurement.comparable) {
     status = worseOf(status, "needs_review");
-    reasons.push(`Provider: ${input.servedProvider.detail}`);
+    reasons.push(`Measurement: ${input.measurement.detail}`);
   }
 
   if (status === "integrity_passed") return { status, reasons: [] };

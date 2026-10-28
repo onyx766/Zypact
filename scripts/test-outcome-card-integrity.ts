@@ -13,7 +13,6 @@
 
 import { evaluateOutcomeCardIntegrity } from "@/lib/reports/outcome-card-integrity";
 import {
-  evaluateServedProviderComparability,
   fingerprintRawResponseBody,
   UNREADABLE_FINGERPRINT,
 } from "@/lib/reports/served-provider-comparability";
@@ -54,7 +53,7 @@ function base(over: Partial<Parameters<typeof evaluateOutcomeCardIntegrity>[0]> 
     retestMarkdown: CLEAN_MARKDOWN,
     retestSignals: PASSING,
     interventionRegisteredAndImplemented: true,
-    servedProvider: { comparable: true, detail: "" },
+    measurement: { comparable: true, detail: "" },
     ...over,
   });
 }
@@ -109,23 +108,14 @@ async function main(): Promise<void> {
     check("clean phases cannot rescue an unregistered intervention", r.status === "blocked", r.status);
   }
 
-  console.log("\n[4b] What the provider served must match across phases");
+  console.log("\n[4b] A measurement difference between phases holds the card for review");
   {
-    const b = ["model=sonar id=other object=chat.completion"];
-    const r5 = Array(5).fill("model=sonar id=resp_ object=chat.completion");
-    const same = evaluateServedProviderComparability(Array(5).fill(r5[0]), r5);
-    check("both phases served identically -> comparable", same.comparable && same.detail === "");
-    const changed = evaluateServedProviderComparability(Array(5).fill(b[0]), r5);
-    check("Sonar-style ids then resp_ ids (intervention 055c3514's shape) -> not comparable",
-      !changed.comparable && /id=other/.test(changed.detail) && /id=resp_/.test(changed.detail), changed.detail);
-    const r = base({ servedProvider: changed });
-    check("a provider-side change holds a clean card for review", r.status === "needs_review", r.status);
-    check("and the reason names the provider", r.reasons.some((x) => x.startsWith("Provider:")));
+    const changed = { comparable: false, detail: "The baseline and retest were not measured the same way (differs in: probeServed)." };
+    const r = base({ measurement: changed });
+    check("a measurement difference holds a clean card for review", r.status === "needs_review", r.status);
+    check("and the reason names the measurement", r.reasons.some((x) => x.startsWith("Measurement:")));
     check("it never relaxes a blocked card",
-      base({ servedProvider: changed, interventionRegisteredAndImplemented: false }).status === "blocked");
-    const missing = evaluateServedProviderComparability([...r5.slice(0, 4), UNREADABLE_FINGERPRINT], r5);
-    check("one counted attempt without a readable receipt -> not comparable", !missing.comparable, missing.detail);
-    check("an empty phase -> not comparable", !evaluateServedProviderComparability([], r5).comparable);
+      base({ measurement: changed, interventionRegisteredAndImplemented: false }).status === "blocked");
     check("fingerprint of a Sonar body",
       fingerprintRawResponseBody(JSON.stringify({ id: "abc-123", model: "sonar", object: "chat.completion" }))
         === "model=sonar id=other object=chat.completion");

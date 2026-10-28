@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { runMirrorScan } from "@/lib/pipeline/run-mirror-scan";
-import { requireCurrentUser } from "@/lib/auth/current-user";
-import { authErrorResponse } from "@/lib/auth/route-helpers";
+import { requireInvitedUser } from "@/lib/auth/current-user";
+import { authErrorResponse, legacyPipelineRefusal } from "@/lib/auth/route-helpers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,9 +19,11 @@ function ensureProtocol(raw: string): string {
 }
 
 export async function POST(req: Request) {
+  const refused = legacyPipelineRefusal("run-mirror-scan");
+  if (refused) return refused;
   let user;
   try {
-    user = await requireCurrentUser();
+    user = await requireInvitedUser();
   } catch (err) {
     const resp = authErrorResponse(err, { route: "run-mirror-scan" });
     if (resp) return resp;

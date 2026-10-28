@@ -6,6 +6,7 @@ import { EvidenceBankOutputSchema } from "@/lib/schemas/evidence-bank.schema";
 import type { QaReportRow } from "@/lib/db/types";
 import { QaAssetPanel } from "./qa-asset-panel";
 import { ExportDownloadButton } from "./export-download-button";
+import { requireProjectOwnerForPage } from "@/lib/auth/current-user";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -50,6 +51,9 @@ function qaStatusColor(s: string): string {
 
 export default async function QaPage({ params }: PageProps) {
   const { id } = await params;
+  // The [id] layout's check does not bind this segment: Next.js can render
+  // a page without re-running its layout, so each page enforces it itself.
+  await requireProjectOwnerForPage(id, `/projects/${id}/[id]`);
   const db = getDb();
   const [project, assets, bankRow, allReports] = await Promise.all([
     db.getProject(id),

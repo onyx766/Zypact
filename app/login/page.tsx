@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/current-user";
+import { isEmailAllowed } from "@/lib/auth/access-allowlist";
 import {
   FOUNDER_ADMIN_PATH,
   safeNextPath,
@@ -57,14 +58,18 @@ export default async function LoginPage({
   );
 
   const user = await getCurrentUser();
+  // Only an invited account is sent on. Redirecting any session would loop
+  // an uninvited one between this page and the gate that refused it.
+  const uninvited = user !== null && !isEmailAllowed(user.email);
 
-  if (user) {
+  if (user && !uninvited) {
     redirect(next);
   }
 
   const sent = resolvedSearchParams.sent === "1";
-  const errorMsg =
-    typeof resolvedSearchParams.error === "string"
+  const errorMsg = uninvited
+    ? "This account has not been invited."
+    : typeof resolvedSearchParams.error === "string"
       ? resolvedSearchParams.error
       : null;
 

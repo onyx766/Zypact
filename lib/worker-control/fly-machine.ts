@@ -22,7 +22,36 @@
  * the environment, never logged, and never returned to the browser.
  */
 
+import { getReportServiceClient } from "@/lib/reports/service-client";
+import {
+  evaluatePaidExecution,
+  type PaidExecutionDecision,
+} from "@/lib/worker-control/paid-execution-gate";
+
 const FLY_API = "https://api.machines.dev/v1";
+
+type PaidExecutionGate = () => Promise<PaidExecutionDecision>;
+
+/**
+ * The default gate reads the real ledger. A failure to even build the
+ * service client is a refusal like any other, never a pass.
+ */
+const defaultGate: PaidExecutionGate = async () => {
+  let client;
+  try {
+    client = getReportServiceClient();
+  } catch {
+    return { ok: false, code: "spend_ledger_unavailable", detail: "The spend ledger is not configured on this deployment." };
+  }
+  return evaluatePaidExecution({ client });
+};
+
+let gate: PaidExecutionGate = defaultGate;
+
+/** Test-only. Pass null to restore the real gate. */
+export function __setPaidExecutionGateForTests(next: PaidExecutionGate | null): void {
+  gate = next ?? defaultGate;
+}
 
 /** Fly's machine states, as far as this module needs to distinguish them. */
 export type FlyMachineState =
@@ -31,7 +60,11 @@ export type FlyMachineState =
 
 export type StartWorkerResult =
   | { ok: true; alreadyRunning: boolean; state: FlyMachineState }
-  | { ok: false; code: "not_configured" | "unauthorized" | "not_found" | "fly_error"; detail: string };
+  | {
+      ok: false;
+      code: "not_configured" | "paid_execution_blocked" | "unauthorized" | "not_found" | "fly_error";
+      detail: string;
+    };
 
 interface FlyConfig { app: string; machineId: string; token: string }
 
@@ -97,6 +130,19 @@ export async function startWorkerMachine(): Promise<StartWorkerResult> {
         "Starting the worker from here is not configured on this deployment. "
         + "Set FLY_WORKER_APP, FLY_WORKER_MACHINE_ID and FLY_API_TOKEN.",
     };
+  }
+
+  // Every start is paid work: the machine claims a job and calls providers.
+  // The gate runs before Fly is contacted at all, and anything it cannot
+  // affirm — including its own failure — is a refusal.
+  let decision: PaidExecutionDecision;
+  try {
+    decision = await gate();
+  } catch {
+    decision = { ok: false, code: "spend_ledger_unavailable", detail: "The spend ledger could not be read." };
+  }
+  if (!decision.ok) {
+    return { ok: false, code: "paid_execution_blocked", detail: decision.detail };
   }
 
   let status: number;

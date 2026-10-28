@@ -13,7 +13,9 @@
  * Security contract, identical in shape to the export route:
  *   - unauthenticated          → 401
  *   - project missing          → 404
+ *   - not on the allowlist     → 403 not_invited
  *   - non-owner / legacy owner → 404 (byte-identical; enumeration guard)
+ *   - owner but not a founder  → 403 founder_only
  *   - protocol not in project  → 404
  *   - protocol not approved    → 409
  *   - owner + approved         → 200/201
@@ -26,6 +28,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { requireProjectOwner } from "@/lib/auth/current-user";
 import { authErrorResponse } from "@/lib/auth/route-helpers";
+import { isFounderEmail } from "@/lib/auth/founder";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,12 +44,19 @@ export async function POST(req: Request, { params }: RouteContext) {
     return NextResponse.json({ ok: false, error: "projectId is required" }, { status: 400 });
   }
 
+  let owner: Awaited<ReturnType<typeof requireProjectOwner>>;
   try {
-    await requireProjectOwner(projectId);
+    owner = await requireProjectOwner(projectId);
   } catch (err) {
     const resp = authErrorResponse(err, { route: `protocol-runs/${projectId}`, projectId });
     if (resp) return resp;
     throw err;
+  }
+
+  // A queued job is claimed by the next worker start, whoever asked for that
+  // start. While V1 is founder-operated, only a founder may put one there.
+  if (!isFounderEmail(owner.user.email)) {
+    return NextResponse.json({ ok: false, error: "founder_only" }, { status: 403 });
   }
 
   let body: unknown;

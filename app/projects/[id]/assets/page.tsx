@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { hasUsableEvidenceBank } from "@/lib/evidence-bank/has-usable-evidence-bank";
 import { EvidenceBankOutputSchema } from "@/lib/schemas/evidence-bank.schema";
 import { FixBriefPanel } from "./fix-brief-panel";
+import { requireProjectOwnerForPage } from "@/lib/auth/current-user";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -20,6 +21,9 @@ const cell: React.CSSProperties = {
 
 export default async function AssetsPage({ params }: PageProps) {
   const { id } = await params;
+  // The [id] layout's check does not bind this segment: Next.js can render
+  // a page without re-running its layout, so each page enforces it itself.
+  await requireProjectOwnerForPage(id, `/projects/${id}/[id]`);
   const db = getDb();
   const [project, fixBriefs, bankRow, assets] = await Promise.all([
     db.getProject(id),

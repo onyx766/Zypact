@@ -37,6 +37,9 @@ Object.assign(process.env, { NODE_ENV: "test" });
 delete process.env.NEXT_PUBLIC_SUPABASE_URL;
 delete process.env.SUPABASE_SERVICE_ROLE_KEY;
 delete process.env.ZYPACT_ALLOW_MEMORY_DB;
+// Both fixture users are invited: these scenarios test ownership, and the
+// access allowlist (scripts/test-paid-execution-guards.ts) is tested apart.
+process.env.ZYPACT_ALLOWED_EMAILS = "alice@example.com,bob@example.com";
 delete process.env.LLM_PROVIDER;
 delete process.env.OPENAI_API_KEY;
 delete process.env.ANTHROPIC_API_KEY;

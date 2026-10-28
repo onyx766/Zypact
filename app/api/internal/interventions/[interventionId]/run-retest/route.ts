@@ -78,7 +78,7 @@ export async function POST(_request: Request, context: RouteContext) {
   if (!start.ok) {
     return NextResponse.json(
       { ok: false, error: start.code, message: start.detail },
-      { status: start.code === "not_configured" ? 503 : 502 }
+      { status: start.code === "not_configured" || start.code === "paid_execution_blocked" ? 503 : 502 }
     );
   }
 

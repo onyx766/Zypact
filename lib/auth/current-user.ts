@@ -27,6 +27,7 @@ import { notFound, redirect } from "next/navigation";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getDb } from "@/lib/db";
 import type { Project } from "@/lib/db/types";
+import { isEmailAllowed } from "@/lib/auth/access-allowlist";
 
 export class UnauthorizedError extends Error {
   readonly code = "unauthorized" as const;
@@ -50,6 +51,19 @@ export class NotFoundError extends Error {
   }
 }
 
+/**
+ * Signed in, but not on the access allowlist (lib/auth/access-allowlist.ts).
+ * A 403 rather than the 404 used for ownership: it says nothing about any
+ * project, only that this account has not been invited.
+ */
+export class ForbiddenError extends Error {
+  readonly code = "not_invited" as const;
+  constructor(message = "not_invited") {
+    super(message);
+    this.name = "ForbiddenError";
+  }
+}
+
 export interface CurrentUser {
   id: string;
   email: string | null;
@@ -65,9 +79,26 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   };
 }
 
+/**
+ * Signed in, nothing more. Every caller must apply a stricter check of its
+ * own: the founder routes require a founder (always on the access
+ * allowlist), and anything open to non-founders goes through
+ * `requireInvitedUser` instead. scripts/test-paid-execution-guards.ts fails
+ * if a route calls this without a founder check.
+ */
 export async function requireCurrentUser(): Promise<CurrentUser> {
   const user = await getCurrentUser();
   if (!user) throw new UnauthorizedError();
+  return user;
+}
+
+/**
+ * Signed in AND on the access allowlist (lib/auth/access-allowlist.ts).
+ * The gate for every route and page a non-founder may use.
+ */
+export async function requireInvitedUser(): Promise<CurrentUser> {
+  const user = await requireCurrentUser();
+  if (!isEmailAllowed(user.email)) throw new ForbiddenError();
   return user;
 }
 
@@ -76,6 +107,7 @@ export async function requireCurrentUser(): Promise<CurrentUser> {
  *
  * Contract:
  *   - No session          → `UnauthorizedError` (401)
+ *   - Not on the allowlist → `ForbiddenError` (403)
  *   - Project missing     → `NotFoundError("project_not_found")` (404)
  *   - Owner is another user → `NotFoundError("ownership_denied")` (404)
  *   - Owner is NULL       → `NotFoundError("legacy_null_owner")` (404)
@@ -84,7 +116,7 @@ export async function requireCurrentUser(): Promise<CurrentUser> {
 export async function requireProjectOwner(
   projectId: string
 ): Promise<{ user: CurrentUser; project: Project }> {
-  const user = await requireCurrentUser();
+  const user = await requireInvitedUser();
   const project = await getDb().getProject(projectId);
   if (!project) {
     throw new NotFoundError("project_not_found");
@@ -126,6 +158,19 @@ export async function requireProjectOwnerForPage(
       })
     );
     redirect(`/login?next=${encodeURIComponent(currentPath)}`);
+  }
+  if (!isEmailAllowed(user.email)) {
+    console.warn(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        level: "warn",
+        event: "auth_denied",
+        route: currentPath,
+        reason: "not_invited",
+        projectId,
+      })
+    );
+    redirect(`/login?error=${encodeURIComponent("This account has not been invited.")}`);
   }
   const project = await getDb().getProject(projectId);
   let reason: NotFoundError["reason"] | null = null;

@@ -10,7 +10,7 @@
  */
 
 import {
-  isWorkerStartConfigured, readWorkerState, startWorkerMachine,
+  __setPaidExecutionGateForTests, isWorkerStartConfigured, readWorkerState, startWorkerMachine,
 } from "@/lib/worker-control/fly-machine";
 
 let checks = 0;
@@ -79,6 +79,31 @@ async function main(): Promise<void> {
 
   configure(CONFIGURED);
   assert("all three values together are configuration", isWorkerStartConfigured());
+
+  // ── 1b. The paid-execution gate is consulted before Fly, and refuses ────
+  //
+  // Everything below exercises Fly's answers, so it runs behind a gate that
+  // allows. The gate's own decisions are tested in
+  // scripts/test-paid-execution-guards.ts; here only its placement is.
+  __setPaidExecutionGateForTests(async () => ({
+    ok: false, code: "paid_execution_disabled", detail: "off",
+  }));
+  stubFetch(200, JSON.stringify({ previous_state: "stopped" }));
+  const gated = await startWorkerMachine();
+  assert("a refusing gate is a refusal", !gated.ok && gated.code === "paid_execution_blocked",
+    JSON.stringify(gated));
+  assert("and Fly is never contacted", captured.length === 0, `${captured.length} call(s)`);
+
+  __setPaidExecutionGateForTests(async () => { throw new Error("ledger down"); });
+  stubFetch(200, JSON.stringify({ previous_state: "stopped" }));
+  const thrown = await startWorkerMachine();
+  assert("a gate that throws is a refusal, never a pass",
+    !thrown.ok && thrown.code === "paid_execution_blocked" && captured.length === 0,
+    JSON.stringify(thrown));
+
+  __setPaidExecutionGateForTests(async () => ({
+    ok: true, ceilingUsd: 5, spentLast24hUsd: 0, nextJobCapUsd: 0.25,
+  }));
 
   // ── 2. A successful start, and where it was sent ────────────────────────
   stubFetch(200, JSON.stringify({ previous_state: "stopped", migrated: false }));
@@ -168,6 +193,7 @@ main()
   })
   .finally(() => {
     globalThis.fetch = realFetch;
+    __setPaidExecutionGateForTests(null);
     if (failures.length > 0) {
       console.error(`\n${failures.length} of ${checks} checks FAILED:`);
       for (const f of failures) console.error(`  ✗ ${f}`);

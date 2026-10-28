@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { generateBuyerPrompts } from "@/lib/pipeline/generate-buyer-prompts";
 import { requireProjectOwner } from "@/lib/auth/current-user";
-import { authErrorResponse } from "@/lib/auth/route-helpers";
+import { authErrorResponse, legacyPipelineRefusal } from "@/lib/auth/route-helpers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,6 +31,8 @@ function parseUserInputs(raw: unknown): UserInputs | undefined {
 }
 
 export async function POST(req: Request) {
+  const refused = legacyPipelineRefusal("generate-buyer-prompts");
+  if (refused) return refused;
   let body: Body;
   try {
     body = (await req.json()) as Body;

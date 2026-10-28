@@ -28,6 +28,12 @@ delete process.env.LLM_PROVIDER;
 delete process.env.OPENAI_API_KEY;
 delete process.env.ANTHROPIC_API_KEY;
 process.env.ZYPACT_MOCK_MODE = "on";
+// PR #1: queueing a job is founder-only, and every session must be invited.
+// The owner here is therefore a founder, and the stranger an invited
+// non-founder, so the ownership checks below still bite. The founder-only
+// and not-invited refusals are tested in scripts/test-paid-execution-guards.ts.
+process.env.SNAPSHOT_FOUNDER_EMAILS = "owner@example.test";
+process.env.ZYPACT_ALLOWED_EMAILS = "other@example.test";
 
 import { getDb } from "@/lib/db";
 import { __setSupabaseServerClientForTests } from "@/lib/supabase/server";

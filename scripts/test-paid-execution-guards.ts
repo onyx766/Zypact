@@ -6,8 +6,10 @@
  *   - paid execution is OFF unless explicitly switched on, and every missing
  *     or malformed setting is a refusal (fail closed);
  *   - the daily ceiling counts the last 24 hours of the ledger, reserved
- *     cost standing in for unknown actual cost, plus the largest queued
- *     job's cap — and an unreadable or truncated ledger refuses;
+ *     cost standing in for unknown actual cost, plus the largest cap of any
+ *     job the worker could claim — queued, or claimed/running with attempts
+ *     left (a crashed job being resumed) — and an unreadable or truncated
+ *     ledger refuses;
  *   - the gate sits in front of Fly, so a refusal contacts nothing, and
  *     concurrent starts never produce more than one fresh start;
  *   - the eight legacy LLM routes refuse before any auth or model work;
@@ -195,6 +197,81 @@ async function main(): Promise<void> {
     check(`${label} → refused as unavailable`, !r.ok && r.code === "spend_ledger_unavailable", JSON.stringify(r));
   }
 
+  /* ═══════ 2b. resumable jobs: what the worker's claim can pick up ═══════ */
+  console.log("\n[2b] Jobs the worker can resume count toward the ceiling");
+  const expiredLease = "2026-10-28T11:00:00.000Z";
+  const liveLease = "2026-10-28T12:10:00.000Z";
+  const nearCeiling = [{ created_at: recent, reserved_cost_usd: 4.0, actual_cost_usd: null }];
+  {
+    // The shape 0050's claim resumes: running, lease expired, attempts left.
+    // Before this correction the gate saw no queued job and allowed a start
+    // that could spend this job's whole $2 cap past the ceiling.
+    const { client } = ledger(nearCeiling,
+      [{ protocol_id: "r1", status: "running", lease_expires_at: expiredLease, attempt_count: 1, max_attempts: 3 }],
+      [{ id: "r1", spend_cap_usd: 2 }]);
+    const r = await evaluatePaidExecution({ client, now: () => NOW, env: ON });
+    check("an expired-lease running job with attempts left is counted → refused at $4 + $2 > $5",
+      !r.ok && r.code === "spend_ceiling_reached", JSON.stringify(r));
+  }
+  {
+    const { client } = ledger(nearCeiling,
+      [{ protocol_id: "c1", status: "claimed", lease_expires_at: expiredLease, attempt_count: 0, max_attempts: 1 }],
+      [{ id: "c1", spend_cap_usd: 2 }]);
+    const r = await evaluatePaidExecution({ client, now: () => NOW, env: ON });
+    check("an expired-lease claimed job is counted the same way", !r.ok && r.code === "spend_ceiling_reached", JSON.stringify(r));
+  }
+  {
+    const { client } = ledger(nearCeiling,
+      [{ protocol_id: "c2", status: "claimed", lease_expires_at: liveLease, attempt_count: 1, max_attempts: 3 }],
+      [{ id: "c2", spend_cap_usd: 2 }]);
+    const r = await evaluatePaidExecution({ client, now: () => NOW, env: ON });
+    check("a live-lease job with attempts left is also counted, so clock skew cannot undercount",
+      !r.ok && r.code === "spend_ceiling_reached", JSON.stringify(r));
+  }
+  {
+    const { client } = ledger(nearCeiling,
+      [{ protocol_id: "x1", status: "running", lease_expires_at: expiredLease, attempt_count: 3, max_attempts: 3 }],
+      [{ id: "x1", spend_cap_usd: 2 }]);
+    const r = await evaluatePaidExecution({ client, now: () => NOW, env: ON });
+    check("an exhausted job (no attempts left) is not counted — the claim abandons it",
+      r.ok && r.nextJobCapUsd === 0, JSON.stringify(r));
+  }
+  {
+    const { client } = ledger([],
+      [{ protocol_id: "q1", status: "queued" },
+       { protocol_id: "r2", status: "running", lease_expires_at: expiredLease, attempt_count: 1, max_attempts: 2 }],
+      [{ id: "q1", spend_cap_usd: 0.25 }, { id: "r2", spend_cap_usd: 2 }]);
+    const r = await evaluatePaidExecution({ client, now: () => NOW, env: ON });
+    check("with queued and resumable jobs together, the largest cap of either counts", r.ok && r.nextJobCapUsd === 2,
+      JSON.stringify(r));
+  }
+  for (const [label, job] of [
+    ["missing attempt counts", { protocol_id: "b1", status: "running", lease_expires_at: expiredLease }],
+    ["non-integer attempt counts", { protocol_id: "b2", status: "claimed", lease_expires_at: expiredLease, attempt_count: "1", max_attempts: 3 }],
+  ] as const) {
+    const { client } = ledger([], [job], [{ id: job.protocol_id, spend_cap_usd: 0.25 }]);
+    const r = await evaluatePaidExecution({ client, now: () => NOW, env: ON });
+    check(`a claimed/running job with ${label} → refused as unavailable`,
+      !r.ok && r.code === "spend_ledger_unavailable", JSON.stringify(r));
+  }
+  {
+    const { client } = ledger([],
+      [{ protocol_id: "r3", status: "running", lease_expires_at: expiredLease, attempt_count: 1, max_attempts: 2 }], []);
+    const r = await evaluatePaidExecution({ client, now: () => NOW, env: ON });
+    check("a resumable job whose protocol cannot be read → refused as unavailable",
+      !r.ok && r.code === "spend_ledger_unavailable", JSON.stringify(r));
+  }
+  console.log("\n[2c] Unreadable spend records refuse");
+  for (const [label, row] of [
+    ["a non-numeric actual cost with no reservation", { created_at: recent, reserved_cost_usd: null, actual_cost_usd: "abc" }],
+    ["a negative actual cost with no reservation", { created_at: recent, reserved_cost_usd: null, actual_cost_usd: -1 }],
+    ["a non-finite reservation", { created_at: recent, reserved_cost_usd: "Infinity", actual_cost_usd: null }],
+  ] as const) {
+    const { client } = ledger([row]);
+    const r = await evaluatePaidExecution({ client, now: () => NOW, env: ON });
+    check(`${label} → refused as unavailable`, !r.ok && r.code === "spend_ledger_unavailable", JSON.stringify(r));
+  }
+
   /* ═══════ 3. the gate in front of Fly, and the kill switch ═══════ */
   console.log("\n[3] Starts go through the gate; the kill switch stops them");
   Object.assign(process.env, {
@@ -265,6 +342,30 @@ async function main(): Promise<void> {
       evaluatePaidExecution({ client, now: () => NOW, env: ON })));
     check("concurrent decisions over one ledger agree",
       new Set(decisions.map((d) => JSON.stringify(d))).size === 1);
+  }
+  {
+    // The case the correction exists for, under concurrency: nothing queued,
+    // one resumable job whose cap would cross the ceiling. Every one of the
+    // simultaneous starts must refuse, and Fly must never be contacted.
+    const { client } = ledger([{ created_at: recent, reserved_cost_usd: 4.0, actual_cost_usd: null }],
+      [{ protocol_id: "r1", status: "running", lease_expires_at: "2026-10-28T11:00:00.000Z", attempt_count: 1, max_attempts: 3 }],
+      [{ id: "r1", spend_cap_usd: 2 }]);
+    __setPaidExecutionGateForTests(() => evaluatePaidExecution({ client, now: () => NOW, env: ON }));
+    machineStarted = false; flyCalls = 0;
+    const results = await Promise.all(Array.from({ length: 5 }, () => startWorkerMachine()));
+    check("five simultaneous starts against a resumable job over the ceiling all refuse",
+      results.every((r) => !r.ok && r.code === "paid_execution_blocked"), JSON.stringify(results));
+    check("and none of them contacts Fly", flyCalls === 0, String(flyCalls));
+  }
+  {
+    const { client } = ledger([],
+      [{ protocol_id: "r1", status: "running", lease_expires_at: "2026-10-28T11:00:00.000Z", attempt_count: 1, max_attempts: 3 }],
+      [{ id: "r1", spend_cap_usd: 2 }]);
+    __setPaidExecutionGateForTests(() => evaluatePaidExecution({ client, now: () => NOW, env: ON }));
+    machineStarted = false; flyCalls = 0;
+    const results = await Promise.all(Array.from({ length: 5 }, () => startWorkerMachine()));
+    check("under the ceiling, simultaneous starts to resume a job still give exactly one fresh start",
+      results.filter((r) => r.ok && !r.alreadyRunning).length === 1, JSON.stringify(results));
   }
   __setPaidExecutionGateForTests(null);
   globalThis.fetch = realFetch;

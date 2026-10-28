@@ -14,7 +14,19 @@
  * ceiling above the hard maximum, an unreadable or truncated ledger — is a
  * refusal. Missing configuration never enables spending.
  *
- * Why "largest queued cap" and not a sum: the worker runs as one machine
+ * Which jobs count: every job the worker could claim on this start. Its
+ * claim (0050, and 0054's identical predicate) takes a `queued` job, or a
+ * `claimed`/`running` one whose lease has expired with attempts left — a
+ * crashed job being resumed. 0059's targeted claim takes only `queued`
+ * jobs, a subset. The gate counts `queued` jobs and every `claimed`/
+ * `running` job with attempts left, lease expired OR NOT: the claim
+ * compares against the database clock and this gate against the web
+ * server's, so mirroring "expired" exactly could undercount at the
+ * boundary. The only extra jobs counted are ones that become claimable the
+ * moment their lease runs out. A job with no attempts left is not counted;
+ * the claim abandons it instead of running it.
+ *
+ * Why "largest claimable cap" and not a sum: the worker runs as one machine
  * that claims one job per start and exits (D-034), and each job's spend is
  * bounded at every reservation by its protocol's `spend_cap_usd` in SQL
  * (0047/0050/0051). One start can therefore add at most one job's cap. A
@@ -90,7 +102,7 @@ export async function evaluatePaidExecution(deps: {
   });
 
   let calls: Record<string, unknown>[];
-  let queued: Record<string, unknown>[];
+  let claimableCaps: Record<string, unknown>[];
   try {
     const { data, error, count } = await deps.client
       .from("protocol_external_calls")
@@ -105,22 +117,33 @@ export async function evaluatePaidExecution(deps: {
 
     const jobs = await deps.client
       .from("protocol_execution_jobs")
-      .select("protocol_id")
-      .eq("status", "queued");
+      .select("protocol_id,status,attempt_count,max_attempts")
+      .in("status", ["queued", "claimed", "running"]);
     if (jobs.error || !Array.isArray(jobs.data)) return unavailable("The job queue could not be read.");
-    const protocolIds = Array.from(new Set(
-      (jobs.data as Record<string, unknown>[]).map((j) => String(j.protocol_id))
-    ));
-    queued = [];
+    const claimable: string[] = [];
+    for (const job of jobs.data as Record<string, unknown>[]) {
+      if (job.status === "queued") {
+        claimable.push(String(job.protocol_id));
+        continue;
+      }
+      const attempts = job.attempt_count;
+      const max = job.max_attempts;
+      if (!Number.isInteger(attempts) || !Number.isInteger(max)) {
+        return unavailable("A claimed job's attempt counts could not be read.");
+      }
+      if ((attempts as number) < (max as number)) claimable.push(String(job.protocol_id));
+    }
+    const protocolIds = Array.from(new Set(claimable));
+    claimableCaps = [];
     if (protocolIds.length > 0) {
       const caps = await deps.client
         .from("protocols")
         .select("id,spend_cap_usd")
         .in("id", protocolIds);
       if (caps.error || !Array.isArray(caps.data) || caps.data.length !== protocolIds.length) {
-        return unavailable("A queued job's spend cap could not be read.");
+        return unavailable("A claimable job's spend cap could not be read.");
       }
-      queued = caps.data as Record<string, unknown>[];
+      claimableCaps = caps.data as Record<string, unknown>[];
     }
   } catch {
     return unavailable("The spend ledger could not be read.");
@@ -136,9 +159,9 @@ export async function evaluatePaidExecution(deps: {
   }
 
   let nextJobCap = 0;
-  for (const row of queued) {
+  for (const row of claimableCaps) {
     const cap = money(row.spend_cap_usd);
-    if (cap === null) return unavailable("A queued job's spend cap is not a usable number.");
+    if (cap === null) return unavailable("A claimable job's spend cap is not a usable number.");
     nextJobCap = Math.max(nextJobCap, cap);
   }
 

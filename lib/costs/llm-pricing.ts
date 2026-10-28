@@ -61,8 +61,8 @@ function isTokenCount(value: unknown): value is number {
 /**
  * The token counts a provider reported, or null when they are absent or not
  * clean non-negative integers. Anthropic's cache-creation and cache-read
- * input tokens are added to input, consistent with charging all input at the
- * full rate.
+ * input tokens are added to input; NOT conservative for cache writes, which
+ * Anthropic bills above the base input rate — price them before listing a model.
  */
 export function tokenUsageFromProviderJson(
   provider: "openai" | "anthropic",

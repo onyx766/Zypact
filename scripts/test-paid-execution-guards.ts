@@ -557,6 +557,9 @@ async function main(): Promise<void> {
 
     const perplexity = entries.filter((e) => reaches(e, sink("lib/probes/perplexity.ts"))).map(rel);
     check("no web entry point reaches the Perplexity probe directly", perplexity.length === 0, perplexity.join(", "));
+    // PR #4 — the Agent API adapter is a paid call too.
+    const agent = entries.filter((e) => reaches(e, sink("lib/probes/perplexity-agent.ts"))).map(rel);
+    check("no web entry point reaches the Perplexity Agent API adapter", agent.length === 0, agent.join(", "));
 
     const fly = entries.filter((e) => reaches(e, sink("lib/worker-control/fly-machine.ts"))).map(rel).sort();
     const expectedFly = [

@@ -51,7 +51,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { sha256Hex } from "@/lib/evidence/hash";
-import { PERPLEXITY_SONAR_ENDPOINT } from "@/lib/probes/endpoints";
+import { PERPLEXITY_AGENT_ENDPOINT, PERPLEXITY_SONAR_ENDPOINT } from "@/lib/probes/endpoints";
 import { fingerprintRawResponseBody, UNREADABLE_FINGERPRINT } from "@/lib/reports/served-provider-comparability";
 
 export const MEASUREMENT_FINGERPRINT_VERSION = "mf-1";
@@ -65,6 +65,11 @@ const UNRECORDED = "unrecorded";
  */
 const ADAPTER_ENDPOINTS: Record<string, string> = {
   perplexity_sonar: PERPLEXITY_SONAR_ENDPOINT,
+  // PR #4. Still an adapter constant, not per-call evidence: the existing
+  // schema has nowhere to record the endpoint each call reached.
+  perplexity_agent: PERPLEXITY_AGENT_ENDPOINT,
+  // The legacy "perplexity" label is deliberately absent: its calls ran on
+  // Sonar, but nothing recorded which endpoint, so it stays unverifiable.
 };
 
 /** Keys sorted at every depth, so two equal configurations print identically. */

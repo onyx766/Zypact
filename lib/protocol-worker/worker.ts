@@ -40,6 +40,40 @@ import type {
   ProtocolAttempt,
 } from "@/lib/db/types";
 import type { IterationResult, WorkerDeps, WorkerOptions } from "@/lib/protocol-worker/types";
+import { agentOutputText, PERPLEXITY_AGENT_MODEL } from "@/lib/probes/perplexity-agent";
+import type { PerplexityProbeRunner } from "@/lib/protocol-worker/types";
+
+/**
+ * PR #4 — which adapter a protocol's provider calls, decided before any
+ * admission or reservation so a refusal spends nothing.
+ *
+ *   perplexity_sonar  the Sonar adapter, exactly as before
+ *   perplexity        legacy label for the same Sonar adapter. Production
+ *                     SQL has only ever written perplexity_sonar, but test
+ *                     fixtures and any pre-rename row use this; until PR #4
+ *                     the worker ran Sonar for EVERY provider value, so
+ *                     every call made under it went through Sonar.
+ *   perplexity_agent  the Agent API adapter, only when the worker was built
+ *                     with `runAgentProbe` (the production entry point is
+ *                     not) and only for the approved model
+ *   anything else     refused — a tightening: before PR #4 it ran Sonar
+ */
+export function probeRunnerForProtocol(
+  deps: Pick<WorkerDeps, "runProbe" | "runAgentProbe">,
+  protocol: { provider: string; modelConfig: Record<string, unknown> }
+): { ok: true; runProbe: PerplexityProbeRunner } | { ok: false; detail: string } {
+  if (protocol.provider === "perplexity_sonar" || protocol.provider === "perplexity") {
+    return { ok: true, runProbe: deps.runProbe };
+  }
+  if (protocol.provider === "perplexity_agent") {
+    if (!deps.runAgentProbe) return { ok: false, detail: "PROVIDER_ADAPTER_NOT_ENABLED" };
+    if (protocol.modelConfig?.model !== PERPLEXITY_AGENT_MODEL) {
+      return { ok: false, detail: "PROVIDER_MODEL_NOT_APPROVED" };
+    }
+    return { ok: true, runProbe: deps.runAgentProbe };
+  }
+  return { ok: false, detail: "UNKNOWN_PROVIDER" };
+}
 
 /**
  * D-026 replay — recovers Perplexity's answer from a stored raw response
@@ -53,6 +87,14 @@ export function answerFromRawResponseBody(raw: string | null): string | null {
     json = JSON.parse(raw);
   } catch {
     return null;
+  }
+  if (!json || typeof json !== "object") return null;
+  // PR #4 — an Agent API body (object "response"). Only a completed response
+  // carries an answer; incomplete, failed or cancelled ones yield none.
+  if ((json as { object?: unknown }).object === "response") {
+    if ((json as { status?: unknown }).status !== "completed") return null;
+    const text = agentOutputText((json as { output?: unknown }).output).trim();
+    return text.length === 0 ? null : text;
   }
   const choices = (json as { choices?: unknown }).choices;
   if (!Array.isArray(choices) || choices.length === 0) return null;
@@ -101,6 +143,11 @@ export function measuredCostUsdFromRawResponseBody(
   if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
     return null;
   }
+  // PR #4 — the Agent API states its currency ("USD" is the only value its
+  // schema allows). A different one is not a dollar amount: unknown, never
+  // a misread number. Sonar bodies carry no currency and are unaffected.
+  const currency = (cost as { currency?: unknown }).currency;
+  if (currency !== undefined && currency !== "USD") return null;
   return total;
 }
 
@@ -266,6 +313,13 @@ async function runOneSlot(
     return { outcome: "failed", jobId: f.jobId, detail: "MISSING_CONTEXT" };
   }
 
+  // PR #4 — refuse an unsupported or not-enabled provider before admission:
+  // nothing is reserved, nothing is sent.
+  const runner = probeRunnerForProtocol(deps, ctx.protocol);
+  if (!runner.ok) {
+    return { outcome: "failed", jobId: f.jobId, detail: runner.detail };
+  }
+
   // D-025 — the key must be exactly `${jobId}:baseline:${nextBaselineOrdinal}`
   // and the ordinal comes from the ledger, never from a local counter. The
   // literal `baseline` in the key names the job's slot counter
@@ -375,7 +429,7 @@ async function runOneSlot(
     }
     answer = answerFromRawResponseBody(now.perplexityReceipt.rawResponseBody);
   } else {
-    const r = await runProviderCall(deps, opts, f, now.perplexity, probeRunId, {
+    const r = await runProviderCall({ ...deps, runProbe: runner.runProbe }, opts, f, now.perplexity, probeRunId, {
       prompt,
       brandName: project.companyName ?? project.domain,
       domain: project.domain,

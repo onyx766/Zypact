@@ -40,6 +40,14 @@ export type RealFetch = typeof fetch;
 export interface WorkerDeps {
   db: DbAdapter;
   runProbe: PerplexityProbeRunner;
+  /**
+   * PR #4 — the Perplexity Agent API adapter, for protocols whose provider
+   * is `perplexity_agent`. Optional and NOT supplied by the production
+   * entry point (scripts/run-protocol-worker.ts): without it such a
+   * protocol is refused before admission. Supplying it is a separately
+   * authorized change.
+   */
+  runAgentProbe?: PerplexityProbeRunner;
   analysis: AnalysisTransport;
   realFetch: RealFetch;
   /** Wall clock, injected so tests are deterministic. */

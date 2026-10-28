@@ -401,6 +401,19 @@ export async function runPerplexityProbe(
   };
 }
 
+/**
+ * Shared with the Agent API adapter (perplexity-agent.ts) so both adapters
+ * normalise sources, build the analysis transcript and send the buyer
+ * question exactly the same way. No behaviour change here.
+ */
+export {
+  buildRawTranscript,
+  buildUserPrompt,
+  normalizeUrl,
+  sourceCitationsFromPerplexity,
+  uniqueStrings,
+};
+
 export const __perplexityProbeTestUtils = {
   classifySource,
   sourceCitationsFromPerplexity,

@@ -280,13 +280,23 @@ async function main(): Promise<void> {
       JSON.stringify(r));
   }
   {
+    // PR #4 registered the Agent adapter's endpoint (still a constant, not
+    // per-call evidence).
     const r = await compat({}, { agentShape: true, provider: "perplexity_agent" });
-    check("an Agent protocol (provider not yet registered — PR #4) → unverifiable, never compared",
-      r.status === "unverifiable", JSON.stringify(r));
+    check("a Sonar baseline vs an Agent retest → incompatible on provider, endpoint, request and response",
+      r.status === "incompatible" &&
+        ["protocol.provider", "endpoint", "probeRequest", "probeServed"].every((f) => r.differingFields.includes(f)),
+      JSON.stringify(r));
   }
   {
-    const r = await compat({ agentShape: true }, { agentShape: true });
-    check("two Agent-shaped phases measured alike are compatible with each other", r.status === "compatible", JSON.stringify(r));
+    const r = await compat({ agentShape: true, provider: "perplexity_agent" }, { agentShape: true, provider: "perplexity_agent" });
+    check("two Agent phases measured alike are compatible, with the endpoint caveat",
+      r.status === "compatible" && r.caveats.includes(ENDPOINT_NOT_RECORDED_CAVEAT), JSON.stringify(r));
+  }
+  {
+    const r = await compat({ provider: "perplexity" }, { provider: "perplexity" });
+    check("the legacy \"perplexity\" label has no recorded endpoint → unverifiable, never compared",
+      r.status === "unverifiable", JSON.stringify(r));
   }
 
   /* ═══════ 5. missing or unreadable metadata ═══════ */

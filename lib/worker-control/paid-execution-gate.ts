@@ -87,6 +87,31 @@ function money(value: unknown): number | null {
   return typeof n === "number" && Number.isFinite(n) && n >= 0 ? n : null;
 }
 
+/**
+ * What one ledger row counts toward the ceiling, by how its cost is known:
+ *
+ *   measured   the provider's own charge (Perplexity usage.cost) — counted
+ *   estimated  computed from token counts and a price list (PR #2) —
+ *              counted as the LARGER of the estimate and the reservation,
+ *              so an estimate can never make spend look smaller than the
+ *              reservation-based count it replaces
+ *   none       no actual cost yet (in flight, failed, unpriced) — the
+ *              reservation is counted
+ *
+ * Anything else — an unknown basis, or a basis without its cost — is null,
+ * and the gate refuses.
+ */
+export function countedCostUsd(row: Record<string, unknown>): number | null {
+  const reserved = money(row.reserved_cost_usd);
+  const basis = row.cost_basis ?? null;
+  if (basis === null) return row.actual_cost_usd === null || row.actual_cost_usd === undefined ? reserved : null;
+  const actual = money(row.actual_cost_usd);
+  if (actual === null) return null;
+  if (basis === "measured") return actual;
+  if (basis === "estimated") return reserved === null ? null : Math.max(actual, reserved);
+  return null;
+}
+
 export async function evaluatePaidExecution(deps: {
   client: SupabaseClient;
   now?: () => Date;
@@ -106,7 +131,7 @@ export async function evaluatePaidExecution(deps: {
   try {
     const { data, error, count } = await deps.client
       .from("protocol_external_calls")
-      .select("reserved_cost_usd,actual_cost_usd", { count: "exact" })
+      .select("reserved_cost_usd,actual_cost_usd,cost_basis", { count: "exact" })
       .gte("created_at", since)
       .limit(LEDGER_ROW_LIMIT);
     if (error || !Array.isArray(data)) return unavailable("The spend ledger could not be read.");
@@ -151,9 +176,7 @@ export async function evaluatePaidExecution(deps: {
 
   let spent = 0;
   for (const row of calls) {
-    const actual = money(row.actual_cost_usd);
-    const reserved = money(row.reserved_cost_usd);
-    const value = actual ?? reserved;
+    const value = countedCostUsd(row);
     if (value === null) return unavailable("A ledger row carries no usable cost.");
     spent += value;
   }

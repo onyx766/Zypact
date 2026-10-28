@@ -41,6 +41,7 @@
  */
 
 import { sha256Hex } from "@/lib/evidence/hash";
+import { tokenUsageFromProviderJson, type TokenUsage } from "@/lib/costs/llm-pricing";
 
 export type LlmProvider = "openai" | "anthropic" | "mock";
 
@@ -110,6 +111,12 @@ export interface CallModelResult {
    * them is exactly the signal this field exists to preserve.
    */
   modelReturned: string | null;
+  /**
+   * PR #2 — token counts the provider reported for this call, read from the
+   * response body's `usage`. Null when absent or malformed, and for mock.
+   * Optional so a result built without it means "unknown", never zero.
+   */
+  usage?: TokenUsage | null;
 }
 
 function resolveMockMode(): "on" | "off" | "auto" {
@@ -494,6 +501,7 @@ export async function executePreparedCallModelRequest(
     providerRequestId,
     httpStatus: res.status,
     modelReturned: extractReturnedModel(json),
+    usage: tokenUsageFromProviderJson(prepared.provider, json),
   };
 }
 
@@ -531,6 +539,8 @@ export async function callModel(input: CallModelInput): Promise<CallModelResult>
       // TK-R-1 — a mock never spoke to a provider, so no provider named a
       // model. Null, never the requested string echoed back.
       modelReturned: null,
+      // No provider, so no usage and no cost.
+      usage: null,
     };
   }
 

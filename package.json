@@ -115,6 +115,8 @@
     "test:pdf": "tsx scripts/test-pdf-render.ts",
     "test:worker-start": "tsx scripts/test-worker-start-control.ts",
     "test:paid-execution-guards": "tsx scripts/test-paid-execution-guards.ts",
+    "test:cost-recording": "tsx scripts/test-cost-recording.ts",
+    "test:m5-0083-schema": "tsx scripts/test-m5-0083-schema-contract.ts",
     "test:0080-report-ready": "tsx scripts/test-0080-report-ready-contract.ts",
     "test:report-pass": "tsx scripts/test-report-pass.ts",
     "test:0081-founder-audits": "tsx scripts/test-0081-founder-created-audits.ts",

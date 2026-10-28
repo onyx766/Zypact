@@ -158,7 +158,8 @@ async function main(): Promise<void> {
   {
     const { client } = ledger(
       [
-        { created_at: recent, reserved_cost_usd: 0.05, actual_cost_usd: 0.004 },
+        // 0050 pairs actual cost with its basis; a Perplexity receipt is `measured`.
+        { created_at: recent, reserved_cost_usd: 0.05, actual_cost_usd: 0.004, cost_basis: "measured" },
         { created_at: recent, reserved_cost_usd: 0.05, actual_cost_usd: null },
         { created_at: old, reserved_cost_usd: 100, actual_cost_usd: 100 },
       ],
@@ -266,6 +267,10 @@ async function main(): Promise<void> {
     ["a non-numeric actual cost with no reservation", { created_at: recent, reserved_cost_usd: null, actual_cost_usd: "abc" }],
     ["a negative actual cost with no reservation", { created_at: recent, reserved_cost_usd: null, actual_cost_usd: -1 }],
     ["a non-finite reservation", { created_at: recent, reserved_cost_usd: "Infinity", actual_cost_usd: null }],
+    ["an actual cost with no basis (impossible under 0050's pair check)", { created_at: recent, reserved_cost_usd: 0.02, actual_cost_usd: 0.01, cost_basis: null }],
+    ["a basis with no actual cost", { created_at: recent, reserved_cost_usd: 0.02, actual_cost_usd: null, cost_basis: "estimated" }],
+    ["an unknown cost basis", { created_at: recent, reserved_cost_usd: 0.02, actual_cost_usd: 0.01, cost_basis: "guessed" }],
+    ["an estimated cost with no reservation", { created_at: recent, reserved_cost_usd: null, actual_cost_usd: 0.01, cost_basis: "estimated" }],
   ] as const) {
     const { client } = ledger([row]);
     const r = await evaluatePaidExecution({ client, now: () => NOW, env: ON });

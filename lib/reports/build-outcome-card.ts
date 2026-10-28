@@ -50,6 +50,12 @@ export interface BuildOutcomeCardInput {
    */
   measurementCompatibility: MeasurementCompatibility;
   /**
+   * PR #3 — each phase protocol's buyer_question_version_id. Required: a
+   * different question can never yield a directional comparison, whatever
+   * deviation is recorded.
+   */
+  questionVersionIds: { baseline: string; retest: string };
+  /**
    * 0075's `protocols.detectable_change_at_plan` from the BASELINE row.
    * Informational only. Null for a baseline approved before 0075 existed.
    */
@@ -80,9 +86,13 @@ function phaseOf(report: ProtocolReportPayload): OutcomeCardPhase {
  * describes — "sonar" vs "sonar-pro" — without widening
  * `ProtocolReportProtocol` for a comparison this is the only caller of.
  */
-function identityOf(report: ProtocolReportPayload): ComparisonProtocolIdentity {
+function identityOf(report: ProtocolReportPayload, questionVersionId: string): ComparisonProtocolIdentity {
   return {
-    questionVersionId: report.question.hash,
+    // The real buyer_question_versions id, supplied by the caller from the
+    // protocol row; the payload carries only the text's hash, which is
+    // compared alongside it (compare-protocols.ts sameQuestion).
+    questionVersionId,
+    questionHash: report.question.hash,
     provider: report.protocol.provider,
     surface: report.protocol.surface,
     modelConfig: { model: report.protocol.model },
@@ -186,8 +196,8 @@ export function buildOutcomeCard(input: BuildOutcomeCardInput): OutcomeCardPaylo
       denominator: retestPhase.denominator,
       plannedRuns: retestPhase.plannedRuns,
     },
-    baselineIdentity: identityOf(input.baseline),
-    retestIdentity: identityOf(input.retest),
+    baselineIdentity: identityOf(input.baseline, input.questionVersionIds.baseline),
+    retestIdentity: identityOf(input.retest, input.questionVersionIds.retest),
     recordedDeviationNote: input.intervention.protocolDeviations,
     minimumUsefulChange: input.minimumUsefulChange,
     measurementCompatibility: input.measurementCompatibility,

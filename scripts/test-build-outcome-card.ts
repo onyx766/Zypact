@@ -36,6 +36,7 @@ import {
   type OutcomeCardIntervention,
 } from "@/lib/reports/outcome-card-types";
 import { renderOutcomeCardMarkdown } from "@/lib/reports/render-outcome-card-markdown";
+import type { MeasurementCompatibility } from "@/lib/reports/measurement-fingerprint";
 
 let checks = 0;
 let failures = 0;
@@ -154,7 +155,8 @@ const INTERVENTION: OutcomeCardIntervention = {
 };
 
 /** These scenarios are about the comparison itself; both phases measured alike. */
-const COMPATIBLE = { status: "compatible", version: "mf-1" } as const;
+const COMPATIBLE: MeasurementCompatibility = { status: "compatible", version: "mf-1", caveats: [] };
+const SAME_QUESTION = { baseline: "qv-1", retest: "qv-1" };
 
 function card(over: Partial<BuildOutcomeCardInput> = {}) {
   const baseline = over.baseline ?? phaseReport({ protocolId: "baseline-1", presentCount: 0, totalRuns: 5 });
@@ -166,7 +168,7 @@ function card(over: Partial<BuildOutcomeCardInput> = {}) {
     intervention: INTERVENTION,
     minimumUsefulChange: 0.6,
     detectableChangeAtPlan: 0.6,
-    measurementCompatibility: COMPATIBLE,
+    measurementCompatibility: COMPATIBLE, questionVersionIds: SAME_QUESTION,
     now: NOW,
     ...over,
   });
@@ -200,7 +202,7 @@ async function main(): Promise<void> {
       baseline,
       retest,
       intervention: INTERVENTION,
-      measurementCompatibility: COMPATIBLE,
+      measurementCompatibility: COMPATIBLE, questionVersionIds: SAME_QUESTION,
       minimumUsefulChange: 0.6,
       now: NOW,
     });
@@ -250,7 +252,7 @@ async function main(): Promise<void> {
       baseline,
       retest,
       intervention: INTERVENTION,
-      measurementCompatibility: COMPATIBLE,
+      measurementCompatibility: COMPATIBLE, questionVersionIds: SAME_QUESTION,
       minimumUsefulChange: 0.6,
       now: NOW,
     });
@@ -299,7 +301,7 @@ async function main(): Promise<void> {
       // Isolates the requested-model_config branch. A real model change
       // would also make the measurement incompatible, which is inconclusive
       // even when disclosed — see scripts/test-measurement-compatibility.ts.
-      measurementCompatibility: COMPATIBLE,
+      measurementCompatibility: COMPATIBLE, questionVersionIds: SAME_QUESTION,
     });
     check("undisclosed model drift is inconclusive", undisclosed.comparison.status === "inconclusive");
     check("the reason names the mismatch",
@@ -308,7 +310,7 @@ async function main(): Promise<void> {
     const disclosed = buildOutcomeCard({
       projectId: "proj-1", baseline, retest,
       intervention: { ...INTERVENTION, protocolDeviations: "Perplexity changed its default Sonar model between phases." },
-      minimumUsefulChange: 0.6, now: NOW, measurementCompatibility: COMPATIBLE,
+      minimumUsefulChange: 0.6, now: NOW, measurementCompatibility: COMPATIBLE, questionVersionIds: SAME_QUESTION,
     });
     check("disclosed model drift proceeds to a real status", disclosed.comparison.status === "increase_observed");
     const md = renderOutcomeCardMarkdown(disclosed);

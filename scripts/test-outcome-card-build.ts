@@ -178,6 +178,8 @@ function world(opts: {
   baselineResponseIdPrefix?: string;
   retestDropReceiptOn?: number;
   retestStatus?: string;
+  /** A retest protocol that points at a different buyer question version. */
+  retestQuestionVersionId?: string;
 } = {}) {
   const b = runs(BASE, "baseline", opts.basePresent ?? 1, { responseIdPrefix: opts.baselineResponseIdPrefix });
   const r = runs(RETEST, "retest", opts.retestPresent ?? 5, {
@@ -204,6 +206,7 @@ function world(opts: {
   const protocols: Row[] = opts.baselineMissing ? [] : [baseline];
   if (!opts.noLiveRetest) {
     const retest = protocolRow(RETEST, BASE, opts.retestStatus ?? "completed");
+    if (opts.retestQuestionVersionId) retest.buyer_question_version_id = opts.retestQuestionVersionId;
     if (opts.retestWithoutMinimumUsefulChange) retest.minimum_useful_change = null;
     if (opts.retestProjectId) retest.project_id = opts.retestProjectId;
     protocols.push(retest);
@@ -222,7 +225,12 @@ function world(opts: {
     buyer_question_versions: [{
       id: BQV, prompt_text: "Which SOC 2 tool?", prompt_hash: HASH, version_number: 1, intent_type: "shortlist",
       provenance: "customer_supplied", approved_at: "2026-09-01T00:00:00Z",
-    }],
+    }, ...(opts.retestQuestionVersionId ? [{
+      // Same text and hash, different version row: only the version id
+      // differs, which is exactly what a deviation note must not explain.
+      id: opts.retestQuestionVersionId, prompt_text: "Which SOC 2 tool?", prompt_hash: HASH, version_number: 2,
+      intent_type: "shortlist", provenance: "customer_supplied", approved_at: "2026-09-20T00:00:00Z",
+    }] : [])],
     snapshot_requests: opts.standaloneBaseline ? [] : [{
       id: "req-1", company_name: "Fixture Co", website_url: "https://fixture.example",
       normalized_domain: "fixture.example", project_id: opts.requestProjectId ?? PROJECT, protocol_id: BASE,
@@ -467,6 +475,32 @@ async function main(): Promise<void> {
     check("a counted retest attempt with no provider receipt holds the card for review",
       r.integrityStatus === "needs_review" && r.integrityReasons.some((x) => x.startsWith("Measurement:")),
       `${r.integrityStatus}: ${r.integrityReasons.join(" | ")}`);
+  }
+
+  console.log("\n[9] A retest of a different buyer question never yields a direction");
+  {
+    const { client, calls } = world({
+      baselineStatus: "approved", retestStatus: "approved", basePresent: 0, retestPresent: 5,
+      retestQuestionVersionId: "88888888-8888-4888-8888-888888888888",
+    });
+    await processOutcomeCard(IV, deps(client));
+    const payload = saved(calls)?.p_payload as Record<string, any> | undefined;
+    check("0/5 → 5/5 with a different question version is inconclusive",
+      payload?.comparison?.status === "inconclusive", String(payload?.comparison?.status));
+    check("with BUYER_QUESTION_MISMATCH recorded",
+      (payload?.comparison?.reasons ?? []).includes("BUYER_QUESTION_MISMATCH"), JSON.stringify(payload?.comparison?.reasons));
+  }
+  {
+    const { client, calls } = world({ baselineStatus: "approved", retestStatus: "approved", basePresent: 0, retestPresent: 5 });
+    await processOutcomeCard(IV, deps(client));
+    const payload = saved(calls)?.p_payload as Record<string, any> | undefined;
+    check("the same question, measured alike, still compares: 0/5 → 5/5 is an increase",
+      payload?.comparison?.status === "increase_observed", String(payload?.comparison?.status));
+    check("and the endpoint caveat is recorded on that comparison",
+      (payload?.comparison?.reasons ?? []).some((x: string) => x.startsWith("MEASUREMENT_CAVEAT: endpoint not recorded per call")),
+      JSON.stringify(payload?.comparison?.reasons));
+    check("and shown to the reader in the card's uncertainty notes",
+      JSON.stringify(payload?.uncertainty ?? []).includes("endpoint not recorded per call"), JSON.stringify(payload?.uncertainty));
   }
 
   console.log(`\n${passed}/${passed + failed} checks passed.${failed ? ` ${failed} FAILED.` : ""}\n`);

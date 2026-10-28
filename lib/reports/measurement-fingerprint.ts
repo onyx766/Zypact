@@ -23,12 +23,25 @@
  *   probeRequest     the exact request body as sent, with the question
  *                    text removed and every other parameter kept
  *                                                       (external_call_requests)
- *   probeServed      served model, response-id format, object type, and
- *                    whether search results came back   (provider_call_receipts)
+ *   probeServed      served model, response-id format and object type
+ *                                                       (provider_call_receipts)
  *   analysisRequest  the exact analysis request, user content removed,
  *                    system instructions kept as a hash (external_call_requests)
  *   analysisServed   the analysis model the provider says it served
  *                                                       (analysis_call_receipts)
+ *
+ * Not part of the fingerprint, by design:
+ *
+ *   search results   whether a run's response carried search results is an
+ *                    OBSERVATION of that run, not configuration: identical
+ *                    requests to the same served model may or may not
+ *                    search. It is counted per phase and returned as
+ *                    evidence, never used to decide compatibility.
+ *   endpoint         never recorded per call. The adapter constant is used
+ *                    to know WHICH endpoint a provider implies, but it is
+ *                    not historical evidence of what each call reached, so
+ *                    a compatible verdict that rests on it says so in a
+ *                    caveat instead of counting it as a verified match.
  *
  * Nothing is inferred to fill a gap. A field that was never recorded is
  * `unrecorded`, and any attempt with an unrecorded or unreadable field makes
@@ -125,27 +138,46 @@ export function searchResultsPresence(rawBody: unknown): "present" | "absent" | 
 export interface MeasurementFingerprint {
   version: string;
   protocol: Record<string, string>;
-  endpoint: { value: string; provenance: "adapter_constant" | "unrecorded" };
+  /** "recorded" is reserved for per-call endpoint evidence (PR #4); nothing writes it yet. */
+  endpoint: { value: string; provenance: "recorded" | "adapter_constant" | "unrecorded" };
   probeRequest: string;
   probeServed: string;
   analysisRequest: string;
   analysisServed: string;
 }
 
+/** Per-phase observations kept as evidence; they never decide compatibility. */
+export interface PhaseObservations {
+  searchResultsPresent: number;
+  searchResultsAbsent: number;
+}
+
 export type PhaseMeasurement =
-  | { status: "consistent"; fingerprint: MeasurementFingerprint; attempts: number }
+  | { status: "consistent"; fingerprint: MeasurementFingerprint; attempts: number; observations: PhaseObservations }
   | { status: "unverifiable"; reason: string };
 
-export type MeasurementCompatibility =
-  | { status: "compatible"; version: string }
-  | { status: "incompatible"; version: string; differingFields: string[]; detail: string }
-  | { status: "unverifiable"; version: string; detail: string };
+export interface CompatibilityObservations {
+  baseline: PhaseObservations | null;
+  retest: PhaseObservations | null;
+}
 
-/** Every leaf of the fingerprint, as "path=value" pairs, for comparison and for naming differences. */
+export type MeasurementCompatibility =
+  | { status: "compatible"; version: string; caveats: string[]; observations?: CompatibilityObservations }
+  | { status: "incompatible"; version: string; differingFields: string[]; detail: string; observations?: CompatibilityObservations }
+  | { status: "unverifiable"; version: string; detail: string; observations?: CompatibilityObservations };
+
+/** Stated whenever a compatible verdict rests on the adapter constant for the endpoint. */
+export const ENDPOINT_NOT_RECORDED_CAVEAT =
+  "endpoint not recorded per call; both phases are assumed to have used the adapter's endpoint, which the stored evidence cannot confirm";
+
+/**
+ * Every compared leaf of the fingerprint, as "path=value" pairs. The
+ * endpoint is not among them: it is handled on its own, because what is
+ * known about it is an assumption, not evidence (see the header).
+ */
 function leaves(fp: MeasurementFingerprint): Record<string, string> {
   const out: Record<string, string> = {
     version: fp.version,
-    endpoint: `${fp.endpoint.value} (${fp.endpoint.provenance})`,
     probeRequest: fp.probeRequest,
     probeServed: fp.probeServed,
     analysisRequest: fp.analysisRequest,
@@ -230,9 +262,14 @@ export async function readPhaseMeasurement(
         return results.map((r) => (r.data ?? []) as Record<string, unknown>[]);
       });
 
+  if (endpoint.provenance === "unrecorded") {
+    return fail(`no endpoint is known for provider ${protocol.provider}`);
+  }
+
   const bodyOf = new Map(requests.map((r) => [String(r.external_call_id), r.request_body]));
   const keys = new Set<string>();
   let first: MeasurementFingerprint | null = null;
+  const observations: PhaseObservations = { searchResultsPresent: 0, searchResultsAbsent: 0 };
 
   for (const attemptId of counted) {
     const own = callRows.filter((c) => String(c.protocol_attempt_id) === attemptId);
@@ -264,7 +301,7 @@ export async function readPhaseMeasurement(
       protocol,
       endpoint,
       probeRequest,
-      probeServed: `${served} search=${search}`,
+      probeServed: served,
       analysisRequest,
       analysisServed: str(analysisOk[0].model_returned),
     };
@@ -272,36 +309,55 @@ export async function readPhaseMeasurement(
     if (unrecorded) return fail(`a counted attempt has no recorded ${unrecorded}`);
     keys.add(canonicalJson(leaves(fp)));
     first ??= fp;
+    if (search === "present") observations.searchResultsPresent += 1;
+    else observations.searchResultsAbsent += 1;
   }
 
   if (keys.size !== 1 || !first) {
     return fail(`its ${counted.length} counted attempts were not all measured the same way`);
   }
-  return { status: "consistent", fingerprint: first, attempts: counted.length };
+  return { status: "consistent", fingerprint: first, attempts: counted.length, observations };
 }
 
-/** Compares two phases. Only two consistent, identical phases are compatible. */
+/**
+ * Compares two phases. Only two consistent phases with identical compared
+ * fingerprints and the same endpoint are compatible; an endpoint known only
+ * from the adapter constant is stated as a caveat. Search observations are
+ * returned alongside, whatever the verdict.
+ */
 export function evaluateMeasurementCompatibility(
   baseline: PhaseMeasurement,
   retest: PhaseMeasurement
 ): MeasurementCompatibility {
   const version = MEASUREMENT_FINGERPRINT_VERSION;
+  const observations: CompatibilityObservations = {
+    baseline: baseline.status === "consistent" ? baseline.observations : null,
+    retest: retest.status === "consistent" ? retest.observations : null,
+  };
   if (baseline.status !== "consistent" || retest.status !== "consistent") {
     const parts: string[] = [];
     if (baseline.status !== "consistent") parts.push(`baseline: ${baseline.reason}`);
     if (retest.status !== "consistent") parts.push(`retest: ${retest.reason}`);
-    return { status: "unverifiable", version, detail: `Measurement configuration could not be verified (${parts.join("; ")}).` };
+    return { status: "unverifiable", version, detail: `Measurement configuration could not be verified (${parts.join("; ")}).`, observations };
   }
   const a = leaves(baseline.fingerprint);
   const b = leaves(retest.fingerprint);
   const differing = Array.from(new Set([...Object.keys(a), ...Object.keys(b)]))
-    .filter((k) => a[k] !== b[k])
-    .sort();
-  if (differing.length === 0) return { status: "compatible", version };
-  return {
-    status: "incompatible",
-    version,
-    differingFields: differing,
-    detail: `The baseline and retest were not measured the same way (differs in: ${differing.join(", ")}).`,
-  };
+    .filter((k) => a[k] !== b[k]);
+  if (baseline.fingerprint.endpoint.value !== retest.fingerprint.endpoint.value) differing.push("endpoint");
+  differing.sort();
+  if (differing.length > 0) {
+    return {
+      status: "incompatible",
+      version,
+      differingFields: differing,
+      detail: `The baseline and retest were not measured the same way (differs in: ${differing.join(", ")}).`,
+      observations,
+    };
+  }
+  const caveats =
+    baseline.fingerprint.endpoint.provenance === "recorded" && retest.fingerprint.endpoint.provenance === "recorded"
+      ? []
+      : [ENDPOINT_NOT_RECORDED_CAVEAT];
+  return { status: "compatible", version, caveats, observations };
 }

@@ -289,6 +289,17 @@ export async function processOutcomeCard(
   ]);
   const measurementCompatibility = evaluateMeasurementCompatibility(baselineMeasurement, retestMeasurement);
 
+  // The real question version of each phase. An unreadable one is passed as
+  // empty, which compare-protocols treats as a different question.
+  const { data: versionRows, error: versionError } = await deps.client
+    .from("protocols")
+    .select("id,buyer_question_version_id")
+    .eq("project_id", interventionRow.project_id)
+    .in("id", [interventionRow.protocol_id, retestProtocolId]);
+  if (versionError) throw versionError;
+  const versionOf = (id: string) =>
+    String(((versionRows ?? []) as Record<string, unknown>[]).find((r) => r.id === id)?.buyer_question_version_id ?? "");
+
   const card = buildOutcomeCard({
     projectId: interventionRow.project_id,
     baseline: baselinePayload,
@@ -296,6 +307,10 @@ export async function processOutcomeCard(
     intervention: toInterventionSummary(interventionRow),
     minimumUsefulChange,
     measurementCompatibility,
+    questionVersionIds: {
+      baseline: versionOf(interventionRow.protocol_id),
+      retest: versionOf(retestProtocolId),
+    },
     detectableChangeAtPlan: retestProto?.detectable_change_at_plan ?? null,
     now: now(),
   });

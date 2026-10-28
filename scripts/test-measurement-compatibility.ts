@@ -25,6 +25,7 @@
 import fs from "node:fs";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
+  ENDPOINT_NOT_RECORDED_CAVEAT,
   MEASUREMENT_FINGERPRINT_VERSION,
   canonicalJson,
   evaluateMeasurementCompatibility,
@@ -205,6 +206,37 @@ async function main(): Promise<void> {
       p.status === "consistent" && p.fingerprint.endpoint.value === PERPLEXITY_ENDPOINT && p.fingerprint.endpoint.provenance === "adapter_constant");
   }
 
+  /* ═══════ 2b. search results are an observation, not configuration ═══════ */
+  console.log("\n[2b] Search-result presence is evidence, never a reason to call phases incomparable");
+  {
+    const r = await compat({}, { search: false });
+    check("identical configuration, retest returned no search results → still compatible", r.status === "compatible", JSON.stringify(r));
+    check("and the observation is kept for each phase",
+      r.observations?.baseline?.searchResultsPresent === 5 && r.observations?.retest?.searchResultsAbsent === 5,
+      JSON.stringify(r.observations));
+    // A phase whose runs differ ONLY in search presence is internally consistent.
+    const tables = phase("mix", {});
+    (tables.provider_call_receipts[1] as Row).raw_response_body = JSON.stringify({
+      id: "resp_2", object: "chat.completion", model: "sonar", choices: [{ message: { content: "answer" } }],
+    });
+    const db = fakeDb(tables);
+    const p = await readPhaseMeasurement(db.client, "mix", PROJECT);
+    check("a phase whose runs differ only in search presence is consistent", p.status === "consistent", JSON.stringify(p));
+    check("with the split recorded: 4 with results, 1 without",
+      p.status === "consistent" && p.observations.searchResultsPresent === 4 && p.observations.searchResultsAbsent === 1);
+  }
+
+  /* ═══════ 2c. the endpoint is an assumption, stated as one ═══════ */
+  console.log("\n[2c] A compatible verdict that rests on the adapter endpoint says so");
+  {
+    const r = await compat({}, {});
+    check("compatible, with the endpoint caveat",
+      r.status === "compatible" && r.caveats.includes(ENDPOINT_NOT_RECORDED_CAVEAT), JSON.stringify(r));
+    const inc = await compat({}, { temperature: 0 });
+    check("an unrelated difference does not report the endpoint as differing",
+      inc.status === "incompatible" && !inc.differingFields.includes("endpoint"), JSON.stringify(inc));
+  }
+
   /* ═══════ 3. incompatible ═══════ */
   console.log("\n[3] Any change in how a phase was measured is incompatible, and named");
   for (const [label, re, field] of [
@@ -213,7 +245,6 @@ async function main(): Promise<void> {
     ["temperature", { temperature: 0 }, "probeRequest"],
     ["output limit", { maxTokens: 2000 }, "probeRequest"],
     ["search mode", { searchMode: "academic" }, "probeRequest"],
-    ["search behaviour (no results returned)", { search: false }, "probeServed"],
     ["analysis model requested", { analysisModel: "gpt-4o-mini-2024-07-18" }, "analysisRequest"],
     ["analysis model served", { analysisServed: "gpt-4o-2024-11-20" }, "analysisServed"],
     ["analysis instructions", { analysisInstructions: "Analyse it differently." }, "analysisRequest"],
@@ -293,6 +324,38 @@ async function main(): Promise<void> {
   {
     const r = compareProtocols({ ...big, recordedDeviationNote: null });
     check("the pure engine without a verdict behaves exactly as before (the card always supplies one)", r.status === "increase_observed");
+  }
+  {
+    const r = compareProtocols({ ...big, recordedDeviationNote: null,
+      measurementCompatibility: { status: "compatible", caveats: [ENDPOINT_NOT_RECORDED_CAVEAT] } });
+    check("a compatible verdict with the endpoint caveat still compares directionally", r.status === "increase_observed", r.status);
+    check("and records the caveat as a reason the card shows",
+      r.reasons.some((x) => x.startsWith("MEASUREMENT_CAVEAT: endpoint not recorded per call")), r.reasons.join("|"));
+  }
+
+  /* ═══════ 6b. the buyer question must be the same ═══════ */
+  console.log("\n[6b] A different buyer question never yields a direction, deviation or not");
+  const ok = { status: "compatible" as const, caveats: [] };
+  for (const [label, re] of [
+    ["a different question version", { ...id, questionVersionId: "q-2" }],
+    ["the same version id but a different question text hash", { ...id, questionHash: "h-other" }],
+    ["a missing question version", { ...id, questionVersionId: "" }],
+  ] as const) {
+    const base = { ...id, questionHash: "h-1" };
+    const retestId = { questionHash: "h-1", ...re };
+    for (const note of [null, "The question was reworded after the baseline."]) {
+      const r = compareProtocols({ ...big, baselineIdentity: base, retestIdentity: retestId, recordedDeviationNote: note, measurementCompatibility: ok });
+      check(`${label}${note ? ", deviation disclosed" : ""} → inconclusive, BUYER_QUESTION_MISMATCH`,
+        r.status === "inconclusive" && r.reasons.includes("BUYER_QUESTION_MISMATCH") && r.delta === null, `${r.status} ${r.reasons}`);
+    }
+  }
+  {
+    const same = { ...id, questionHash: "h-1" };
+    const r = compareProtocols({ ...big, baselineIdentity: same, retestIdentity: same, recordedDeviationNote: null, measurementCompatibility: ok });
+    check("the same version and hash still compare", r.status === "increase_observed", r.status);
+    const card = fs.readFileSync("lib/reports/deliver-outcome-card.ts", "utf8");
+    check("the Outcome Card reads each phase's real buyer_question_version_id and passes both",
+      /select\("id,buyer_question_version_id"\)/.test(card) && /questionVersionIds: \{/.test(card));
   }
 
   /* ═══════ 7. scoping and read-only ═══════ */

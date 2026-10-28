@@ -31,11 +31,12 @@ export function fingerprintRawResponseBody(raw: unknown): string {
   } catch {
     return UNREADABLE_FINGERPRINT;
   }
-  if (!json || typeof json !== "object") return UNREADABLE_FINGERPRINT;
+  if (!json || typeof json !== "object" || Array.isArray(json)) return UNREADABLE_FINGERPRINT;
   const body = json as Record<string, unknown>;
-  const model = typeof body.model === "string" ? body.model : "none";
-  const id = typeof body.id === "string" ? body.id : "";
-  const idFormat = id === "" ? "none" : id.startsWith("resp_") ? "resp_" : "other";
-  const object = typeof body.object === "string" ? body.object : "none";
-  return `model=${model} id=${idFormat} object=${object}`;
+  // All three are required. A missing or empty one is unreadable, never a
+  // placeholder: two incomplete responses must not fingerprint as a match.
+  const present = (v: unknown): v is string => typeof v === "string" && v.trim() !== "";
+  if (!present(body.model) || !present(body.id) || !present(body.object)) return UNREADABLE_FINGERPRINT;
+  const idFormat = body.id.startsWith("resp_") ? "resp_" : "other";
+  return `model=${body.model} id=${idFormat} object=${body.object}`;
 }

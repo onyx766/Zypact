@@ -34,6 +34,7 @@ import {
   searchResultsPresence,
 } from "@/lib/reports/measurement-fingerprint";
 import { compareProtocols } from "@/lib/reports/compare-protocols";
+import { fingerprintRawResponseBody, UNREADABLE_FINGERPRINT } from "@/lib/reports/served-provider-comparability";
 import { PERPLEXITY_ENDPOINT } from "@/lib/probes/perplexity";
 
 let checks = 0;
@@ -73,6 +74,8 @@ interface PhaseShape {
   brokenResponseOn?: number;
   requestInOtherProjectOn?: number;
   attempts?: number;
+  /** Every run's stored provider response, verbatim (overrides the generated one). */
+  rawResponse?: string;
 }
 
 function phase(protocolId: string, shape: PhaseShape = {}) {
@@ -123,7 +126,7 @@ function phase(protocolId: string, shape: PhaseShape = {}) {
     if (shape.dropReceiptOn !== i) {
       t.provider_call_receipts.push({
         external_call_id: pc, project_id: PROJECT, outcome: "success",
-        raw_response_body: shape.brokenResponseOn === i ? "{not json" : JSON.stringify(response),
+        raw_response_body: shape.brokenResponseOn === i ? "{not json" : shape.rawResponse ?? JSON.stringify(response),
       });
       if (shape.duplicateReceiptOn === i) {
         t.provider_call_receipts.push({ external_call_id: pc, project_id: PROJECT, outcome: "success", raw_response_body: JSON.stringify(response) });
@@ -301,6 +304,45 @@ async function main(): Promise<void> {
   ] as const) {
     const r = await compat({}, re as PhaseShape);
     check(`${label} → unverifiable`, r.status === "unverifiable", JSON.stringify(r));
+  }
+
+  /* ═══════ 5b. incomplete served responses never match ═══════ */
+  console.log("\n[5b] A served response missing its model, id or object type is unverifiable");
+  const sonar = { id: "pplx-1", object: "chat.completion", model: "sonar", choices: [{ message: { content: "a" } }] };
+  const without = (key: string) => { const o: Record<string, unknown> = { ...sonar }; delete o[key]; return JSON.stringify(o); };
+  for (const [label, raw] of [
+    ["valid JSON missing the served model", without("model")],
+    ["missing the response id", without("id")],
+    ["missing the object type", without("object")],
+    ["an empty served model", JSON.stringify({ ...sonar, model: "" })],
+    ["a non-string served model", JSON.stringify({ ...sonar, model: 42 })],
+    ["an empty JSON object", "{}"],
+    ["an empty JSON array", "[]"],
+  ] as const) {
+    check(`fingerprint: ${label} → unreadable`, fingerprintRawResponseBody(raw) === UNREADABLE_FINGERPRINT,
+      fingerprintRawResponseBody(raw));
+    const { client } = fakeDb(phase("inc", { rawResponse: raw }));
+    const p = await readPhaseMeasurement(client, "inc", PROJECT);
+    check(`phase: ${label} → unverifiable`, p.status === "unverifiable", JSON.stringify(p));
+  }
+  for (const [label, raw] of [
+    ["both missing the served model", without("model")],
+    ["both missing the response id", without("id")],
+    ["both missing the object type", without("object")],
+    ["both an empty object", "{}"],
+  ] as const) {
+    const r = await compat({ rawResponse: raw }, { rawResponse: raw });
+    check(`two phases with identically incomplete responses (${label}) → unverifiable, never compatible`,
+      r.status === "unverifiable", JSON.stringify(r));
+  }
+  {
+    // Historical Sonar (before the 2026-09-27 reformulation): complete, with
+    // Sonar-style ids, in both phases.
+    const complete = JSON.stringify({ ...sonar, citations: ["https://x.example"], search_results: [{ url: "https://x.example" }] });
+    check("a complete historical Sonar response fingerprints normally",
+      fingerprintRawResponseBody(complete) === "model=sonar id=other object=chat.completion", fingerprintRawResponseBody(complete));
+    const r = await compat({ rawResponse: complete }, { rawResponse: complete });
+    check("two phases of complete historical Sonar responses remain compatible", r.status === "compatible", JSON.stringify(r));
   }
 
   /* ═══════ 6. the outcome rule ═══════ */

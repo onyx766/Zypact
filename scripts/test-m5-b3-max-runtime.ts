@@ -458,7 +458,7 @@ async function main(): Promise<void> {
     const mainAt = entry.indexOf("async function main()");
     const mainBody = entry.slice(mainAt);
     const exit78 = mainBody.indexOf("process.exit(78)");
-    const callLive = mainBody.indexOf("await runLive(plan.config)");
+    const callLive = mainBody.indexOf("await runLive(plan.config, build)");
     check("[B] dans main(), la sortie 78 précède l'appel à runLive",
       mainAt > 0 && exit78 > 0 && callLive > 0 && exit78 < callLive,
       `${exit78} < ${callLive}`);
@@ -849,7 +849,7 @@ async function main(): Promise<void> {
         entry.includes(`import("${m}")`)
         && !new RegExp(`^import [^;]*"${m.replace(/[/@]/g, "\\$&")}";`, "m").test(entry)));
     const disabledReturn = entry.indexOf('await runDisabled(');
-    const runLiveCall = entry.indexOf("await runLive(plan.config)");
+    const runLiveCall = entry.indexOf("await runLive(plan.config, build)");
     check("[L] le retour disabled précède toujours runLive",
       disabledReturn > 0 && runLiveCall > disabledReturn);
     check("[L] la variable n'est lue nulle part dans le point d'entrée: " +

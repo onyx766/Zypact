@@ -44,7 +44,11 @@
  * about the disabled path changes: the variable is never read there.
  */
 
+import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
+// PR-2 — pure, like execution-mode: it imports nothing, and its one file
+// read is the local provenance record, injected below.
+import { liveStartRefusal, readBuildProvenance, type BuildProvenance } from "@/lib/protocol-worker/build-provenance";
 import { resolveExecutionPlan, WorkerConfigError } from "@/lib/protocol-worker/execution-mode";
 // STATIC, and deliberately so. The ceiling has to be armed before the
 // first await, so the primitive that arms it cannot itself arrive through
@@ -108,11 +112,11 @@ function startHealthServer(
  * Perplexity, OpenAI or Anthropic credential, because it never reaches any
  * code that would read one.
  */
-async function runDisabled(healthPort: number, healthHost: HealthHost): Promise<void> {
-  log("worker_execution_disabled", { executionEnabled: false, healthPort, healthHost });
+async function runDisabled(healthPort: number, healthHost: HealthHost, build: BuildProvenance): Promise<void> {
+  log("worker_execution_disabled", { executionEnabled: false, healthPort, healthHost, ...build });
 
   const server = startHealthServer(healthPort, healthHost, () => ({
-    healthz: { ready: true, executionEnabled: false },
+    healthz: { ready: true, executionEnabled: false, ...build },
     readyz: { ready: true, executionEnabled: false },
     readyStatus: 200,
   }));
@@ -151,7 +155,7 @@ async function runDisabled(healthPort: number, healthHost: HealthHost): Promise<
  * imported here, after `resolveExecutionPlan` has already accepted the
  * configuration.
  */
-async function runLive(cfg: LiveWorkerConfig): Promise<void> {
+async function runLive(cfg: LiveWorkerConfig, build: BuildProvenance): Promise<void> {
   // ── T0 ────────────────────────────────────────────────────────────────
   // Every statement between this line and `startRuntimeBound` below is
   // synchronous and allocation-only: no await, no dynamic import, no
@@ -313,6 +317,7 @@ async function runLive(cfg: LiveWorkerConfig): Promise<void> {
         probeMode: deps.probeMode,
         maxRuntimeSeconds: cfg.maxRuntimeSeconds,
         executionEnabled: true,
+        ...build,
       });
 
       const healthRef = new WorkerHealth(deps.now);
@@ -321,7 +326,7 @@ async function runLive(cfg: LiveWorkerConfig): Promise<void> {
         return {
           // Closed scalars and one timestamp. No job id, no project id, no
           // claim token, no prompt, no body.
-          healthz: healthRef.snapshot(),
+          healthz: { ...healthRef.snapshot(), ...build },
           readyz: { ready },
           readyStatus: ready ? 200 : 503,
         };
@@ -393,11 +398,33 @@ async function main(): Promise<void> {
     throw err;
   }
 
+  // PR-2 — read once, synchronously, before either branch: closed values
+  // only (a status, a commit SHA, a digest), withheld when inconsistent.
+  const build = readBuildProvenance(process.env, (file) => {
+    try {
+      return readFileSync(file, "utf8");
+    } catch {
+      return null;
+    }
+  });
+
   if (plan.mode === "disabled") {
-    await runDisabled(plan.healthPort, plan.healthHost);
+    await runDisabled(plan.healthPort, plan.healthHost, build);
     return;
   }
-  await runLive(plan.config);
+  // PR-2 — live execution only from an image whose provenance is recorded.
+  // Refused here, before runLive: no runtime clock, no dynamic import, no
+  // database client, no provider transport, so nothing can be claimed,
+  // reserved or sent. The reason is a closed label; no value is printed.
+  const refusal = liveStartRefusal(build);
+  if (refusal !== null) {
+    console.error(JSON.stringify({
+      ts: new Date().toISOString(), level: "error",
+      event: "worker_provenance_refused", reason: refusal, provenance: build.provenance,
+    }));
+    process.exit(78); // EX_CONFIG
+  }
+  await runLive(plan.config, build);
 }
 
 main().catch((err) => {

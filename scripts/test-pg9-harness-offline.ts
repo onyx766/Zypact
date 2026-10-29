@@ -32,7 +32,14 @@
  *       factory approves independent baselines on distinct, approved
  *       versions; P12 copies the full identity chain and verifies it;
  *       errors are described in bounded, redacted form, never as
- *       "[object Object]".
+ *       "[object Object]";
+ *   [9] P12's dataset batches (0052: dataset_batch_id NOT NULL, UNIQUE,
+ *       FK (dataset_batch_id, project_id)): each copied job gets its own
+ *       new batch in the same project, verified for missing, shared and
+ *       cross-project references; psql failures report only the bounded,
+ *       redacted PostgreSQL ERROR line (never the command, SQL or DETAIL),
+ *       with a generic fallback, and P14's expected CHECK violations stay
+ *       detectable through psqlFails.
  */
 
 import { createHash } from "node:crypto";
@@ -42,7 +49,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describeError, runPg9Lifecycle, type LifecycleResult } from "./pg9-lifecycle";
-import { fixtureClaims, fixtureJobFactory } from "./test-pg9-paid-gate-runtime";
+import { fixtureClaims, fixtureJobFactory, psqlFailure, psqlRunner, type PsqlExec } from "./test-pg9-paid-gate-runtime";
 import type { DbAdapter } from "@/lib/db/types";
 import {
   PG9_API_ORIGIN,
@@ -651,17 +658,110 @@ async function main(): Promise<void> {
         && (stackSrc.match(/createBuyerQuestionVersion\(/g) ?? []).length === 1);
     check("the factory creates and approves a question version for every baseline",
       /const question = await db\.createBuyerQuestion\(\{ projectId: ids\.projectId \}\);[\s\S]{0,600}?approveBuyerQuestionVersion\(\{ versionId: version\.id[\s\S]{0,200}?buyerQuestionVersionId: version\.id/.test(stackSrc));
-    check("P12 copies the whole chain: questions, versions (re-pointed), protocols (re-pointed), jobs (re-pointed)",
+    check("P12 copies the whole chain: questions, versions (re-pointed), protocols (re-pointed), batches, jobs (re-pointed)",
       /insert into public\.buyer_questions/.test(stackSrc)
         && /'id', g\.vid, 'buyer_question_id', g\.qid/.test(stackSrc)
         && /'id', g\.pid, 'buyer_question_version_id', g\.vid/.test(stackSrc)
-        && /'id', g\.jid, 'protocol_id', g\.pid, 'dataset_batch_id', null, 'current_attempt_id', null/.test(stackSrc));
+        && /'id', g\.jid, 'protocol_id', g\.pid, 'dataset_batch_id', g\.bid, 'current_attempt_id', null/.test(stackSrc));
     check("P12 verifies row counts, the joined identity chain, distinct versions and > 1000 eligible jobs",
-      /inserted === "1000,1000,1000,1000"/.test(stackSrc) && /chain === "1001,1001,1001,1001,1001"/.test(stackSrc)
+      /inserted === "1000,1000,1000,1000,1000"/.test(stackSrc) && /chain === "1001,1001,1001,1001,1001,1001"/.test(stackSrc)
         && /lbCount >= 1001 && lbCount === lbDistinct/.test(stackSrc) && /live > 1000 && !d\.ok && d\.code === "spend_ledger_unavailable"/.test(stackSrc));
     check("both error sinks use describeError; no String(e) remains in them",
       /the cases threw: \$\{describeError\(e\)\}/.test(lifecycleSrc) && /PG-9 harness error: \$\{describeError\(e\)\}/.test(stackSrc)
         && !/the cases threw: \$\{e instanceof Error/.test(lifecycleSrc) && !/PG-9 harness error: \$\{e instanceof Error/.test(stackSrc));
+  }
+
+
+  /* ═══════ [9] P12 dataset batches (0052) and bounded psql failures ═══════ */
+  console.log("\n[9] P12 dataset-batch identities (0052) and bounded psql failures");
+  {
+    const CONTAINER = "supabase_db_zypact-pg9-test";
+    const SQL_MARKER = "SQL_TEXT_MARKER_should_never_be_reported";
+    const NOT_NULL = 'ERROR:  null value in column "dataset_batch_id" of relation "protocol_execution_jobs" violates not-null constraint';
+    const CHECK_VIOLATION = 'ERROR:  new row for relation "protocol_external_calls" violates check constraint "protocol_external_calls_cost_basis_check"';
+    /** An exec that fails the way execFileSync does: the message carries the whole command, SQL included. */
+    const failingExec = (stderr: unknown): PsqlExec => (cmd, args) => {
+      const err = new Error(`Command failed: ${cmd} ${args.join(" ")}\n${typeof stderr === "string" ? stderr : ""}`) as Error & { stderr?: unknown; status?: number };
+      err.stderr = stderr;
+      err.status = 1;
+      throw err;
+    };
+    const thrownMessage = (f: () => unknown) => { try { f(); return null; } catch (e) { return e instanceof Error ? e.message : `non-Error: ${String(e)}`; } };
+
+    // psql: what a failure says.
+    const m1 = thrownMessage(() => psqlRunner(CONTAINER, failingExec(`${NOT_NULL}\nDETAIL:  Failing row contains (4399ac5e-3c94-4ea9-b501-66b0b9b9e0e2, queued, null).\n`)).psql(`insert into x values (1) -- ${SQL_MARKER}`));
+    check("a psql failure reports exactly its PostgreSQL ERROR line, whitespace-normalised",
+      m1 === 'psql failed: ERROR: null value in column "dataset_batch_id" of relation "protocol_execution_jobs" violates not-null constraint', String(m1));
+    check("…and never the command, its arguments, the SQL text or the DETAIL row",
+      m1 !== null && !m1.includes(SQL_MARKER) && !m1.includes("docker") && !m1.includes(CONTAINER) && !m1.includes("-tAc") && !m1.includes("Failing row") && !m1.includes("4399ac5e"));
+    for (const [label, stderr] of [["no ERROR line", "psql: error: connection to server failed\n"], ["no stderr at all", undefined], ["an empty stderr", ""]] as const) {
+      const m = thrownMessage(() => psqlRunner(CONTAINER, failingExec(stderr)).psql(`select 1 -- ${SQL_MARKER}`));
+      check(`${label} → the generic safe fallback`, m === "psql failed: no PostgreSQL ERROR line could be extracted (see the database log)", String(m));
+    }
+    const huge = thrownMessage(() => psqlRunner(CONTAINER, failingExec(`ERROR:  ${"z".repeat(10_000)}\n`)).psql("select 1"));
+    check("an unbounded ERROR line is clipped", huge !== null && huge.length <= "psql failed: ".length + 201, String(huge?.length));
+    const jwt = `eyJhbGciOiJIUzI1NiJ9.${"a".repeat(24)}.${"b".repeat(24)}`;
+    const secret = thrownMessage(() => psqlRunner(CONTAINER, failingExec(`ERROR:  permission denied near ${jwt}\n`)).psql("select 1"));
+    check("a secret-shaped value in the ERROR line is redacted", secret !== null && secret.includes("[redacted]") && !secret.includes("eyJhbGci"), String(secret));
+    const buf = thrownMessage(() => psqlRunner(CONTAINER, failingExec(Buffer.from(`${NOT_NULL}\n`))).psql("select 1"));
+    check("a Buffer stderr is read the same way", buf !== null && buf.startsWith("psql failed: ERROR: null value in column"), String(buf));
+    const fatal = psqlFailure({ stderr: "FATAL:  terminating connection due to administrator command\n" });
+    check("FATAL is recognised as a PostgreSQL error line", fatal.errorLine === "FATAL: terminating connection due to administrator command", String(fatal.errorLine));
+
+    // psql: success, and the container scoping.
+    const calls: Array<{ cmd: string; args: string[] }> = [];
+    const ok = psqlRunner(CONTAINER, ((cmd, args) => { calls.push({ cmd, args }); return "  42\n"; }) as PsqlExec);
+    check("a successful statement returns trimmed stdout", ok.psql("select 42") === "42");
+    check("…run only as `docker exec -i <this run's container> psql -U postgres … -tAc <sql>`",
+      calls[0]?.cmd === "docker" && calls[0].args.slice(0, 3).join(" ") === `exec -i ${CONTAINER}` && calls[0].args.at(-2) === "-tAc" && calls[0].args.at(-1) === "select 42");
+
+    // psqlFails: P14's expected failures stay detectable, and safe.
+    const expected = psqlRunner(CONTAINER, failingExec(`${CHECK_VIOLATION}\nDETAIL:  Failing row contains (secret-row-value).\n`)).psqlFails(`update y set a = 'guessed' -- ${SQL_MARKER}`);
+    check("psqlFails: a CHECK violation is failed: true, and P14's /violates check constraint/ still matches",
+      expected.failed && /violates check constraint/.test(expected.stderr), expected.stderr);
+    check("psqlFails: its stderr is the single safe ERROR line (no DETAIL row, no SQL, no command)",
+      !expected.stderr.includes("\n") && !expected.stderr.includes("secret-row-value") && !expected.stderr.includes(SQL_MARKER) && !expected.stderr.includes("docker"));
+    check("psqlFails: P14's detail (first line) is that same safe line", expected.stderr.split("\n")[0] === expected.stderr);
+    const passes = psqlRunner(CONTAINER, (() => "") as PsqlExec).psqlFails("update y set a = 1");
+    check("psqlFails: a statement that succeeds is failed: false (so P14 records the missing constraint)", passes.failed === false && passes.stderr === "");
+    const unexplained = psqlRunner(CONTAINER, failingExec("psql: could not connect\n")).psqlFails("select 1");
+    check("psqlFails: a failure with no ERROR line cannot pass P14's check", unexplained.failed && !/violates check constraint/.test(unexplained.stderr));
+
+    // Focused schema contract: the 0052/0038 rules P12 must satisfy.
+    const m0052 = readFileSync("supabase/migrations/0052_m5_durable_call_payloads_and_probe_result_replay.sql", "utf8");
+    const m0038 = readFileSync("supabase/migrations/0038_m2_canonical_observations_schema.sql", "utf8");
+    check("0052: protocol_execution_jobs.dataset_batch_id is NOT NULL", /alter column dataset_batch_id set not null/.test(m0052));
+    check("0052: one batch per job (UNIQUE (dataset_batch_id))", /protocol_execution_jobs_dataset_batch_id_key unique \(dataset_batch_id\)/.test(m0052));
+    check("0052: the batch is project-scoped (FK (dataset_batch_id, project_id) → dataset_batches (id, project_id))",
+      /foreign key \(dataset_batch_id, project_id\)\s*references public\.dataset_batches \(id, project_id\)/.test(m0052));
+    check("0052: enqueue creates the template's batch as manual_scan in the job's project",
+      /insert into public\.dataset_batches \(project_id, dataset_source_type\)\s*values \(p_project_id, 'manual_scan'\)/.test(m0052));
+    check("0038: a non-snapshot batch must have no snapshot_request_id, and backfill_key is unique (nullable)",
+      /dataset_source_type <> 'snapshot_request' and snapshot_request_id is null/.test(m0038) && /unique \(backfill_key\)/.test(m0038)
+        && /backfill_key\s+text null/.test(m0038));
+
+    // P12's statement and assertions in the runtime script.
+    const stack9 = readFileSync("scripts/test-pg9-paid-gate-runtime.ts", "utf8");
+    const p12 = stack9.slice(stack9.indexOf("/* ═══ P12"), stack9.indexOf("/* ═══ P13"));
+    check("P12 reads the template job's own batch and refuses incomplete template identities",
+      /const tBatch = psql\(`select dataset_batch_id from public\.protocol_execution_jobs where id = '\$\{template\.id\}'`\);/.test(p12)
+        && /\[tVersion, tQuestion, tBatch\]\.every/.test(p12));
+    check("P12 generates a new batch id per copy", /gen_random_uuid\(\) as bid/.test(p12));
+    check("P12 copies the template batch with ONLY its id replaced (same project, same source type)",
+      /insert into public\.dataset_batches\s*select \(jsonb_populate_record\(null::public\.dataset_batches, to_jsonb\(t\) \|\| jsonb_build_object\('id', g\.bid\)\)\)\.\*/.test(p12)
+        && /from public\.dataset_batches t, g where t\.id = '\$\{tBatch\}'/.test(p12));
+    check("each job copy points at its own new batch; no null, shared or template batch",
+      /'id', g\.jid, 'protocol_id', g\.pid, 'dataset_batch_id', g\.bid, 'current_attempt_id', null/.test(p12)
+        && !/'dataset_batch_id', null/.test(p12) && !/'dataset_batch_id', '\$\{tBatch\}'/.test(p12));
+    check("P12 verifies five inserted counts, the six-way identity chain through the batch, and batch ownership",
+      /inserted === "1000,1000,1000,1000,1000"/.test(p12) && /chain === "1001,1001,1001,1001,1001,1001"/.test(p12)
+        && /join public\.dataset_batches db on db\.id = j\.dataset_batch_id and db\.project_id = j\.project_id/.test(p12)
+        && /batches === "1001,1001,0,0"/.test(p12)
+        && /count\(\*\) filter \(where db\.id is null\)/.test(p12) && /db\.project_id <> j\.project_id/.test(p12));
+    check("…and keeps the distinct-version and > 1000 eligible-job gate assertions",
+      /lbCount >= 1001 && lbCount === lbDistinct/.test(p12) && /live > 1000 && !d\.ok && d\.code === "spend_ledger_unavailable"/.test(p12));
+    check("runCases uses psqlRunner for this run's container; no other psql exec exists",
+      /const \{ psql, psqlFails \} = psqlRunner\(container\);/.test(stack9) && (stack9.match(/"exec", "-i", container,/g) ?? []).length === 1);
   }
 
   console.log(`\n${checks - failures}/${checks} checks passed.${failures ? ` ${failures} FAILED.` : ""}`);

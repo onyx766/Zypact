@@ -89,6 +89,59 @@ function serviceRoleKeyFrom(ctx: StackContext): string {
   throw new Error("supabase status did not report SERVICE_ROLE_KEY");
 }
 
+/* ─────────────────────────── psql, with bounded failures ─────────────────────────── */
+
+/** What `docker exec … psql` failed with, reduced to something safe to print. */
+export interface PsqlFailure {
+  /** The first `ERROR:`/`FATAL:`/`PANIC:` line of stderr, one line, bounded and redacted; null if none was found. */
+  errorLine: string | null;
+  /** What a thrown failure says: never the command, its arguments, the SQL or unbounded stderr. */
+  safeMessage: string;
+}
+
+const PSQL_NO_ERROR_LINE = "psql failed: no PostgreSQL ERROR line could be extracted (see the database log)";
+
+/**
+ * execFileSync's Error message begins with the whole command line, SQL
+ * included, so it is never used. Only stderr is read, and only its first
+ * PostgreSQL error line (`DETAIL:` and later lines can carry row values).
+ */
+export function psqlFailure(e: unknown): PsqlFailure {
+  const raw = (e as { stderr?: unknown } | null)?.stderr;
+  const stderr = typeof raw === "string" ? raw : Buffer.isBuffer(raw) ? raw.toString("utf8") : "";
+  const line = stderr.split(/\r?\n/).map((l) => l.trim()).find((l) => /^(ERROR|FATAL|PANIC):\s/.test(l)) ?? null;
+  if (line === null) return { errorLine: null, safeMessage: PSQL_NO_ERROR_LINE };
+  // describeError on a string redacts, flattens and clips (200).
+  const errorLine = describeError(line.replace(/\s+/g, " "));
+  return { errorLine, safeMessage: `psql failed: ${errorLine}` };
+}
+
+export type PsqlExec = (cmd: string, args: string[], opts: { encoding: "utf8"; stdio: ["ignore", "pipe", "pipe"] }) => string;
+
+/** psql against this run's own database container only. */
+export function psqlRunner(container: string, exec: PsqlExec = execFileSync as unknown as PsqlExec) {
+  const run = (sql: string): string =>
+    exec("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-tAc", sql],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const psql = (sql: string): string => {
+    try {
+      return run(sql);
+    } catch (e) {
+      throw new Error(psqlFailure(e).safeMessage);
+    }
+  };
+  /** For statements EXPECTED to fail (P14): `stderr` is the safe PostgreSQL error line, or "". */
+  const psqlFails = (sql: string): { failed: boolean; stderr: string } => {
+    try {
+      run(sql);
+      return { failed: false, stderr: "" };
+    } catch (e) {
+      return { failed: true, stderr: psqlFailure(e).errorLine ?? "" };
+    }
+  };
+  return { psql, psqlFails };
+}
+
 /* ─────────────────────────── fixture claim contract ─────────────────────────── */
 
 export interface FixtureJobOptions {
@@ -220,13 +273,7 @@ async function main(): Promise<void> {
 /** The cases, against the started stack. Recorded into `results`; never throws past a restore. */
 async function runCases(ctx: StackContext, guard: NetworkGuard): Promise<void> {
   const { container } = ctx;
-  const psql = (sql: string): string =>
-    execFileSync("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-tAc", sql],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-  const psqlFails = (sql: string): { failed: boolean; stderr: string } => {
-    try { psql(sql); return { failed: false, stderr: "" }; }
-    catch (e) { return { failed: true, stderr: String((e as { stderr?: unknown }).stderr ?? e) }; }
-  };
+  const { psql, psqlFails } = psqlRunner(container);
 
   process.env.NEXT_PUBLIC_SUPABASE_URL = PG9_API_ORIGIN;
   process.env.SUPABASE_SERVICE_ROLE_KEY = serviceRoleKeyFrom(ctx);
@@ -497,15 +544,19 @@ async function runCases(ctx: StackContext, guard: NetworkGuard): Promise<void> {
   await reset();
   {
     // 1000 copies of one complete baseline identity chain — question, approved
-    // version, approved protocol, queued job — each with new ids, in ONE
-    // statement (foreign keys are checked at its end). Every copy gets its own
-    // version, so protocols_one_live_baseline_per_version still holds.
-    // Disposable database only.
+    // version, approved protocol, dataset batch, queued job — each with new
+    // ids, in ONE statement (foreign keys are checked at its end). Every copy
+    // gets its own version (0073's one live baseline per version) and its own
+    // dataset batch in the same project (0052: dataset_batch_id NOT NULL,
+    // UNIQUE, FK (dataset_batch_id, project_id)). Disposable database only.
     const template = await makeJob(0.5);
     const tVersion = psql(`select buyer_question_version_id from public.protocols where id = '${template.protocolId}'`);
     const tQuestion = psql(`select buyer_question_id from public.buyer_question_versions where id = '${tVersion}'`);
+    const tBatch = psql(`select dataset_batch_id from public.protocol_execution_jobs where id = '${template.id}'`);
+    if (![tVersion, tQuestion, tBatch].every((x) => /^[0-9a-f-]{36}$/.test(x))) throw new Error("P12 template identities are incomplete");
     const inserted = psql(`with g as (
-            select gen_random_uuid() as qid, gen_random_uuid() as vid, gen_random_uuid() as pid, gen_random_uuid() as jid
+            select gen_random_uuid() as qid, gen_random_uuid() as vid, gen_random_uuid() as pid,
+                   gen_random_uuid() as bid, gen_random_uuid() as jid
               from generate_series(1, 1000)),
           q as (insert into public.buyer_questions
               select (jsonb_populate_record(null::public.buyer_questions, to_jsonb(t) || jsonb_build_object('id', g.qid))).*
@@ -521,23 +572,38 @@ async function runCases(ctx: StackContext, guard: NetworkGuard): Promise<void> {
                 'id', g.pid, 'buyer_question_version_id', g.vid))).*
               from public.protocols t, g where t.id = '${template.protocolId}'
             returning id),
+          b as (insert into public.dataset_batches
+              select (jsonb_populate_record(null::public.dataset_batches, to_jsonb(t) || jsonb_build_object('id', g.bid))).*
+              from public.dataset_batches t, g where t.id = '${tBatch}'
+            returning id),
           j as (insert into public.protocol_execution_jobs
               select (jsonb_populate_record(null::public.protocol_execution_jobs, to_jsonb(t) || jsonb_build_object(
-                'id', g.jid, 'protocol_id', g.pid, 'dataset_batch_id', null, 'current_attempt_id', null))).*
+                'id', g.jid, 'protocol_id', g.pid, 'dataset_batch_id', g.bid, 'current_attempt_id', null))).*
               from public.protocol_execution_jobs t, g where t.id = '${template.id}'
             returning id)
-          select (select count(*) from q) || ',' || (select count(*) from v) || ',' || (select count(*) from p) || ',' || (select count(*) from j)`);
-    record("P12", "1000 questions, versions, protocols and jobs inserted", inserted === "1000,1000,1000,1000", inserted);
+          select (select count(*) from q) || ',' || (select count(*) from v) || ',' || (select count(*) from p)
+            || ',' || (select count(*) from b) || ',' || (select count(*) from j)`);
+    record("P12", "1000 questions, versions, protocols, dataset batches and jobs inserted", inserted === "1000,1000,1000,1000,1000", inserted);
     const scope = `j.project_id = '${template.projectId}' and j.status = 'queued'`;
     const chain = psql(`select count(*) || ',' || count(distinct p.id) || ',' || count(distinct v.id) || ',' || count(distinct q.id)
+        || ',' || count(distinct db.id)
         || ',' || count(*) filter (where v.approved_at is not null and p.status = 'approved' and p.baseline_protocol_id is null)
         from public.protocol_execution_jobs j
         join public.protocols p on p.id = j.protocol_id and p.project_id = j.project_id
         join public.buyer_question_versions v on v.id = p.buyer_question_version_id and v.project_id = p.project_id
         join public.buyer_questions q on q.id = v.buyer_question_id and q.project_id = v.project_id
+        join public.dataset_batches db on db.id = j.dataset_batch_id and db.project_id = j.project_id
        where ${scope}`);
-    record("P12", "1001 queued jobs, each joined through its own protocol, version and question; all approved baselines",
-      chain === "1001,1001,1001,1001,1001", chain);
+    record("P12", "1001 queued jobs, each joined through its own protocol, version, question and dataset batch; all approved baselines",
+      chain === "1001,1001,1001,1001,1001,1001", chain);
+    const batches = psql(`select count(*) || ',' || count(distinct j.dataset_batch_id)
+        || ',' || count(*) filter (where db.id is null)
+        || ',' || count(*) filter (where db.id is not null and db.project_id <> j.project_id)
+        from public.protocol_execution_jobs j
+        left join public.dataset_batches db on db.id = j.dataset_batch_id
+       where ${scope}`);
+    record("P12", "every queued job owns a distinct dataset batch: none shared, none missing, none in another project",
+      batches === "1001,1001,0,0", batches);
     const liveBaselines = psql(`select count(*) || ',' || count(distinct buyer_question_version_id) from public.protocols
        where project_id = '${template.projectId}' and status in ('approved', 'active') and baseline_protocol_id is null`);
     const [lbCount, lbDistinct] = liveBaselines.split(",").map(Number);

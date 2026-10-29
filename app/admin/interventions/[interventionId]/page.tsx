@@ -435,6 +435,7 @@ export default async function InterventionDetailPage({
                         }
                       : null
                   }
+                  attemptsRecorded={retest.attempts.total}
                   actionsEnabled={interventionAdminEnabled()}
                 />
               </section>

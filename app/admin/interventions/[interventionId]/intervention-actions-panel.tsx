@@ -23,7 +23,20 @@ async function post(path: string, body: unknown): Promise<{ ok: true } | { ok: f
     });
     const payload = await res.json().catch(() => null);
     if (!res.ok || !payload?.ok) {
-      return { ok: false, message: payload?.message || payload?.error || `Request failed (${res.status}).` };
+      const raw = payload?.message || payload?.error || `Request failed (${res.status}).`;
+      if (payload?.error === "unauthorized" || /Fly rejected the access token/i.test(String(raw))) {
+        return {
+          ok: false,
+          message: "Worker authentication failed. Check the production Fly token, worker app, and machine ID, then try again.",
+        };
+      }
+      if (payload?.error === "not_found") {
+        return {
+          ok: false,
+          message: "The configured Fly worker machine was not found. Check the production app and machine ID.",
+        };
+      }
+      return { ok: false, message: String(raw) };
     }
     return { ok: true };
   } catch {

@@ -41,6 +41,37 @@ export const defaultExec: Exec = (cmd, args) =>
 
 export const EXPECTED_MAX_ROWS = 1000;
 
+/** Shapes that must never reach a log: JWTs, bearer headers, Supabase API keys. */
+const SECRET_SHAPES: readonly RegExp[] = [
+  /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
+  /Bearer\s+\S+/gi,
+  /sb_(secret|publishable)_[A-Za-z0-9_-]+/g,
+];
+
+/**
+ * A bounded, privacy-safe one-line description of a thrown value.
+ *
+ * PostgREST rejects with a plain object ({ code, message, details, hint }),
+ * which `String()` renders as "[object Object]". Only two closed fields are
+ * kept: a short alphanumeric `code` (e.g. 23505) and the `message`, clipped
+ * (it carries the constraint name). `details` and `hint` are dropped: they
+ * can carry row values. An Error gives its name and message. Everything is
+ * clipped and secret-shaped substrings are redacted.
+ */
+export function describeError(e: unknown): string {
+  const clip = (t: string, n: number) => (t.length > n ? `${t.slice(0, n)}…` : t);
+  const redact = (t: string) => SECRET_SHAPES.reduce((acc, re) => acc.replace(re, "[redacted]"), t);
+  if (e instanceof Error) return redact(clip(`${e.name}: ${e.message}`, 300));
+  if (e !== null && typeof e === "object") {
+    const o = e as Record<string, unknown>;
+    const code = typeof o.code === "string" && /^[A-Za-z0-9_]{1,16}$/.test(o.code) ? o.code : null;
+    const message = typeof o.message === "string" ? clip(o.message, 200) : null;
+    const parts = [code === null ? null : `code=${code}`, message === null ? null : `message=${message}`].filter((x) => x !== null);
+    return redact(parts.length > 0 ? parts.join(" ") : "unrecognised error object");
+  }
+  return redact(clip(String(e), 200));
+}
+
 export function readTomlScalar(text: string, section: string | null, key: string): string | null {
   let current: string | null = null;
   for (const raw of text.split("\n")) {
@@ -211,7 +242,7 @@ export async function runPg9Lifecycle(o: LifecycleOptions): Promise<LifecycleRes
   try {
     bodyOk = await o.body({ workdir, projectId, container, exec });
   } catch (e) {
-    result.reasons.push(`the cases threw: ${e instanceof Error ? e.message : String(e)}`);
+    result.reasons.push(`the cases threw: ${describeError(e)}`);
   }
   if (!bodyOk) {
     result.observedContainers = observe(projectId);

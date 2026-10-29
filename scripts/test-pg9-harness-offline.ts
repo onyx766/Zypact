@@ -19,7 +19,13 @@
  *       `supabase start`; a partial start keeps the workdir and reports the
  *       containers; a failed stop after a successful run is a failure; no
  *       command ever stops or touches a container, related or not; and the
- *       real script exits non-zero with that evidence.
+ *       real script exits non-zero with that evidence;
+ *   [7] the fixture claim contract (run 40878868914 failed on it): the
+ *       targeted claim takes only one-attempt jobs (0059's max_attempts = 1)
+ *       and the ordinary claim takes multi-attempt jobs, each checking
+ *       CLAIMED, the job id and the token, and naming the RPC outcome on
+ *       refusal; P3/P7/ledgerRow/P15 use the right one. Against the
+ *       in-memory adapter, which mirrors both claim predicates.
  */
 
 import { createHash } from "node:crypto";
@@ -29,6 +35,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { runPg9Lifecycle, type LifecycleResult } from "./pg9-lifecycle";
+import { fixtureClaims, fixtureJobFactory } from "./test-pg9-paid-gate-runtime";
+import type { DbAdapter } from "@/lib/db/types";
 import {
   PG9_API_ORIGIN,
   PG9_CASES,
@@ -378,6 +386,112 @@ async function main(): Promise<void> {
       check(`script ${mode}: no command touched any container`, touchedNothing(st.calls()));
     }
     rmSync(root, { recursive: true, force: true });
+  }
+
+
+  /* ═══════ [7] the fixture claim contract ═══════ */
+  console.log("\n[7] Fixture claim contract (targeted one-attempt vs ordinary multi-attempt)");
+  {
+    const { memoryAdapter } = await import("@/lib/db/memory-adapter");
+    const db: DbAdapter = memoryAdapter;
+    const Q = "Which vendors handle X best?";
+    const project = await db.createProject({ domain: "pg9-fixture-contract.test", companyName: "Fixture" });
+    const question = await db.createBuyerQuestion({ projectId: project.id });
+    const version = await db.createBuyerQuestionVersion({
+      buyerQuestionId: question.id, projectId: project.id, versionNumber: 1, promptText: Q,
+      promptHash: createHash("sha256").update(Q).digest("hex"), intentType: "comparison", commercialValue: 3, winnability: 3,
+      priority: 10, rationale: "fixture", provenance: "founder_supplied",
+    });
+    await db.approveBuyerQuestionVersion({ versionId: version.id, projectId: project.id, approvedBy: "11111111-1111-4111-8111-111111111111" });
+    const makeJob = fixtureJobFactory(db, { projectId: project.id, versionId: version.id });
+    const { claimById, claimNext } = fixtureClaims(db);
+    const errorOf = async (f: () => Promise<unknown>) => { try { await f(); return ""; } catch (e) { return e instanceof Error ? e.message : String(e); } };
+    const drain = async () => {
+      for (;;) {
+        const c = await db.claimProtocolExecutionJob({ workerId: "drain", leaseSeconds: 60 });
+        if (!c.job || !c.claimToken) return;
+        await db.failProtocolExecutionJob({ jobId: c.job.id, claimToken: c.claimToken, projectId: c.job.projectId, reason: "test_cleanup" });
+      }
+    };
+
+    // The root cause, reproduced on the RPC itself.
+    const dflt = await makeJob(1);
+    check("makeJob without maxAttempts keeps the enqueue default (3)", dflt.maxAttempts === 3, String(dflt.maxAttempts));
+    const raw = await db.claimProtocolExecutionJobById({ workerId: "w", leaseSeconds: 60, jobId: dflt.id, projectId: dflt.projectId });
+    check("the targeted RPC on a 3-attempt job is JOB_NOT_ELIGIBLE with no job (run 40878868914)",
+      raw.outcome === "JOB_NOT_ELIGIBLE" && raw.job === null && raw.claimToken === null, raw.outcome);
+    await drain();
+
+    // Targeted claim: one-attempt jobs only.
+    const one = await makeJob(1, { maxAttempts: 1 });
+    check("makeJob passes maxAttempts: 1 through", one.maxAttempts === 1);
+    const t = await claimById(one, 60);
+    check("claimById on a one-attempt job: CLAIMED, same id, a token, attempt 1 of 1 (exhausted once the lease lapses)",
+      t.job.id === one.id && typeof t.claimToken === "string" && t.claimToken.length > 0 && t.job.attemptCount === 1 && t.job.maxAttempts === 1);
+    const three = await makeJob(1);
+    const refusedPre = await errorOf(() => claimById(three, 60));
+    check("claimById refuses a multi-attempt job before calling the RPC", /targeted claim is for one-attempt jobs; .*maxAttempts=3/.test(refusedPre), refusedPre);
+    const afterPre = await db.claimProtocolExecutionJobById({ workerId: "probe", leaseSeconds: 60, jobId: three.id, projectId: three.projectId });
+    check("…so that job was left untouched (the RPC still sees it as merely ineligible)", afterPre.outcome === "JOB_NOT_ELIGIBLE");
+    await drain();
+
+    // Ordinary claim: multi-attempt jobs, the exact expected job.
+    const multi = await makeJob(1);
+    const n = await claimNext(multi, 60);
+    check("claimNext on the only eligible multi-attempt job: CLAIMED, same id, a token, attempts left (1 of 3)",
+      n.job.id === multi.id && n.claimToken.length > 0 && n.job.attemptCount === 1 && n.job.maxAttempts === 3);
+    const single = await makeJob(1, { maxAttempts: 1 });
+    const refusedOne = await errorOf(() => claimNext(single, 60));
+    check("claimNext refuses a one-attempt job before calling the RPC", /ordinary claim is for multi-attempt jobs; .*maxAttempts=1/.test(refusedOne), refusedOne);
+    await drain();
+    const older = await makeJob(1);
+    const newer = await makeJob(1);
+    const wrong = await errorOf(() => claimNext(newer, 60));
+    check("claimNext fails when oldest-first takes a different job than expected", /took a different job than the fixture expected/.test(wrong), wrong);
+    void older;
+    await drain();
+    const none = await makeJob(1);
+    await drain(); // closes `none` too: nothing is eligible now
+    const empty = await errorOf(() => claimNext(none, 60));
+    check("claimNext names the RPC outcome when nothing is claimable", empty === "ordinary claim refused: NO_JOB_AVAILABLE", empty);
+
+    // A refusal names the closed outcome and nothing else.
+    const locked: DbAdapter = { ...db, claimProtocolExecutionJobById: async () => ({ outcome: "JOB_LOCKED" as const, job: null, claimToken: null }) };
+    const lockedMsg = await errorOf(() => fixtureClaims(locked).claimById(one, 60));
+    check("a targeted refusal reports exactly its outcome (JOB_LOCKED)", lockedMsg === "targeted claim refused: JOB_LOCKED", lockedMsg);
+    const tokenOnly: DbAdapter = { ...db, claimProtocolExecutionJob: async () => ({ outcome: "CLAIMED" as const, job: null, claimToken: "SECRET-TOKEN-SENTINEL" }) };
+    const tokenMsg = await errorOf(() => fixtureClaims(tokenOnly).claimNext(multi, 60));
+    check("a malformed CLAIMED reply is refused without echoing the token",
+      /without a job and a token/.test(tokenMsg) && !tokenMsg.includes("SECRET-TOKEN-SENTINEL"), tokenMsg);
+
+    // P3's fixture order, run as written: every claim takes exactly its job.
+    await drain();
+    {
+      const live = await makeJob(2); await claimNext(live, 600);
+      const expired = await makeJob(1.5); const e = await claimNext(expired, 600);
+      const exhausted = await makeJob(9, { maxAttempts: 1 }); const x = await claimById(exhausted, 600);
+      const queued = await makeJob(0.5);
+      check("P3 order: live and expired are claimed 1 of 3 (attempts left); exhausted is 1 of 1; the last job stays queued",
+        e.job.attemptCount === 1 && e.job.maxAttempts === 3 && x.job.attemptCount === 1 && x.job.maxAttempts === 1
+          && queued.maxAttempts === 3 && queued.status === "queued" && queued.attemptCount === 0);
+      await drain();
+    }
+
+    // The runtime script uses each helper where the scenario needs it.
+    const stackSrc = readFileSync("scripts/test-pg9-paid-gate-runtime.ts", "utf8");
+    check("ledgerRow creates one-attempt jobs and uses the targeted claim",
+      /const job = await makeJob\(100, \{ maxAttempts: 1 \}\);\s*const c = await claimById\(job\);/.test(stackSrc));
+    check("P15 creates a one-attempt job and uses the targeted claim",
+      /const job = await makeJob\(0\.03, \{ maxAttempts: 1 \}\);\s*const c = await claimById\(job\);/.test(stackSrc));
+    check("P3: live and expired via claimNext on default jobs; exhausted via claimById on a one-attempt job; queued created last",
+      /const live = await makeJob\(2\); await claimNext\(live, 600\);\s*const expired = await makeJob\(1\.5\); await claimNext\(expired, 600\);\s*const exhausted = await makeJob\(9, \{ maxAttempts: 1 \}\); await claimById\(exhausted, 600\);/.test(stackSrc)
+        && /const queued = await makeJob\(0\.5\);\s*psql\(`update public\.protocol_execution_jobs set lease_expires_at/.test(stackSrc));
+    check("P7: expired via claimNext; exhausted via claimById on a one-attempt job; leases moved after both",
+      /const expired = await makeJob\(1\.5\); await claimNext\(expired, 600\);\s*const exhausted = await makeJob\(9, \{ maxAttempts: 1 \}\); await claimById\(exhausted, 600\);\s*psql\(`update public\.protocol_execution_jobs set lease_expires_at/.test(stackSrc));
+    check("no fixture forces exhaustion by editing attempt_count any more", !/set attempt_count = max_attempts/.test(stackSrc));
+    check("every claimById call outside the helpers targets a job made with maxAttempts: 1",
+      [...stackSrc.matchAll(/await claimById\((\w+)/g)].every((m) => new RegExp(`const ${m[1]} = await makeJob\\([^)]*\\{ maxAttempts: 1 \\}\\)`).test(stackSrc)));
+    check("the old silent null check is gone", !/must\(c\.job, "claimed job"\)/.test(stackSrc));
   }
 
   console.log(`\n${checks - failures}/${checks} checks passed.${failures ? ` ${failures} FAILED.` : ""}`);

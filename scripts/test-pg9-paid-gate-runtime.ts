@@ -44,7 +44,13 @@ import { reportLifecycle, runPg9Lifecycle, type LifecycleResult, type StackConte
 
 const REPO_ROOT = process.cwd();
 
-if (process.env.ZYPACT_PG9_STACK_TEST !== "1") {
+/**
+ * Run only as the entry point. Imported (by test-pg9-harness-offline.ts, for
+ * the fixture helpers below), this module starts nothing and exits nothing.
+ */
+const IS_ENTRY = /test-pg9-paid-gate-runtime\.ts$/.test(process.argv[1] ?? "");
+
+if (IS_ENTRY && process.env.ZYPACT_PG9_STACK_TEST !== "1") {
   console.log("\n[PG-9] not requested — set ZYPACT_PG9_STACK_TEST=1 (needs Docker + the Supabase CLI, and separate approval).");
   console.log("[PG-9] NOTHING was started, migrated or validated by this run. PG-9 remains OPEN.");
   process.exit(0);
@@ -81,6 +87,69 @@ function serviceRoleKeyFrom(ctx: StackContext): string {
     if (m) return m[1];
   }
   throw new Error("supabase status did not report SERVICE_ROLE_KEY");
+}
+
+/* ─────────────────────────── fixture claim contract ─────────────────────────── */
+
+export interface FixtureJobOptions {
+  plannedBaselineRuns?: number;
+  /** Omitted: the enqueue default (3). 1: a job the targeted claim may take. */
+  maxAttempts?: number;
+}
+
+/** One approved protocol with its queued job. `maxAttempts` is passed through only when given. */
+export function fixtureJobFactory(db: DbAdapter, ids: { projectId: string; versionId: string }) {
+  return async (spendCapUsd: number, o: FixtureJobOptions = {}): Promise<ProtocolExecutionJob> => {
+    const protocol = await db.createProtocol({
+      projectId: ids.projectId, buyerQuestionVersionId: ids.versionId, provider: "perplexity", surface: "sonar",
+      plannedBaselineRuns: o.plannedBaselineRuns ?? 1, plannedRetestRuns: 0, paraphrasePlan: [{ text: QUESTION, hash: sha256Hex(QUESTION) }],
+      unitOfAnalysis: "run", primaryMetric: "listed_in_run", samplePlanningMethod: "fixed",
+      runCap: 20, spendCapUsd, timeWindowSeconds: 3600, rateLimitPerHour: 100, concurrencyLimit: 5, retryCap: 2,
+    });
+    await db.approveProtocol({ protocolId: protocol.id, projectId: ids.projectId, approvedBy: APPROVER });
+    const enqueued = await db.enqueueProtocolExecutionJob({
+      protocolId: protocol.id, projectId: ids.projectId, ...(o.maxAttempts === undefined ? {} : { maxAttempts: o.maxAttempts }),
+    });
+    return must(enqueued.job, `enqueued job (${enqueued.outcome})`);
+  };
+}
+
+/**
+ * The two ways a fixture takes a job, matching the two claim functions:
+ *
+ *   claimById   the targeted claim (0059). Its contract admits only a queued,
+ *               untouched job with max_attempts = 1; anything else is
+ *               JOB_NOT_ELIGIBLE. So it refuses a multi-attempt job before
+ *               calling, and a one-attempt job it claims is exhausted (1 of 1)
+ *               once its lease lapses — the shape of a one-shot fixture.
+ *   claimNext   the ordinary claim (0054), oldest eligible job first, for
+ *               multi-attempt jobs that must stay "claimed with attempts left".
+ *               It must take exactly the job the fixture expects.
+ *
+ * Both require CLAIMED, the expected job id and a claim token, and a refusal
+ * names only the RPC's closed outcome — never a token or a body.
+ */
+export function fixtureClaims(db: DbAdapter, workerId = "pg9-fixture") {
+  const claimById = async (job: ProtocolExecutionJob, leaseSeconds = 600) => {
+    if (job.maxAttempts !== 1) {
+      throw new Error(`targeted claim is for one-attempt jobs; this fixture job has maxAttempts=${job.maxAttempts}`);
+    }
+    const c = await db.claimProtocolExecutionJobById({ workerId, leaseSeconds, jobId: job.id, projectId: job.projectId });
+    if (c.outcome !== "CLAIMED") throw new Error(`targeted claim refused: ${c.outcome}`);
+    if (!c.job || c.job.id !== job.id || !c.claimToken) throw new Error("targeted claim returned CLAIMED without this job and a token");
+    return { job: c.job, claimToken: c.claimToken };
+  };
+  const claimNext = async (expected: ProtocolExecutionJob, leaseSeconds = 600) => {
+    if (expected.maxAttempts < 2) {
+      throw new Error(`ordinary claim is for multi-attempt jobs; this fixture job has maxAttempts=${expected.maxAttempts}`);
+    }
+    const c = await db.claimProtocolExecutionJob({ workerId, leaseSeconds });
+    if (c.outcome !== "CLAIMED") throw new Error(`ordinary claim refused: ${c.outcome}`);
+    if (!c.job || !c.claimToken) throw new Error("ordinary claim returned CLAIMED without a job and a token");
+    if (c.job.id !== expected.id) throw new Error("ordinary claim took a different job than the fixture expected (oldest eligible first)");
+    return { job: c.job, claimToken: c.claimToken };
+  };
+  return { claimById, claimNext };
 }
 
 /* ─────────────────────────── fixtures ─────────────────────────── */
@@ -177,21 +246,8 @@ async function runCases(ctx: StackContext, guard: NetworkGuard): Promise<void> {
   });
   await db.approveBuyerQuestionVersion({ versionId: version.id, projectId: project.id, approvedBy: APPROVER });
 
-  /** One approved protocol with its queued job. */
-  const makeJob = async (spendCapUsd: number, plannedBaselineRuns = 1): Promise<ProtocolExecutionJob> => {
-    const protocol = await db.createProtocol({
-      projectId: project.id, buyerQuestionVersionId: version.id, provider: "perplexity", surface: "sonar",
-      plannedBaselineRuns, plannedRetestRuns: 0, paraphrasePlan: [{ text: QUESTION, hash: sha256Hex(QUESTION) }],
-      unitOfAnalysis: "run", primaryMetric: "listed_in_run", samplePlanningMethod: "fixed",
-      runCap: 20, spendCapUsd, timeWindowSeconds: 3600, rateLimitPerHour: 100, concurrencyLimit: 5, retryCap: 2,
-    });
-    await db.approveProtocol({ protocolId: protocol.id, projectId: project.id, approvedBy: APPROVER });
-    return must((await db.enqueueProtocolExecutionJob({ protocolId: protocol.id, projectId: project.id })).job, "job");
-  };
-  const claimById = async (job: ProtocolExecutionJob, leaseSeconds = 600) => {
-    const c = await db.claimProtocolExecutionJobById({ workerId: "pg9-fixture", leaseSeconds, jobId: job.id, projectId: job.projectId });
-    return { job: must(c.job, "claimed job"), claimToken: must(c.claimToken, "claim token") };
-  };
+  const makeJob = fixtureJobFactory(db, { projectId: project.id, versionId: version.id });
+  const { claimById, claimNext } = fixtureClaims(db);
   /**
    * One ledger row with the given shape. Created through the real claim and
    * admission RPCs (two calls), then — disposable database only — the
@@ -199,7 +255,8 @@ async function runCases(ctx: StackContext, guard: NetworkGuard): Promise<void> {
    * call is moved out of the window; the job is closed so it is not claimable.
    */
   const ledgerRow = async (o: { ageSeconds: number; reserved: number; actual: number | null; basis: "measured" | "estimated" | null }) => {
-    const job = await makeJob(100);
+    // Admitted once, then closed: a one-attempt job, taken by the targeted claim.
+    const job = await makeJob(100, { maxAttempts: 1 });
     const c = await claimById(job);
     const a = await db.admitAndReserveAttemptForJob({
       jobId: job.id, claimToken: c.claimToken, projectId: job.projectId, attemptKind: "baseline",
@@ -293,12 +350,14 @@ async function runCases(ctx: StackContext, guard: NetworkGuard): Promise<void> {
   /* ═══ P3 the largest eligible cap ═══ */
   await reset();
   {
-    const queued = await makeJob(0.5);
-    const live = await makeJob(2); await claimById(live, 600);
-    const expired = await makeJob(1.5); await claimById(expired, 600);
-    psql(`update public.protocol_execution_jobs set lease_expires_at = clock_timestamp() - interval '1 minute' where id = '${expired.id}'`);
-    const exhausted = await makeJob(9); await claimById(exhausted, 600);
-    psql(`update public.protocol_execution_jobs set attempt_count = max_attempts, lease_expires_at = clock_timestamp() - interval '1 minute' where id = '${exhausted.id}'`);
+    // Claimed jobs with attempts left need the ordinary claim on multi-attempt
+    // jobs; each is created and claimed while it is the only eligible job, so
+    // oldest-first takes exactly it. The exhausted job is a one-attempt job,
+    // exhausted naturally (1 of 1). Leases move only after every claim, and
+    // the queued job is created last so no claim takes it.
+    const live = await makeJob(2); await claimNext(live, 600);
+    const expired = await makeJob(1.5); await claimNext(expired, 600);
+    const exhausted = await makeJob(9, { maxAttempts: 1 }); await claimById(exhausted, 600);
     for (const [cap, sql] of [
       [7, "status = 'failed', failure_reason = 'pg9_fixture'"],
       [8, "status = 'needs_review', needs_review_reason = 'pg9_fixture'"],
@@ -307,6 +366,8 @@ async function runCases(ctx: StackContext, guard: NetworkGuard): Promise<void> {
       const j = await makeJob(cap);
       psql(`update public.protocol_execution_jobs set ${sql} where id = '${j.id}'`);
     }
+    const queued = await makeJob(0.5);
+    psql(`update public.protocol_execution_jobs set lease_expires_at = clock_timestamp() - interval '1 minute' where id in ('${expired.id}', '${exhausted.id}')`);
     const d = await gate(ON("50"));
     record("P3", "largest of queued (0.5), live claim (2), expired-with-attempts (1.5); exhausted (9) and terminal (7, 8, 6) excluded",
       d.ok && d.nextJobCapUsd === 2, JSON.stringify(d));
@@ -360,10 +421,11 @@ async function runCases(ctx: StackContext, guard: NetworkGuard): Promise<void> {
   /* ═══ P7 expired and exhausted: gate and claim agree ═══ */
   await reset();
   {
-    const expired = await makeJob(1.5); await claimById(expired, 600);
-    psql(`update public.protocol_execution_jobs set lease_expires_at = clock_timestamp() - interval '1 minute' where id = '${expired.id}'`);
-    const exhausted = await makeJob(9); await claimById(exhausted, 600);
-    psql(`update public.protocol_execution_jobs set attempt_count = max_attempts, lease_expires_at = clock_timestamp() - interval '1 minute' where id = '${exhausted.id}'`);
+    // Expired with attempts left: a multi-attempt job, ordinary claim. Exhausted:
+    // a one-attempt job, targeted claim (1 of 1). Leases move after both claims.
+    const expired = await makeJob(1.5); await claimNext(expired, 600);
+    const exhausted = await makeJob(9, { maxAttempts: 1 }); await claimById(exhausted, 600);
+    psql(`update public.protocol_execution_jobs set lease_expires_at = clock_timestamp() - interval '1 minute' where id in ('${expired.id}', '${exhausted.id}')`);
     const d = await gate(ON("50"));
     record("P7", "the gate counts the expired job with attempts left (1.5), not the exhausted one (9)", d.ok && d.nextJobCapUsd === 1.5, JSON.stringify(d));
     const c = await db.claimProtocolExecutionJob({ workerId: "pg9-claimer", leaseSeconds: 60 });
@@ -480,7 +542,7 @@ async function runCases(ctx: StackContext, guard: NetworkGuard): Promise<void> {
   /* ═══ P15 the per-protocol cap in SQL ═══ */
   await reset();
   {
-    const job = await makeJob(0.03);
+    const job = await makeJob(0.03, { maxAttempts: 1 });
     const c = await claimById(job);
     const a = await db.admitAndReserveAttemptForJob({
       jobId: job.id, claimToken: c.claimToken, projectId: job.projectId, attemptKind: "baseline",
@@ -557,7 +619,9 @@ function summary(print: boolean): { success: boolean } {
   return { success: harnessFailures === 0 && assertionsFailed === 0 && limitationsMissing === 0 };
 }
 
-main().catch((e) => {
-  console.error(`PG-9 harness error: ${e instanceof Error ? e.message : String(e)}`);
-  process.exitCode = 1;
-});
+if (IS_ENTRY) {
+  main().catch((e) => {
+    console.error(`PG-9 harness error: ${e instanceof Error ? e.message : String(e)}`);
+    process.exitCode = 1;
+  });
+}

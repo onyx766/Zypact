@@ -35,6 +35,12 @@ export interface PerplexityProbeResult {
   citations: string[];
   searchResults: PerplexitySearchResult[];
   sourceCitations: SourceCitation[];
+  /**
+   * PR #4 — Agent API only: which inline citation markers matched a search
+   * result id, and which did not. Absent for Sonar, whose provider returns
+   * its own `citations` list.
+   */
+  citationMarkers?: { mapped: number[]; unmapped: number[] };
   model: string;
   usedMock: boolean;
   /**
@@ -400,6 +406,19 @@ export async function runPerplexityProbe(
     providerRequestId,
   };
 }
+
+/**
+ * Shared with the Agent API adapter (perplexity-agent.ts) so both adapters
+ * normalise sources, build the analysis transcript and send the buyer
+ * question exactly the same way. No behaviour change here.
+ */
+export {
+  buildRawTranscript,
+  buildUserPrompt,
+  normalizeUrl,
+  sourceCitationsFromPerplexity,
+  uniqueStrings,
+};
 
 export const __perplexityProbeTestUtils = {
   classifySource,

@@ -9,7 +9,7 @@
 #     commit). A label naming any other commit — including an earlier head
 #     after a later push — matches nothing. The label is 47 characters,
 #     within GitHub's 50-character limit;
-#   - the pull request is #0;
+#   - the pull request is #87;
 #   - its head branch is exactly `ci/pg9-isolated-20261029-run3`;
 #   - the head repository is this repository (no fork);
 #   - this is the run's first attempt (a "Re-run" of the job is skipped).
@@ -59,7 +59,7 @@ jobs:
     name: PG-9 disposable-stack run
     if: >-
       github.event.label.name == format('pg9-ok-{0}', github.event.pull_request.head.sha) &&
-      github.event.pull_request.number == 0 &&
+      github.event.pull_request.number == 87 &&
       github.event.pull_request.head.ref == 'ci/pg9-isolated-20261029-run3' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.run_attempt == '1'
@@ -80,10 +80,10 @@ jobs:
         run: |
           set -euo pipefail
           [ "$RUN_ATTEMPT" = "1" ] || { echo "Not the first attempt; refusing." >&2; exit 1; }
-          [ "$PR_NUMBER" = "0" ] || { echo "Not pull request #0; refusing." >&2; exit 1; }
+          [ "$PR_NUMBER" = "87" ] || { echo "Not pull request #87; refusing." >&2; exit 1; }
           [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Unexpected head SHA; refusing." >&2; exit 1; }
           [ "$LABEL" = "pg9-ok-$HEAD_SHA" ] || { echo "The label does not name the head commit exactly; refusing." >&2; exit 1; }
-          echo "Authorized: pg9-ok-$HEAD_SHA, first attempt, PR #0."
+          echo "Authorized: pg9-ok-$HEAD_SHA, first attempt, PR #87."
 
       - name: Check out the reviewed head commit
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0

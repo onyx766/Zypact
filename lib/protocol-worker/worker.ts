@@ -307,6 +307,64 @@ export async function runOneIteration(
 }
 
 /**
+ * Closes a job that cannot proceed, found before this slot's admission.
+ *
+ * Only a job never admitted is closed: no attempt of any status in its full
+ * history (getProtocolAttempts — one job per protocol, 0050, so the
+ * protocol's attempts are the job's), and no reserved or in-flight call. It
+ * is closed through the fenced fail_protocol_execution_job (0050) with the
+ * exact reason. A bare return used to leave it claimed, so after the lease
+ * lapsed it was reclaimed and failed again until attempt_count reached
+ * max_attempts, ending as abandoned_exhausted with no reason recorded.
+ * `failed` is never claimed.
+ *
+ * Anything else is left exactly as it is: an open attempt or call (a
+ * crashed earlier claim), or earlier attempts — completed baseline slots
+ * whose current_attempt_id was cleared between slots, or a terminalized
+ * attempt with its receipts. A job-only `failed` would misstate a job that
+ * holds evidence, and no existing transition fits: the ambiguity review
+ * needs an unreceipted in-flight call (handled before any slot runs), and
+ * T3 would terminalize an attempt that may hold a paid, receipted answer.
+ * If the history cannot be read, nothing is closed either. The job takes
+ * the existing recovery route: lease lapse, reclaim, then
+ * abandoned_exhausted, which an operator can reactivate (D-024).
+ */
+async function closeJobBeforeAdmission(
+  deps: WorkerDeps,
+  f: Fenced,
+  ctx: GetProtocolExecutionJobContextResult,
+  reason: "MISSING_CONTEXT" | "INVALID_BASELINE_ORDINAL"
+): Promise<IterationResult> {
+  const openAttempt = ctx.currentAttempt !== null && ctx.currentAttempt.terminalizedAt === null;
+  const openCall = ctx.externalCalls.some((c) => c.status === "reserved" || c.status === "in_progress");
+  if (openAttempt || openCall) {
+    return { outcome: "failed", jobId: f.jobId, detail: `${reason}:OPEN_ATTEMPT_PRESERVED` };
+  }
+  if (ctx.currentAttempt !== null || ctx.externalCalls.length > 0 || !ctx.job) {
+    return { outcome: "failed", jobId: f.jobId, detail: `${reason}:ATTEMPT_HISTORY_PRESERVED` };
+  }
+  let history: number;
+  try {
+    history = (await deps.db.getProtocolAttempts(ctx.job.protocolId, f.projectId)).length;
+  } catch {
+    return { outcome: "failed", jobId: f.jobId, detail: `${reason}:ATTEMPT_HISTORY_UNVERIFIED` };
+  }
+  if (history > 0) {
+    return { outcome: "failed", jobId: f.jobId, detail: `${reason}:ATTEMPT_HISTORY_PRESERVED` };
+  }
+  const closed = await deps.db.failProtocolExecutionJob({
+    jobId: f.jobId,
+    claimToken: f.claimToken,
+    projectId: f.projectId,
+    reason,
+  });
+  if (closed.outcome !== "FAILED") {
+    return { outcome: "lost_ownership", jobId: f.jobId, detail: `${reason}:${closed.outcome}` };
+  }
+  return { outcome: "failed", jobId: f.jobId, detail: reason };
+}
+
+/**
  * Drives one baseline slot to reconciliation, then asks the completion
  * gate what to do next. Returns null when — and only when — the gate
  * reports that another baseline slot is required.
@@ -319,7 +377,7 @@ async function runOneSlot(
 ): Promise<IterationResult | null> {
   const project = await deps.db.getProject(f.projectId);
   if (!project || !ctx.protocol) {
-    return { outcome: "failed", jobId: f.jobId, detail: "MISSING_CONTEXT" };
+    return await closeJobBeforeAdmission(deps, f, ctx, "MISSING_CONTEXT");
   }
 
   // PR #4 — refuse an unsupported or not-enabled provider before admission:
@@ -351,7 +409,7 @@ async function runOneSlot(
   // for a retest protocol's job, so the key format does not vary by phase.
   const ordinal = ctx.job?.nextBaselineOrdinal ?? 0;
   if (ordinal < 1) {
-    return { outcome: "failed", jobId: f.jobId, detail: "INVALID_BASELINE_ORDINAL" };
+    return await closeJobBeforeAdmission(deps, f, ctx, "INVALID_BASELINE_ORDINAL");
   }
   // M7/0074 — a retest protocol (baselineProtocolId set) must record its
   // attempts as 'retest', never 'baseline', or a later comparison that

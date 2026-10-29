@@ -118,6 +118,7 @@
     "test:cost-recording": "tsx scripts/test-cost-recording.ts",
     "test:measurement-compatibility": "tsx scripts/test-measurement-compatibility.ts",
     "test:perplexity-agent-adapter": "tsx scripts/test-perplexity-agent-adapter.ts",
+    "test:worker-precheck-closure": "tsx scripts/test-worker-precheck-closure.ts",
     "test:m5-0083-schema": "tsx scripts/test-m5-0083-schema-contract.ts",
     "test:0080-report-ready": "tsx scripts/test-0080-report-ready-contract.ts",
     "test:report-pass": "tsx scripts/test-report-pass.ts",

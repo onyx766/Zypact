@@ -93,6 +93,9 @@ export function answerFromRawResponseBody(raw: string | null): string | null {
   // carries an answer; incomplete, failed or cancelled ones yield none.
   if ((json as { object?: unknown }).object === "response") {
     if ((json as { status?: unknown }).status !== "completed") return null;
+    // The adapter already refuses an unexpected served model; a stored body
+    // is re-checked so no other path can turn one into an answer.
+    if ((json as { model?: unknown }).model !== PERPLEXITY_AGENT_MODEL) return null;
     const text = agentOutputText((json as { output?: unknown }).output).trim();
     return text.length === 0 ? null : text;
   }
@@ -143,11 +146,17 @@ export function measuredCostUsdFromRawResponseBody(
   if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
     return null;
   }
-  // PR #4 — the Agent API states its currency ("USD" is the only value its
-  // schema allows). A different one is not a dollar amount: unknown, never
-  // a misread number. Sonar bodies carry no currency and are unaffected.
+  // PR #4 — currency, by response shape. An Agent API body (object
+  // "response") must state USD explicitly — its schema requires currency —
+  // so a missing or different one is unknown, never a misread number. A
+  // legacy Sonar body never carried a currency: absent stays measured, as
+  // before, and an explicit non-USD one is unknown.
   const currency = (cost as { currency?: unknown }).currency;
-  if (currency !== undefined && currency !== "USD") return null;
+  if ((json as { object?: unknown }).object === "response") {
+    if (currency !== "USD") return null;
+  } else if (currency !== undefined && currency !== "USD") {
+    return null;
+  }
   return total;
 }
 

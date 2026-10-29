@@ -35,6 +35,12 @@ export interface PerplexityProbeResult {
   citations: string[];
   searchResults: PerplexitySearchResult[];
   sourceCitations: SourceCitation[];
+  /**
+   * PR #4 — Agent API only: which inline citation markers matched a search
+   * result id, and which did not. Absent for Sonar, whose provider returns
+   * its own `citations` list.
+   */
+  citationMarkers?: { mapped: number[]; unmapped: number[] };
   model: string;
   usedMock: boolean;
   /**

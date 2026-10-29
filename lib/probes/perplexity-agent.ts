@@ -49,16 +49,29 @@ import {
 /** The only model this adapter sends. Another model needs approval and a code change. */
 export const PERPLEXITY_AGENT_MODEL = "perplexity/sonar";
 
-/** Same sampling as the Sonar adapter, for parity. Not a determinism guarantee. */
-const TEMPERATURE = 0.2;
+/**
+ * The Agent measurement setting, versioned. Temperature 0.2 matches the
+ * Sonar adapter's value, but that does NOT make an Agent measurement
+ * equivalent to a historical Sonar one: different endpoint, request and
+ * response shapes, and Perplexity's own pipeline. PR #3's fingerprint keeps
+ * the two incomparable. Any change here is a new version and a new
+ * measuring instrument.
+ */
+export const PERPLEXITY_AGENT_MEASUREMENT_SETTING = {
+  version: "agent-sonar-v1",
+  model: PERPLEXITY_AGENT_MODEL,
+  tool: "web_search",
+  temperature: 0.2,
+  maxOutputTokens: 1200,
+} as const;
 
 export function buildAgentRequestBody(prompt: string, maxTokens?: number): Record<string, unknown> {
   return {
-    model: PERPLEXITY_AGENT_MODEL,
+    model: PERPLEXITY_AGENT_MEASUREMENT_SETTING.model,
     input: prompt,
-    tools: [{ type: "web_search" }],
-    max_output_tokens: maxTokens ?? 1200,
-    temperature: TEMPERATURE,
+    tools: [{ type: PERPLEXITY_AGENT_MEASUREMENT_SETTING.tool }],
+    max_output_tokens: maxTokens ?? PERPLEXITY_AGENT_MEASUREMENT_SETTING.maxOutputTokens,
+    temperature: PERPLEXITY_AGENT_MEASUREMENT_SETTING.temperature,
   };
 }
 
@@ -117,6 +130,17 @@ export function agentCitationMarkers(
     (ids.has(n) ? mapped : unmapped).add(n);
   }
   return { mapped: [...mapped].sort((a, b) => a - b), unmapped: [...unmapped].sort((a, b) => a - b) };
+}
+
+/** The mapped ids in the order the answer first cites them. */
+function agentCitedIdsInOrder(text: string, mapped: number[]): number[] {
+  const allowed = new Set(mapped);
+  const order: number[] = [];
+  for (const m of text.matchAll(/\[(?:web:)?(\d+)\]/g)) {
+    const n = Number(m[1]);
+    if (allowed.has(n) && !order.includes(n)) order.push(n);
+  }
+  return order;
 }
 
 export async function runPerplexityAgentProbe(
@@ -194,13 +218,25 @@ export async function runPerplexityAgentProbe(
   if (body.status !== "completed") throw unusable(`status:${String(body.status)}`);
   if (typeof body.id !== "string" || body.id.trim() === "") throw unusable("missing_id");
   if (typeof body.model !== "string" || body.model.trim() === "") throw unusable("missing_served_model");
+  // An unexpected served model is not an approved measurement. It fails
+  // here with the whole body as evidence; the worker records one
+  // provider_error receipt and closes the job (no automatic retry).
+  if (body.model !== PERPLEXITY_AGENT_MODEL) throw unusable(`unexpected_served_model:${body.model}`);
 
   const answer = agentOutputText(body.output).trim();
   if (!answer) throw unusable("empty_output_text");
 
+  // Retrieved is not cited. Every search result is kept in `searchResults`;
+  // `citations` holds only the URLs of results the answer actually marks
+  // ([n] / [web:n] matching a result id), in the order first cited. A
+  // marker with no matching result is reported, never turned into a source.
   const searchResults = agentSearchResults(body.output);
-  const citations = uniqueStrings(searchResults.map((r) => normalizeUrl(r.url ?? "")));
-  const sourceCitations = sourceCitationsFromPerplexity(citations, searchResults);
+  const citationMarkers = agentCitationMarkers(answer, searchResults);
+  const citedInOrder = agentCitedIdsInOrder(answer, citationMarkers.mapped);
+  const citations = uniqueStrings(
+    citedInOrder.map((id) => normalizeUrl(searchResults.find((r) => r.id === id)?.url ?? ""))
+  );
+  const sourceCitations = sourceCitationsFromPerplexity(citations, []);
   const rawResponse = buildRawTranscript({ answer, citations, searchResults });
 
   return {
@@ -211,6 +247,7 @@ export async function runPerplexityAgentProbe(
     citations,
     searchResults,
     sourceCitations,
+    citationMarkers,
     model: body.model,
     usedMock: false,
     rawResponseSha256: sha256Hex(rawResponse),

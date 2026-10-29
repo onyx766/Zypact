@@ -29,6 +29,7 @@ import fs from "node:fs";
 import { sha256Hex } from "@/lib/evidence/hash";
 import { PERPLEXITY_AGENT_ENDPOINT, PERPLEXITY_SONAR_ENDPOINT } from "@/lib/probes/endpoints";
 import {
+  PERPLEXITY_AGENT_MEASUREMENT_SETTING,
   PERPLEXITY_AGENT_MODEL,
   agentCitationMarkers,
   agentOutputText,
@@ -131,6 +132,13 @@ async function main(): Promise<void> {
     check("no preset, fallback list, instructions or background mode",
       !("effort" in sent) && !("models" in sent) && !("instructions" in sent) && !("background" in sent) && !("preset" in sent));
     check("output limit and sampling are explicit", sent.max_output_tokens === 1200 && sent.temperature === 0.2);
+    check("they are the versioned Agent measurement setting",
+      PERPLEXITY_AGENT_MEASUREMENT_SETTING.version === "agent-sonar-v1" &&
+      sent.temperature === PERPLEXITY_AGENT_MEASUREMENT_SETTING.temperature &&
+      sent.model === PERPLEXITY_AGENT_MEASUREMENT_SETTING.model &&
+      sent.max_output_tokens === PERPLEXITY_AGENT_MEASUREMENT_SETTING.maxOutputTokens);
+    check("the setting disclaims equivalence with historical Sonar",
+      /does NOT make an Agent measurement\s+\*?\s*equivalent to a historical Sonar one/.test(fs.readFileSync("lib/probes/perplexity-agent.ts", "utf8")));
     check("the stored request is byte-identical to the bytes sent", r.fullRequestBody === wire[0].body);
     check("and its SHA-256 covers those exact bytes", r.fullRequestBodySha256 === sha256Hex(wire[0].body));
     check("the question's own hash is kept separately", r.rawProbeRequestSha256 === sha256Hex(QUESTION));
@@ -165,6 +173,44 @@ async function main(): Promise<void> {
       r.answer === "No sources here." && r.citations.length === 0 && r.searchResults.length === 0);
   }
 
+  /* ═══════ 2b. cited is not the same as retrieved ═══════ */
+  console.log("\n[2b] Cited sources come from markers; every search result is kept separately");
+  const twoResults = [{ type: "search_results", results: [
+    { id: 1, url: "https://vanta.example/soc2", title: "Vanta" },
+    { id: 2, url: "https://drata.example/", title: "Drata" },
+  ] }];
+  const withText = (text: string) => agentBody({}, [...twoResults, { type: "message", content: [{ type: "output_text", text }] }]);
+  const probe = (raw: string) => runPerplexityAgentProbe({ prompt: QUESTION, brandName: "Acme", fetchImpl: fixtureFetch(200, raw, []) });
+  {
+    const r = await probe(withText("Both are common choices."));
+    check("results but no markers → no cited sources", r.citations.length === 0 && r.sourceCitations.length === 0, JSON.stringify(r.citations));
+    check("…and every search result is still kept", r.searchResults.length === 2);
+    check("…with no markers reported", JSON.stringify(r.citationMarkers) === JSON.stringify({ mapped: [], unmapped: [] }));
+  }
+  {
+    const r = await probe(withText("Drata [2] is popular."));
+    check("a valid marker cites only its own result", JSON.stringify(r.citations) === JSON.stringify(["https://drata.example/"]),
+      JSON.stringify(r.citations));
+    check("…the uncited result is retrieved, not cited", r.searchResults.length === 2 && !r.citations.includes("https://vanta.example/soc2"));
+    check("…and source records cover cited sources only", r.sourceCitations.length === 1 && r.sourceCitations[0].source === "https://drata.example/");
+  }
+  {
+    const r = await probe(withText("Drata [web:2] then Vanta [1], again Drata [2]."));
+    check("cited sources keep the order they are first cited, once each",
+      JSON.stringify(r.citations) === JSON.stringify(["https://drata.example/", "https://vanta.example/soc2"]), JSON.stringify(r.citations));
+  }
+  {
+    const r = await probe(withText("Vanta [1] and an unknown [7]."));
+    check("an unmatched marker is reported", JSON.stringify(r.citationMarkers) === JSON.stringify({ mapped: [1], unmapped: [7] }),
+      JSON.stringify(r.citationMarkers));
+    check("…and never becomes a source", JSON.stringify(r.citations) === JSON.stringify(["https://vanta.example/soc2"]));
+  }
+  {
+    const r = await probe(agentBody({}, [{ type: "message", content: [{ type: "output_text", text: "See [1]." }] }]));
+    check("a marker with no search results at all is unmatched, and nothing is cited",
+      r.citations.length === 0 && JSON.stringify(r.citationMarkers) === JSON.stringify({ mapped: [], unmapped: [1] }));
+  }
+
   /* ═══════ 3. failures keep their evidence ═══════ */
   console.log("\n[3] Unusable responses fail with full evidence");
   const run = (status: number, body: string) => () =>
@@ -181,6 +227,10 @@ async function main(): Promise<void> {
     "empty_answer", /unexpected_object/);
   await expectFailure("a response with no id", run(200, agentBody({ id: "" })), "empty_answer", /missing_id/);
   await expectFailure("a response with no served model", run(200, agentBody({ model: undefined })), "empty_answer", /missing_served_model/);
+  for (const served of ["sonar", "perplexity/sonar-pro", "openai/gpt-5.6-luna", "PERPLEXITY/SONAR"]) {
+    await expectFailure(`an unexpected served model (${served})`, run(200, agentBody({ model: served })), "empty_answer",
+      /unexpected_served_model/);
+  }
   await expectFailure("an HTTP 429", run(429, "{\"error\":\"rate limited\"}"), "http_error");
   await expectFailure("an HTTP 500", run(500, "upstream"), "http_error");
   await expectFailure("a timeout (the worker's deadline aborts the request)", () =>
@@ -213,6 +263,15 @@ async function main(): Promise<void> {
   check("no usage at all → unknown", measuredCostUsdFromRawResponseBody(agentBody({ usage: undefined })) === null);
   check("a Sonar body with no currency is still measured as before",
     measuredCostUsdFromRawResponseBody(JSON.stringify({ choices: [], usage: { cost: { total_cost: 0.0035 } } })) === 0.0035);
+  for (const [label, currency] of [["no currency", undefined], ["lowercase usd", "usd"], ["an empty currency", ""], ["a null currency", null]] as const) {
+    const body = agentBody({ usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2,
+      cost: { total_cost: 0.003, ...(currency === undefined ? {} : { currency }) } } });
+    check(`an Agent cost with ${label} → unknown (null)`, measuredCostUsdFromRawResponseBody(body) === null);
+  }
+  check("a Sonar body with explicit USD is measured",
+    measuredCostUsdFromRawResponseBody(JSON.stringify({ choices: [], usage: { cost: { total_cost: 0.0035, currency: "USD" } } })) === 0.0035);
+  check("a Sonar body with an explicit non-USD currency → unknown",
+    measuredCostUsdFromRawResponseBody(JSON.stringify({ choices: [], usage: { cost: { total_cost: 0.0035, currency: "EUR" } } })) === null);
 
   /* ═══════ 5. the worker's parser and dispatch ═══════ */
   console.log("\n[5] The worker reads stored Agent bodies and routes by provider");
@@ -220,6 +279,8 @@ async function main(): Promise<void> {
   for (const status of ["incomplete", "failed", "queued"]) {
     check(`a stored ${status} Agent body yields no answer`, answerFromRawResponseBody(agentBody({ status })) === null);
   }
+  check("a stored Agent body from an unexpected served model yields no answer",
+    answerFromRawResponseBody(agentBody({ model: "sonar" })) === null);
   check("a stored Agent body with empty output yields no answer",
     answerFromRawResponseBody(agentBody({}, [{ type: "message", content: [{ type: "output_text", text: "" }] }])) === null);
   check("a stored Sonar body is read exactly as before",
@@ -343,6 +404,45 @@ async function main(): Promise<void> {
     check("with its hash", rec.rawResponseSha256 === sha256Hex(raw));
     check("and the provider's own cost, measured", rec.actualCostUsd === 0.003 && rec.costBasis === "measured",
       `${rec.actualCostUsd}/${rec.costBasis}`);
+  }
+  {
+    // An unexpected served model through the worker: one paid call, its full
+    // evidence kept, the job closed — and no further call however long the
+    // worker keeps polling.
+    const { projectId, protocolId } = await seed("agent-wrong-model.test", "perplexity_agent", "perplexity/sonar");
+    const wire: Wire[] = [];
+    const raw = agentBody({ model: "openai/gpt-5.6-luna" });
+    const receipts: Array<Record<string, unknown>> = [];
+    const spyDb: DbAdapter = {
+      ...db,
+      recordProviderCallReceiptForJob: async (input) => {
+        receipts.push(input as unknown as Record<string, unknown>);
+        return db.recordProviderCallReceiptForJob(input);
+      },
+    };
+    const deps: WorkerDeps = {
+      db: spyDb, analysis, now: () => 1_700_000_000_000, sleep: async () => {}, probeMode: "live_perplexity",
+      realFetch: fixtureFetch(200, raw, wire),
+      runProbe: (async () => { throw new Error("must not run Sonar"); }) as unknown as WorkerDeps["runProbe"],
+      runAgentProbe: runPerplexityAgentProbe,
+    };
+    const results: IterationResult[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      const r = await runOneIteration(deps, OPTS, new WorkerHealth(deps.now));
+      results.push(r);
+      if (r.outcome === "no_job") break;
+    }
+    const attempts = await db.getProtocolAttempts(protocolId, projectId);
+    check("an unexpected served model is not a successful measurement",
+      !results.some((r) => r.outcome === "completed") && attempts.every((a) => a.status !== "completed"),
+      results.map((r) => `${r.outcome}:${r.detail}`).join(" | "));
+    check("exactly one paid call is made, and no automatic retry follows", wire.length === 1, String(wire.length));
+    check("the job stops: the worker finds nothing left to run", results[results.length - 1]?.outcome === "no_job",
+      results.map((r) => r.outcome).join(","));
+    const rec = receipts[0] ?? {};
+    check("one provider_error receipt keeps the whole response body", receipts.length === 1 &&
+      rec.outcome === "provider_error" && rec.rawResponseBody === raw && rec.rawResponseSha256 === sha256Hex(raw),
+      `${receipts.length} ${rec.outcome}`);
   }
   check("global fetch was never called", globalFetchCalls === 0, String(globalFetchCalls));
 

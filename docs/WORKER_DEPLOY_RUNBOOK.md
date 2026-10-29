@@ -112,8 +112,14 @@ Those three are the live statuses in migration `0050`. If the count is not zero,
 stop: resolve the job first. Do not deploy past a non-empty queue.
 
 ```bash
-# 4. Deploy
-flyctl deploy -c fly.worker.production.toml -a zypact-protocol-worker
+# 4a. Provenance (PR-2). The build context must be exactly the commit you deploy:
+#     this exits 1 on any edit or untracked file under the image source.
+npm run verify:worker-provenance -- "$(git rev-parse HEAD)" --worktree
+
+# 4b. Deploy, naming that commit. The image build refuses a missing or
+#     malformed GIT_SHA, so a deploy without this argument fails to build.
+flyctl deploy -c fly.worker.production.toml -a zypact-protocol-worker \
+  --build-arg GIT_SHA="$(git rev-parse HEAD)"
 
 # 5. Verify. This step is the point of the runbook.
 flyctl machine list -a zypact-protocol-worker
@@ -130,6 +136,15 @@ Three things to check in step 5, in order:
 
 Check (c) is the only direct evidence that D-036 took effect. Record the values
 you observed, not the values you expected.
+
+**Provenance (PR-2).** Record the commit passed in step 4b and the digest
+`npm run verify:worker-provenance -- <sha>` prints for it. The image reports
+both (`gitSha`, `sourceDigest`, `provenance: "recorded"`) in its start event
+(`worker_execution_disabled` / `worker_started`) and on its private `/healthz`,
+so the first separately authorised start can be checked with
+`npm run verify:worker-provenance -- <gitSha> --digest <sourceDigest>`. Anything
+other than `provenance: "recorded"` and a match means the running image is not
+the commit on record: stop it.
 
 ## 7. If the machine ID changed
 

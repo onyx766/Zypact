@@ -33,6 +33,8 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import path from "node:path";
+import { SOURCE_ROOTS } from "@/lib/protocol-worker/source-digest";
+import { sourceDigestAtCommit } from "./worker-provenance-git";
 
 let checks = 0;
 const failures: string[] = [];
@@ -157,8 +159,48 @@ function code(src: string, comment: string): string[] {
   assert("no instruction carries a credential-shaped token",
     !/(SUPABASE|PERPLEXITY|OPENAI|ANTHROPIC|SERVICE_ROLE|API_KEY|_TOKEN|_SECRET)/i.test(instructions),
     instructions.split("\n").filter((l) => /KEY|TOKEN|SECRET/i.test(l)).join(" | "));
-  assert("no build argument could inject one",
-    !lines.some((l) => /^ARG /i.test(l)));
+  // PR-2 — provenance. Exactly one build argument, GIT_SHA, with no
+  // default (a default would let a build without provenance pass), declared
+  // in the runtime stage after the sources are copied. The build itself
+  // validates it and records it: a RUN that writes build-provenance.json
+  // through writeImageProvenance (which refuses a missing or malformed SHA),
+  // then the image environment and the OCI revision label. All of it before
+  // USER node, so the worker cannot rewrite its own record.
+  const onlyGitShaArg = (ls: string[]): boolean => {
+    const a = ls.filter((l) => /^ARG /i.test(l));
+    return a.length === 1 && a[0] === "ARG GIT_SHA";
+  };
+  assert("the only build argument is GIT_SHA, with no default", onlyGitShaArg(lines),
+    lines.filter((l) => /^ARG /i.test(l)).join(" | ") || "none");
+  assert("a GIT_SHA default, or a second ARG, would fail that check",
+    !onlyGitShaArg(lines.map((l) => (l === "ARG GIT_SHA" ? `ARG GIT_SHA=${"0".repeat(40)}` : l)))
+      && !onlyGitShaArg([...lines, "ARG EXTRA"]));
+  const at = (re: RegExp) => lines.findIndex((l) => re.test(l));
+  const argAt = at(/^ARG GIT_SHA$/);
+  const runAt = at(/^RUN node --import tsx -e .*writeImageProvenance\('\.', process\.env\.GIT_SHA\)/);
+  const envAt = at(/^ENV ZYPACT_BUILD_GIT_SHA=\$\{GIT_SHA\}$/);
+  const labelAt = at(/^LABEL org\.opencontainers\.image\.revision=\$\{GIT_SHA\}$/);
+  const lastCopyAt = lines.reduce((acc, l, i) => (/^COPY /i.test(l) ? i : acc), -1);
+  const userAt = lines.findIndex((l) => /^USER\s+node$/i.test(l));
+  const runtimeAt = lines.findIndex((l) => /AS runtime/i.test(l));
+  assert("GIT_SHA is declared in the runtime stage, after every COPY",
+    argAt > runtimeAt && argAt > lastCopyAt, `arg=${argAt} lastCopy=${lastCopyAt}`);
+  assert("the build validates GIT_SHA and records the source digest (writeImageProvenance)",
+    runAt > argAt, `run=${runAt}`);
+  assert("the RUN fails the build on refusal (explicit non-zero exit)",
+    runAt >= 0 && /\.catch\(\(e\) => \{ console\.error\(e\.message\); process\.exit\(1\); \}\)/.test(lines[runAt]));
+  assert("the SHA is recorded in the image environment and the OCI revision label",
+    envAt > argAt && labelAt > argAt, `env=${envAt} label=${labelAt}`);
+  assert("provenance is written before USER node, so the worker cannot rewrite it",
+    runAt >= 0 && userAt > runAt && userAt > envAt && userAt > labelAt, `run=${runAt} user=${userAt}`);
+  {
+    // Negative proof: the same ordering check on a file with USER moved first.
+    const moved = [...lines.slice(0, runAt), "USER node", ...lines.slice(runAt).filter((l) => !/^USER\s+node$/i.test(l))];
+    assert("a USER node placed before the provenance RUN would fail that ordering check",
+      moved.findIndex((l) => /^USER\s+node$/i.test(l)) < moved.findIndex((l) => /writeImageProvenance/.test(l)));
+  }
+  assert("no provenance record is copied in from the build context",
+    !/(COPY|ADD)[^\n]*build-provenance/i.test(instructions));
 }
 
 // ══════════════════════════════════════════════════════ 2. .dockerignore
@@ -602,13 +644,53 @@ async function dockerHalf(): Promise<void> {
 
   try {
     // ---------------------------------------------------------- build
+    // PR-2 — the image claims the checked-out commit, and the contract
+    // proves it holds that commit's files. That proof needs a clean build
+    // context: an edit or an untracked file under the image source would
+    // ship under a commit it does not match, so it is a failure, not a skip.
+    const head = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
+    const dirty = spawnSync("git", ["status", "--porcelain", "--untracked-files=all", "--",
+      ...SOURCE_ROOTS.map((r) => r.replace(/\/$/, ""))], { encoding: "utf8" }).stdout.trim();
+    assert("the build context is a clean checkout of HEAD", /^[0-9a-f]{40}$/.test(head) && dirty === "",
+      dirty.split("\n").slice(0, 3).join(" / ") || head);
+    if (dirty !== "" || !/^[0-9a-f]{40}$/.test(head)) return;
+    const expectedDigest = sourceDigestAtCommit(head);
+
+    // Fail closed: no image without a valid GIT_SHA.
+    for (const [label, extra] of [
+      ["no GIT_SHA", [] as string[]],
+      ["a malformed GIT_SHA", ["--build-arg", "GIT_SHA=not-a-commit"]],
+      ["an abbreviated GIT_SHA", ["--build-arg", `GIT_SHA=${head.slice(0, 12)}`]],
+    ] as const) {
+      const refused = docker(["build", "--platform", PLATFORM, "--file", "Dockerfile.worker", ...extra, "."]);
+      assert(`a build with ${label} fails`, refused.code !== 0, `exit=${refused.code}`);
+      assert(`…and says why`, /GIT_SHA must be passed as a build argument/.test(refused.err + refused.out),
+        refused.err.trim().split("\n").slice(-2).join(" / "));
+    }
+
     const build = docker([
-      "build", "--platform", PLATFORM, "--file", "Dockerfile.worker", "--tag", TAG, ".",
+      "build", "--platform", PLATFORM, "--file", "Dockerfile.worker",
+      "--build-arg", `GIT_SHA=${head}`, "--tag", TAG, ".",
     ]);
     assert("the image builds", build.code === 0,
       build.err.trim().split("\n").slice(-4).join(" / "));
     if (build.code !== 0) return;
     built = true;
+
+    // ------------------------------------------------------ provenance
+    const label = docker(["image", "inspect", "--format",
+      '{{index .Config.Labels "org.opencontainers.image.revision"}}', TAG]);
+    assert("the OCI revision label is the built commit", label.out.trim() === head, label.out.trim());
+    const record = docker(["run", "--rm", "--platform", PLATFORM, TAG, "cat", "/app/build-provenance.json"]);
+    let parsedRecord: Record<string, unknown> = {};
+    try { parsedRecord = JSON.parse(record.out) as Record<string, unknown>; } catch { /* asserted below */ }
+    assert("build-provenance.json records the built commit", parsedRecord.gitSha === head, record.out.trim().slice(0, 120));
+    assert("…and the source digest git computes for that commit",
+      parsedRecord.sourceDigest === expectedDigest, `${String(parsedRecord.sourceDigest)} vs ${expectedDigest}`);
+    const owner = docker(["run", "--rm", "--platform", PLATFORM, TAG, "stat", "-c", "%U %a", "/app/build-provenance.json"]);
+    assert("the record is root-owned and read-only to others", owner.out.trim() === "root 644", owner.out.trim());
+    const writable = docker(["run", "--rm", "--platform", PLATFORM, TAG, "test", "-w", "/app/build-provenance.json"]);
+    assert("the worker user cannot rewrite it", writable.code !== 0, `exit=${writable.code}`);
 
     // ------------------------------------------- the architecture built
     const arch = docker(["image", "inspect", "--format", "{{.Architecture}}/{{.Os}}", TAG]);
@@ -746,6 +828,8 @@ async function dockerHalf(): Promise<void> {
       envDump.out.split("\n").filter((l) => /KEY|TOKEN|SECRET/i.test(l)).join(" | "));
     assert("execution is disabled inside the container",
       /WORKER_EXECUTION_MODE=disabled/.test(envDump.out));
+    assert("the image environment carries the built commit",
+      envDump.out.split("\n").includes(`ZYPACT_BUILD_GIT_SHA=${head}`));
 
     // ------------------------------------------------------- health
     const healthz = await get(hostPort, "/healthz");
@@ -754,11 +838,19 @@ async function dockerHalf(): Promise<void> {
     assert("/healthz answers 200", healthz.status === 200, String(healthz.status));
     assert("/readyz answers 200", readyz.status === 200, String(readyz.status));
     assert("an unknown route answers 404", unknown.status === 404, String(unknown.status));
-    for (const [label, probe] of [["healthz", healthz], ["readyz", readyz]] as const) {
+    for (const [probeName, probe] of [["healthz", healthz], ["readyz", readyz]] as const) {
       const parsed = JSON.parse(probe.body) as Record<string, unknown>;
-      assert(`${label} carries closed scalars only`,
-        Object.keys(parsed).sort().join(",") === "executionEnabled,ready",
+      // PR-2 — /healthz also states the image's provenance; /readyz does not change.
+      const keys = probeName === "healthz" ? "executionEnabled,gitSha,provenance,ready,sourceDigest" : "executionEnabled,ready";
+      assert(`${probeName} carries closed scalars only`,
+        Object.keys(parsed).sort().join(",") === keys,
         Object.keys(parsed).join(","));
+      if (probeName === "healthz") {
+        assert("healthz reports the built commit, the git-computed digest, and provenance=recorded",
+          parsed.gitSha === head && parsed.sourceDigest === expectedDigest && parsed.provenance === "recorded",
+          probe.body.slice(0, 200));
+      }
+      const label = probeName;
       assert(`${label} reports executionEnabled=false`, parsed.executionEnabled === false);
       assert(`${label} leaks no identifier`,
         !/token|job|project|prompt|key|secret|ref/i.test(probe.body), probe.body);
@@ -779,6 +871,8 @@ async function dockerHalf(): Promise<void> {
       /"healthServerClosed":true/.test(out));
     assert("the start event reported the wildcard bind host",
       /"healthHost":"0\.0\.0\.0"/.test(out));
+    assert("the start event reported the same provenance as /healthz",
+      out.includes(`"provenance":"recorded","gitSha":"${head}","sourceDigest":"${expectedDigest}"`));
     assert("exactly two closed events, and no others",
       (out.match(/"event":/g) ?? []).length === 2,
       (out.match(/"event":"[a-z_]+"/g) ?? []).join(","));

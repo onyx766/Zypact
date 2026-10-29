@@ -53,23 +53,29 @@ const SECRET_SHAPES: readonly RegExp[] = [
  *
  * PostgREST rejects with a plain object ({ code, message, details, hint }),
  * which `String()` renders as "[object Object]". Only two closed fields are
- * kept: a short alphanumeric `code` (e.g. 23505) and the `message`, clipped
- * (it carries the constraint name). `details` and `hint` are dropped: they
- * can carry row values. An Error gives its name and message. Everything is
- * clipped and secret-shaped substrings are redacted.
+ * kept: a short alphanumeric `code` (e.g. 23505) and the `message` (it
+ * carries the constraint name). `details` and `hint` are dropped: they can
+ * carry row values. An Error gives its name and message.
+ *
+ * Order matters, and is fixed: the COMPLETE text is redacted first, then
+ * flattened to one line, and only then clipped. Clipping first could cut a
+ * secret at the boundary into a fragment no redaction pattern recognises.
  */
 export function describeError(e: unknown): string {
-  const clip = (t: string, n: number) => (t.length > n ? `${t.slice(0, n)}…` : t);
   const redact = (t: string) => SECRET_SHAPES.reduce((acc, re) => acc.replace(re, "[redacted]"), t);
-  if (e instanceof Error) return redact(clip(`${e.name}: ${e.message}`, 300));
+  // Control characters (including CR, LF, tab) and Unicode line/paragraph separators.
+  const oneLine = (t: string) => t.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ");
+  const clip = (t: string, n: number) => (t.length > n ? `${t.slice(0, n)}…` : t);
+  const safe = (t: string, n: number) => clip(oneLine(redact(t)), n);
+  if (e instanceof Error) return safe(`${e.name}: ${e.message}`, 300);
   if (e !== null && typeof e === "object") {
     const o = e as Record<string, unknown>;
     const code = typeof o.code === "string" && /^[A-Za-z0-9_]{1,16}$/.test(o.code) ? o.code : null;
-    const message = typeof o.message === "string" ? clip(o.message, 200) : null;
+    const message = typeof o.message === "string" ? safe(o.message, 200) : null;
     const parts = [code === null ? null : `code=${code}`, message === null ? null : `message=${message}`].filter((x) => x !== null);
-    return redact(parts.length > 0 ? parts.join(" ") : "unrecognised error object");
+    return parts.length > 0 ? parts.join(" ") : "unrecognised error object";
   }
-  return redact(clip(String(e), 200));
+  return safe(String(e), 200);
 }
 
 export function readTomlScalar(text: string, section: string | null, key: string): string | null {

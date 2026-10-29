@@ -613,6 +613,30 @@ async function main(): Promise<void> {
         const d = describeError(e);
         check(`${label} is redacted`, d.includes("[redacted]") && !d.includes(jwt) && !d.includes("abc.def.ghi") && !d.includes("sb_secret_ABCDEF"), d);
       }
+      // Secrets that straddle the clipping boundary: the object message clips
+      // at 200 characters, an Error at 300. Redaction must see the whole
+      // secret first, so not even a fragment of it may survive.
+      const JWT_HEAD = "eyJhbGciOiJIUzI1NiJ9";
+      const boundaryJwt = `${JWT_HEAD}.${"c".repeat(30)}.${"d".repeat(30)}`;
+      for (const [label, e, fragments] of [
+        ["a JWT starting 10 characters before the 200-character clip", { code: "42501", message: `${"x".repeat(190)}${boundaryJwt}` }, [JWT_HEAD.slice(0, 6), "ccc", "ddd"]],
+        ["a JWT starting 10 characters before the 300-character Error clip", new Error(`${"x".repeat(290 - "Error: ".length)}${boundaryJwt}`), [JWT_HEAD.slice(0, 6), "ccc", "ddd"]],
+        ["a bearer token whose value crosses the clip", { message: `${"x".repeat(186)}Bearer tok_SECRETVALUE_0123456789` }, ["tok_SEC", "SECRETVALUE"]],
+        ["the word Bearer itself cut by the clip", { message: `${"x".repeat(197)}Bearer tok_SECRETVALUE_0123456789` }, ["tok_SEC", "SECRETVALUE"]],
+        ["a Supabase secret key crossing the clip", { message: `${"x".repeat(192)}sb_secret_ABCDEFGHIJKLMNOP0123` }, ["sb_s", "ABCDEFGH"]],
+        ["a Supabase publishable key crossing the clip", { message: `${"x".repeat(195)}sb_publishable_QRSTUVWXYZ987654` }, ["sb_p", "QRSTUV"]],
+      ] as const) {
+        const d = describeError(e);
+        check(`${label}: no fragment survives`, fragments.every((f) => !d.includes(f)), d.slice(-60));
+        check(`${label}: the output stays bounded`, d.length <= "code=42501 message=".length + 201 || (e instanceof Error && d.length <= 301), String(d.length));
+      }
+      const multi = describeError({ code: "P0001", message: "first line\nsecond\r\nthird\ttab\u0000nul\u2028sep\u0085next" });
+      check("a multi-line, control-character message becomes one line",
+        multi === "code=P0001 message=first line second third tab nul sep next" && !/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(multi), JSON.stringify(multi));
+      const multiErr = describeError(new Error("boom\nat line 2"));
+      check("an Error's message is one line too", multiErr === "Error: boom at line 2", JSON.stringify(multiErr));
+      const splitSecret = describeError({ message: `token\nBearer abc.def.ghi` });
+      check("redaction runs on the complete text before flattening", !splitSecret.includes("abc.def") && splitSecret.includes("[redacted]"), splitSecret);
       const circular: Record<string, unknown> = { code: "XX000", message: "loop" };
       circular.self = circular;
       check("a circular object is described without serialising it", describeError(circular) === "code=XX000 message=loop");

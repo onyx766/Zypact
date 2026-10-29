@@ -251,10 +251,13 @@ async function runLive(cfg: LiveWorkerConfig): Promise<void> {
         import("@/lib/protocol-worker/worker"),
         import("@/lib/protocol-worker/health"),
         import("@/lib/reports/report-pass"),
+        import("@/lib/worker-control/paid-execution-gate"),
+        import("@/lib/reports/service-client"),
       ]),
     run: async ([
       { getDb }, { runPerplexityProbe }, callModel, { sleep }, { runWorkerLoop },
       { WorkerHealth, idleProofEvent }, { runReportPass },
+      { paidExecutionGateFor }, { getReportServiceClient },
     ], adopt) => {
       const analysis: AnalysisTransport = {
         prepare: (call) =>
@@ -297,6 +300,13 @@ async function runLive(cfg: LiveWorkerConfig): Promise<void> {
         runtimeBound: bound,
       };
 
+      // PR-1 — the paid-execution gate, asked by the loop before every
+      // claim: the switch, the ceiling and the ledger, read through an
+      // explicitly configured service-role client (never the memory
+      // adapter, which live mode already refuses). Missing configuration
+      // is a refusal.
+      const paidExecutionGate = paidExecutionGateFor(getReportServiceClient, process.env);
+
       log("worker_started", {
         workerId: cfg.workerId,
         leaseSeconds: cfg.leaseSeconds,
@@ -326,7 +336,7 @@ async function runLive(cfg: LiveWorkerConfig): Promise<void> {
        * idle worker would simply vanish. Shutdown is cooperative, never
        * accidental.
        */
-      const health = await runWorkerLoop(deps, opts, signal, sleep, (r: IterationResult) => {
+      const health = await runWorkerLoop(deps, opts, paidExecutionGate, signal, sleep, (r: IterationResult) => {
         if (r.outcome === "no_job") {
           // TK-R-0 — idle cycles are still NOT logged one by one: a worker
           // on an empty queue would otherwise fill the log with nothing.

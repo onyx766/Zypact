@@ -157,7 +157,12 @@ export type IterationOutcome =
   | "parse_failed"
   | "lost_ownership"
   | "capped"
-  | "failed";
+  | "failed"
+  /**
+   * PR-1 — the paid-execution gate refused before a claim. Nothing was
+   * claimed, reserved or sent; `detail` is the gate's closed refusal code.
+   */
+  | "paid_execution_refused";
 
 export interface IterationResult {
   outcome: IterationOutcome;

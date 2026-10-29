@@ -197,3 +197,24 @@ export async function evaluatePaidExecution(deps: {
   }
   return { ok: true, ceilingUsd: config.ceilingUsd, spentLast24hUsd: spent, nextJobCapUsd: nextJobCap };
 }
+
+/**
+ * PR-1 — the gate the protocol worker asks before every claim, bound to an
+ * explicitly configured service-role client. `buildClient` is called on
+ * each evaluation; if it throws (no URL or key), the answer is a refusal,
+ * never a fallback to another store or a pass.
+ */
+export function paidExecutionGateFor(
+  buildClient: () => SupabaseClient,
+  env?: Record<string, string | undefined>,
+): () => Promise<PaidExecutionDecision> {
+  return async () => {
+    let client: SupabaseClient;
+    try {
+      client = buildClient();
+    } catch {
+      return { ok: false, code: "spend_ledger_unavailable", detail: "The spend ledger is not configured for this worker." };
+    }
+    return evaluatePaidExecution({ client, env });
+  };
+}

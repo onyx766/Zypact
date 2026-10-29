@@ -34,6 +34,14 @@
  *
  * Reserved cost stands in for actual cost wherever actual is unknown, so a
  * call that was paid for but never measured is counted, not ignored.
+ *
+ * PG-9 / C1 — every read is complete or the gate refuses. Each of the three
+ * reads asks PostgREST for an exact count, and the count must be present
+ * and equal to the rows returned: a missing count, a larger one (the
+ * response was truncated, e.g. at the API's max_rows) and a smaller one (an
+ * inconsistent response) all refuse. The cap read must also return exactly
+ * one row for every claimable protocol id and nothing else: a missing,
+ * duplicated or unrequested row refuses rather than being skipped.
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -135,20 +143,26 @@ export async function evaluatePaidExecution(deps: {
       .gte("created_at", since)
       .limit(LEDGER_ROW_LIMIT);
     if (error || !Array.isArray(data)) return unavailable("The spend ledger could not be read.");
-    if (typeof count !== "number" || count > data.length) {
+    if (typeof count !== "number" || count !== data.length) {
       return unavailable("The spend ledger returned an incomplete window, so spend cannot be totalled.");
     }
     calls = data as Record<string, unknown>[];
 
     const jobs = await deps.client
       .from("protocol_execution_jobs")
-      .select("protocol_id,status,attempt_count,max_attempts")
+      .select("protocol_id,status,attempt_count,max_attempts", { count: "exact" })
       .in("status", ["queued", "claimed", "running"]);
     if (jobs.error || !Array.isArray(jobs.data)) return unavailable("The job queue could not be read.");
+    if (typeof jobs.count !== "number" || jobs.count !== jobs.data.length) {
+      return unavailable("The job queue returned an incomplete read, so the next job's cap cannot be known.");
+    }
     const claimable: string[] = [];
     for (const job of jobs.data as Record<string, unknown>[]) {
+      if (typeof job.protocol_id !== "string" || job.protocol_id === "") {
+        return unavailable("A live job carries no protocol id.");
+      }
       if (job.status === "queued") {
-        claimable.push(String(job.protocol_id));
+        claimable.push(job.protocol_id);
         continue;
       }
       const attempts = job.attempt_count;
@@ -156,19 +170,31 @@ export async function evaluatePaidExecution(deps: {
       if (!Number.isInteger(attempts) || !Number.isInteger(max)) {
         return unavailable("A claimed job's attempt counts could not be read.");
       }
-      if ((attempts as number) < (max as number)) claimable.push(String(job.protocol_id));
+      if ((attempts as number) < (max as number)) claimable.push(job.protocol_id);
     }
     const protocolIds = Array.from(new Set(claimable));
     claimableCaps = [];
     if (protocolIds.length > 0) {
       const caps = await deps.client
         .from("protocols")
-        .select("id,spend_cap_usd")
+        .select("id,spend_cap_usd", { count: "exact" })
         .in("id", protocolIds);
-      if (caps.error || !Array.isArray(caps.data) || caps.data.length !== protocolIds.length) {
-        return unavailable("A claimable job's spend cap could not be read.");
+      if (caps.error || !Array.isArray(caps.data)) return unavailable("A claimable job's spend cap could not be read.");
+      if (typeof caps.count !== "number" || caps.count !== caps.data.length) {
+        return unavailable("The spend caps returned an incomplete read.");
       }
-      claimableCaps = caps.data as Record<string, unknown>[];
+      // Exactly one row per required protocol id, and no other row.
+      const required = new Set(protocolIds);
+      const byId = new Map<string, Record<string, unknown>>();
+      for (const row of caps.data as Record<string, unknown>[]) {
+        const id = row.id;
+        if (typeof id !== "string" || !required.has(id) || byId.has(id)) {
+          return unavailable("The spend caps did not match the claimable jobs one-to-one.");
+        }
+        byId.set(id, row);
+      }
+      if (byId.size !== required.size) return unavailable("A claimable job's spend cap could not be read.");
+      claimableCaps = protocolIds.map((id) => byId.get(id) as Record<string, unknown>);
     }
   } catch {
     return unavailable("The spend ledger could not be read.");

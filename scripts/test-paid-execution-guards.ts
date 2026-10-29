@@ -70,7 +70,15 @@ function check(name: string, cond: boolean, detail = ""): void {
 type Row = Record<string, unknown>;
 
 /** Just enough PostgREST for the gate's three reads, recording each table. */
-function fakeLedger(tables: Record<string, Row[]>, opts: { failOn?: string; countBonus?: number } = {}) {
+/**
+ * `countFor` overrides the exact count one table reports (a number, or null
+ * for a response that carries none); `ignoreInFor` makes one table ignore
+ * its `.in()` filter, as a misbehaving response would.
+ */
+function fakeLedger(tables: Record<string, Row[]>, opts: {
+  failOn?: string; countBonus?: number;
+  countFor?: Record<string, number | null>; ignoreInFor?: string;
+} = {}) {
   const reads: string[] = [];
   const client = {
     from(table: string) {
@@ -81,14 +89,14 @@ function fakeLedger(tables: Record<string, Row[]>, opts: { failOn?: string; coun
         select(_cols: string, o?: { count?: string }) { wantCount = o?.count === "exact"; return q; },
         gte(c: string, v: string) { rows = rows.filter((r) => String(r[c]) >= v); return q; },
         eq(c: string, v: unknown) { rows = rows.filter((r) => r[c] === v); return q; },
-        in(c: string, vs: unknown[]) { rows = rows.filter((r) => vs.includes(r[c])); return q; },
+        in(c: string, vs: unknown[]) { if (opts.ignoreInFor !== table) rows = rows.filter((r) => vs.includes(r[c])); return q; },
         limit(n: number) { rows = rows.slice(0, n); return q; },
         then(resolve: (v: unknown) => unknown) {
           if (opts.failOn === table) return resolve({ data: null, error: { message: "down" }, count: null });
-          return resolve({
-            data: rows, error: null,
-            count: wantCount ? rows.length + (opts.countBonus ?? 0) : null,
-          });
+          const count = !wantCount ? null
+            : opts.countFor && table in opts.countFor ? opts.countFor[table]
+            : rows.length + (opts.countBonus ?? 0);
+          return resolve({ data: rows, error: null, count });
         },
       };
       return q;
@@ -196,6 +204,61 @@ async function main(): Promise<void> {
   ] as const) {
     const r = await evaluatePaidExecution({ client: l.client, now: () => NOW, env: ON });
     check(`${label} → refused as unavailable`, !r.ok && r.code === "spend_ledger_unavailable", JSON.stringify(r));
+  }
+
+  /* ═══════ 2d. PG-9 C1: every read is complete, or the gate refuses ═══════ */
+  console.log("\n[2d] Complete reads only (PG-9 C1)");
+  {
+    const jobs2 = [{ protocol_id: "p1", status: "queued" }, { protocol_id: "p2", status: "queued" }];
+    const caps2 = [{ id: "p1", spend_cap_usd: 0.25 }, { id: "p2", spend_cap_usd: 0.4 }];
+    const call = { created_at: recent, reserved_cost_usd: 0.05, actual_cost_usd: null };
+    const base = await evaluatePaidExecution({ client: ledger([call], jobs2, caps2).client, now: () => NOW, env: ON });
+    check("a complete, valid read is unchanged: allowed, same totals",
+      base.ok && Math.abs(base.spentLast24hUsd - 0.05) < 1e-9 && base.nextJobCapUsd === 0.4, JSON.stringify(base));
+    for (const [label, o] of [
+      ["the job queue carries no count", { countFor: { protocol_execution_jobs: null } }],
+      ["the job queue count is larger than its rows (truncated, e.g. at max_rows)", { countFor: { protocol_execution_jobs: 3 } }],
+      ["the job queue count is smaller than its rows (inconsistent)", { countFor: { protocol_execution_jobs: 1 } }],
+      ["the spend caps carry no count", { countFor: { protocols: null } }],
+      ["the spend cap count is larger than its rows (truncated)", { countFor: { protocols: 3 } }],
+      ["the spend cap count is smaller than its rows (inconsistent)", { countFor: { protocols: 1 } }],
+      ["the ledger count is smaller than its rows (inconsistent)", { countFor: { protocol_external_calls: 0 } }],
+      ["the ledger carries no count", { countFor: { protocol_external_calls: null } }],
+    ] as const) {
+      const r = await evaluatePaidExecution({ client: ledger([call], jobs2, caps2, o).client, now: () => NOW, env: ON });
+      check(`${label} → refused as unavailable`, !r.ok && r.code === "spend_ledger_unavailable", JSON.stringify(r));
+    }
+    for (const [label, caps, o] of [
+      ["one required cap row is missing", [caps2[0]], {}],
+      ["a cap row is duplicated (count consistent)", [...caps2, caps2[1]], {}],
+      ["a cap row nobody asked for comes back", [...caps2, { id: "p9", spend_cap_usd: 0.1 }], { ignoreInFor: "protocols" }],
+      ["a duplicate hides a missing row (same row count)", [caps2[0], caps2[0]], {}],
+      ["a cap row has no id", [caps2[0], { spend_cap_usd: 0.4 }], { ignoreInFor: "protocols" }],
+    ] as const) {
+      const r = await evaluatePaidExecution({ client: ledger([call], jobs2, caps as unknown as Row[], o).client, now: () => NOW, env: ON });
+      check(`${label} → refused as unavailable`, !r.ok && r.code === "spend_ledger_unavailable", JSON.stringify(r));
+    }
+    for (const [label, job] of [
+      ["a live job with no protocol id", { status: "queued" }],
+      ["a live job whose protocol id is not a string", { protocol_id: 7, status: "queued" }],
+      ["a live job with an empty protocol id", { protocol_id: "", status: "queued" }],
+    ] as const) {
+      const r = await evaluatePaidExecution({ client: ledger([call], [job as Row], caps2).client, now: () => NOW, env: ON });
+      check(`${label} → refused as unavailable`, !r.ok && r.code === "spend_ledger_unavailable", JSON.stringify(r));
+    }
+    {
+      // Two live jobs on one protocol id are one cap, read once.
+      const r = await evaluatePaidExecution({
+        client: ledger([call], [jobs2[0], { protocol_id: "p1", status: "running", attempt_count: 1, max_attempts: 3 }], [caps2[0]]).client,
+        now: () => NOW, env: ON });
+      check("two live jobs sharing a protocol id need its one cap row, and are allowed", r.ok && r.nextJobCapUsd === 0.25, JSON.stringify(r));
+    }
+    {
+      const l = ledger([call], [], []);
+      const r = await evaluatePaidExecution({ client: l.client, now: () => NOW, env: ON });
+      check("with no claimable job, the cap table is not read at all", r.ok && r.nextJobCapUsd === 0 && !l.reads.includes("protocols"),
+        l.reads.join(","));
+    }
   }
 
   /* ═══════ 2b. resumable jobs: what the worker's claim can pick up ═══════ */

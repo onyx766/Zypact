@@ -40,7 +40,7 @@ import type { ProbeAnalysisM5Parsed } from "@/lib/protocol-worker/analysis-m5";
 import type { PerplexityProbeResult } from "@/lib/probes/perplexity";
 import type { PaidExecutionDecision } from "@/lib/worker-control/paid-execution-gate";
 import { PG9_API_ORIGIN, PG9_CASES, installLocalOnlyNetworkGuard, type NetworkGuard } from "./pg9-harness";
-import { reportLifecycle, runPg9Lifecycle, type LifecycleResult, type StackContext } from "./pg9-lifecycle";
+import { describeError, reportLifecycle, runPg9Lifecycle, type LifecycleResult, type StackContext } from "./pg9-lifecycle";
 
 const REPO_ROOT = process.cwd();
 
@@ -97,11 +97,29 @@ export interface FixtureJobOptions {
   maxAttempts?: number;
 }
 
-/** One approved protocol with its queued job. `maxAttempts` is passed through only when given. */
-export function fixtureJobFactory(db: DbAdapter, ids: { projectId: string; versionId: string }) {
+/**
+ * One independent baseline: its own buyer question and approved version, an
+ * approved protocol on that version, and its queued job. `maxAttempts` is
+ * passed through only when given.
+ *
+ * A fresh question per baseline is required, not incidental: 0073's
+ * protocols_one_live_baseline_per_version allows at most ONE approved/active
+ * baseline protocol per buyer-question version (a retest reuses its
+ * baseline's version on purpose). Sharing one version across fixture
+ * baselines made the second approve_protocol fail with 23505 (run
+ * 40890954215).
+ */
+export function fixtureJobFactory(db: DbAdapter, ids: { projectId: string }) {
   return async (spendCapUsd: number, o: FixtureJobOptions = {}): Promise<ProtocolExecutionJob> => {
+    const question = await db.createBuyerQuestion({ projectId: ids.projectId });
+    const version = await db.createBuyerQuestionVersion({
+      buyerQuestionId: question.id, projectId: ids.projectId, versionNumber: 1, promptText: QUESTION,
+      promptHash: sha256Hex(QUESTION), intentType: "comparison", commercialValue: 3, winnability: 3, priority: 10,
+      rationale: "fixture", provenance: "founder_supplied",
+    });
+    await db.approveBuyerQuestionVersion({ versionId: version.id, projectId: ids.projectId, approvedBy: APPROVER });
     const protocol = await db.createProtocol({
-      projectId: ids.projectId, buyerQuestionVersionId: ids.versionId, provider: "perplexity", surface: "sonar",
+      projectId: ids.projectId, buyerQuestionVersionId: version.id, provider: "perplexity", surface: "sonar",
       plannedBaselineRuns: o.plannedBaselineRuns ?? 1, plannedRetestRuns: 0, paraphrasePlan: [{ text: QUESTION, hash: sha256Hex(QUESTION) }],
       unitOfAnalysis: "run", primaryMetric: "listed_in_run", samplePlanningMethod: "fixed",
       runCap: 20, spendCapUsd, timeWindowSeconds: 3600, rateLimitPerHour: 100, concurrencyLimit: 5, retryCap: 2,
@@ -238,15 +256,7 @@ async function runCases(ctx: StackContext, guard: NetworkGuard): Promise<void> {
 
   // ── fixtures
   const project = await db.createProject({ domain: "pg9.example.test", companyName: "PG-9 Fixture" });
-  const question = await db.createBuyerQuestion({ projectId: project.id });
-  const version = await db.createBuyerQuestionVersion({
-    buyerQuestionId: question.id, projectId: project.id, versionNumber: 1, promptText: QUESTION,
-    promptHash: sha256Hex(QUESTION), intentType: "comparison", commercialValue: 3, winnability: 3, priority: 10,
-    rationale: "fixture", provenance: "founder_supplied",
-  });
-  await db.approveBuyerQuestionVersion({ versionId: version.id, projectId: project.id, approvedBy: APPROVER });
-
-  const makeJob = fixtureJobFactory(db, { projectId: project.id, versionId: version.id });
+  const makeJob = fixtureJobFactory(db, { projectId: project.id });
   const { claimById, claimNext } = fixtureClaims(db);
   /**
    * One ledger row with the given shape. Created through the real claim and
@@ -486,21 +496,57 @@ async function runCases(ctx: StackContext, guard: NetworkGuard): Promise<void> {
   /* ═══ P12 a job queue larger than max_rows (C1) ═══ */
   await reset();
   {
+    // 1000 copies of one complete baseline identity chain — question, approved
+    // version, approved protocol, queued job — each with new ids, in ONE
+    // statement (foreign keys are checked at its end). Every copy gets its own
+    // version, so protocols_one_live_baseline_per_version still holds.
+    // Disposable database only.
     const template = await makeJob(0.5);
-    psql(`with p as (
-            insert into public.protocols
-              select (jsonb_populate_record(null::public.protocols, to_jsonb(t) || jsonb_build_object('id', gen_random_uuid()))).*
-              from public.protocols t, generate_series(1, 1000) g where t.id = '${template.protocolId}'
-            returning id, project_id)
-          insert into public.protocol_execution_jobs
-            select (jsonb_populate_record(null::public.protocol_execution_jobs, to_jsonb(j) || jsonb_build_object(
-              'id', gen_random_uuid(), 'protocol_id', p.id, 'dataset_batch_id', null, 'current_attempt_id', null))).*
-            from public.protocol_execution_jobs j, p where j.id = '${template.id}'`);
+    const tVersion = psql(`select buyer_question_version_id from public.protocols where id = '${template.protocolId}'`);
+    const tQuestion = psql(`select buyer_question_id from public.buyer_question_versions where id = '${tVersion}'`);
+    const inserted = psql(`with g as (
+            select gen_random_uuid() as qid, gen_random_uuid() as vid, gen_random_uuid() as pid, gen_random_uuid() as jid
+              from generate_series(1, 1000)),
+          q as (insert into public.buyer_questions
+              select (jsonb_populate_record(null::public.buyer_questions, to_jsonb(t) || jsonb_build_object('id', g.qid))).*
+              from public.buyer_questions t, g where t.id = '${tQuestion}'
+            returning id),
+          v as (insert into public.buyer_question_versions
+              select (jsonb_populate_record(null::public.buyer_question_versions, to_jsonb(t) || jsonb_build_object(
+                'id', g.vid, 'buyer_question_id', g.qid))).*
+              from public.buyer_question_versions t, g where t.id = '${tVersion}'
+            returning id),
+          p as (insert into public.protocols
+              select (jsonb_populate_record(null::public.protocols, to_jsonb(t) || jsonb_build_object(
+                'id', g.pid, 'buyer_question_version_id', g.vid))).*
+              from public.protocols t, g where t.id = '${template.protocolId}'
+            returning id),
+          j as (insert into public.protocol_execution_jobs
+              select (jsonb_populate_record(null::public.protocol_execution_jobs, to_jsonb(t) || jsonb_build_object(
+                'id', g.jid, 'protocol_id', g.pid, 'dataset_batch_id', null, 'current_attempt_id', null))).*
+              from public.protocol_execution_jobs t, g where t.id = '${template.id}'
+            returning id)
+          select (select count(*) from q) || ',' || (select count(*) from v) || ',' || (select count(*) from p) || ',' || (select count(*) from j)`);
+    record("P12", "1000 questions, versions, protocols and jobs inserted", inserted === "1000,1000,1000,1000", inserted);
+    const scope = `j.project_id = '${template.projectId}' and j.status = 'queued'`;
+    const chain = psql(`select count(*) || ',' || count(distinct p.id) || ',' || count(distinct v.id) || ',' || count(distinct q.id)
+        || ',' || count(*) filter (where v.approved_at is not null and p.status = 'approved' and p.baseline_protocol_id is null)
+        from public.protocol_execution_jobs j
+        join public.protocols p on p.id = j.protocol_id and p.project_id = j.project_id
+        join public.buyer_question_versions v on v.id = p.buyer_question_version_id and v.project_id = p.project_id
+        join public.buyer_questions q on q.id = v.buyer_question_id and q.project_id = v.project_id
+       where ${scope}`);
+    record("P12", "1001 queued jobs, each joined through its own protocol, version and question; all approved baselines",
+      chain === "1001,1001,1001,1001,1001", chain);
+    const liveBaselines = psql(`select count(*) || ',' || count(distinct buyer_question_version_id) from public.protocols
+       where project_id = '${template.projectId}' and status in ('approved', 'active') and baseline_protocol_id is null`);
+    const [lbCount, lbDistinct] = liveBaselines.split(",").map(Number);
+    record("P12", "every live baseline has its own version (the 0073 index's rule)", lbCount >= 1001 && lbCount === lbDistinct, liveBaselines);
     psql(`update public.protocols set spend_cap_usd = 9 where id = (select protocol_id from public.protocol_execution_jobs
             where status = 'queued' order by id desc limit 1)`);
     const live = Number(psql("select count(*) from public.protocol_execution_jobs where status in ('queued','claimed','running')"));
     const d = await gate(ON("50"));
-    record("P12", `${live} live jobs (> max_rows 1000) → spend_ledger_unavailable, never a truncated max`,
+    record("P12", `${live} eligible live jobs (> max_rows 1000) → spend_ledger_unavailable, never a truncated max`,
       live > 1000 && !d.ok && d.code === "spend_ledger_unavailable", JSON.stringify(d));
   }
 
@@ -621,7 +667,7 @@ function summary(print: boolean): { success: boolean } {
 
 if (IS_ENTRY) {
   main().catch((e) => {
-    console.error(`PG-9 harness error: ${e instanceof Error ? e.message : String(e)}`);
+    console.error(`PG-9 harness error: ${describeError(e)}`);
     process.exitCode = 1;
   });
 }

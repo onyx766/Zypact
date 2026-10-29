@@ -25,7 +25,14 @@
  *       and the ordinary claim takes multi-attempt jobs, each checking
  *       CLAIMED, the job id and the token, and naming the RPC outcome on
  *       refusal; P3/P7/ledgerRow/P15 use the right one. Against the
- *       in-memory adapter, which mirrors both claim predicates.
+ *       in-memory adapter, which mirrors both claim predicates;
+ *   [8] one live baseline per question version (0073's partial unique
+ *       index, which the in-memory adapter does not model): a test double
+ *       enforcing it reproduces run 40890954215's 23505, and the corrected
+ *       factory approves independent baselines on distinct, approved
+ *       versions; P12 copies the full identity chain and verifies it;
+ *       errors are described in bounded, redacted form, never as
+ *       "[object Object]".
  */
 
 import { createHash } from "node:crypto";
@@ -34,7 +41,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { runPg9Lifecycle, type LifecycleResult } from "./pg9-lifecycle";
+import { describeError, runPg9Lifecycle, type LifecycleResult } from "./pg9-lifecycle";
 import { fixtureClaims, fixtureJobFactory } from "./test-pg9-paid-gate-runtime";
 import type { DbAdapter } from "@/lib/db/types";
 import {
@@ -337,6 +344,14 @@ async function main(): Promise<void> {
         body: async () => { throw new Error("boom"); } });
       check("cases throw: cases_failed with the error kept", r.status === "cases_failed" && r.reasons.some((x) => /boom/.test(x)));
     }
+    {
+      const st = scenario("ok");
+      const r = await runPg9Lifecycle({ exec: st.exec, migrationsDir, tmpRoot, portFree: async () => true, log: quiet,
+        body: async () => { throw { code: "23505", message: 'duplicate key value violates unique constraint "protocols_one_live_baseline_per_version"', details: "Key (x)=(y) already exists.", hint: null }; } });
+      check("cases throw a PostgREST error object: the reason names its code and constraint, not [object Object]",
+        r.status === "cases_failed" && r.reasons.some((x) => x === 'the cases threw: code=23505 message=duplicate key value violates unique constraint "protocols_one_live_baseline_per_version"')
+          && !r.reasons.some((x) => x.includes("[object Object]") || x.includes("Key (x)")), r.reasons.join(" / "));
+    }
 
     // L4 — a failed stop after a successful run is a failure
     {
@@ -394,16 +409,8 @@ async function main(): Promise<void> {
   {
     const { memoryAdapter } = await import("@/lib/db/memory-adapter");
     const db: DbAdapter = memoryAdapter;
-    const Q = "Which vendors handle X best?";
     const project = await db.createProject({ domain: "pg9-fixture-contract.test", companyName: "Fixture" });
-    const question = await db.createBuyerQuestion({ projectId: project.id });
-    const version = await db.createBuyerQuestionVersion({
-      buyerQuestionId: question.id, projectId: project.id, versionNumber: 1, promptText: Q,
-      promptHash: createHash("sha256").update(Q).digest("hex"), intentType: "comparison", commercialValue: 3, winnability: 3,
-      priority: 10, rationale: "fixture", provenance: "founder_supplied",
-    });
-    await db.approveBuyerQuestionVersion({ versionId: version.id, projectId: project.id, approvedBy: "11111111-1111-4111-8111-111111111111" });
-    const makeJob = fixtureJobFactory(db, { projectId: project.id, versionId: version.id });
+    const makeJob = fixtureJobFactory(db, { projectId: project.id });
     const { claimById, claimNext } = fixtureClaims(db);
     const errorOf = async (f: () => Promise<unknown>) => { try { await f(); return ""; } catch (e) { return e instanceof Error ? e.message : String(e); } };
     const drain = async () => {
@@ -492,6 +499,169 @@ async function main(): Promise<void> {
     check("every claimById call outside the helpers targets a job made with maxAttempts: 1",
       [...stackSrc.matchAll(/await claimById\((\w+)/g)].every((m) => new RegExp(`const ${m[1]} = await makeJob\\([^)]*\\{ maxAttempts: 1 \\}\\)`).test(stackSrc)));
     check("the old silent null check is gone", !/must\(c\.job, "claimed job"\)/.test(stackSrc));
+  }
+
+
+  /* ═══════ [8] one live baseline per question version (0073), and bounded errors ═══════ */
+  console.log("\n[8] Independent baseline identities (0073) and bounded error reporting");
+  {
+    const { memoryAdapter } = await import("@/lib/db/memory-adapter");
+    const base: DbAdapter = memoryAdapter;
+    const APPROVER = "11111111-1111-4111-8111-111111111111";
+    const UNIQUE_VIOLATION = {
+      code: "23505",
+      message: 'duplicate key value violates unique constraint "protocols_one_live_baseline_per_version"',
+      details: "Key (buyer_question_version_id)=(bdf9cdad-4a2a-49d4-a575-e65ccfa9f5ff) already exists.",
+      hint: null,
+    };
+    /**
+     * A test double that enforces 0073's partial unique index the way
+     * PostgreSQL does — the in-memory adapter does not model it. A second
+     * live baseline on a version throws exactly what PostgREST throws: a
+     * plain object, not an Error.
+     */
+    const enforcing = () => {
+      const liveByVersion = new Map<string, string>();
+      const created: Array<{ protocolVersion: string }> = [];
+      const approvedVersions = new Set<string>();
+      const db: DbAdapter = {
+        ...base,
+        approveBuyerQuestionVersion: async (input) => {
+          const r = await base.approveBuyerQuestionVersion(input);
+          approvedVersions.add(input.versionId);
+          return r;
+        },
+        createProtocol: async (input) => {
+          created.push({ protocolVersion: input.buyerQuestionVersionId });
+          return base.createProtocol(input);
+        },
+        approveProtocol: async (input) => {
+          const p = await base.getProtocol(input.protocolId, input.projectId);
+          if (p && p.baselineProtocolId == null) {
+            const holder = liveByVersion.get(p.buyerQuestionVersionId);
+            if (holder !== undefined && holder !== p.id) throw { ...UNIQUE_VIOLATION };
+          }
+          const r = await base.approveProtocol(input);
+          if (r.outcome === "APPROVED" && r.protocol) liveByVersion.set(r.protocol.buyerQuestionVersionId, r.protocol.id);
+          return r;
+        },
+      };
+      return { db, created, approvedVersions };
+    };
+    const thrown = async (f: () => Promise<unknown>) => { try { await f(); return null; } catch (e) { return e; } };
+
+    // The original failure, reproduced: two baselines on one version.
+    {
+      const { db } = enforcing();
+      const project = await db.createProject({ domain: "pg9-0073-repro.test", companyName: "Repro" });
+      const question = await db.createBuyerQuestion({ projectId: project.id });
+      const Q = "Which vendors handle X best?";
+      const version = await db.createBuyerQuestionVersion({
+        buyerQuestionId: question.id, projectId: project.id, versionNumber: 1, promptText: Q,
+        promptHash: createHash("sha256").update(Q).digest("hex"), intentType: "comparison", commercialValue: 3, winnability: 3,
+        priority: 10, rationale: "fixture", provenance: "founder_supplied",
+      });
+      await db.approveBuyerQuestionVersion({ versionId: version.id, projectId: project.id, approvedBy: APPROVER });
+      const shared = async () => {
+        const p = await db.createProtocol({
+          projectId: project.id, buyerQuestionVersionId: version.id, provider: "perplexity", surface: "sonar",
+          plannedBaselineRuns: 1, plannedRetestRuns: 0, paraphrasePlan: [{ text: Q, hash: createHash("sha256").update(Q).digest("hex") }],
+          unitOfAnalysis: "run", primaryMetric: "listed_in_run", samplePlanningMethod: "fixed",
+          runCap: 20, spendCapUsd: 1, timeWindowSeconds: 3600, rateLimitPerHour: 100, concurrencyLimit: 5, retryCap: 2,
+        });
+        return db.approveProtocol({ protocolId: p.id, projectId: project.id, approvedBy: APPROVER });
+      };
+      await shared();
+      const e = await thrown(shared);
+      check("two baselines on one version: the second approval throws the 23505 plain object (run 40890954215)",
+        e !== null && typeof e === "object" && !(e instanceof Error) && (e as { code?: string }).code === "23505");
+      check("…which String() renders as the useless \"[object Object]\"", String(e) === "[object Object]");
+      const d = describeError(e);
+      check("describeError gives the code and the constraint name",
+        d === 'code=23505 message=duplicate key value violates unique constraint "protocols_one_live_baseline_per_version"', d);
+      check("…and drops `details`, which carries row values", !d.includes("bdf9cdad") && !d.includes("Key ("));
+    }
+
+    // The corrected factory: every baseline its own approved version.
+    {
+      const { db, created, approvedVersions } = enforcing();
+      const project = await db.createProject({ domain: "pg9-0073-fixed.test", companyName: "Fixed" });
+      const makeJob = fixtureJobFactory(db, { projectId: project.id });
+      const jobs: unknown[] = [];
+      const e = await thrown(async () => { for (let i = 0; i < 4; i += 1) jobs.push(await makeJob(1)); });
+      check("four independent baselines approve under the enforced 0073 rule", e === null && jobs.length === 4, e === null ? "" : describeError(e));
+      const versions = created.map((c) => c.protocolVersion);
+      check("each protocol was created on a distinct buyer-question version", new Set(versions).size === versions.length && versions.length === 4,
+        versions.length.toString());
+      check("each of those versions was approved first", versions.every((v) => approvedVersions.has(v)));
+    }
+
+    // describeError: bounded and closed.
+    {
+      check("an Error gives its name and message", describeError(new TypeError("bad input")) === "TypeError: bad input");
+      check("a plain object without code or message", describeError({ foo: { bar: 1 } }) === "unrecognised error object");
+      check("a non-alphanumeric or overlong code is dropped",
+        describeError({ code: "23505; drop table x", message: "m" }) === "message=m" && describeError({ code: "x".repeat(17) }) === "unrecognised error object");
+      const long = describeError({ code: "P0001", message: "y".repeat(500) });
+      check("a long message is clipped", long.length <= "code=P0001 message=".length + 201 && long.endsWith("…"), String(long.length));
+      const jwt = `eyJhbGciOiJIUzI1NiJ9.${"a".repeat(20)}.${"b".repeat(20)}`;
+      for (const [label, e] of [
+        ["a JWT in a message", { code: "42501", message: `permission denied for ${jwt}` }],
+        ["a bearer header in an Error", new Error("request failed: Authorization: Bearer abc.def.ghi")],
+        ["a Supabase secret key", { message: "key sb_secret_ABCDEF1234567890 rejected" }],
+      ] as const) {
+        const d = describeError(e);
+        check(`${label} is redacted`, d.includes("[redacted]") && !d.includes(jwt) && !d.includes("abc.def.ghi") && !d.includes("sb_secret_ABCDEF"), d);
+      }
+      // Secrets that straddle the clipping boundary: the object message clips
+      // at 200 characters, an Error at 300. Redaction must see the whole
+      // secret first, so not even a fragment of it may survive.
+      const JWT_HEAD = "eyJhbGciOiJIUzI1NiJ9";
+      const boundaryJwt = `${JWT_HEAD}.${"c".repeat(30)}.${"d".repeat(30)}`;
+      for (const [label, e, fragments] of [
+        ["a JWT starting 10 characters before the 200-character clip", { code: "42501", message: `${"x".repeat(190)}${boundaryJwt}` }, [JWT_HEAD.slice(0, 6), "ccc", "ddd"]],
+        ["a JWT starting 10 characters before the 300-character Error clip", new Error(`${"x".repeat(290 - "Error: ".length)}${boundaryJwt}`), [JWT_HEAD.slice(0, 6), "ccc", "ddd"]],
+        ["a bearer token whose value crosses the clip", { message: `${"x".repeat(186)}Bearer tok_SECRETVALUE_0123456789` }, ["tok_SEC", "SECRETVALUE"]],
+        ["the word Bearer itself cut by the clip", { message: `${"x".repeat(197)}Bearer tok_SECRETVALUE_0123456789` }, ["tok_SEC", "SECRETVALUE"]],
+        ["a Supabase secret key crossing the clip", { message: `${"x".repeat(192)}sb_secret_ABCDEFGHIJKLMNOP0123` }, ["sb_s", "ABCDEFGH"]],
+        ["a Supabase publishable key crossing the clip", { message: `${"x".repeat(195)}sb_publishable_QRSTUVWXYZ987654` }, ["sb_p", "QRSTUV"]],
+      ] as const) {
+        const d = describeError(e);
+        check(`${label}: no fragment survives`, fragments.every((f) => !d.includes(f)), d.slice(-60));
+        check(`${label}: the output stays bounded`, d.length <= "code=42501 message=".length + 201 || (e instanceof Error && d.length <= 301), String(d.length));
+      }
+      const multi = describeError({ code: "P0001", message: "first line\nsecond\r\nthird\ttab\u0000nul\u2028sep\u0085next" });
+      check("a multi-line, control-character message becomes one line",
+        multi === "code=P0001 message=first line second third tab nul sep next" && !/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(multi), JSON.stringify(multi));
+      const multiErr = describeError(new Error("boom\nat line 2"));
+      check("an Error's message is one line too", multiErr === "Error: boom at line 2", JSON.stringify(multiErr));
+      const splitSecret = describeError({ message: `token\nBearer abc.def.ghi` });
+      check("redaction runs on the complete text before flattening", !splitSecret.includes("abc.def") && splitSecret.includes("[redacted]"), splitSecret);
+      const circular: Record<string, unknown> = { code: "XX000", message: "loop" };
+      circular.self = circular;
+      check("a circular object is described without serialising it", describeError(circular) === "code=XX000 message=loop");
+      check("null, numbers and strings", describeError(null) === "null" && describeError(42) === "42" && describeError("plain") === "plain");
+    }
+
+    // The runtime script uses all of it.
+    const stackSrc = readFileSync("scripts/test-pg9-paid-gate-runtime.ts", "utf8");
+    const lifecycleSrc = readFileSync("scripts/pg9-lifecycle.ts", "utf8");
+    check("runCases builds the factory from the project only (no shared version)",
+      /const makeJob = fixtureJobFactory\(db, \{ projectId: project\.id \}\);/.test(stackSrc)
+        && (stackSrc.match(/createBuyerQuestionVersion\(/g) ?? []).length === 1);
+    check("the factory creates and approves a question version for every baseline",
+      /const question = await db\.createBuyerQuestion\(\{ projectId: ids\.projectId \}\);[\s\S]{0,600}?approveBuyerQuestionVersion\(\{ versionId: version\.id[\s\S]{0,200}?buyerQuestionVersionId: version\.id/.test(stackSrc));
+    check("P12 copies the whole chain: questions, versions (re-pointed), protocols (re-pointed), jobs (re-pointed)",
+      /insert into public\.buyer_questions/.test(stackSrc)
+        && /'id', g\.vid, 'buyer_question_id', g\.qid/.test(stackSrc)
+        && /'id', g\.pid, 'buyer_question_version_id', g\.vid/.test(stackSrc)
+        && /'id', g\.jid, 'protocol_id', g\.pid, 'dataset_batch_id', null, 'current_attempt_id', null/.test(stackSrc));
+    check("P12 verifies row counts, the joined identity chain, distinct versions and > 1000 eligible jobs",
+      /inserted === "1000,1000,1000,1000"/.test(stackSrc) && /chain === "1001,1001,1001,1001,1001"/.test(stackSrc)
+        && /lbCount >= 1001 && lbCount === lbDistinct/.test(stackSrc) && /live > 1000 && !d\.ok && d\.code === "spend_ledger_unavailable"/.test(stackSrc));
+    check("both error sinks use describeError; no String(e) remains in them",
+      /the cases threw: \$\{describeError\(e\)\}/.test(lifecycleSrc) && /PG-9 harness error: \$\{describeError\(e\)\}/.test(stackSrc)
+        && !/the cases threw: \$\{e instanceof Error/.test(lifecycleSrc) && !/PG-9 harness error: \$\{e instanceof Error/.test(stackSrc));
   }
 
   console.log(`\n${checks - failures}/${checks} checks passed.${failures ? ` ${failures} FAILED.` : ""}`);

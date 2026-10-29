@@ -14,20 +14,27 @@
  *       runtime reads back as `recorded`; refuses to overwrite it;
  *   [6] the verification CLI agrees with [4];
  *   [7] the entrypoint reports provenance in both modes, leaves /readyz
- *       unchanged, and never loads the digest code or child_process.
+ *       unchanged, and never loads the digest code or child_process;
+ *   [8] live mode refuses to start unless provenance is `recorded`: a real
+ *       worker process with absent or inconsistent provenance exits 78
+ *       before any module that could claim, reserve or send is loaded,
+ *       with no network attempt and no value echoed;
+ *   [9] traversal fails closed on a symlink under lib/ (an untracked one,
+ *       as a stray build context would carry), so the build step refuses.
  *
  * The Docker half (fail-closed builds, label, record, /healthz inside the
  * image) is in test-m0-worker-hosting-contract.ts.
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
   PROVENANCE_FILE,
   isValidGitSha,
   isValidSourceDigest,
+  liveStartRefusal,
   readBuildProvenance,
 } from "@/lib/protocol-worker/build-provenance";
 import {
@@ -205,6 +212,108 @@ console.log("\n[7] The entrypoint");
     /readyz: \{ ready: true, executionEnabled: false \}/.test(disabled) && /readyz: \{ ready \}/.test(live));
   check("the entrypoint never loads the digest code or child_process",
     !/source-digest|worker-provenance-git|child_process/.test(entry));
+  const refusalAt = main.indexOf("const refusal = liveStartRefusal(build);");
+  check("the live refusal sits in main, after the disabled return and before runLive (so before every dynamic import)",
+    refusalAt > main.indexOf("await runDisabled(") && refusalAt < main.indexOf("await runLive(plan.config, build)")
+      && /if \(refusal !== null\) \{[\s\S]{0,400}?process\.exit\(78\);/.test(main)
+      && entry.indexOf("import(\"@/lib/db\")") > entry.indexOf("async function runLive"));
+}
+
+/* ═══════ [8] live mode refuses unrecorded provenance ═══════ */
+console.log("\n[8] Live mode refuses absent or inconsistent provenance");
+check("recorded → may start", liveStartRefusal({ provenance: "recorded", gitSha: SHA, sourceDigest: DIGEST }) === null);
+check("absent → provenance_absent", liveStartRefusal({ provenance: "absent", gitSha: null, sourceDigest: null }) === "provenance_absent");
+check("inconsistent → provenance_inconsistent",
+  liveStartRefusal({ provenance: "inconsistent", gitSha: null, sourceDigest: null }) === "provenance_inconsistent");
+{
+  // A complete, valid live configuration with sentinel credentials, run as a
+  // real process from this checkout (which has no provenance record). A
+  // preloaded trap reports any socket or fetch attempt.
+  const REF = "abcdefghijklmnopqrst";
+  const SENTINEL = "SENTINEL-CREDENTIAL-VALUE-0001";
+  const liveEnv = (over: Record<string, string> = {}): NodeJS.ProcessEnv => ({
+    PATH: process.env.PATH ?? "", TZ: "UTC",
+    WORKER_EXECUTION_MODE: "live", NODE_ENV: "production", ZYPACT_MOCK_MODE: "off",
+    WORKER_ID: "w-1", NEXT_PUBLIC_SUPABASE_URL: `https://${REF}.supabase.co`,
+    WORKER_EXPECTED_SUPABASE_PROJECT_REF: REF, WORKER_LIVE_CONFIRM: `LIVE:${REF}`,
+    LLM_PROVIDER: "openai", OPENAI_MODEL: "gpt-4o-mini-2024-07-18",
+    OPENAI_API_KEY: SENTINEL, PERPLEXITY_API_KEY: SENTINEL, SUPABASE_SERVICE_ROLE_KEY: SENTINEL,
+    WORKER_EXIT_AFTER_CLAIMED_JOB: "true", WORKER_PROVIDER_TIMEOUT_MS: "45000",
+    WORKER_LEASE_SECONDS: "60", WORKER_GRACE_MS: "10000", WORKER_MAX_RUNTIME_SECONDS: "120",
+    WORKER_HEALTH_PORT: "0", ...over,
+  });
+  const trapDir = mkdtempSync(path.join(os.tmpdir(), "zypact-provenance-trap-"));
+  try {
+    const trap = path.join(trapDir, "trap.mjs");
+    writeFileSync(trap, [
+      'import net from "node:net";',
+      "const connect = net.Socket.prototype.connect;",
+      'net.Socket.prototype.connect = function (...a) { process.stderr.write("NETWORK_ATTEMPT\\n"); return connect.apply(this, a); };',
+      'globalThis.fetch = async () => { process.stderr.write("NETWORK_ATTEMPT\\n"); throw new Error("trapped"); };',
+    ].join("\n"));
+    const runLiveWorker = (env: NodeJS.ProcessEnv) => spawnSync(process.execPath,
+      ["--import", "tsx", "--import", `file://${trap}`, "scripts/run-protocol-worker.ts"],
+      { cwd: process.cwd(), env, encoding: "utf8", timeout: 60_000 });
+    for (const [label, over, status] of [
+      ["absent provenance", {}, "absent"],
+      ["an env SHA with no record (inconsistent)", { ZYPACT_BUILD_GIT_SHA: SHA }, "inconsistent"],
+      ["a malformed env SHA (inconsistent)", { ZYPACT_BUILD_GIT_SHA: "NOT-A-SHA-SENTINEL-0002" }, "inconsistent"],
+    ] as const) {
+      const r = runLiveWorker(liveEnv(over));
+      const reason = status === "absent" ? "provenance_absent" : "provenance_inconsistent";
+      check(`${label}: live start exits 78 with worker_provenance_refused / ${reason}`,
+        r.status === 78 && r.stderr.includes('"event":"worker_provenance_refused"') && r.stderr.includes(`"reason":"${reason}"`),
+        `status=${r.status} ${r.stderr.trim().slice(0, 160)}`);
+      check(`${label}: nothing started — no start event, no health server, no other output`,
+        r.stdout.trim() === "" && r.stderr.trim().split("\n").length === 1, `${r.stdout.slice(0, 80)} | ${r.stderr.slice(0, 80)}`);
+      check(`${label}: no network attempt, so no claim, reservation or provider call`,
+        !r.stderr.includes("NETWORK_ATTEMPT"));
+      check(`${label}: no credential or raw value is echoed`,
+        !r.stderr.includes(SENTINEL) && !r.stderr.includes("NOT-A-SHA-SENTINEL") && !r.stderr.includes(SHA));
+    }
+    const misconfigured = runLiveWorker(liveEnv({ WORKER_ID: "" }));
+    check("configuration is still judged first: a bad live config is worker_configuration_rejected, not a provenance refusal",
+      misconfigured.status === 78 && misconfigured.stderr.includes("worker_configuration_rejected")
+        && !misconfigured.stderr.includes("worker_provenance_refused"), misconfigured.stderr.slice(0, 160));
+    const disabled = spawnSync(process.execPath, ["--import", "tsx", "scripts/run-protocol-worker.ts"], {
+      cwd: process.cwd(), env: { PATH: process.env.PATH ?? "", TZ: "UTC", NODE_ENV: "production", WORKER_EXECUTION_MODE: "disabled", WORKER_HEALTH_PORT: "0" },
+      encoding: "utf8", timeout: 8_000, killSignal: "SIGTERM",
+    });
+    check("disabled mode is unchanged: it still starts with absent provenance and reports it",
+      /"event":"worker_execution_disabled"/.test(disabled.stdout) && /"provenance":"absent"/.test(disabled.stdout)
+        && !/worker_provenance_refused/.test(disabled.stdout + disabled.stderr), disabled.stdout.slice(0, 200));
+  } finally {
+    rmSync(trapDir, { recursive: true, force: true });
+  }
+}
+
+/* ═══════ [9] symlinks fail closed ═══════ */
+console.log("\n[9] Unsupported entries fail closed");
+{
+  const tree = mkdtempSync(path.join(os.tmpdir(), "zypact-provenance-link-"));
+  try {
+    mkdirSync(path.join(tree, "lib", "protocol-worker"), { recursive: true });
+    writeFileSync(path.join(tree, "package.json"), "{}");
+    writeFileSync(path.join(tree, "lib", "protocol-worker", "a.ts"), "export {};");
+    const clean = sourceDigestOfDirectory(tree);
+    check("a tree of regular files digests", isValidSourceDigest(clean));
+    writeFileSync(path.join(tree, "outside.txt"), "not image source");
+    symlinkSync("../../outside.txt", path.join(tree, "lib", "protocol-worker", "link.ts"));
+    let message = "";
+    try { sourceDigestOfDirectory(tree); } catch (e) { message = e instanceof Error ? e.message : String(e); }
+    check("an untracked symlink under lib/ makes the digest throw, naming the entry",
+      /unsupported entry in the image source/.test(message) && message.includes("lib/protocol-worker/link.ts"), message);
+    let built = true;
+    try { writeImageProvenance(tree, SHA); } catch { built = false; }
+    check("…so the image build step refuses, and writes no record", !built && !existsSync(path.join(tree, PROVENANCE_FILE)));
+    symlinkSync(path.join(tree, "lib"), path.join(tree, "lib", "loop"));
+    rmSync(path.join(tree, "lib", "protocol-worker", "link.ts"));
+    let dirLink = "";
+    try { sourceDigestOfDirectory(tree); } catch (e) { dirLink = e instanceof Error ? e.message : String(e); }
+    check("a symlinked directory under lib/ is refused too (no traversal through it)", dirLink.includes("lib/loop"), dirLink);
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed.${failures ? ` ${failures} FAILED.` : ""}\n`);

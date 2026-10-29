@@ -61,7 +61,13 @@ export function sourceDigest(files: Array<{ path: string; sha256: string }>): st
   return `${SOURCE_DIGEST_VERSION}:${sha256(lines)}`;
 }
 
-/** The digest of the image source as it sits on disk under `root`. Regular files only. */
+/**
+ * The digest of the image source as it sits on disk under `root`. Regular
+ * files and directories only: a symlink, socket, FIFO or device under the
+ * source roots throws, because the digest could not say what it points at
+ * and the image would carry it anyway. A missing root is skipped (the git
+ * side then disagrees, which the comparison reports).
+ */
 export function sourceDigestOfDirectory(root: string): string {
   const files: Array<{ path: string; sha256: string }> = [];
   const visit = (rel: string): void => {
@@ -74,8 +80,10 @@ export function sourceDigestOfDirectory(root: string): string {
     }
     if (st.isDirectory()) {
       for (const name of readdirSync(abs)) visit(rel === "" ? name : `${rel}/${name}`);
-    } else if (st.isFile() && includedInSource(rel)) {
-      files.push({ path: rel, sha256: sha256(readFileSync(abs)) });
+    } else if (st.isFile()) {
+      if (includedInSource(rel)) files.push({ path: rel, sha256: sha256(readFileSync(abs)) });
+    } else {
+      throw new Error(`unsupported entry in the image source (not a regular file or directory): ${rel}`);
     }
   };
   for (const r of SOURCE_ROOTS) visit(r.replace(/\/$/, ""));

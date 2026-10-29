@@ -13,6 +13,17 @@
  * and stay exactly as inert. A malformed or disagreeing record is reported
  * as `inconsistent` with both values withheld — never echoed into a log or
  * a health response.
+ *
+ * What `recorded` proves, and what it does not: only that the image's two
+ * records agree with each other and are well formed. It does NOT prove the
+ * source digest belongs to the claimed commit — a hand-built image can
+ * carry any consistent pair. That comparison is independent and mandatory
+ * before production activation: `npm run verify:worker-provenance --
+ * <gitSha> --digest <sourceDigest>`, which recomputes the digest from git.
+ *
+ * Live mode refuses to start unless provenance is `recorded`
+ * (liveStartRefusal, enforced in scripts/run-protocol-worker.ts before any
+ * database or provider module is loaded). Disabled mode only reports it.
  */
 
 /** Written by the image build next to package.json, in the image WORKDIR. */
@@ -75,4 +86,13 @@ export function readBuildProvenance(
     return INCONSISTENT;
   }
   return { provenance: "recorded", gitSha: envSha, sourceDigest: r.sourceDigest };
+}
+
+/**
+ * Why live execution must not start with this provenance, or null when it
+ * may. Closed labels only; the values themselves are never part of it.
+ */
+export function liveStartRefusal(build: BuildProvenance): "provenance_absent" | "provenance_inconsistent" | null {
+  if (build.provenance === "recorded") return null;
+  return build.provenance === "absent" ? "provenance_absent" : "provenance_inconsistent";
 }

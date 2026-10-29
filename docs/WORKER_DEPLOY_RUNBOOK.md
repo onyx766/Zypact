@@ -146,6 +146,15 @@ so the first separately authorised start can be checked with
 other than `provenance: "recorded"` and a match means the running image is not
 the commit on record: stop it.
 
+`recorded` proves only that the image's own two records (the
+`ZYPACT_BUILD_GIT_SHA` environment value and `build-provenance.json`) are well
+formed and agree. It does not prove the digest belongs to the claimed commit:
+the `--digest` comparison above, which recomputes the digest from git, is
+independent and **mandatory before production activation**. A live worker
+refuses to start (`worker_provenance_refused`, exit 78) unless provenance is
+`recorded`, so live execution is only possible from an image built with
+`GIT_SHA`; it cannot run from a plain checkout.
+
 ## 7. If the machine ID changed
 
 `FLY_WORKER_MACHINE_ID` is deployment state, not configuration (D-035). It lives

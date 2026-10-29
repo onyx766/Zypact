@@ -48,7 +48,7 @@ import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 // PR-2 — pure, like execution-mode: it imports nothing, and its one file
 // read is the local provenance record, injected below.
-import { readBuildProvenance, type BuildProvenance } from "@/lib/protocol-worker/build-provenance";
+import { liveStartRefusal, readBuildProvenance, type BuildProvenance } from "@/lib/protocol-worker/build-provenance";
 import { resolveExecutionPlan, WorkerConfigError } from "@/lib/protocol-worker/execution-mode";
 // STATIC, and deliberately so. The ceiling has to be armed before the
 // first await, so the primitive that arms it cannot itself arrive through
@@ -411,6 +411,18 @@ async function main(): Promise<void> {
   if (plan.mode === "disabled") {
     await runDisabled(plan.healthPort, plan.healthHost, build);
     return;
+  }
+  // PR-2 — live execution only from an image whose provenance is recorded.
+  // Refused here, before runLive: no runtime clock, no dynamic import, no
+  // database client, no provider transport, so nothing can be claimed,
+  // reserved or sent. The reason is a closed label; no value is printed.
+  const refusal = liveStartRefusal(build);
+  if (refusal !== null) {
+    console.error(JSON.stringify({
+      ts: new Date().toISOString(), level: "error",
+      event: "worker_provenance_refused", reason: refusal, provenance: build.provenance,
+    }));
+    process.exit(78); // EX_CONFIG
   }
   await runLive(plan.config, build);
 }

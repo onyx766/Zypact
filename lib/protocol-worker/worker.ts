@@ -40,6 +40,7 @@ import type {
   ProtocolAttempt,
 } from "@/lib/db/types";
 import type { IterationResult, WorkerDeps, WorkerOptions } from "@/lib/protocol-worker/types";
+import type { PaidExecutionDecision } from "@/lib/worker-control/paid-execution-gate";
 import { agentOutputText, PERPLEXITY_AGENT_MODEL } from "@/lib/probes/perplexity-agent";
 import type { PerplexityProbeRunner } from "@/lib/protocol-worker/types";
 
@@ -691,10 +692,29 @@ function promptForSlot(protocol: Protocol | null, ordinal: number): string | nul
   return text.trim().length === 0 ? null : text;
 }
 
-/** The long-running loop. Exits cleanly once `signal.aborted` is set. */
+/**
+ * PR-1 — the paid-execution decision, asked before every claim. The same
+ * rule the web start path applies (lib/worker-control/paid-execution-gate.ts):
+ * the switch, a valid ceiling, and a readable ledger whose last 24 hours plus
+ * the largest claimable spend cap stay within it.
+ */
+export type PaidExecutionGate = () => Promise<PaidExecutionDecision>;
+
+/**
+ * The long-running loop. Exits cleanly once `signal.aborted` is set.
+ *
+ * PR-1 — `paidExecutionGate` is a required positional argument, not an
+ * option with a default: a worker that could claim without it would be one
+ * omitted field away from spending outside the ledger ceiling. It is
+ * awaited before EVERY claim, after the runtime bound and before
+ * runOneIteration, so a refusal means nothing is claimed, reserved or sent.
+ * A refusal, or a gate that throws, ends the loop; it is never retried, so
+ * a worker started outside the gate stops instead of polling into money.
+ */
 export async function runWorkerLoop(
   deps: WorkerDeps,
   opts: WorkerOptions,
+  paidExecutionGate: PaidExecutionGate,
   signal: { aborted: boolean },
   sleep: (ms: number, signal?: AbortSignal) => Promise<void>,
   onIteration?: (r: IterationResult) => void,
@@ -711,6 +731,24 @@ export async function runWorkerLoop(
     // No optional chaining and no fallback. The bound is a required
     // option, so there is no "absent" case to be lenient about, and a
     // reader cannot mistake this line for one that tolerates its absence.
+    if (!opts.runtimeBound.allowsNewClaim()) break;
+    // PR-1 — the paid-execution gate, before every claim. A gate that
+    // throws is a refusal like any other, never a pass.
+    let paid: PaidExecutionDecision;
+    try {
+      paid = await paidExecutionGate();
+    } catch {
+      paid = { ok: false, code: "spend_ledger_unavailable", detail: "The paid-execution gate failed." };
+    }
+    if (!paid.ok) {
+      onIteration?.({ outcome: "paid_execution_refused", jobId: null, detail: paid.code });
+      break;
+    }
+    // The gate is awaited, so the world may have moved while it ran: a stop
+    // may have been requested, or the runtime bound may no longer leave room
+    // for a claim. Both are re-asked here, immediately before the claim, and
+    // either one ends the loop without claiming.
+    if (signal.aborted) break;
     if (!opts.runtimeBound.allowsNewClaim()) break;
     // B1 — no try/catch here on purpose. An unhandled throw during the first
     // job propagates out of this loop and ends the process; it can never

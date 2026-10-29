@@ -77,6 +77,9 @@ const PROBE_BODY = JSON.stringify({ id: "p", choices: [{ message: { content: "an
  * helper on purpose: an unbounded worker must never be one import away.
  */
 const ALWAYS_ALLOWS = { allowsNewClaim: (): boolean => true };
+// PR-1 — this suite is not about the paid-execution gate; it declares its
+// own always-allowing double, as it does for the runtime bound.
+const PAID_GATE_ALLOWS = async () => ({ ok: true as const, ceilingUsd: 1, spentLast24hUsd: 0, nextJobCapUsd: 0 });
 
 const BASE_OPTS: WorkerOptions = {
   workerId: "hard-bounds",
@@ -168,7 +171,7 @@ async function main(): Promise<void> {
     const health = new WorkerHealth(() => 1);
     const signal = { aborted: false };
     const seen: string[] = [];
-    await runWorkerLoop(deps, BASE_OPTS, signal, async () => undefined,
+    await runWorkerLoop(deps, BASE_OPTS, PAID_GATE_ALLOWS, signal, async () => undefined,
       (r) => seen.push(r.outcome), health);
     check("[A] exactement un claim émis", calls.filter((c) => c === "claim").length === 1,
       `claims=${calls.filter((c) => c === "claim").length}`);
@@ -187,7 +190,7 @@ async function main(): Promise<void> {
     let thrown: unknown = null;
     try {
       await runWorkerLoop(deps2, { ...BASE_OPTS, exitAfterClaimedJob: false },
-        { aborted: false }, async () => undefined, () => {}, new WorkerHealth(() => 1));
+        PAID_GATE_ALLOWS, { aborted: false }, async () => undefined, () => {}, new WorkerHealth(() => 1));
     } catch (e) {
       thrown = e;
     }
@@ -211,7 +214,7 @@ async function main(): Promise<void> {
     const health = new WorkerHealth(() => 1);
     const seen: string[] = [];
     let slept = 0;
-    await runWorkerLoop(deps, BASE_OPTS, { aborted: false }, async () => { slept += 1; },
+    await runWorkerLoop(deps, BASE_OPTS, PAID_GATE_ALLOWS, { aborted: false }, async () => { slept += 1; },
       (r) => seen.push(r.outcome), health);
     check("[B] la boucle a attendu sur les cycles idle", slept === 2, `sleeps=${slept}`);
     check("[B] elle sort après le premier job réclamé",
@@ -230,7 +233,7 @@ async function main(): Promise<void> {
     const health = new WorkerHealth(() => 1);
     const signal = { aborted: false };
     let n = 0;
-    await runWorkerLoop(deps, { ...BASE_OPTS, exitAfterClaimedJob: false }, signal,
+    await runWorkerLoop(deps, { ...BASE_OPTS, exitAfterClaimedJob: false }, PAID_GATE_ALLOWS, signal,
       async () => undefined, () => { n += 1; if (n >= 3) signal.aborted = true; }, health);
     check("[C] trois jobs traités à la suite", n === 3, `itérations=${n}`);
     check("[C] trois claims émis", calls.filter((c) => c === "claim").length === 3);

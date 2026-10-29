@@ -115,6 +115,9 @@ const FAKE_ANTHROPIC_KEY = "sk-ant-test-not-a-real-key";
  * helper on purpose: an unbounded worker must never be one import away.
  */
 const ALWAYS_ALLOWS = { allowsNewClaim: (): boolean => true };
+// PR-1 — this suite is not about the paid-execution gate; it declares its
+// own always-allowing double, as it does for the runtime bound.
+const PAID_GATE_ALLOWS = async () => ({ ok: true as const, ceilingUsd: 1, spentLast24hUsd: 0, nextJobCapUsd: 0 });
 
 const OPTS: WorkerOptions = {
   workerId: "tk-r-worker",
@@ -304,6 +307,7 @@ async function main(): Promise<void> {
     await runWorkerLoop(
       deps,
       OPTS,
+      PAID_GATE_ALLOWS,
       signal,
       async () => undefined,
       (r) => {
@@ -367,13 +371,13 @@ async function main(): Promise<void> {
     // hands the same instance to both positions, so divergence is not even
     // expressible in a behavioural test. It is pinned here instead, on the
     // runner's own source — anchored to THE runWorkerLoop call, capturing its
-    // sixth argument rather than matching a substring that could appear
-    // anywhere.
-    const RUN_LOOP_SIXTH_ARG =
-      /await runWorkerLoop\(\s*deps,\s*opts,\s*signal,\s*sleep,\s*\([\s\S]*?\n\s*\},\s*(\w+)\s*\);/;
+    // seventh argument (PR-1 put the paid-execution gate third) rather than
+    // matching a substring that could appear anywhere.
+    const RUN_LOOP_HEALTH_ARG =
+      /await runWorkerLoop\(\s*deps,\s*opts,\s*paidExecutionGate,\s*signal,\s*sleep,\s*\([\s\S]*?\n\s*\},\s*(\w+)\s*\);/;
     const wiringHolds = (src: string): boolean =>
       (src.match(/new WorkerHealth\(/g) ?? []).length === 1 &&
-      RUN_LOOP_SIXTH_ARG.exec(src)?.[1] === "healthRef";
+      RUN_LOOP_HEALTH_ARG.exec(src)?.[1] === "healthRef";
 
     check(
       "[T4] the runner constructs exactly one WorkerHealth — a second instance is unrepresentable",
@@ -381,9 +385,9 @@ async function main(): Promise<void> {
       `occurrences=${(runnerSrc.match(/new WorkerHealth\(/g) ?? []).length}`
     );
     check(
-      "[T4] …and the sixth argument of THE runWorkerLoop call is healthRef itself",
-      RUN_LOOP_SIXTH_ARG.exec(runnerSrc)?.[1] === "healthRef",
-      `sixth argument = ${RUN_LOOP_SIXTH_ARG.exec(runnerSrc)?.[1] ?? "(no match)"}`
+      "[T4] …and the seventh argument of THE runWorkerLoop call is healthRef itself",
+      RUN_LOOP_HEALTH_ARG.exec(runnerSrc)?.[1] === "healthRef",
+      `seventh argument = ${RUN_LOOP_HEALTH_ARG.exec(runnerSrc)?.[1] ?? "(no match)"}`
     );
     // An assertion that cannot fail proves nothing. This mutates the runner
     // source IN MEMORY — the file on disk is never touched — and requires the
@@ -416,6 +420,7 @@ async function main(): Promise<void> {
     const returned = await runWorkerLoop(
       deps,
       OPTS,
+      PAID_GATE_ALLOWS,
       signal,
       async () => undefined,
       () => {

@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/current-user";
+import { isEmailAllowed } from "@/lib/auth/access-allowlist";
 import { NewProjectForm } from "./new-project-form";
 
 export const dynamic = "force-dynamic";
@@ -9,6 +10,9 @@ export default async function NewProjectPage() {
   const user = await getCurrentUser();
   if (!user) {
     redirect(`/login?next=${encodeURIComponent("/projects/new")}`);
+  }
+  if (!isEmailAllowed(user.email)) {
+    redirect(`/login?error=${encodeURIComponent("This account has not been invited.")}`);
   }
   return (
     <main className="product-page product-new-page">

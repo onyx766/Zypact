@@ -253,6 +253,9 @@ const CANARY = { maxRuntimeSeconds: 120, providerTimeoutMs: 45_000, graceMs: 10_
  * being falsified.
  */
 const ALWAYS_ALLOWS = { allowsNewClaim: (): boolean => true };
+// PR-1 — this suite is not about the paid-execution gate; it declares its
+// own always-allowing double, as it does for the runtime bound.
+const PAID_GATE_ALLOWS = async () => ({ ok: true as const, ceilingUsd: 1, spentLast24hUsd: 0, nextJobCapUsd: 0 });
 
 const BASE_OPTS: WorkerOptions = {
   workerId: "b3-runtime",
@@ -455,7 +458,7 @@ async function main(): Promise<void> {
     const mainAt = entry.indexOf("async function main()");
     const mainBody = entry.slice(mainAt);
     const exit78 = mainBody.indexOf("process.exit(78)");
-    const callLive = mainBody.indexOf("await runLive(plan.config)");
+    const callLive = mainBody.indexOf("await runLive(plan.config, build)");
     check("[B] dans main(), la sortie 78 précède l'appel à runLive",
       mainAt > 0 && exit78 > 0 && callLive > 0 && exit78 < callLive,
       `${exit78} < ${callLive}`);
@@ -530,7 +533,7 @@ async function main(): Promise<void> {
     const calls: string[] = [];
     const deps = scriptedDeps({}, calls, clock);
     const health = new WorkerHealth(clock.now);
-    await runWorkerLoop(deps, { ...BASE_OPTS, runtimeBound: h.bound }, h.signal,
+    await runWorkerLoop(deps, { ...BASE_OPTS, runtimeBound: h.bound }, PAID_GATE_ALLOWS, h.signal,
       deps.sleep, () => {}, health);
 
     const claims = calls.filter((c) => c === "claim").length;
@@ -567,7 +570,7 @@ async function main(): Promise<void> {
     const deps2 = scriptedDeps({ hardCap: 40 }, calls2, clock2);
     let thrown: unknown = null;
     try {
-      await runWorkerLoop(deps2, BASE_OPTS, { aborted: false }, deps2.sleep, () => {},
+      await runWorkerLoop(deps2, BASE_OPTS, PAID_GATE_ALLOWS, { aborted: false }, deps2.sleep, () => {},
         new WorkerHealth(clock2.now));
     } catch (e) { thrown = e; }
     check("[E] sans la borne, la même boucle ne s'arrête jamais — la borne " +
@@ -591,7 +594,7 @@ async function main(): Promise<void> {
     const calls: string[] = [];
     const deps = scriptedDeps({ hardCap: 0 }, calls, clock);
     const health = new WorkerHealth(clock.now);
-    await runWorkerLoop(deps, { ...BASE_OPTS, runtimeBound: h.bound }, h.signal,
+    await runWorkerLoop(deps, { ...BASE_OPTS, runtimeBound: h.bound }, PAID_GATE_ALLOWS, h.signal,
       deps.sleep, () => {}, health);
     check("[F] AUCUN claim n'a été émis", calls.length === 0, `calls=${calls.length}`);
     check("[F] …donc aucune dépense possible", health.snapshot().iterations === 0);
@@ -617,7 +620,7 @@ async function main(): Promise<void> {
       onContext: () => clock.advance(111_000),
     }, calls, clock);
     const health = new WorkerHealth(clock.now);
-    await runWorkerLoop(deps, { ...BASE_OPTS, runtimeBound: h.bound }, h.signal,
+    await runWorkerLoop(deps, { ...BASE_OPTS, runtimeBound: h.bound }, PAID_GATE_ALLOWS, h.signal,
       deps.sleep, () => {}, health);
 
     check("[G] l'échéance de grâce a été franchie pendant l'itération",
@@ -645,7 +648,7 @@ async function main(): Promise<void> {
     const calls: string[] = [];
     const deps = scriptedDeps({ hang: true }, calls, clock);
     let settled = false;
-    void runWorkerLoop(deps, { ...BASE_OPTS, runtimeBound: h.bound }, h.signal,
+    void runWorkerLoop(deps, { ...BASE_OPTS, runtimeBound: h.bound }, PAID_GATE_ALLOWS, h.signal,
       deps.sleep, () => {}, new WorkerHealth(clock.now)).then(() => { settled = true; });
     await Promise.resolve();
     check("[H] un claim a été émis et ne revient jamais",
@@ -682,7 +685,7 @@ async function main(): Promise<void> {
     const deps = scriptedDeps({ claimedOn: [1], hardCap: 1 }, calls, clock);
     const health = new WorkerHealth(clock.now);
     await runWorkerLoop(deps, { ...BASE_OPTS, exitAfterClaimedJob: true, runtimeBound: h.bound },
-      h.signal, deps.sleep, () => {}, health);
+      PAID_GATE_ALLOWS, h.signal, deps.sleep, () => {}, health);
     check("[I] un seul claim, la sortie mono-job est intacte",
       calls.filter((c) => c === "claim").length === 1);
     check("[I] un seul job", health.snapshot().iterations === 1);
@@ -764,7 +767,7 @@ async function main(): Promise<void> {
     const c2 = new VirtualClock();
     const h2 = harness(c2);
     const deps = scriptedDeps({}, [], c2);
-    await runWorkerLoop(deps, { ...BASE_OPTS, runtimeBound: h2.bound }, h2.signal,
+    await runWorkerLoop(deps, { ...BASE_OPTS, runtimeBound: h2.bound }, PAID_GATE_ALLOWS, h2.signal,
       deps.sleep, () => {}, new WorkerHealth(c2.now));
     check("[K] à la sortie de la boucle, deux timers restent armés…",
       c2.armed() === 2, `armed=${c2.armed()}`);
@@ -846,7 +849,7 @@ async function main(): Promise<void> {
         entry.includes(`import("${m}")`)
         && !new RegExp(`^import [^;]*"${m.replace(/[/@]/g, "\\$&")}";`, "m").test(entry)));
     const disabledReturn = entry.indexOf('await runDisabled(');
-    const runLiveCall = entry.indexOf("await runLive(plan.config)");
+    const runLiveCall = entry.indexOf("await runLive(plan.config, build)");
     check("[L] le retour disabled précède toujours runLive",
       disabledReturn > 0 && runLiveCall > disabledReturn);
     check("[L] la variable n'est lue nulle part dans le point d'entrée: " +

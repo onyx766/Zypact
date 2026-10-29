@@ -38,6 +38,15 @@ export interface EvaluateOutcomeCardIntegrityInput {
    * for.
    */
   interventionRegisteredAndImplemented: boolean;
+  /**
+   * Whether both phases were measured the same way — the full execution
+   * fingerprint (measurement-fingerprint.ts), which includes what the
+   * provider served. Not comparable is needs_review, not blocked: the
+   * evidence is intact and worth reading, and the outcome itself is already
+   * forced to `inconclusive`, but no one may be sent a card across a
+   * measurement change without a person reading the reason first.
+   */
+  measurement: { comparable: boolean; detail: string };
 }
 
 /** blocked > needs_review > integrity_passed. */
@@ -75,6 +84,11 @@ export function evaluateOutcomeCardIntegrity(
     reasons.push(
       "Intervention: not confirmed approved and implemented. An Outcome Card must not be produced for an intervention that was never registered end to end."
     );
+  }
+
+  if (!input.measurement.comparable) {
+    status = worseOf(status, "needs_review");
+    reasons.push(`Measurement: ${input.measurement.detail}`);
   }
 
   if (status === "integrity_passed") return { status, reasons: [] };

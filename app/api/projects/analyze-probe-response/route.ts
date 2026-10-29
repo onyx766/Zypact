@@ -4,7 +4,7 @@ import { analyzeProbeResponse } from "@/lib/pipeline/analyze-probe-response";
 import { createManualScanDatasetBatch } from "@/lib/evidence/resolve-dataset-batch";
 import { Platform } from "@/lib/schemas/probe-analysis.schema";
 import { requireProjectOwner } from "@/lib/auth/current-user";
-import { authErrorResponse } from "@/lib/auth/route-helpers";
+import { authErrorResponse, legacyPipelineRefusal } from "@/lib/auth/route-helpers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,6 +20,8 @@ interface Body {
 }
 
 export async function POST(req: Request) {
+  const refused = legacyPipelineRefusal("analyze-probe-response");
+  if (refused) return refused;
   let body: Body;
   try {
     body = (await req.json()) as Body;

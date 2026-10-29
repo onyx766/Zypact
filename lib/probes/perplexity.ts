@@ -1,5 +1,6 @@
 import type { SourceCitation, SourceType } from "@/lib/schemas/probe-analysis.schema";
 import { sha256Hex } from "@/lib/evidence/hash";
+import { PERPLEXITY_SONAR_ENDPOINT } from "@/lib/probes/endpoints";
 
 /**
  * The one outbound Perplexity address. Exported so an operator preflight can
@@ -7,7 +8,7 @@ import { sha256Hex } from "@/lib/evidence/hash";
  * away from it. Every committed test injects its own `fetchImpl`, so this
  * constant is the only thing that decides where a real call lands.
  */
-export const PERPLEXITY_ENDPOINT = "https://api.perplexity.ai/v1/sonar";
+export const PERPLEXITY_ENDPOINT = PERPLEXITY_SONAR_ENDPOINT;
 
 export interface PerplexitySearchResult {
   title?: string;
@@ -34,6 +35,12 @@ export interface PerplexityProbeResult {
   citations: string[];
   searchResults: PerplexitySearchResult[];
   sourceCitations: SourceCitation[];
+  /**
+   * PR #4 — Agent API only: which inline citation markers matched a search
+   * result id, and which did not. Absent for Sonar, whose provider returns
+   * its own `citations` list.
+   */
+  citationMarkers?: { mapped: number[]; unmapped: number[] };
   model: string;
   usedMock: boolean;
   /**
@@ -399,6 +406,19 @@ export async function runPerplexityProbe(
     providerRequestId,
   };
 }
+
+/**
+ * Shared with the Agent API adapter (perplexity-agent.ts) so both adapters
+ * normalise sources, build the analysis transcript and send the buyer
+ * question exactly the same way. No behaviour change here.
+ */
+export {
+  buildRawTranscript,
+  buildUserPrompt,
+  normalizeUrl,
+  sourceCitationsFromPerplexity,
+  uniqueStrings,
+};
 
 export const __perplexityProbeTestUtils = {
   classifySource,

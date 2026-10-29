@@ -215,6 +215,7 @@ export async function sendReviewedOutcomeCard(
     {
       interventionId,
       projectId: iv.projectId,
+      baselineProtocolId: iv.protocolId,
       artifactId: card.artifactId,
       publicToken: card.publicToken,
       revision: input.expectedRevision,

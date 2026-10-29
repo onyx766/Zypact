@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getDb } from "@/lib/db";
 import { getOrCreateEvidenceBank } from "@/lib/pipeline/get-or-create-evidence-bank";
 import { EvidenceBankForm } from "./evidence-bank-form";
+import { requireProjectOwnerForPage } from "@/lib/auth/current-user";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -12,6 +13,9 @@ interface PageProps {
 
 export default async function EvidenceBankPage({ params }: PageProps) {
   const { id } = await params;
+  // The [id] layout's check does not bind this segment: Next.js can render
+  // a page without re-running its layout, so each page enforces it itself.
+  await requireProjectOwnerForPage(id, `/projects/${id}/[id]`);
   const db = getDb();
   const project = await db.getProject(id);
   if (!project) {

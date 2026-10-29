@@ -47,6 +47,20 @@ COPY --chown=node:node package.json package-lock.json tsconfig.json ./
 COPY --chown=node:node lib ./lib
 COPY --chown=node:node scripts/run-protocol-worker.ts ./scripts/run-protocol-worker.ts
 
+# PR-2 — provenance. The commit this image claims to be built from is the
+# only build argument, with no default: `fly deploy --build-arg GIT_SHA=$(git
+# rev-parse HEAD)`. The RUN below refuses a missing or malformed value, which
+# fails the build, so no image without provenance can be produced. It also
+# writes build-provenance.json with the digest of the source files copied
+# above (lib/protocol-worker/source-digest.ts), which
+# `npm run verify:worker-provenance` recomputes from git to prove the image
+# holds exactly that commit's files. Run as root before USER node, so the
+# record is not writable by the worker. Not a credential.
+ARG GIT_SHA
+RUN node --import tsx -e "import('@/lib/protocol-worker/source-digest').then((m) => m.writeImageProvenance('.', process.env.GIT_SHA)).catch((e) => { console.error(e.message); process.exit(1); })"
+ENV ZYPACT_BUILD_GIT_SHA=${GIT_SHA}
+LABEL org.opencontainers.image.revision=${GIT_SHA}
+
 # Non-root. The base image ships `node` (uid 1000); nothing here needs more.
 USER node
 

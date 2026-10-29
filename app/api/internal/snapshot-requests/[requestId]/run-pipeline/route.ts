@@ -150,7 +150,7 @@ export async function POST(
     // are set.
     return NextResponse.json(
       { ok: false, error: start.detail },
-      { status: start.code === "not_configured" ? 503 : 502 }
+      { status: start.code === "not_configured" || start.code === "paid_execution_blocked" ? 503 : 502 }
     );
   }
 

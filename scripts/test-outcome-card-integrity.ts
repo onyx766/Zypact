@@ -12,6 +12,10 @@
  */
 
 import { evaluateOutcomeCardIntegrity } from "@/lib/reports/outcome-card-integrity";
+import {
+  fingerprintRawResponseBody,
+  UNREADABLE_FINGERPRINT,
+} from "@/lib/reports/served-provider-comparability";
 import type { ProtocolIntegritySignals } from "@/lib/reports/protocol-integrity-signals";
 
 let checks = 0;
@@ -49,6 +53,7 @@ function base(over: Partial<Parameters<typeof evaluateOutcomeCardIntegrity>[0]> 
     retestMarkdown: CLEAN_MARKDOWN,
     retestSignals: PASSING,
     interventionRegisteredAndImplemented: true,
+    measurement: { comparable: true, detail: "" },
     ...over,
   });
 }
@@ -101,6 +106,25 @@ async function main(): Promise<void> {
     // The gate must not be silently overridable by two clean phases.
     const r = base({ interventionRegisteredAndImplemented: false, baselineSignals: PASSING, retestSignals: PASSING });
     check("clean phases cannot rescue an unregistered intervention", r.status === "blocked", r.status);
+  }
+
+  console.log("\n[4b] A measurement difference between phases holds the card for review");
+  {
+    const changed = { comparable: false, detail: "The baseline and retest were not measured the same way (differs in: probeServed)." };
+    const r = base({ measurement: changed });
+    check("a measurement difference holds a clean card for review", r.status === "needs_review", r.status);
+    check("and the reason names the measurement", r.reasons.some((x) => x.startsWith("Measurement:")));
+    check("it never relaxes a blocked card",
+      base({ measurement: changed, interventionRegisteredAndImplemented: false }).status === "blocked");
+    check("fingerprint of a Sonar body",
+      fingerprintRawResponseBody(JSON.stringify({ id: "abc-123", model: "sonar", object: "chat.completion" }))
+        === "model=sonar id=other object=chat.completion");
+    check("fingerprint of an Agent-reformulated body",
+      fingerprintRawResponseBody(JSON.stringify({ id: "resp_9", model: "sonar", object: "chat.completion" }))
+        === "model=sonar id=resp_ object=chat.completion");
+    check("an unparseable body is unreadable, never a match",
+      fingerprintRawResponseBody("{not json") === UNREADABLE_FINGERPRINT &&
+      fingerprintRawResponseBody(null) === UNREADABLE_FINGERPRINT);
   }
 
   console.log("\n[5] Determinism and reason accumulation");

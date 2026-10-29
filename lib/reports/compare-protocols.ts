@@ -37,6 +37,11 @@ export interface ComparisonPhase {
 
 export interface ComparisonProtocolIdentity {
   questionVersionId: string;
+  /**
+   * The approved question text's hash, when the caller has it. Compared
+   * alongside the version id: either differing means a different question.
+   */
+  questionHash?: string;
   provider: string;
   surface: string;
   modelConfig: Record<string, unknown>;
@@ -64,6 +69,24 @@ export interface CompareProtocolsInput {
    * (0073 stamps `minimum_useful_change.value` at creation).
    */
   minimumUsefulChange: number;
+  /**
+   * PR #3 — whether both phases were measured the same way, from the
+   * execution evidence (lib/reports/measurement-fingerprint.ts). Anything
+   * but `compatible` makes the result `inconclusive`, and a recorded
+   * deviation does NOT override it: a disclosed change of protocol settings
+   * is something a reader can weigh, but a different measuring instrument
+   * makes the two numbers incomparable. Optional only so this pure engine
+   * stays usable on its own; the Outcome Card always supplies it.
+   */
+  measurementCompatibility?: {
+    status: "compatible" | "incompatible" | "unverifiable";
+    detail?: string;
+    /**
+     * What a compatible verdict could not verify (e.g. an endpoint known only
+     * from the adapter constant). Recorded as reasons; never a match.
+     */
+    caveats?: string[];
+  };
 }
 
 export interface NewcombeInterval {
@@ -112,6 +135,14 @@ function canonicalJson(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+function sameQuestion(a: ComparisonProtocolIdentity, b: ComparisonProtocolIdentity): boolean {
+  if (!a.questionVersionId || !b.questionVersionId || a.questionVersionId !== b.questionVersionId) return false;
+  if (a.questionHash !== undefined || b.questionHash !== undefined) {
+    return Boolean(a.questionHash) && a.questionHash === b.questionHash;
+  }
+  return true;
 }
 
 function identityMatches(
@@ -200,6 +231,21 @@ export function compareProtocols(input: CompareProtocolsInput): CompareProtocols
   const { baseline, retest, baselineIdentity, retestIdentity, recordedDeviationNote, minimumUsefulChange } = input;
   const reasons: string[] = [];
 
+  // PR #3 — the buyer question is not a configuration that a deviation can
+  // explain: two different questions measure two different things. Checked
+  // before, and independently of, the deviation-aware identity check.
+  if (!sameQuestion(baselineIdentity, retestIdentity)) {
+    return {
+      status: "inconclusive",
+      delta: null,
+      interval: null,
+      intervalMethod: "newcombe_95",
+      minimumUsefulChange,
+      smallestDetectableChange: null,
+      reasons: ["BUYER_QUESTION_MISMATCH"],
+    };
+  }
+
   const hasDeviation =
     recordedDeviationNote !== null && recordedDeviationNote.trim() !== "";
   if (!identityMatches(baselineIdentity, retestIdentity)) {
@@ -217,6 +263,23 @@ export function compareProtocols(input: CompareProtocolsInput): CompareProtocols
     // Disclosed, so the comparison proceeds — but the deviation is surfaced,
     // never silently absorbed into a clean-looking number.
     reasons.push(`CONFIGURATION_DEVIATION_DISCLOSED: ${recordedDeviationNote}`);
+  }
+
+  const measurement = input.measurementCompatibility;
+  for (const caveat of measurement?.caveats ?? []) reasons.push(`MEASUREMENT_CAVEAT: ${caveat}`);
+  if (measurement && measurement.status !== "compatible") {
+    return {
+      status: "inconclusive",
+      delta: null,
+      interval: null,
+      intervalMethod: "newcombe_95",
+      minimumUsefulChange,
+      smallestDetectableChange: null,
+      reasons: [
+        ...reasons,
+        `MEASUREMENT_${measurement.status.toUpperCase()}${measurement.detail ? `: ${measurement.detail}` : ""}`,
+      ],
+    };
   }
 
   const baselineUnderpowered = !phaseMeetsFloor(baseline);

@@ -412,18 +412,25 @@ function rejects(label: string, env: Record<string, string | undefined>, variabl
   const src = readFileSync(path.join(process.cwd(), "scripts/run-protocol-worker.ts"), "utf8");
   const staticValueImports = [...src.matchAll(/^import (?!type )([^;]+?) from "([^"]+)";/gm)]
     .map((m) => m[2]);
-  // Three static value imports, and the list is closed. `runtime-bound`
+  // Five static value imports, and the list is closed. `runtime-bound`
   // joined it for B3-intrinsic: the total runtime ceiling has to be armed
   // BEFORE the first await, so the primitive that arms it cannot itself
-  // arrive through a dynamic import. Widening this list is only safe for a
-  // module that is genuinely inert, so the next two assertions measure
-  // that rather than take it on trust.
-  assert("the entrypoint statically imports only node:http and two pure modules",
+  // arrive through a dynamic import. PR-2 added `build-provenance` (pure)
+  // and `node:fs`, whose only use is one synchronous read of the local
+  // provenance record. Widening this list is only safe for a module that is
+  // genuinely inert, so the next assertions measure that rather than take
+  // it on trust.
+  assert("the entrypoint statically imports only node:http, node:fs and three pure modules",
     staticValueImports.sort().join(",")
-      === "@/lib/protocol-worker/execution-mode,@/lib/protocol-worker/runtime-bound,node:http",
+      === "@/lib/protocol-worker/build-provenance,@/lib/protocol-worker/execution-mode,"
+        + "@/lib/protocol-worker/runtime-bound,node:fs,node:http",
     staticValueImports.join(","));
+  assert("node:fs is imported for readFileSync alone, and read only for the provenance record",
+    /^import \{ readFileSync \} from "node:fs";$/m.test(src)
+      && (src.match(/\breadFileSync\(/g) ?? []).length === 1
+      && /readBuildProvenance\(process\.env, \(file\) => \{\s*try \{\s*return readFileSync\(file, "utf8"\);/.test(src));
   for (const pure of ["lib/protocol-worker/execution-mode.ts",
-    "lib/protocol-worker/runtime-bound.ts"]) {
+    "lib/protocol-worker/runtime-bound.ts", "lib/protocol-worker/build-provenance.ts"]) {
     const mod = readFileSync(path.join(process.cwd(), pure), "utf8");
     assert(`\`${pure}\` imports nothing, so evaluating it pulls in nothing`,
       !/^\s*import\s/m.test(mod) && !/\bimport\s*\(/.test(mod), pure);
@@ -437,7 +444,8 @@ function rejects(label: string, env: Record<string, string | undefined>, variabl
   {
     const probe = execFileSync(process.execPath, ["--import", "tsx", "-e",
       "Promise.all([import('./lib/protocol-worker/execution-mode.ts'),"
-      + "import('./lib/protocol-worker/runtime-bound.ts')]).then(() => console.log("
+      + "import('./lib/protocol-worker/runtime-bound.ts'),"
+      + "import('./lib/protocol-worker/build-provenance.ts')]).then(() => console.log("
       + "JSON.stringify(process.getActiveResourcesInfo().filter((r) => r === 'Timeout'))));"],
       // A controlled environment, not this process's. The probe imports two
       // pure modules and needs nothing else; the ambient environment of a
@@ -445,7 +453,7 @@ function rejects(label: string, env: Record<string, string | undefined>, variabl
       // business in a child process.
       { cwd: process.cwd(), encoding: "utf8", timeout: 120_000,
         env: { PATH: process.env.PATH ?? "", NODE_ENV: "test", TZ: "UTC" } });
-    assert("evaluating both pure modules arms no timer at all",
+    assert("evaluating the three pure modules arms no timer at all",
       JSON.parse(probe.trim().split("\n").pop() ?? "[]").length === 0, probe.trim().slice(-40));
   }
   for (const mod of ["@/lib/db", "@/lib/probes/perplexity", "@/lib/llm/call-model",

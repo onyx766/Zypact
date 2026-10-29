@@ -60,6 +60,28 @@ import {
   type WorkerDeps,
   type WorkerOptions,
 } from "@/lib/protocol-worker/types";
+import { estimateLlmCostUsd, type TokenUsage } from "@/lib/costs/llm-pricing";
+
+/**
+ * PR #2 — the cost fields for a successful analysis receipt. The served
+ * model (`modelReturned`) is priced when the provider named one, else the
+ * requested model; a mock, an unpriced model or missing usage gives no cost.
+ * `estimated`, never `measured`: the provider reported tokens, not a charge.
+ */
+export function analysisReceiptCost(out: {
+  provider: string;
+  model: string;
+  modelReturned: string | null;
+  usage?: TokenUsage | null;
+}): { actualCostUsd: number; costBasis: "estimated" } | { actualCostUsd?: undefined; costBasis?: undefined } {
+  if (out.provider === "mock") return {};
+  const usd = estimateLlmCostUsd({
+    provider: out.provider,
+    model: out.modelReturned ?? out.model,
+    usage: out.usage,
+  });
+  return usd === null ? {} : { actualCostUsd: usd, costBasis: "estimated" };
+}
 
 interface Fenced {
   jobId: string;
@@ -460,6 +482,11 @@ async function runAnalysisCall(
     modelReturned: out.modelReturned,
     rawContent: out.content,
     rawRequestBody: fields.rawRequestBody,
+    // PR #2 — the analysis call's cost, ESTIMATED from the provider's token
+    // counts (lib/costs/llm-pricing.ts). Null when it cannot be priced, and
+    // then BOTH fields stay unset, exactly as before: 0058 requires them as
+    // a pair and the ledger keeps an honest unknown.
+    ...analysisReceiptCost(out),
   });
   if (rec.outcome !== "RECEIPTED" && rec.outcome !== "ALREADY_RECEIPTED_IDENTICAL") {
     return { outcome: conflictOutcome(rec.outcome), jobId: f.jobId, detail: rec.outcome };

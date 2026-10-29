@@ -26,6 +26,9 @@ export function LoginForm({ next }: Props) {
         email,
         options: {
           emailRedirectTo: `${origin}/auth/callback?next=${nextParam}`,
+          // Existing accounts only. Not a control on its own (the browser
+          // can be bypassed); the server-side allowlist is.
+          shouldCreateUser: false,
         },
       });
       if (err) {

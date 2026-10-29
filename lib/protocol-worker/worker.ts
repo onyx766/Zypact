@@ -40,6 +40,43 @@ import type {
   ProtocolAttempt,
 } from "@/lib/db/types";
 import type { IterationResult, WorkerDeps, WorkerOptions } from "@/lib/protocol-worker/types";
+import type { PaidExecutionDecision } from "@/lib/worker-control/paid-execution-gate";
+import { agentOutputText, PERPLEXITY_AGENT_MODEL } from "@/lib/probes/perplexity-agent";
+import type { PerplexityProbeRunner } from "@/lib/protocol-worker/types";
+
+/**
+ * PR #4 — which adapter a protocol's provider calls, decided before any
+ * admission or reservation so a refusal spends nothing.
+ *
+ *   perplexity_sonar  the Sonar adapter, exactly as before
+ *   perplexity        legacy label for the same Sonar adapter. Production
+ *                     SQL has only ever written perplexity_sonar, but test
+ *                     fixtures and any pre-rename row use this; until PR #4
+ *                     the worker ran Sonar for EVERY provider value, so
+ *                     every call made under it went through Sonar.
+ *   perplexity_agent  the Agent API adapter, only when the worker was built
+ *                     with `runAgentProbe` (the production entry point is
+ *                     not) and only for the approved model
+ *   anything else     refused — a tightening: before PR #4 it ran Sonar
+ */
+export type ProviderRefusal = "PROVIDER_ADAPTER_NOT_ENABLED" | "PROVIDER_MODEL_NOT_APPROVED" | "UNKNOWN_PROVIDER";
+
+export function probeRunnerForProtocol(
+  deps: Pick<WorkerDeps, "runProbe" | "runAgentProbe">,
+  protocol: { provider: string; modelConfig: Record<string, unknown> }
+): { ok: true; runProbe: PerplexityProbeRunner } | { ok: false; detail: ProviderRefusal } {
+  if (protocol.provider === "perplexity_sonar" || protocol.provider === "perplexity") {
+    return { ok: true, runProbe: deps.runProbe };
+  }
+  if (protocol.provider === "perplexity_agent") {
+    if (!deps.runAgentProbe) return { ok: false, detail: "PROVIDER_ADAPTER_NOT_ENABLED" };
+    if (protocol.modelConfig?.model !== PERPLEXITY_AGENT_MODEL) {
+      return { ok: false, detail: "PROVIDER_MODEL_NOT_APPROVED" };
+    }
+    return { ok: true, runProbe: deps.runAgentProbe };
+  }
+  return { ok: false, detail: "UNKNOWN_PROVIDER" };
+}
 
 /**
  * D-026 replay — recovers Perplexity's answer from a stored raw response
@@ -53,6 +90,17 @@ export function answerFromRawResponseBody(raw: string | null): string | null {
     json = JSON.parse(raw);
   } catch {
     return null;
+  }
+  if (!json || typeof json !== "object") return null;
+  // PR #4 — an Agent API body (object "response"). Only a completed response
+  // carries an answer; incomplete, failed or cancelled ones yield none.
+  if ((json as { object?: unknown }).object === "response") {
+    if ((json as { status?: unknown }).status !== "completed") return null;
+    // The adapter already refuses an unexpected served model; a stored body
+    // is re-checked so no other path can turn one into an answer.
+    if ((json as { model?: unknown }).model !== PERPLEXITY_AGENT_MODEL) return null;
+    const text = agentOutputText((json as { output?: unknown }).output).trim();
+    return text.length === 0 ? null : text;
   }
   const choices = (json as { choices?: unknown }).choices;
   if (!Array.isArray(choices) || choices.length === 0) return null;
@@ -99,6 +147,17 @@ export function measuredCostUsdFromRawResponseBody(
   if (!cost || typeof cost !== "object") return null;
   const total = (cost as { total_cost?: unknown }).total_cost;
   if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
+    return null;
+  }
+  // PR #4 — currency, by response shape. An Agent API body (object
+  // "response") must state USD explicitly — its schema requires currency —
+  // so a missing or different one is unknown, never a misread number. A
+  // legacy Sonar body never carried a currency: absent stays measured, as
+  // before, and an explicit non-USD one is unknown.
+  const currency = (cost as { currency?: unknown }).currency;
+  if ((json as { object?: unknown }).object === "response") {
+    if (currency !== "USD") return null;
+  } else if (currency !== undefined && currency !== "USD") {
     return null;
   }
   return total;
@@ -251,6 +310,64 @@ export async function runOneIteration(
 }
 
 /**
+ * Closes a job that cannot proceed, found before this slot's admission.
+ *
+ * Only a job never admitted is closed: no attempt of any status in its full
+ * history (getProtocolAttempts — one job per protocol, 0050, so the
+ * protocol's attempts are the job's), and no reserved or in-flight call. It
+ * is closed through the fenced fail_protocol_execution_job (0050) with the
+ * exact reason. A bare return used to leave it claimed, so after the lease
+ * lapsed it was reclaimed and failed again until attempt_count reached
+ * max_attempts, ending as abandoned_exhausted with no reason recorded.
+ * `failed` is never claimed.
+ *
+ * Anything else is left exactly as it is: an open attempt or call (a
+ * crashed earlier claim), or earlier attempts — completed baseline slots
+ * whose current_attempt_id was cleared between slots, or a terminalized
+ * attempt with its receipts. A job-only `failed` would misstate a job that
+ * holds evidence, and no existing transition fits: the ambiguity review
+ * needs an unreceipted in-flight call (handled before any slot runs), and
+ * T3 would terminalize an attempt that may hold a paid, receipted answer.
+ * If the history cannot be read, nothing is closed either. The job takes
+ * the existing recovery route: lease lapse, reclaim, then
+ * abandoned_exhausted, which an operator can reactivate (D-024).
+ */
+async function closeJobBeforeAdmission(
+  deps: WorkerDeps,
+  f: Fenced,
+  ctx: GetProtocolExecutionJobContextResult,
+  reason: "MISSING_CONTEXT" | "INVALID_BASELINE_ORDINAL" | ProviderRefusal
+): Promise<IterationResult> {
+  const openAttempt = ctx.currentAttempt !== null && ctx.currentAttempt.terminalizedAt === null;
+  const openCall = ctx.externalCalls.some((c) => c.status === "reserved" || c.status === "in_progress");
+  if (openAttempt || openCall) {
+    return { outcome: "failed", jobId: f.jobId, detail: `${reason}:OPEN_ATTEMPT_PRESERVED` };
+  }
+  if (ctx.currentAttempt !== null || ctx.externalCalls.length > 0 || !ctx.job) {
+    return { outcome: "failed", jobId: f.jobId, detail: `${reason}:ATTEMPT_HISTORY_PRESERVED` };
+  }
+  let history: number;
+  try {
+    history = (await deps.db.getProtocolAttempts(ctx.job.protocolId, f.projectId)).length;
+  } catch {
+    return { outcome: "failed", jobId: f.jobId, detail: `${reason}:ATTEMPT_HISTORY_UNVERIFIED` };
+  }
+  if (history > 0) {
+    return { outcome: "failed", jobId: f.jobId, detail: `${reason}:ATTEMPT_HISTORY_PRESERVED` };
+  }
+  const closed = await deps.db.failProtocolExecutionJob({
+    jobId: f.jobId,
+    claimToken: f.claimToken,
+    projectId: f.projectId,
+    reason,
+  });
+  if (closed.outcome !== "FAILED") {
+    return { outcome: "lost_ownership", jobId: f.jobId, detail: `${reason}:${closed.outcome}` };
+  }
+  return { outcome: "failed", jobId: f.jobId, detail: reason };
+}
+
+/**
  * Drives one baseline slot to reconciliation, then asks the completion
  * gate what to do next. Returns null when — and only when — the gate
  * reports that another baseline slot is required.
@@ -263,7 +380,17 @@ async function runOneSlot(
 ): Promise<IterationResult | null> {
   const project = await deps.db.getProject(f.projectId);
   if (!project || !ctx.protocol) {
-    return { outcome: "failed", jobId: f.jobId, detail: "MISSING_CONTEXT" };
+    return await closeJobBeforeAdmission(deps, f, ctx, "MISSING_CONTEXT");
+  }
+
+  // PR #4 — refuse an unsupported or not-enabled provider before admission:
+  // nothing is reserved, nothing is sent.
+  const runner = probeRunnerForProtocol(deps, ctx.protocol);
+  if (!runner.ok) {
+    // Closed durably with the exact refusal reason only when the job was
+    // never admitted; a job holding an open attempt, earlier slots or
+    // receipts (a provider disabled after admission) is left as it is.
+    return await closeJobBeforeAdmission(deps, f, ctx, runner.detail);
   }
 
   // D-025 — the key must be exactly `${jobId}:baseline:${nextBaselineOrdinal}`
@@ -273,7 +400,7 @@ async function runOneSlot(
   // for a retest protocol's job, so the key format does not vary by phase.
   const ordinal = ctx.job?.nextBaselineOrdinal ?? 0;
   if (ordinal < 1) {
-    return { outcome: "failed", jobId: f.jobId, detail: "INVALID_BASELINE_ORDINAL" };
+    return await closeJobBeforeAdmission(deps, f, ctx, "INVALID_BASELINE_ORDINAL");
   }
   // M7/0074 — a retest protocol (baselineProtocolId set) must record its
   // attempts as 'retest', never 'baseline', or a later comparison that
@@ -375,7 +502,7 @@ async function runOneSlot(
     }
     answer = answerFromRawResponseBody(now.perplexityReceipt.rawResponseBody);
   } else {
-    const r = await runProviderCall(deps, opts, f, now.perplexity, probeRunId, {
+    const r = await runProviderCall({ ...deps, runProbe: runner.runProbe }, opts, f, now.perplexity, probeRunId, {
       prompt,
       brandName: project.companyName ?? project.domain,
       domain: project.domain,
@@ -565,10 +692,29 @@ function promptForSlot(protocol: Protocol | null, ordinal: number): string | nul
   return text.trim().length === 0 ? null : text;
 }
 
-/** The long-running loop. Exits cleanly once `signal.aborted` is set. */
+/**
+ * PR-1 — the paid-execution decision, asked before every claim. The same
+ * rule the web start path applies (lib/worker-control/paid-execution-gate.ts):
+ * the switch, a valid ceiling, and a readable ledger whose last 24 hours plus
+ * the largest claimable spend cap stay within it.
+ */
+export type PaidExecutionGate = () => Promise<PaidExecutionDecision>;
+
+/**
+ * The long-running loop. Exits cleanly once `signal.aborted` is set.
+ *
+ * PR-1 — `paidExecutionGate` is a required positional argument, not an
+ * option with a default: a worker that could claim without it would be one
+ * omitted field away from spending outside the ledger ceiling. It is
+ * awaited before EVERY claim, after the runtime bound and before
+ * runOneIteration, so a refusal means nothing is claimed, reserved or sent.
+ * A refusal, or a gate that throws, ends the loop; it is never retried, so
+ * a worker started outside the gate stops instead of polling into money.
+ */
 export async function runWorkerLoop(
   deps: WorkerDeps,
   opts: WorkerOptions,
+  paidExecutionGate: PaidExecutionGate,
   signal: { aborted: boolean },
   sleep: (ms: number, signal?: AbortSignal) => Promise<void>,
   onIteration?: (r: IterationResult) => void,
@@ -585,6 +731,24 @@ export async function runWorkerLoop(
     // No optional chaining and no fallback. The bound is a required
     // option, so there is no "absent" case to be lenient about, and a
     // reader cannot mistake this line for one that tolerates its absence.
+    if (!opts.runtimeBound.allowsNewClaim()) break;
+    // PR-1 — the paid-execution gate, before every claim. A gate that
+    // throws is a refusal like any other, never a pass.
+    let paid: PaidExecutionDecision;
+    try {
+      paid = await paidExecutionGate();
+    } catch {
+      paid = { ok: false, code: "spend_ledger_unavailable", detail: "The paid-execution gate failed." };
+    }
+    if (!paid.ok) {
+      onIteration?.({ outcome: "paid_execution_refused", jobId: null, detail: paid.code });
+      break;
+    }
+    // The gate is awaited, so the world may have moved while it ran: a stop
+    // may have been requested, or the runtime bound may no longer leave room
+    // for a claim. Both are re-asked here, immediately before the claim, and
+    // either one ends the loop without claiming.
+    if (signal.aborted) break;
     if (!opts.runtimeBound.allowsNewClaim()) break;
     // B1 — no try/catch here on purpose. An unhandled throw during the first
     // job propagates out of this loop and ends the process; it can never

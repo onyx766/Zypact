@@ -70,8 +70,10 @@ const ARTIFACT = "77777777-7777-4777-8777-777777777777";
 const REVISION = "a".repeat(64);
 const CONFIG = { apiKey: "k", from: "f@zypact.example", appBaseUrl: "https://zypact.example" };
 
+const BASELINE = "b";
+const OTHER_PROJECT = "55555555-5555-4555-8555-555555555555";
 const recipientTables = {
-  snapshot_requests: [{ project_id: PROJECT, work_email: "buyer@customer.example", company_name: "Customer Co", created_at: "x" }],
+  snapshot_requests: [{ project_id: PROJECT, protocol_id: BASELINE, work_email: "buyer@customer.example", company_name: "Customer Co", created_at: "x" }],
 };
 
 function sender(behaviour: "ok" | "proven" | "unknown") {
@@ -86,7 +88,7 @@ function sender(behaviour: "ok" | "proven" | "unknown") {
 }
 
 const card = {
-  interventionId: IV, projectId: PROJECT, artifactId: ARTIFACT, publicToken: "tok",
+  interventionId: IV, projectId: PROJECT, baselineProtocolId: BASELINE, artifactId: ARTIFACT, publicToken: "tok",
   revision: REVISION, questionText: "Which tool?",
 };
 
@@ -162,6 +164,49 @@ async function main(): Promise<void> {
     const r = await deliverSavedOutcomeCard(card, { client, deliveryConfig: CONFIG, sendEmail: sender("ok").fn });
     check("sent but not finalized: ambiguous, with the message id kept for reconciliation",
       r.outcome === "delivery_ambiguous" && r.messageId === "msg-1");
+  }
+
+  /* ═══════════ 1b. who receives the card ═══════════ */
+  console.log("\n[1b] The recipient is whoever requested this card's baseline");
+  const okRpc: RpcImpl = (n) => {
+    if (n === "begin_outcome_card_delivery") return { data: [{ delivery_claim_token: "claim-1" }], error: null };
+    if (n === "finalize_outcome_card_delivery") return { data: [{ id: ARTIFACT }], error: null };
+    return { data: null, error: null };
+  };
+  {
+    // fakeClient ignores order(), so the other audit's row is listed first:
+    // the old "newest request in the project" lookup took exactly that row.
+    const { client } = fakeClient({ snapshot_requests: [
+      { project_id: PROJECT, protocol_id: "another-baseline", work_email: "other@audit.example", company_name: "Other", created_at: "y" },
+      ...recipientTables.snapshot_requests,
+    ] }, okRpc);
+    const s = sender("ok");
+    const r = await deliverSavedOutcomeCard(card, { client, deliveryConfig: CONFIG, sendEmail: s.fn });
+    check("with two audits in one project, the card goes to its own baseline's requester",
+      r.outcome === "delivered" && s.sent.length === 1 && s.sent[0]?.to === "buyer@customer.example",
+      `${r.outcome} ${String(s.sent[0]?.to)}`);
+  }
+  {
+    // The production shape of intervention a313e28e: its baseline came from
+    // the standalone control, and the project's only request is another
+    // intervention's audit.
+    const { client, names } = fakeClient({ snapshot_requests: [
+      { project_id: PROJECT, protocol_id: "another-baseline", work_email: "other@audit.example", company_name: "Other", created_at: "y" },
+    ] }, okRpc);
+    const s = sender("ok");
+    const r = await deliverSavedOutcomeCard(card, { client, deliveryConfig: CONFIG, sendEmail: s.fn });
+    check("a baseline with no request of its own is refused, never sent to another audit's address",
+      r.outcome === "delivery_rejected" && s.sent.length === 0 && names().length === 0, r.outcome);
+    check("and the refusal says nothing was sent", /Nothing was sent/.test(r.detail ?? ""), r.detail);
+  }
+  {
+    const { client, names } = fakeClient({ snapshot_requests: [
+      { ...recipientTables.snapshot_requests[0], project_id: OTHER_PROJECT },
+    ] }, okRpc);
+    const s = sender("ok");
+    const r = await deliverSavedOutcomeCard(card, { client, deliveryConfig: CONFIG, sendEmail: s.fn });
+    check("a request for the baseline in another project is not a recipient",
+      r.outcome === "delivery_rejected" && s.sent.length === 0 && names().length === 0, r.outcome);
   }
 
   /* ═══════════ 2. sendReviewedOutcomeCard ═══════════ */

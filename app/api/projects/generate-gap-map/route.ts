@@ -5,7 +5,7 @@ import {
   NO_PROBE_RESULTS_MESSAGE,
 } from "@/lib/pipeline/generate-gap-map";
 import { requireProjectOwner } from "@/lib/auth/current-user";
-import { authErrorResponse } from "@/lib/auth/route-helpers";
+import { authErrorResponse, legacyPipelineRefusal } from "@/lib/auth/route-helpers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,6 +16,8 @@ interface Body {
 }
 
 export async function POST(req: Request) {
+  const refused = legacyPipelineRefusal("generate-gap-map");
+  if (refused) return refused;
   let body: Body;
   try {
     body = (await req.json()) as Body;

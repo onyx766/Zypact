@@ -326,6 +326,21 @@ async function runOneSlot(
   // nothing is reserved, nothing is sent.
   const runner = probeRunnerForProtocol(deps, ctx.protocol);
   if (!runner.ok) {
+    // Closed durably, under this claim, with the exact refusal reason. A
+    // bare return would leave the job claimed: after the lease lapsed it
+    // was reclaimed and refused again until attempt_count reached
+    // max_attempts, ending as abandoned_exhausted with no reason recorded.
+    // fail_protocol_execution_job (0050) is fenced, touches no attempt
+    // (none exists yet) and moves the job to `failed`, which no claim takes.
+    const closed = await deps.db.failProtocolExecutionJob({
+      jobId: f.jobId,
+      claimToken: f.claimToken,
+      projectId: f.projectId,
+      reason: runner.detail,
+    });
+    if (closed.outcome !== "FAILED") {
+      return { outcome: "lost_ownership", jobId: f.jobId, detail: `${runner.detail}:${closed.outcome}` };
+    }
     return { outcome: "failed", jobId: f.jobId, detail: runner.detail };
   }
 

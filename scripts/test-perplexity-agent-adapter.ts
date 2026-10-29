@@ -444,6 +444,76 @@ async function main(): Promise<void> {
       rec.outcome === "provider_error" && rec.rawResponseBody === raw && rec.rawResponseSha256 === sha256Hex(raw),
       `${receipts.length} ${rec.outcome}`);
   }
+  /* ═══════ 7. a refusal closes the job durably ═══════ */
+  console.log("\n[7] A refused provider closes its job: zero cost, never reclaimed");
+  const SHORT: WorkerOptions = { ...OPTS, leaseSeconds: 0.4 };
+  const lapse = () => new Promise((res) => setTimeout(res, 500));
+  for (const [label, provider, model, wireAgent, reason] of [
+    ["Agent adapter not enabled", "perplexity_agent", "perplexity/sonar", false, "PROVIDER_ADAPTER_NOT_ENABLED"],
+    ["Agent provider with an unapproved model", "perplexity_agent", "openai/gpt-5.6-sol", true, "PROVIDER_MODEL_NOT_APPROVED"],
+    ["an unknown provider", "someone_else", "x", true, "UNKNOWN_PROVIDER"],
+  ] as const) {
+    const { projectId, protocolId } = await seed(`refused-${reason.toLowerCase()}.test`, provider, model);
+    const wire: Wire[] = [];
+    let probeCalls = 0;
+    const closures: Array<Record<string, any>> = [];
+    const spyDb: DbAdapter = {
+      ...db,
+      failProtocolExecutionJob: async (input) => {
+        const r = await db.failProtocolExecutionJob(input);
+        closures.push({ input, ...r });
+        return r;
+      },
+    };
+    const deps: WorkerDeps = {
+      db: spyDb, analysis, now: () => Date.now(), sleep: async () => {}, probeMode: "live_perplexity",
+      realFetch: fixtureFetch(200, agentBody(), wire),
+      runProbe: (async () => { probeCalls += 1; throw new Error("must not run"); }) as unknown as WorkerDeps["runProbe"],
+      ...(wireAgent ? { runAgentProbe: (async () => { probeCalls += 1; throw new Error("must not run"); }) as unknown as WorkerDeps["runProbe"] } : {}),
+    };
+    const first = await runOneIteration(deps, SHORT, new WorkerHealth(deps.now));
+    check(`${label}: refused with the exact reason`, first.outcome === "failed" && first.detail === reason, `${first.outcome}:${first.detail}`);
+    const c = closures[0];
+    check(`${label}: closed through the fenced fail RPC, which answered FAILED`,
+      closures.length === 1 && c.outcome === "FAILED", JSON.stringify(closures.map((x) => x.outcome)));
+    check(`${label}: the stored job is failed, with that exact reason (not a cap reason)`,
+      c?.job?.status === "failed" && c?.job?.failureReason === reason, `${c?.job?.status}/${c?.job?.failureReason}`);
+    check(`${label}: zero cost — no attempt, no request, no probe`,
+      (await db.getProtocolAttempts(protocolId, projectId)).length === 0 && wire.length === 0 && probeCalls === 0);
+    await lapse();
+    const reclaim = await db.claimProtocolExecutionJob({ workerId: "reclaimer", leaseSeconds: 60 });
+    check(`${label}: after the lease lapses, the job is not reclaimed`,
+      reclaim.job === null || reclaim.job.protocolId !== protocolId, JSON.stringify(reclaim.job?.protocolId ?? null));
+    const again = await runOneIteration(deps, SHORT, new WorkerHealth(deps.now));
+    check(`${label}: and the worker finds nothing to run — no repeated failure`,
+      again.outcome === "no_job" && closures.length === 1, `${again.outcome}:${again.detail}`);
+    check(`${label}: still zero attempts and zero requests`,
+      (await db.getProtocolAttempts(protocolId, projectId)).length === 0 && wire.length === 0);
+  }
+  {
+    // If the fenced RPC does not confirm the closure (here: ownership lost),
+    // the worker reports it instead of claiming a clean failure.
+    const { projectId, protocolId } = await seed("refused-not-owned.test", "someone_else", "x");
+    const spyDb: DbAdapter = {
+      ...db,
+      failProtocolExecutionJob: async () => ({ outcome: "JOB_NOT_OWNED" as const, job: null }),
+    };
+    const deps: WorkerDeps = {
+      db: spyDb, analysis, now: () => Date.now(), sleep: async () => {}, probeMode: "live_perplexity",
+      realFetch: fixtureFetch(200, agentBody(), []),
+      runProbe: (async () => { throw new Error("must not run"); }) as unknown as WorkerDeps["runProbe"],
+    };
+    const r = await runOneIteration(deps, OPTS, new WorkerHealth(deps.now));
+    check("an unconfirmed closure (JOB_NOT_OWNED) is reported as lost ownership, with the reason kept",
+      r.outcome === "lost_ownership" && r.detail === "UNKNOWN_PROVIDER:JOB_NOT_OWNED", `${r.outcome}:${r.detail}`);
+    check("…and still nothing was admitted", (await db.getProtocolAttempts(protocolId, projectId)).length === 0);
+    // Close it for real so it cannot leak into later claims.
+    const claim = await db.claimProtocolExecutionJob({ workerId: "cleanup", leaseSeconds: 60 });
+    if (claim.job && claim.claimToken) {
+      await db.failProtocolExecutionJob({ jobId: claim.job.id, claimToken: claim.claimToken, projectId: claim.job.projectId, reason: "test_cleanup" });
+    }
+  }
+
   check("global fetch was never called", globalFetchCalls === 0, String(globalFetchCalls));
 
   console.log(`\n${checks - failures}/${checks} checks passed.${failures ? ` ${failures} FAILED.` : ""}\n`);

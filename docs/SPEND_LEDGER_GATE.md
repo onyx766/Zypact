@@ -28,7 +28,7 @@ Review of the remediation found gaps that any claim-time check shares:
 
 ## 2. Design in one paragraph
 
-Safety rests on the ledger, not the claim. Every insert into `protocol_external_calls` (a reservation) and every send marker (`request_sent_at` set) passes a gate. The gate serialises on one `spend_controls` row, reads exposure from one snapshot taken after the lock, uses the database clock at the moment of decision, and refuses if the ceiling would be exceeded. Claim admission stays, but only for liveness: it places a hold so admitted jobs are unlikely to be refused mid-run, and it caps live claims. Every refusal writes nothing.
+Safety rests on the ledger, not the claim. Every insert into `protocol_external_calls` (a reservation) and every send marker (`request_sent_at` set) passes a gate. The gate serialises on one `spend_controls` row, reads exposure from one snapshot taken after the lock, uses the database clock at the moment of decision, and refuses if the ceiling would be exceeded. Claim admission stays, but only for liveness: it places a hold so admitted jobs are unlikely to be refused mid-run, and it caps live claims. Every refusal leaves no persisted change (section 13.1 defines this exactly and how it is tested).
 
 ## 3. What is counted
 
@@ -70,8 +70,8 @@ A REPEATABLE READ or SERIALIZABLE transaction keeps the snapshot taken at its fi
 
 Two independent layers close this:
 
-1. Every decision path refuses with `ZP008` unless `current_setting('transaction_isolation')` is `read committed`. A transaction cannot change its isolation after its first query, so the check is reliable.
-2. Every decision path takes the lock by updating `spend_controls.decision_seq`. Under READ COMMITTED it waits and proceeds; under REPEATABLE READ or SERIALIZABLE it fails with `40001` if any decision committed after the caller's snapshot.
+1. Every decision path, the claim included, refuses with `ZP008` unless `current_setting('transaction_isolation')` is `read committed`. A transaction cannot change its isolation after its first query, so the check is reliable.
+2. Every gate decision (a reservation insert, a send marker, `enable_paid_execution`, `record_spend_call_review`, `disable_paid_execution`) takes the lock by updating `spend_controls.decision_seq`. Under READ COMMITTED it waits and proceeds; under REPEATABLE READ or SERIALIZABLE it fails with `40001` if any decision committed after the caller's snapshot. The claim instead takes the lock with `SELECT … FOR UPDATE` and never updates `spend_controls`: under READ COMMITTED that is sufficient, the claim's decision affects only liveness, and it keeps the claim's refusals free of writes (section 13.1).
 
 **Lemma S.** Any decision that gets past the lock sees, in every later statement, every decision committed before the lock was granted. Writes that are not decisions (receipts, cancelling unsent rows, reconcile, leases, the sweep) can only make exposure look higher, except an overrun, which is counted in Ω and latches.
 
@@ -220,6 +220,49 @@ Superuser actions and writes as `postgres` through the SQL editor are outside th
 
 **Lock order:** job, then protocol, then call, then `spend_controls`. The claim holds `spend_controls` but never waits on a job row (`SKIP LOCKED`), so no wait cycle can form.
 
+### 13.1 What "a refusal writes nothing" means
+
+A refusal leaves no persisted change. After the refusing call ends, every row in the tables listed under the regression assertions below has the same contents, and the `spend_controls` row has the same `decision_seq` and the same `xmin`. Row locks taken on the way are not persisted changes; they end with the transaction. There are two kinds of refusal, and they reach that result differently.
+
+**Status returns (the claim only).** `claim_protocol_execution_job_within_spend` returns `SPEND_CONTROLS_MISSING`, `PAID_EXECUTION_DISABLED`, `SPEND_GATE_MISSING`, a latch reason, `LIVE_CLAIM_LIMIT_REACHED` or `SPEND_CEILING_REACHED` as a normal result, and its transaction commits. It writes nothing because it issues no write before its last refusal branch:
+
+- it takes the `spend_controls` lock with `SELECT … FOR UPDATE`, which changes neither the row nor its `xmin`;
+- it never calls `_spend_lock_controls`, so `decision_seq` is untouched;
+- it locks the candidate job with `SELECT … FOR UPDATE SKIP LOCKED`, which also changes nothing;
+- its only writes, the job update and one `spend_admissions` row, come after every refusal branch, on `CLAIMED`.
+
+`NO_JOB_AVAILABLE` is not a refusal, but it follows the same rule. The exhausted-job sweep is a separate RPC.
+
+**Exceptions (every other refusal).** The gate triggers, the send guard, `enable_paid_execution` and `record_spend_call_review` take the lock through `_spend_lock_controls`, which increments `decision_seq` before deciding. When they then refuse, they raise an exception: `ZP001`–`ZP008` or `22023`, or PostgreSQL raises `55P03` or `40001` itself. The claim also raises `ZP004` when its exposure read is unavailable. The exception aborts the statement and everything it did: the increment, any rows it inserted or updated, and any trigger effects.
+
+- No function on the ledger path catches exceptions (0050–0083 have no exception handlers there), so under PostgREST the whole RPC transaction rolls back.
+- A caller that does catch the error, with a PL/pgSQL `EXCEPTION` block or an explicit savepoint, gets the same result for that work: the catch rolls back to the savepoint taken before the call, and the increment is inside it.
+- An explicit transaction left in the aborted state can only be rolled back.
+
+`decision_seq` therefore changes only when a decision succeeds and its own writes persist:
+
+| Successful operation | `decision_seq` change | Other writes |
+|---|---|---|
+| reservation insert statement with at least one row | +2 (the before-statement and after-statement triggers) | the ledger rows |
+| send marker | +1 | the marker |
+| `enable_paid_execution` | +1 | the `spend_controls` row, one `spend_control_events` row |
+| `record_spend_call_review` | +1 | one `spend_call_reviews` row |
+| `disable_paid_execution` | +1 | the `spend_controls` row, one `spend_control_events` row |
+| claim returning `CLAIMED` | 0 | the job update, one `spend_admissions` row |
+| reservation insert statement with zero rows, while enabled | +1 (the before-statement trigger only) | none. No current path issues one and it is not a refusal; it is listed so the counter's behaviour is fully specified. |
+
+**Regression assertions for PR-B.** Before each case, record:
+
+- the full `spend_controls` row, including `decision_seq`, `updated_at`, `updated_by` and `xmin`;
+- a row count and an ordered content hash of `spend_control_events`, `spend_admissions`, `spend_call_reviews`, `protocol_external_calls`, `external_call_requests`, `protocol_attempts`, `protocol_execution_jobs`, `protocol_operator_actions`, `protocol_execution_job_alerts` and `protocol_execution_job_alert_deliveries`.
+
+After the call ends, record them again.
+
+- **R1, status returns:** for each claim refusal status and for `NO_JOB_AVAILABLE`, with and without exhausted jobs present, every recorded value is identical after the transaction commits, `decision_seq` and `xmin` included. `SPEND_CONTROLS_MISSING` is reached only in the disposable stack, by disabling the delete guard as superuser during setup.
+- **R2, exceptions:** for each of `ZP001`–`ZP008`, `22023`, `55P03` and `40001`, raised both from a PostgREST call and from an explicit psql transaction that is then rolled back, every recorded value is identical.
+- **R3, caught exceptions:** a test-only PL/pgSQL block catches `ZP001` from a gate refusal, writes one unrelated marker row and commits. The marker persists, and every recorded value is identical, `decision_seq` included.
+- **R4, successes:** each operation in the table above changes `decision_seq` by exactly the amount shown and changes only the rows listed.
+
 ## 14. Implementation plan and acceptance tests
 
 | PR | Scope | Authorisation |
@@ -239,6 +282,7 @@ The PR-B suite must include, with exact expected results:
 - **Time:** lock waits and long transactions do not backdate decisions or send markers; boundary rows are counted by decision time.
 - **Concurrency:** a lease expiry, a crash and a client abort each leave the in-flight count correct; simultaneous sends admit exactly the limit; no deadlocks across random interleavings.
 - **Disable:** forced races in both orders; a fake provider receives at most the potentially-unsent calls, within M_w, and nothing afterwards.
+- **Refusals:** R1–R4 (section 13.1), including `spend_controls.decision_seq` and `xmin`.
 - **Pre-activation:** each blocking check refuses activation; reviews clear only the clearable checks; pre-gate rows are byte-identical before and after.
 - **Regression:** the full PG-9 roster and the M5 runtime contracts on 0084 behave as before.
 

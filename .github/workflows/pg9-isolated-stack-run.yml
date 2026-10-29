@@ -1,0 +1,165 @@
+# PG-9 — one-off, label-gated run of the paid-execution gate against a
+# disposable Supabase stack on a fresh GitHub-hosted runner.
+#
+# Opening, pushing to or editing the pull request does NOT start anything:
+# the only trigger is a `labeled` event, and the job runs only when ALL hold:
+#   - the label just added is `pg9-ok-<head SHA>`, where <head SHA> is the
+#     full 40-character SHA of the pull request's head AT THE TIME OF THE
+#     EVENT (added by the Founder, by hand, after reviewing that exact
+#     commit). A label naming any other commit — including an earlier head
+#     after a later push — matches nothing. The label is 47 characters,
+#     within GitHub's 50-character limit;
+#   - the pull request is #0;
+#   - its head branch is exactly `ci/pg9-isolated-20261029-run3`;
+#   - the head repository is this repository (no fork);
+#   - this is the run's first attempt (a "Re-run" of the job is skipped).
+# Anything else: the job is skipped and nothing runs.
+#
+# One authorized execution only. Removing the label and adding it again is
+# a NEW `labeled` event and would start a new run (run_attempt 1). So, after
+# the first authorized execution, the pull request is to be CLOSED (not
+# merged) and the branch deleted. GitHub compares strings case-insensitively
+# in expressions; an upper-case spelling of the same SHA names the same
+# commit.
+#
+# What the job may and may not do:
+#   - GITHUB_TOKEN is read-only (contents: read); checkout does not persist it.
+#   - No `environment:`, no `secrets.*`, no repository variables are used,
+#     so no Preview/Production environment secret can reach this job.
+#   - The run refuses to start if any Supabase, provider, paid-execution,
+#     Fly or Vercel variable is present.
+#   - The harness (scripts/test-pg9-paid-gate-runtime.ts, pg9-lifecycle.ts)
+#     clears those variables, installs a network guard that allows only the
+#     stack's loopback API and ports, never links or pushes to a remote
+#     project, and applies migrations only to the disposable database it
+#     starts (0001-0081 + 0083; 0082 on HOLD). Provider and analysis calls
+#     are injected fakes. No paid call is possible.
+#   - Actions are pinned to commit SHAs; the Supabase CLI is v2.111.0,
+#     installed from its release asset and verified against a fixed SHA-256.
+#
+# The runner VM is destroyed when the job ends, so a stack left running for
+# evidence ends with it. Evidence is uploaded as a short-lived artifact.
+
+name: PG-9 isolated stack run (one-off, label-gated)
+
+on:
+  pull_request:
+    types: [labeled]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pg9-isolated-stack-run
+  cancel-in-progress: false
+
+jobs:
+  pg9:
+    name: PG-9 disposable-stack run
+    if: >-
+      github.event.label.name == format('pg9-ok-{0}', github.event.pull_request.head.sha) &&
+      github.event.pull_request.number == 0 &&
+      github.event.pull_request.head.ref == 'ci/pg9-isolated-20261029-run3' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.run_attempt == '1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Defence in depth: the same gate again, exact and case-sensitive.
+      # Event values arrive through env, never interpolated into the script.
+      - name: Re-assert the SHA-bound authorization
+        env:
+          LABEL: ${{ github.event.label.name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          [ "$RUN_ATTEMPT" = "1" ] || { echo "Not the first attempt; refusing." >&2; exit 1; }
+          [ "$PR_NUMBER" = "0" ] || { echo "Not pull request #0; refusing." >&2; exit 1; }
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Unexpected head SHA; refusing." >&2; exit 1; }
+          [ "$LABEL" = "pg9-ok-$HEAD_SHA" ] || { echo "The label does not name the head commit exactly; refusing." >&2; exit 1; }
+          echo "Authorized: pg9-ok-$HEAD_SHA, first attempt, PR #0."
+
+      - name: Check out the reviewed head commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Refuse inherited credentials
+        run: |
+          set -euo pipefail
+          if env | cut -d= -f1 | grep -E '^(SUPABASE_|NEXT_PUBLIC_SUPABASE_|PERPLEXITY_|OPENAI_|ANTHROPIC_|ZYPACT_PAID_|ZYPACT_DAILY_|FLY_|VERCEL_)'; then
+            echo "A credential-shaped variable is present; refusing to run." >&2
+            exit 1
+          fi
+          echo "No Supabase, provider, paid-execution, Fly or Vercel variable is set."
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install the Supabase CLI v2.111.0 (checksum-verified)
+        run: |
+          set -euo pipefail
+          url="https://github.com/supabase/cli/releases/download/v2.111.0/supabase_2.111.0_linux_amd64.tar.gz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/supabase.tar.gz" "$url"
+          echo "31ee8a152e9c8c8eddae072c6bc7c9119748a96c8cdaf21a6d31c9ce7e62cc18  $RUNNER_TEMP/supabase.tar.gz" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/supabase-cli"
+          tar -xzf "$RUNNER_TEMP/supabase.tar.gz" -C "$RUNNER_TEMP/supabase-cli" supabase
+          echo "$RUNNER_TEMP/supabase-cli" >> "$GITHUB_PATH"
+
+      - name: Record the environment
+        run: |
+          set -euo pipefail
+          {
+            echo "head_sha=${{ github.event.pull_request.head.sha }}"
+            echo "checked_out=$(git rev-parse HEAD)"
+            echo "node=$(node --version)"
+            echo "supabase_cli=$(supabase --version)"
+            echo "docker_server=$(docker version --format '{{.Server.Version}}')"
+            echo "runner_image=${ImageOS:-unknown}/${ImageVersion:-unknown}"
+          } | tee pg9-environment.txt
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+
+      - name: Run PG-9 against the disposable stack
+        env:
+          ZYPACT_PG9_STACK_TEST: "1"
+        run: |
+          set -o pipefail
+          npm run test:pg9-paid-gate-runtime 2>&1 | tee pg9-run.log
+
+      - name: Observe containers
+        if: always()
+        run: |
+          docker ps -a --format '{{.Names}}\t{{.Status}}\t{{.Image}}' | tee pg9-containers.txt || true
+
+      - name: Tail database and PostgREST logs (on failure only)
+        if: failure() || cancelled()
+        run: |
+          for c in $(docker ps -a --format '{{.Names}}' | grep -E '^supabase_(db|rest)_' || true); do
+            echo "=== $c (last 200 lines) ===" >> pg9-container-logs.txt
+            docker logs --tail 200 "$c" >> pg9-container-logs.txt 2>&1 || true
+          done
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pg9-evidence
+          path: |
+            pg9-environment.txt
+            pg9-run.log
+            pg9-containers.txt
+            pg9-container-logs.txt
+          if-no-files-found: warn
+          retention-days: 7

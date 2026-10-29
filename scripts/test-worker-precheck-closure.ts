@@ -1,11 +1,14 @@
 /**
- * Follow-up to PR #77 — runOneSlot()'s two remaining pre-admission exits,
- * MISSING_CONTEXT and INVALID_BASELINE_ORDINAL, close their job durably,
- * but only a job that was never admitted.
+ * Follow-up to PR #77 — runOneSlot()'s pre-admission exits close their job
+ * durably, but only a job that was never admitted: MISSING_CONTEXT,
+ * INVALID_BASELINE_ORDINAL, and the three provider refusals
+ * (PROVIDER_ADAPTER_NOT_ENABLED, PROVIDER_MODEL_NOT_APPROVED,
+ * UNKNOWN_PROVIDER), which share one helper.
  *
- * Neither can occur with valid database data (the claim loop already
- * returns when the protocol is missing; next_baseline_ordinal is NOT NULL
- * DEFAULT 1 CHECK >= 1, 0051), so both are reached here by making the
+ * The first two cannot occur with valid database data (the claim loop
+ * already returns when the protocol is missing; next_baseline_ordinal is
+ * NOT NULL DEFAULT 1 CHECK >= 1, 0051); a refusal can, if a provider is
+ * disabled after a job was admitted. All are reached here by making the
  * adapter return the bad context. What it pins, for each:
  *
  *   - never admitted (no attempt in the job's full history, no call):
@@ -27,7 +30,7 @@
 
 import { sha256Hex } from "@/lib/evidence/hash";
 import { runPerplexityProbe } from "@/lib/probes/perplexity";
-import { runOneIteration } from "@/lib/protocol-worker/worker";
+import { runOneIteration, type ProviderRefusal } from "@/lib/protocol-worker/worker";
 import { WorkerHealth } from "@/lib/protocol-worker/health";
 import type { AnalysisTransport, IterationResult, WorkerDeps, WorkerOptions } from "@/lib/protocol-worker/types";
 import type { DbAdapter, ProtocolAttempt } from "@/lib/db/types";
@@ -56,11 +59,22 @@ const PROVIDER_BODY = JSON.stringify({ id: "pplx-1", object: "chat.completion", 
 const ANALYSIS_BODY = JSON.stringify({ model: "gpt-4o-2024-08-06", messages: [] });
 const ANALYSIS_OUT = JSON.stringify({ clientPosition: "absent", competitorsMentioned: [], sourcesCited: [], answerSummary: "None." });
 
-type Reason = "MISSING_CONTEXT" | "INVALID_BASELINE_ORDINAL";
+type Reason = "MISSING_CONTEXT" | "INVALID_BASELINE_ORDINAL" | ProviderRefusal;
+/**
+ * How each provider refusal is produced: the protocol the context returns,
+ * and whether the worker has the Agent adapter wired in. Rewriting the
+ * context (rather than seeding the protocol) lets slot 1 run as Sonar first,
+ * which is how "a provider disabled after admission" looks to the worker.
+ */
+const REFUSALS: Record<ProviderRefusal, { provider: string; model: string; agentWired: boolean }> = {
+  PROVIDER_ADAPTER_NOT_ENABLED: { provider: "perplexity_agent", model: "perplexity/sonar", agentWired: false },
+  PROVIDER_MODEL_NOT_APPROVED: { provider: "perplexity_agent", model: "perplexity/sonar-pro", agentWired: true },
+  UNKNOWN_PROVIDER: { provider: "openai_search", model: "gpt-4o", agentWired: false },
+};
 type JobContext = Awaited<ReturnType<DbAdapter["getProtocolExecutionJobContext"]>>;
 
 async function main(): Promise<void> {
-  console.log("\nPre-admission job closure (MISSING_CONTEXT, INVALID_BASELINE_ORDINAL)\n");
+  console.log("\nPre-admission job closure (MISSING_CONTEXT, INVALID_BASELINE_ORDINAL, provider refusals)\n");
   const { memoryAdapter } = await import("@/lib/db/memory-adapter");
   const db: DbAdapter = memoryAdapter;
 
@@ -136,7 +150,8 @@ async function main(): Promise<void> {
     active?: () => Promise<boolean>;
     shapeContext?: (ctx: JobContext) => Promise<JobContext>;
   } = {}) {
-    const wire = { fetches: 0, analyses: 0 };
+    const wire = { fetches: 0, analyses: 0, agentProbes: 0 };
+    const refusal = reason in REFUSALS ? REFUSALS[reason as ProviderRefusal] : null;
     const closures: Array<{ outcome: string; job: { status?: string; failureReason?: string | null } | null }> = [];
     const aborts: unknown[] = [];
     const active = opts.active ?? (async () => true);
@@ -147,6 +162,9 @@ async function main(): Promise<void> {
         let r = await db.getProtocolExecutionJobContext(input);
         if (!r.job || !(await active())) return r;
         if (reason === "INVALID_BASELINE_ORDINAL") r = { ...r, job: { ...r.job, nextBaselineOrdinal: 0 } };
+        if (refusal && r.protocol) {
+          r = { ...r, protocol: { ...r.protocol, provider: refusal.provider, modelConfig: { ...r.protocol.modelConfig, model: refusal.model } } };
+        }
         return opts.shapeContext ? opts.shapeContext(r) : r;
       },
       failProtocolExecutionJob: async (input) => {
@@ -174,6 +192,9 @@ async function main(): Promise<void> {
         return new Response(PROVIDER_BODY, { status: 200, headers: { "x-request-id": `req-${wire.fetches}` } });
       }) as typeof fetch,
       runProbe: runPerplexityProbe,
+      ...(refusal?.agentWired
+        ? { runAgentProbe: (async () => { wire.agentProbes += 1; throw new Error("the Agent adapter must not run"); }) as unknown as WorkerDeps["runProbe"] }
+        : {}),
     };
     return { deps, wire, closures, aborts };
   }
@@ -181,7 +202,8 @@ async function main(): Promise<void> {
   const attemptsOf = (protocolId: string, projectId: string) => db.getProtocolAttempts(protocolId, projectId);
   const same = (a: ProtocolAttempt[], b: ProtocolAttempt[]) => JSON.stringify(a) === JSON.stringify(b);
 
-  for (const reason of ["MISSING_CONTEXT", "INVALID_BASELINE_ORDINAL"] as const) {
+  const REASONS: Reason[] = ["MISSING_CONTEXT", "INVALID_BASELINE_ORDINAL", ...(Object.keys(REFUSALS) as ProviderRefusal[])];
+  for (const reason of REASONS) {
     console.log(`\n[${reason}]`);
 
     /* ── never admitted ──────────────────────────────────────────────── */
@@ -196,7 +218,7 @@ async function main(): Promise<void> {
         h.closures[0]?.job?.status === "failed" && h.closures[0]?.job?.failureReason === reason,
         `${h.closures[0]?.job?.status}/${h.closures[0]?.job?.failureReason}`);
       check("never admitted: zero cost — no attempt, request or analysis",
-        (await attemptsOf(protocolId, projectId)).length === 0 && h.wire.fetches === 0 && h.wire.analyses === 0);
+        (await attemptsOf(protocolId, projectId)).length === 0 && h.wire.fetches === 0 && h.wire.analyses === 0 && h.wire.agentProbes === 0);
       await lapse();
       const reclaim = await db.claimProtocolExecutionJob({ workerId: "reclaimer", leaseSeconds: 60 });
       check("never admitted: after the lease lapses, the job is not reclaimed",
@@ -267,7 +289,7 @@ async function main(): Promise<void> {
         `${h.closures.length}/${h.aborts.length}`);
       check(`${label}: the completed slot is unchanged, and nothing new was admitted`,
         snapshot !== null && same(snapshot, after), `${(snapshot as ProtocolAttempt[] | null)?.length}→${after.length}`);
-      check(`${label}: no new request or analysis`, h.wire.fetches === 1 && h.wire.analyses === 1);
+      check(`${label}: no new request or analysis`, h.wire.fetches === 1 && h.wire.analyses === 1 && h.wire.agentProbes === 0);
       check(`${label}: the job stays recoverable (reclaimable, not failed)`, await reclaimAndClose(protocolId));
     }
 
@@ -287,7 +309,7 @@ async function main(): Promise<void> {
       check(`open attempt (${frontier}): the attempt is not terminalized or changed`,
         attempt !== undefined && attempt.terminalizedAt === null && same(before, after),
         `${attempt?.status} ${attempt?.terminalizedAt}`);
-      check(`open attempt (${frontier}): no new request or analysis`, h.wire.fetches === 0 && h.wire.analyses === 0);
+      check(`open attempt (${frontier}): no new request or analysis`, h.wire.fetches === 0 && h.wire.analyses === 0 && h.wire.agentProbes === 0);
       if (frontier === "provider_receipted") {
         // Read the stored evidence back under a fresh claim.
         await lapse();

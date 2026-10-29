@@ -58,10 +58,12 @@ import type { PerplexityProbeRunner } from "@/lib/protocol-worker/types";
  *                     not) and only for the approved model
  *   anything else     refused — a tightening: before PR #4 it ran Sonar
  */
+export type ProviderRefusal = "PROVIDER_ADAPTER_NOT_ENABLED" | "PROVIDER_MODEL_NOT_APPROVED" | "UNKNOWN_PROVIDER";
+
 export function probeRunnerForProtocol(
   deps: Pick<WorkerDeps, "runProbe" | "runAgentProbe">,
   protocol: { provider: string; modelConfig: Record<string, unknown> }
-): { ok: true; runProbe: PerplexityProbeRunner } | { ok: false; detail: string } {
+): { ok: true; runProbe: PerplexityProbeRunner } | { ok: false; detail: ProviderRefusal } {
   if (protocol.provider === "perplexity_sonar" || protocol.provider === "perplexity") {
     return { ok: true, runProbe: deps.runProbe };
   }
@@ -333,7 +335,7 @@ async function closeJobBeforeAdmission(
   deps: WorkerDeps,
   f: Fenced,
   ctx: GetProtocolExecutionJobContextResult,
-  reason: "MISSING_CONTEXT" | "INVALID_BASELINE_ORDINAL"
+  reason: "MISSING_CONTEXT" | "INVALID_BASELINE_ORDINAL" | ProviderRefusal
 ): Promise<IterationResult> {
   const openAttempt = ctx.currentAttempt !== null && ctx.currentAttempt.terminalizedAt === null;
   const openCall = ctx.externalCalls.some((c) => c.status === "reserved" || c.status === "in_progress");
@@ -384,22 +386,10 @@ async function runOneSlot(
   // nothing is reserved, nothing is sent.
   const runner = probeRunnerForProtocol(deps, ctx.protocol);
   if (!runner.ok) {
-    // Closed durably, under this claim, with the exact refusal reason. A
-    // bare return would leave the job claimed: after the lease lapsed it
-    // was reclaimed and refused again until attempt_count reached
-    // max_attempts, ending as abandoned_exhausted with no reason recorded.
-    // fail_protocol_execution_job (0050) is fenced, touches no attempt
-    // (none exists yet) and moves the job to `failed`, which no claim takes.
-    const closed = await deps.db.failProtocolExecutionJob({
-      jobId: f.jobId,
-      claimToken: f.claimToken,
-      projectId: f.projectId,
-      reason: runner.detail,
-    });
-    if (closed.outcome !== "FAILED") {
-      return { outcome: "lost_ownership", jobId: f.jobId, detail: `${runner.detail}:${closed.outcome}` };
-    }
-    return { outcome: "failed", jobId: f.jobId, detail: runner.detail };
+    // Closed durably with the exact refusal reason only when the job was
+    // never admitted; a job holding an open attempt, earlier slots or
+    // receipts (a provider disabled after admission) is left as it is.
+    return await closeJobBeforeAdmission(deps, f, ctx, runner.detail);
   }
 
   // D-025 — the key must be exactly `${jobId}:baseline:${nextBaselineOrdinal}`

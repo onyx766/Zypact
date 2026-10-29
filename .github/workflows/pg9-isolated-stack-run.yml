@@ -3,11 +3,24 @@
 #
 # Opening, pushing to or editing the pull request does NOT start anything:
 # the only trigger is a `labeled` event, and the job runs only when ALL hold:
-#   - the label just added is exactly `pg9-run-approved` (added by the
-#     Founder, by hand, after reviewing this file and the head commit);
-#   - the pull request's head branch is exactly `ci/pg9-isolated-stack-run`;
-#   - the head repository is this repository (no fork).
-# Any other label, branch or fork: the job is skipped and nothing runs.
+#   - the label just added is `pg9-ok-<head SHA>`, where <head SHA> is the
+#     full 40-character SHA of the pull request's head AT THE TIME OF THE
+#     EVENT (added by the Founder, by hand, after reviewing that exact
+#     commit). A label naming any other commit — including an earlier head
+#     after a later push — matches nothing. The label is 47 characters,
+#     within GitHub's 50-character limit;
+#   - the pull request is #83;
+#   - its head branch is exactly `ci/pg9-isolated-stack-run`;
+#   - the head repository is this repository (no fork);
+#   - this is the run's first attempt (a "Re-run" of the job is skipped).
+# Anything else: the job is skipped and nothing runs.
+#
+# One authorized execution only. Removing the label and adding it again is
+# a NEW `labeled` event and would start a new run (run_attempt 1). So, after
+# the first authorized execution, the pull request is to be CLOSED (not
+# merged) and the branch deleted. GitHub compares strings case-insensitively
+# in expressions; an upper-case spelling of the same SHA names the same
+# commit.
 #
 # What the job may and may not do:
 #   - GITHUB_TOKEN is read-only (contents: read); checkout does not persist it.
@@ -45,15 +58,33 @@ jobs:
   pg9:
     name: PG-9 disposable-stack run
     if: >-
-      github.event.label.name == 'pg9-run-approved' &&
+      github.event.label.name == format('pg9-ok-{0}', github.event.pull_request.head.sha) &&
+      github.event.pull_request.number == 83 &&
       github.event.pull_request.head.ref == 'ci/pg9-isolated-stack-run' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.run_attempt == '1'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
       run:
         shell: bash
     steps:
+      # Defence in depth: the same gate again, exact and case-sensitive.
+      # Event values arrive through env, never interpolated into the script.
+      - name: Re-assert the SHA-bound authorization
+        env:
+          LABEL: ${{ github.event.label.name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          [ "$RUN_ATTEMPT" = "1" ] || { echo "Not the first attempt; refusing." >&2; exit 1; }
+          [ "$PR_NUMBER" = "83" ] || { echo "Not pull request #83; refusing." >&2; exit 1; }
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Unexpected head SHA; refusing." >&2; exit 1; }
+          [ "$LABEL" = "pg9-ok-$HEAD_SHA" ] || { echo "The label does not name the head commit exactly; refusing." >&2; exit 1; }
+          echo "Authorized: pg9-ok-$HEAD_SHA, first attempt, PR #83."
+
       - name: Check out the reviewed head commit
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:

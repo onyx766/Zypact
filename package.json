@@ -122,6 +122,8 @@
     "test:worker-precheck-closure": "tsx scripts/test-worker-precheck-closure.ts",
     "test:worker-paid-execution-gate": "tsx scripts/test-worker-paid-execution-gate.ts",
     "test:worker-image-provenance": "tsx scripts/test-worker-image-provenance.ts",
+    "test:pg9-harness-offline": "tsx scripts/test-pg9-harness-offline.ts",
+    "test:pg9-paid-gate-runtime": "tsx scripts/test-pg9-paid-gate-runtime.ts",
     "test:m5-0083-schema": "tsx scripts/test-m5-0083-schema-contract.ts",
     "test:0080-report-ready": "tsx scripts/test-0080-report-ready-contract.ts",
     "test:report-pass": "tsx scripts/test-report-pass.ts",

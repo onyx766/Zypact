@@ -23,7 +23,11 @@
  *       service-role client, in the live branch only; no production caller
  *       outside the gated loop reaches runOneIteration or runWorkerLoop;
  *       the loop asks the gate before runOneIteration — and each pin is
- *       shown to fail on a mutated source.
+ *       shown to fail on a mutated source;
+ *   [6] the gate is awaited, so the stop signal and the runtime bound are
+ *       re-asked after it resolves: an ALLOW that arrives after a stop was
+ *       requested, or after the bound ran out, claims nothing; an ALLOW with
+ *       both still valid claims exactly once.
  *
  * Offline: the in-memory adapter, a fixture fetch, a fake ledger client.
  */
@@ -298,6 +302,55 @@ async function main(): Promise<void> {
     await drain();
   }
 
+  /* ═══════ [6] the world may move while the gate is awaited ═══════ */
+  console.log("\n[6] Re-checked after the gate resolves");
+  for (const variant of ["stop_requested", "bound_exhausted", "both_valid"] as const) {
+    await drain();
+    const { protocolId } = await seed(`pending-${variant}.test`);
+    const h = harness();
+    const signal = { aborted: false };
+    let room = true;
+    let boundAsked = 0;
+    const bound = { allowsNewClaim: () => { boundAsked += 1; return room; } };
+    // A gate that stays pending until the test releases it with ALLOW.
+    let release: (d: PaidExecutionDecision) => void = () => {};
+    let asked = 0;
+    const gate: PaidExecutionGate = () => {
+      asked += 1;
+      if (asked > 1) return Promise.resolve(refuse("paid_execution_disabled"));
+      return new Promise<PaidExecutionDecision>((res) => { release = res; });
+    };
+    const seen: IterationResult[] = [];
+    const loop = runWorkerLoop(h.deps, { ...OPTS, exitAfterClaimedJob: true, runtimeBound: bound }, gate, signal,
+      async () => {}, (r) => seen.push(r), new WorkerHealth(h.deps.now));
+    // Let the loop reach the pending gate.
+    for (let i = 0; i < 5 && asked === 0; i += 1) await Promise.resolve();
+    const pendingAtGate = asked === 1 && h.wire.claims === 0;
+    if (variant === "stop_requested") signal.aborted = true;
+    if (variant === "bound_exhausted") room = false;
+    release(ALLOW);
+    await loop;
+    const label = variant === "stop_requested" ? "ALLOW after a stop was requested"
+      : variant === "bound_exhausted" ? "ALLOW after the runtime bound ran out" : "ALLOW with stop and bound still valid";
+    check(`${label}: the loop was parked on the pending gate, nothing claimed yet`, pendingAtGate);
+    if (variant === "both_valid") {
+      check(`${label}: exactly one normal claim, and its job ran`,
+        h.wire.claims === 1 && h.wire.admissions === 1 && h.wire.fetches === 1 && seen.length === 1 && seen[0].outcome === "completed",
+        `${JSON.stringify(h.wire)} ${JSON.stringify(seen.map((x) => x.outcome))}`);
+      check(`${label}: the bound was asked before and again after the gate`, boundAsked === 2, String(boundAsked));
+    } else {
+      check(`${label}: no claim, reservation, request or analysis`,
+        h.wire.claims === 0 && h.wire.admissions === 0 && h.wire.fetches === 0 && h.wire.analyses === 0, JSON.stringify(h.wire));
+      check(`${label}: stopped without a refusal event and without asking the gate again`,
+        seen.length === 0 && asked === 1, `seen=${JSON.stringify(seen)} asked=${asked}`);
+      const c = await db.claimProtocolExecutionJob({ workerId: "inspector", leaseSeconds: 60 });
+      check(`${label}: the queued job is untouched and still claimable`,
+        c.job?.protocolId === protocolId && c.job?.attemptCount === 1, JSON.stringify(c.job?.attemptCount));
+      if (c.job && c.claimToken) await db.failProtocolExecutionJob({ jobId: c.job.id, claimToken: c.claimToken, projectId: c.job.projectId, reason: "test_cleanup" });
+    }
+  }
+  await drain();
+
   /* ═══════ [5] static protection ═══════ */
   console.log("\n[5] Static protection");
   const entry = readFileSync("scripts/run-protocol-worker.ts", "utf8");
@@ -333,11 +386,14 @@ async function main(): Promise<void> {
     const bound = body.indexOf("opts.runtimeBound.allowsNewClaim()");
     const gate = body.indexOf("await paidExecutionGate()");
     const iterate = body.indexOf("await runOneIteration(");
-    return bound > 0 && gate > bound && iterate > gate && /if \(!paid\.ok\) \{[\s\S]{0,200}?break;/.test(body)
+    const recheck = body.search(/if \(signal\.aborted\) break;\s*if \(!opts\.runtimeBound\.allowsNewClaim\(\)\) break;/);
+    return bound > 0 && gate > bound && recheck > gate && iterate > recheck && /if \(!paid\.ok\) \{[\s\S]{0,200}?break;/.test(body)
       && /paidExecutionGate: PaidExecutionGate,/.test(body);
   };
-  check("the loop asks the gate after the runtime bound and before runOneIteration, and breaks on refusal",
+  check("the loop asks the gate after the runtime bound, re-asks stop and bound after it, then claims; breaks on refusal",
     gatedBeforeClaim(workerSrc));
+  check("…and that pin fails when the post-gate re-check is removed",
+    !gatedBeforeClaim(workerSrc.replace(/    if \(signal\.aborted\) break;\n    if \(!opts\.runtimeBound\.allowsNewClaim\(\)\) break;\n/, "")));
   check("…and that pin fails when the gate call is removed",
     !gatedBeforeClaim(workerSrc.replace("paid = await paidExecutionGate();", "paid = { ok: true } as never;")));
 

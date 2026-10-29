@@ -744,6 +744,12 @@ export async function runWorkerLoop(
       onIteration?.({ outcome: "paid_execution_refused", jobId: null, detail: paid.code });
       break;
     }
+    // The gate is awaited, so the world may have moved while it ran: a stop
+    // may have been requested, or the runtime bound may no longer leave room
+    // for a claim. Both are re-asked here, immediately before the claim, and
+    // either one ends the loop without claiming.
+    if (signal.aborted) break;
+    if (!opts.runtimeBound.allowsNewClaim()) break;
     // B1 — no try/catch here on purpose. An unhandled throw during the first
     // job propagates out of this loop and ends the process; it can never
     // fall through to a second claim.

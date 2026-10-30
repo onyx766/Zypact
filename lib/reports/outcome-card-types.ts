@@ -18,6 +18,7 @@
 import type {
   ProtocolReportInterval,
   ProtocolReportQuestion,
+  ProtocolReportReconciliation,
   ProtocolReportSubject,
 } from "@/lib/reports/protocol-report-types";
 import type { OutcomeStatus } from "@/lib/reports/compare-protocols";
@@ -62,6 +63,12 @@ export interface OutcomeCardPhase {
   plannedRuns: number;
   rate: number | null;
   interval: ProtocolReportInterval | null;
+  /**
+   * Every attempt the phase reserved, readable or not. Optional only because
+   * cards saved before this field existed do not carry it; the view then says
+   * so rather than implying nothing failed.
+   */
+  reconciliation?: ProtocolReportReconciliation;
 }
 
 export interface OutcomeCardComparison {

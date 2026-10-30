@@ -81,7 +81,7 @@ const STAGES = [
     number: 2,
     title: "Run a controlled baseline",
     icon: Search,
-    copy: "After the question and protocol are approved, the bounded Perplexity Sonar baseline runs automatically.",
+    copy: "After the question and protocol are approved, Zypact launches the bounded Perplexity Sonar baseline.",
   },
   {
     number: 3,
@@ -131,7 +131,7 @@ export default function ScanPage() {
                 <Badge>See Zypact in action</Badge>
 
                 <p className="mt-6 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
-                  Zypact V1 · Controlled automation
+                  Zypact V1 · Controlled execution
                 </p>
 
                 <h1 className="mt-4 text-balance text-[32px] font-extrabold leading-[1.07] tracking-tightest sm:text-[42px] lg:text-[48px]">
@@ -142,7 +142,7 @@ export default function ScanPage() {
                   See how your company appears in an AI buyer answer. Bring one
                   commercially important buyer question. Zypact reviews the
                   question and protocol first. After approval, the controlled
-                  Perplexity Sonar baseline runs automatically and preserves the
+                  Perplexity Sonar baseline is launched by Zypact and preserves the
                   evidence.
                 </p>
 
@@ -204,7 +204,7 @@ export default function ScanPage() {
               <SectionHeading
                 label="How it works"
                 title="From question to insights in three steps"
-                lede="Nothing runs until the question and protocol are approved. After that, the controlled baseline runs automatically."
+                lede="Nothing runs until the question and protocol are approved. After that, Zypact launches the controlled baseline."
               />
 
               <div className="mt-12 grid gap-8 sm:grid-cols-3 sm:gap-6">
@@ -243,7 +243,7 @@ export default function ScanPage() {
         <footer className="border-t border-border bg-background">
           <div className="shell flex flex-col gap-2 py-6 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-[12px] text-muted-foreground">
-              Perplexity Sonar V1 · Automated after approval · No guaranteed
+              Perplexity Sonar V1 · Launched by Zypact after approval · No guaranteed
               outcome
             </p>
             <p className="text-[12px] text-muted-foreground">© 2026 Zypact</p>

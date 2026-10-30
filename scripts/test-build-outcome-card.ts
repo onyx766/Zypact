@@ -213,6 +213,23 @@ async function main(): Promise<void> {
       md.includes(NON_CAUSALITY_FOOTER));
   }
 
+  // The card carries the same required sentence and dependence warning, and
+  // both phases' attempt accounting, so a rate never appears without what
+  // was left out of its denominator.
+  {
+    const c = card();
+    check("the card states the exact METHODOLOGY Perplexity limitation",
+      c.limitations.includes(
+        "This is a directional measurement of Perplexity Sonar under the recorded conditions. It does not represent what every buyer sees across ChatGPT, Gemini, Copilot, Claude, or all AI systems."
+      ));
+    check("the card states the dependence warning",
+      c.limitations.some((l) => l.startsWith("Independence is not guaranteed")));
+    check("both phases carry their attempt reconciliation",
+      c.baseline.reconciliation !== undefined && c.retest.reconciliation !== undefined &&
+      typeof c.baseline.reconciliation.failed === "number" &&
+      typeof c.retest.reconciliation.excludedByReview === "number");
+  }
+
   // D-038 — 1/5 → 4/5 used to read as no_clear_change with a note claiming a
   // change of Δ_min "would have been visible". It is inconclusive, and says why.
   {

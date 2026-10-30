@@ -151,6 +151,36 @@ function Fact({ label, wide, children }: { label: string; wide?: boolean; childr
   );
 }
 
+/**
+ * The attempts behind a phase's rate that did not produce a readable run.
+ * A rate over readable runs is only honest next to what was left out
+ * (METHODOLOGY section 8), so failed and excluded attempts are listed rather
+ * than silently dropped from the denominator. Cards saved before this field
+ * existed say so instead of implying that nothing failed.
+ */
+function AttemptAccounting({ phase }: { phase: OutcomeCardPhase }) {
+  const r = phase.reconciliation;
+  if (!r) {
+    return (
+      <p className="zoc-phase-attempts">
+        Attempt accounting was not recorded on this card.
+      </p>
+    );
+  }
+  return (
+    <p className="zoc-phase-attempts">
+      {r.attempted} attempted of {r.planned} planned: {r.completed} completed
+      {" · "}
+      {r.failed} failed
+      {" · "}
+      {r.excludedByReview} excluded by review
+      {" · "}
+      {r.excludedNoResult} with no readable result
+      {r.accountedFor ? "" : " · does not fully reconcile"}
+    </p>
+  );
+}
+
 function PhaseCard({
   label,
   tone,
@@ -193,6 +223,8 @@ function PhaseCard({
           <span key={`unreadable-${i}`} className="zoc-dot is-unreadable" />
         ))}
       </div>
+
+      <AttemptAccounting phase={phase} />
 
       {measured && interval ? (
         <>

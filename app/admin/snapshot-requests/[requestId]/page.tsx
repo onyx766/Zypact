@@ -670,6 +670,9 @@ export default async function SnapshotRequestDetailPage({
                   deliveryClaimActive={
                     artifact.deliveryClaimActive
                   }
+                  needsReview={
+                    artifact.integrityStatus !== "integrity_passed"
+                  }
                 />
 
                 <details className="group relative">

@@ -113,6 +113,30 @@ const INTEGRITY_BLOCKED = {
     "This report failed its integrity gate and cannot be delivered. Resolve the blocking reasons and re-render it.",
 } as const;
 
+/**
+ * Only a report built from the canonical protocol payload may be emailed. An
+ * artifact without one is a legacy mvp-scan report whose email template
+ * carries visibility and branded-reputation fields that V1 does not produce
+ * (METHODOLOGY §10), so there is nothing canonical to send. Refused before the
+ * claim.
+ */
+const LEGACY_REPORT_NOT_DELIVERABLE = {
+  error: "legacy_report_not_deliverable",
+  message:
+    "This artifact has no canonical protocol report and cannot be emailed. Rebuild it from the protocol evidence.",
+} as const;
+
+/**
+ * Anything other than `integrity_passed` — `needs_review`, or no recorded
+ * decision at all — is delivered only after a founder has reviewed it and said
+ * so. The Outcome Card route enforces the same rule.
+ */
+const REVIEW_ACKNOWLEDGEMENT_REQUIRED = {
+  error: "review_acknowledgement_required",
+  message:
+    "This report has not passed its integrity gate. Review it, then confirm the review to send.",
+} as const;
+
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -130,6 +154,12 @@ export interface SendReportDeps {
     publicToken: string;
     /** Null for artifacts written before migration 0068 recorded a decision. */
     integrityStatus: string | null;
+    /**
+     * The buyer question from the canonical protocol payload, or null when the
+     * artifact has none. Read before the claim and used only to quote the
+     * question in the email, never for findings.
+     */
+    questionText: string | null;
   } | null>;
   beginSnapshotReportDelivery: (input: {
     snapshotRequestId: string;
@@ -142,6 +172,7 @@ export interface SendReportDeps {
     to: string;
     companyName: string;
     publicToken: string;
+    questionText: string;
     shortReportMarkdown: string;
     deliveryIdempotencyKey: string;
   }) => Promise<{ messageId: string }>;
@@ -220,10 +251,8 @@ export function createSendReportHandler(deps: SendReportDeps) {
       return NextResponse.json({ error: "invalid_body" }, { status: 400 });
     }
 
-    const { expectedArtifactId, expectedRevision } = (body ?? {}) as Record<
-      string,
-      unknown
-    >;
+    const { expectedArtifactId, expectedRevision, acknowledgeReview } = (body ??
+      {}) as Record<string, unknown>;
 
     // A request naming only the snapshot is no longer sufficient: without the
     // reviewed artifact and revision there is nothing to fence against.
@@ -248,6 +277,17 @@ export function createSendReportHandler(deps: SendReportDeps) {
     // Refused before the claim, so a blocked artifact never holds one.
     if (context.integrityStatus === "blocked") {
       return NextResponse.json(INTEGRITY_BLOCKED, { status: 409 });
+    }
+
+    if (!isNonEmptyString(context.questionText)) {
+      return NextResponse.json(LEGACY_REPORT_NOT_DELIVERABLE, { status: 409 });
+    }
+
+    if (
+      context.integrityStatus !== "integrity_passed" &&
+      acknowledgeReview !== true
+    ) {
+      return NextResponse.json(REVIEW_ACKNOWLEDGEMENT_REQUIRED, { status: 409 });
     }
 
     // ---- BEGIN: the concurrency boundary -----------------------------------
@@ -300,6 +340,7 @@ export function createSendReportHandler(deps: SendReportDeps) {
         to: context.workEmail,
         companyName: context.companyName,
         publicToken: context.publicToken,
+        questionText: context.questionText,
         // Pinned to the claim. Not re-read, not re-rendered.
         shortReportMarkdown: claimed.shortReportMarkdown,
         deliveryIdempotencyKey,

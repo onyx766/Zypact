@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth/current-user";
 import { isFounderEmail } from "@/lib/auth/founder";
 import { getDb } from "@/lib/db";
-import { parsePublicSnapshotReport } from "@/lib/snapshot-requests/parse-public-report";
-import { sendClientSnapshotReport } from "@/lib/snapshot-requests/client-report-delivery";
+import { isProtocolReportPayload } from "@/lib/reports/protocol-report-types";
+import { sendProtocolReportEmail } from "@/lib/reports/protocol-report-email";
 import { createSendReportHandler } from "@/lib/snapshot-requests/send-report-handler";
 import { publicSiteUrl } from "@/lib/seo/site";
 
@@ -37,12 +37,18 @@ export const POST = createSendReportHandler({
     ]);
     if (!snapshotRequest?.workEmail || !artifact) return null;
 
-    // Read BEFORE the claim and used only for the link, never for content.
+    // Read BEFORE the claim and used only for the link and the quoted
+    // question, never for findings. No canonical payload means no email.
+    const questionText = isProtocolReportPayload(artifact.reportPayload)
+      ? artifact.reportPayload.question.text
+      : null;
+
     return {
       workEmail: snapshotRequest.workEmail,
       companyName: snapshotRequest.companyName ?? "",
       publicToken: artifact.publicToken,
       integrityStatus: artifact.integrityStatus ?? null,
+      questionText,
     };
   },
 
@@ -54,23 +60,15 @@ export const POST = createSendReportHandler({
     const from = process.env.SNAPSHOT_EMAIL_FROM as string;
     const appBaseUrl = publicSiteUrl();
 
-    // Parsed from the CLAIMED markdown the handler passed in. The artifact is
-    // never re-read here: a replacement landing between the claim and this
-    // call must not change what the customer receives.
-    const report = parsePublicSnapshotReport(input.shortReportMarkdown);
-
-    const delivery = await sendClientSnapshotReport(
+    // The email carries no findings: it says the snapshot is ready and links
+    // to the page that states it in full, with its uncertainty. It is built
+    // from the canonical payload's question, never from parsed markdown.
+    const delivery = await sendProtocolReportEmail(
       {
-        requestId: input.requestId,
         to: input.to,
         companyName: input.companyName,
         publicToken: input.publicToken,
-        visibilitySummary: report.visibility || "See the private report",
-        brandedReputation:
-          report.brandedReputation || "See the private report",
-        firstPriorityAction:
-          report.firstFixHeading ||
-          "Review the first priority action in your private report.",
+        questionText: input.questionText,
         deliveryIdempotencyKey: input.deliveryIdempotencyKey,
       },
       { apiKey, from, replyTo: null, appBaseUrl }

@@ -18,6 +18,7 @@ export function SendReportButton({
   expectedArtifactId,
   expectedRevision,
   deliveryClaimActive,
+  needsReview,
 }: {
   requestId: string;
   recipientEmail: string;
@@ -26,6 +27,8 @@ export function SendReportButton({
   expectedArtifactId: string;
   expectedRevision: string;
   deliveryClaimActive: boolean;
+  /** True unless the integrity gate passed; sending then needs an explicit review confirmation. */
+  needsReview: boolean;
 }) {
   const router = useRouter();
 
@@ -34,6 +37,9 @@ export function SendReportButton({
 
   const [error, setError] =
     useState<string | null>(null);
+
+  const [acknowledged, setAcknowledged] =
+    useState(false);
 
   async function sendReport() {
     // Delivered reports are terminal in this workflow, so there is no
@@ -64,6 +70,7 @@ export function SendReportButton({
           body: JSON.stringify({
             expectedArtifactId,
             expectedRevision,
+            acknowledgeReview: needsReview ? acknowledged : false,
           }),
         }
       );
@@ -105,7 +112,8 @@ export function SendReportButton({
         disabled={
           pending ||
           alreadyDelivered ||
-          deliveryClaimActive
+          deliveryClaimActive ||
+          (needsReview && !acknowledged)
         }
         className={cn(
           ui.btnOutline,
@@ -124,6 +132,21 @@ export function SendReportButton({
             ? "Report delivered"
             : "Send report"}
       </button>
+
+      {needsReview && !alreadyDelivered ? (
+        <label className="flex max-w-xs items-start gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={acknowledged}
+            onChange={(event) => setAcknowledged(event.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            I reviewed this report. It has not passed the automatic integrity
+            gate.
+          </span>
+        </label>
+      ) : null}
 
       {error ? (
         <p className="max-w-xs text-xs text-destructive">

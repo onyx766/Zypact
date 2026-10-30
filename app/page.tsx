@@ -259,7 +259,7 @@ const faqs = [
   {
     question: "What happens after I request a demo?",
     answer:
-      "The form requests access; it does not approve a protocol or start an AI call. If you proceed, the question and protocol are approved first. V1 then runs the baseline automatically. Integrity-passed records continue to automatic delivery, exceptions are held for review, and blocked evidence is not delivered.",
+      "The form requests access; it does not approve a protocol or start an AI call. If you proceed, the question and protocol are approved first. Zypact then launches the baseline. Integrity-passed records continue to automatic delivery, exceptions are held for review, and blocked evidence is not delivered.",
   },
   {
     question: "Do I need a subscription?",
@@ -576,7 +576,7 @@ export default function LandingPage() {
             <SectionHeading
               label="How it works"
               title="From one question to an honest outcome"
-              lede="Nothing runs until the question, limits, sampling plan and observation window are approved. After that the controlled baseline runs automatically."
+              lede="Nothing runs until the question, limits, sampling plan and observation window are approved. After that Zypact launches the controlled baseline."
             />
 
             <div className="mt-12 grid gap-8 sm:grid-cols-2 sm:gap-6 lg:mt-14 lg:grid-cols-4">
@@ -807,7 +807,7 @@ export default function LandingPage() {
 
           <div className="shell flex flex-col gap-2 border-t border-border py-6 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-[12px] text-muted-foreground">
-              Perplexity Sonar V1 · Automated after approval · No guaranteed
+              Perplexity Sonar V1 · Launched by Zypact after approval · No guaranteed
               outcome
             </p>
             <p className="text-[12px] text-muted-foreground">© 2026 Zypact</p>

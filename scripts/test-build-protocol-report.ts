@@ -448,7 +448,17 @@ console.log("\nprohibited V1 language is absent");
   );
   check(
     "single-surface limitation is stated",
-    payload.limitations.some((l) => l.includes("does not represent all AI buyers"))
+    payload.limitations.some((l) => l.includes("It does not represent what every buyer sees across ChatGPT, Gemini, Copilot, Claude, or all AI systems."))
+  );
+  check(
+    "the required Perplexity limitation is the exact METHODOLOGY sentence",
+    payload.limitations.includes(
+      "This is a directional measurement of Perplexity Sonar under the recorded conditions. It does not represent what every buyer sees across ChatGPT, Gemini, Copilot, Claude, or all AI systems."
+    )
+  );
+  check(
+    "the dependence warning is stated",
+    payload.limitations.some((l) => l.startsWith("Independence is not guaranteed"))
   );
   check(
     "no causal claim is made",

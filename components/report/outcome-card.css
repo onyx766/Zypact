@@ -350,6 +350,13 @@
   font-size: 12.5px;
 }
 
+.zpr-root .zoc-phase-attempts {
+  margin-top: 10px;
+  color: var(--zpr-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
 /* ---------------------------------------------------------------- outcome */
 
 .zpr-root .zoc-outcome {

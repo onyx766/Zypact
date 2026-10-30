@@ -18,6 +18,7 @@
  * file inventing a second integrity concept beside it.
  */
 
+import { DEPENDENCE_LIMITATION, surfaceLimitation } from "@/lib/reports/surface-limitations";
 import {
   compareProtocols,
   type ComparisonProtocolIdentity,
@@ -75,6 +76,9 @@ function phaseOf(report: ProtocolReportPayload): OutcomeCardPhase {
     plannedRuns: report.protocol.plannedBaselineRuns,
     rate: report.observation.rate,
     interval: report.observation.interval,
+    // Carried so the card cannot show a rate without the attempts that did
+    // not produce a readable run (METHODOLOGY section 8).
+    reconciliation: report.reconciliation,
   };
 }
 
@@ -164,7 +168,9 @@ function buildLimitations(
   intervention: OutcomeCardIntervention
 ): string[] {
   const notes = [
-    `Single surface: ${baseline.protocol.provider} (${baseline.protocol.surface}), model ${baseline.protocol.model}. Directional proxy for AI answer behavior, not a measure of all AI buyers.`,
+    `Single surface: ${baseline.protocol.provider} (${baseline.protocol.surface}), model ${baseline.protocol.model}.`,
+    surfaceLimitation(baseline.protocol.provider),
+    DEPENDENCE_LIMITATION,
     "Prompt-scoped: describes this question only and does not generalize to other buyer questions.",
     "Observational: this records what the surface answered before and after the intervention. It does not establish that any answer caused a sale to be won or lost.",
   ];

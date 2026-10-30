@@ -17,6 +17,7 @@
  *      words rather than leaving the reader to infer it from a number.
  */
 
+import { DEPENDENCE_LIMITATION, surfaceLimitation } from "@/lib/reports/surface-limitations";
 import {
   PROTOCOL_REPORT_VERSION,
   type BuildProtocolReportInput,
@@ -402,7 +403,9 @@ function buildLimitations(
   input: BuildProtocolReportInput
 ): string[] {
   return [
-    `Single surface: ${input.protocol.provider} (${input.protocol.surface}), model ${input.protocol.model}. It is a directional proxy for AI answer behavior and does not represent all AI buyers.`,
+    `Single surface: ${input.protocol.provider} (${input.protocol.surface}), model ${input.protocol.model}.`,
+    surfaceLimitation(input.protocol.provider),
+    DEPENDENCE_LIMITATION,
     "Prompt-scoped: results describe this question only and do not generalize to other buyer questions.",
     "Observational: this records what the surface answered. It does not establish that any answer caused a sale to be won or lost.",
     `Point-in-time: captured under methodology version ${input.protocol.methodologyVersion}. Answers on this surface change over time; a registered retest is the only way to observe change.`,

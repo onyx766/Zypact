@@ -75,7 +75,7 @@ const STATUS_COPY: Record<
     tone: "neutral",
     icon: Scale,
     reading:
-      "The runs do not show a difference of at least the minimum useful change that this sample can separate from noise.",
+      "The interval on the difference stays within the minimum useful change in both directions, so a change of that size is ruled out for these runs.",
   },
   inconclusive: {
     label: "Inconclusive",

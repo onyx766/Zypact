@@ -135,9 +135,9 @@ function buildUncertainty(
       break;
     case "no_clear_change":
       notes.push(
-        `No change of at least ${formatPercent(
+        `The 95% interval on the difference stays within ±${formatPercent(
           comparison.minimumUsefulChange
-        )} was distinguishable from noise. A change of that size would have been visible at this sample size; a smaller real change may still exist and would not be visible here.`
+        )}, so these runs rule out a change of the minimum useful size in either direction. A smaller real change may still exist and would not be visible here.`
       );
       break;
     case "inconclusive":
@@ -145,7 +145,9 @@ function buildUncertainty(
         "This retest cannot support any of the three other outcomes. " +
           (comparison.reasons.includes("PLAN_UNDERPOWERED_FOR_MINIMUM_USEFUL_CHANGE")
             ? "The plan could not have detected the declared minimum useful change even in the best case — this is a limit of the sample size, not evidence that nothing changed."
-            : "See the reasons recorded with this comparison for why.")
+            : comparison.reasons.includes("INTERVAL_INCLUDES_MINIMUM_USEFUL_CHANGE")
+              ? "The 95% interval on the difference still includes a change of the minimum useful size, so these runs can neither confirm such a change nor rule it out — this is a limit of the sample size, not evidence that nothing changed."
+              : "See the reasons recorded with this comparison for why.")
       );
       break;
   }

@@ -359,6 +359,24 @@ export function compareProtocols(input: CompareProtocolsInput): CompareProtocols
     };
   }
 
+  // D-038 — "no clear change" claims that a change of Δ_min would have been
+  // visible and was not there. That is true only when the interval rules out
+  // a change of Δ_min in both directions. sdc ≤ Δ_min is not enough: it is
+  // the best case over all outcome pairs, so at 5 vs 5 (sdc = Δ_min = 0.60)
+  // a 1/5 → 4/5 result, interval [0.00, 0.83], would otherwise read as no
+  // change.
+  if (interval.low <= -minimumUsefulChange || interval.high >= minimumUsefulChange) {
+    return {
+      status: "inconclusive",
+      delta,
+      interval,
+      intervalMethod: "newcombe_95",
+      minimumUsefulChange,
+      smallestDetectableChange: sdc,
+      reasons: [...reasons, "INTERVAL_INCLUDES_MINIMUM_USEFUL_CHANGE"],
+    };
+  }
+
   return {
     status: "no_clear_change",
     delta,

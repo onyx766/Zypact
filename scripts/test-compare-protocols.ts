@@ -195,6 +195,64 @@ async function main(): Promise<void> {
     );
   }
 
+  // (f) D-038 — an interval that still reaches Δ_min is not "no clear change".
+  // Under the pre-D-038 rule both of these read as no_clear_change, and the
+  // card told the client a change of Δ_min would have been visible.
+  for (const [base, retest, label] of [
+    [1, 4, "1/5 → 4/5 (Δ = +60%, interval [0.00, 0.83])"],
+    [1, 3, "1/5 → 3/5 (Δ = +40%, interval [-0.16, 0.73])"],
+  ] as const) {
+    const result = compareProtocols({
+      baseline: phase(base, 5, 5),
+      retest: phase(retest, 5, 5),
+      baselineIdentity: IDENTITY,
+      retestIdentity: IDENTITY,
+      recordedDeviationNote: null,
+      minimumUsefulChange: 0.6,
+    });
+    check(`(f) ${label} reports inconclusive, not no_clear_change`, result.status === "inconclusive", result.status);
+    check(
+      `(f) ${label} names the interval reason`,
+      result.reasons.includes("INTERVAL_INCLUDES_MINIMUM_USEFUL_CHANGE"),
+      result.reasons.join(",")
+    );
+  }
+
+  // (g) D-038 — every 5 vs 5 outcome pair at Δ_min = 0.60. no_clear_change
+  // must only ever be issued with the interval strictly inside ±Δ_min.
+  {
+    const counts: Record<string, number> = {};
+    let noChangeOutsideBand = 0;
+    for (let base = 0; base <= 5; base += 1) {
+      for (let retest = 0; retest <= 5; retest += 1) {
+        const result = compareProtocols({
+          baseline: phase(base, 5, 5),
+          retest: phase(retest, 5, 5),
+          baselineIdentity: IDENTITY,
+          retestIdentity: IDENTITY,
+          recordedDeviationNote: null,
+          minimumUsefulChange: 0.6,
+        });
+        counts[result.status] = (counts[result.status] ?? 0) + 1;
+        if (
+          result.status === "no_clear_change" &&
+          (result.interval === null || result.interval.low <= -0.6 || result.interval.high >= 0.6)
+        ) {
+          noChangeOutsideBand += 1;
+        }
+      }
+    }
+    check("(g) no no_clear_change is issued with an interval reaching ±Δ_min", noChangeOutsideBand === 0, String(noChangeOutsideBand));
+    check(
+      "(g) 5 vs 5 distribution: 5 increase, 5 decrease, 8 no_clear_change, 18 inconclusive",
+      counts.increase_observed === 5 &&
+        counts.decrease_observed === 5 &&
+        counts.no_clear_change === 8 &&
+        counts.inconclusive === 18,
+      JSON.stringify(counts)
+    );
+  }
+
   // ======================================================================
   // [4] Structural guarantees.
   // ======================================================================

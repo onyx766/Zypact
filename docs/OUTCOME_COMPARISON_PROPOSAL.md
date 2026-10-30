@@ -107,7 +107,17 @@ Evaluated in order:
      `[lo, hi]` includes zero.
 2. **`increase_observed`** if `lo > 0` and `Δ ≥ Δ_min`.
 3. **`decrease_observed`** if `hi < 0` and `|Δ| ≥ Δ_min`.
-4. **`no_clear_change`** otherwise.
+4. **`inconclusive`** if `[lo, hi]` reaches `Δ_min` in either direction
+   (`lo ≤ −Δ_min` or `hi ≥ Δ_min`) — reason
+   `INTERVAL_INCLUDES_MINIMUM_USEFUL_CHANGE`. *Added by D-038, 2026-10-29.*
+5. **`no_clear_change`** otherwise, i.e. only when the interval lies strictly
+   inside (−`Δ_min`, +`Δ_min`).
+
+> **D-038 amendment.** As first signed off, rule 4 read "`no_clear_change`
+> otherwise". At the V1 plan the smallest detectable change equals `Δ_min`,
+> so rule 1's third clause never fires, and wide intervals such as
+> 1/5 → 4/5 ([0.00, 0.83]) fell through to `no_clear_change`, contradicting
+> the meaning stated below. See `DECISIONS.md` D-038.
 
 ### Why rule 1's third clause is the important one
 

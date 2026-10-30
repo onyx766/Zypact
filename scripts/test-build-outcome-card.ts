@@ -213,6 +213,25 @@ async function main(): Promise<void> {
       md.includes(NON_CAUSALITY_FOOTER));
   }
 
+  // D-038 — 1/5 → 4/5 used to read as no_clear_change with a note claiming a
+  // change of Δ_min "would have been visible". It is inconclusive, and says why.
+  {
+    const c = buildOutcomeCard({
+      projectId: "proj-1",
+      baseline: phaseReport({ protocolId: "b-d038", presentCount: 1, totalRuns: 5 }),
+      retest: phaseReport({ protocolId: "r-d038", presentCount: 4, totalRuns: 5 }),
+      intervention: INTERVENTION,
+      measurementCompatibility: COMPATIBLE, questionVersionIds: SAME_QUESTION,
+      minimumUsefulChange: 0.6,
+      now: NOW,
+    });
+    check("(D-038) 1/5 → 4/5 is inconclusive", c.comparison.status === "inconclusive", c.comparison.status);
+    check("(D-038) the card explains the interval still includes the minimum useful change",
+      c.uncertainty.some((note) => note.includes("still includes a change of the minimum useful size")));
+    check("(D-038) no note claims the change would have been visible",
+      !c.uncertainty.some((note) => /would have been visible/i.test(note)));
+  }
+
   check(
     "buildOutcomeCard's input type has no field that could override the footer",
     (() => {

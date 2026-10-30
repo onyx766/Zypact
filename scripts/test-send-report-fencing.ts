@@ -58,7 +58,7 @@ function build(over: Partial<{
       // Pre-BEGIN content exists but must never reach the provider.
       spy.artifactContentReads += 0;
       return over.context === undefined
-        ? { workEmail: "client@example.com", companyName: "Acme", publicToken: "t".repeat(43), integrityStatus: "integrity_passed" }
+        ? { workEmail: "client@example.com", companyName: "Acme", publicToken: "t".repeat(43), integrityStatus: "integrity_passed", questionText: "Which SOC 2 tool?" }
         : over.context;
     },
     beginSnapshotReportDelivery: async (input) => {
@@ -152,6 +152,7 @@ async function main(): Promise<void> {
     const blockedContext = {
       workEmail: "client@example.com", companyName: "Acme",
       publicToken: "t".repeat(43), integrityStatus: "blocked",
+      questionText: "Which SOC 2 tool?",
     };
     const { handler, spy } = build({ context: blockedContext });
     const r = await call(handler, VALID);
@@ -163,15 +164,70 @@ async function main(): Promise<void> {
     check("blocked artifact takes no claim to release",
       spy.release.length === 0 && spy.order.join(">") === "auth>prep");
 
-    // The other two decisions are not this gate's business: `integrity_passed`
-    // delivers, and a legacy null predates 0068 and keeps its prior behavior.
-    for (const status of ["integrity_passed", null] as Array<string | null>) {
+    // `integrity_passed` delivers on its own.
+    {
       const { handler: h, spy: s } = build({
-        context: { ...blockedContext, integrityStatus: status },
+        context: { ...blockedContext, integrityStatus: "integrity_passed" },
       });
-      check(`integrityStatus ${String(status)} still delivers`,
+      check("integrity_passed delivers without an acknowledgement",
         (await call(h, VALID)).status === 200 && s.provider.length === 1);
     }
+  }
+
+  /* ---- review gate: needs_review and an empty status need a founder's review ---- */
+  {
+    const ctx = (integrityStatus: string | null) => ({
+      workEmail: "client@example.com", companyName: "Acme",
+      publicToken: "t".repeat(43), integrityStatus,
+      questionText: "Which SOC 2 tool?",
+    });
+    for (const status of ["needs_review", null, "something_unknown"] as Array<string | null>) {
+      const { handler, spy } = build({ context: ctx(status) });
+      const r = await call(handler, VALID);
+      const body = await r.json();
+      check(`${String(status)} without acknowledgement → 409 review_acknowledgement_required`,
+        r.status === 409 && body.error === "review_acknowledgement_required");
+      check(`${String(status)} without acknowledgement never reaches BEGIN or the provider`,
+        spy.begin.length === 0 && spy.provider.length === 0 && spy.finalize.length === 0);
+
+      const { handler: hFalse, spy: sFalse } = build({ context: ctx(status) });
+      const rFalse = await call(hFalse, { ...VALID, acknowledgeReview: "true" });
+      check(`${String(status)} with a non-boolean acknowledgement is still refused`,
+        rFalse.status === 409 && sFalse.provider.length === 0);
+
+      const { handler: hAck, spy: sAck } = build({ context: ctx(status) });
+      const rAck = await call(hAck, { ...VALID, acknowledgeReview: true });
+      check(`${String(status)} with acknowledgeReview: true delivers`,
+        rAck.status === 200 && sAck.provider.length === 1);
+    }
+
+    // Acknowledging a review can never override a blocked artifact.
+    const { handler: hB, spy: sB } = build({ context: ctx("blocked") });
+    const rB = await call(hB, { ...VALID, acknowledgeReview: true });
+    check("blocked stays blocked even with acknowledgeReview: true",
+      rB.status === 409 && (await rB.json()).error === "integrity_blocked" && sB.begin.length === 0);
+  }
+
+  /* ---- canonical payload only: a legacy artifact is never emailed ---- */
+  {
+    for (const questionText of [null, "", "   "] as Array<string | null>) {
+      const { handler, spy } = build({
+        context: {
+          workEmail: "client@example.com", companyName: "Acme",
+          publicToken: "t".repeat(43), integrityStatus: "integrity_passed",
+          questionText,
+        },
+      });
+      const r = await call(handler, { ...VALID, acknowledgeReview: true });
+      check(`no canonical question (${JSON.stringify(questionText)}) → 409 legacy_report_not_deliverable`,
+        r.status === 409 && (await r.json()).error === "legacy_report_not_deliverable");
+      check("a legacy artifact takes no claim and never reaches the provider",
+        spy.begin.length === 0 && spy.provider.length === 0);
+    }
+    const { handler, spy } = build();
+    await call(handler, VALID);
+    check("the provider receives the canonical question text",
+      spy.provider[0]?.questionText === "Which SOC 2 tool?");
   }
 
   /* ---- §24 BEGIN conflicts ---- */
@@ -571,6 +627,9 @@ async function main(): Promise<void> {
       !/update\(\s*\{[^}]*delivered_at/.test(all));
     check("§28 claim token never reaches the browser",
       !/deliveryClaimToken/.test(uiSrc));
+    check("the founder email is built by sendProtocolReportEmail, never the legacy visibility template",
+      /sendProtocolReportEmail/.test(routeSrc) &&
+      !/sendClientSnapshotReport|parsePublicSnapshotReport|visibilitySummary|brandedReputation/.test(routeSrc));
     check("§18 ambiguous message forbids automatic resend",
       /Do not resend automatically/.test(handlerSrc));
     check("§20 release failure never claims a safe unlock",

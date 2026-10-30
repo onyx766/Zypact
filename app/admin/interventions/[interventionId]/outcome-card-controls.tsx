@@ -19,6 +19,7 @@ export function OutcomeCardControls({
   generateBlockedReason,
   card,
   actionsEnabled,
+  attemptsRecorded,
 }: {
   interventionId: string;
   canGenerate: boolean;
@@ -30,6 +31,7 @@ export function OutcomeCardControls({
     delivered: boolean;
   } | null;
   actionsEnabled: boolean;
+  attemptsRecorded?: number;
 }) {
   const [busy, setBusy] = useState<"generate" | "send" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -65,6 +67,11 @@ export function OutcomeCardControls({
 
   return (
     <div className="flex flex-col gap-3">
+      {card && !card.delivered ? (
+        <p className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-foreground">
+          Outcome Card ready for review{typeof attemptsRecorded === "number" ? ` · ${attemptsRecorded} attempts recorded` : ""}.
+        </p>
+      ) : null}
       {!card?.delivered ? (
         <>
           <button

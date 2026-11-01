@@ -923,3 +923,36 @@ requests #48 through #60 landed on `main` — including the merge of the entire 
 application layer, the production worker going live under D-034, and three
 decisions (D-034, D-035, D-036). Section 15.7's process finding asked for a
 record written at the time the change happens. That did not occur here either.
+
+## 19. Buyer Question Intelligence Q1 — offline rules, run locally, not in CI
+
+- **As of:** 2026-11-01
+- **Base:** `main` at `6d81553` (merge of #95, the Q0 documents)
+- **Branch:** `feat/bqi-q1-offline`, not merged
+- **Scope:** the pure functions in `lib/buyer-questions/` and their offline tests,
+  as defined by the accepted Q1 scope and test plan. Nothing in this section is
+  wired into a route, page, worker, RPC or workflow. No migration, database,
+  network, provider or paid path changed.
+
+### 19.1 Commands added
+
+| Command | Plan cases | Local result on 2026-11-01 |
+|---|---|---|
+| `npm run test:bqi-candidates` | C-01 to C-28 | 186/186 checks passed |
+| `npm run test:bqi-selection` | S-01 to S-18 | 70/70 checks passed |
+| `npm run test:bqi-wording` | W-01 to W-11, P-01 to P-04 | 77/77 checks passed |
+
+These three commands are registered in `package.json` but are **not** run by any
+CI workflow. Adding them to CI is a separate decision. With them, `package.json`
+registers 103 `test:*` and 4 `verify:*` commands, and 191 files match
+`scripts/test-*.ts`. These figures supersede section 18.1's command and file
+counts, which were already behind `main` before this branch.
+
+### 19.2 What these tests do not establish
+
+They test rules over in-memory inputs only. No Q0 acceptance criterion in
+[`BUYER_QUESTION_INTELLIGENCE.md`](BUYER_QUESTION_INTELLIGENCE.md) is met by Q1
+alone: enforcement on save, stored rows, the approval RPC, rendered cards and
+pages, and criteria 25 and 32 to 69 all need the later steps (Q2, Q3, Q4, Q4b).
+The marketing-language, personal-data, length and question-shape detectors are
+provisional `v1` review signals, not validated classifiers.

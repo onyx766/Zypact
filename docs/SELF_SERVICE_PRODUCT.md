@@ -219,7 +219,7 @@ Each check returns one of four states:
 
 | Capability | Unverified domain | Verified domain |
 |---|---|---|
-| Diagnostic of public pages | ✓ limited (page cap, rate limits), private, labelled "Domain ownership not verified" | ✓ higher limits |
+| Diagnostic of public pages | ✓ base run and refresh quotas; each diagnostic capped at 10 pages; safety and abuse limits enforced; private, labelled "Domain ownership not verified" | ✓ higher run and refresh quotas; each diagnostic still capped at 10 pages; safety and abuse limits enforced |
 | Own questions, suggestions, customer material | ✓ customer material labelled as supplied by an unverified workspace | ✓ |
 | Question review and approval | ✓ | ✓ |
 | **Paid execution** | ✗ | ✓, together with billing, an execution-authorisation record and the PG-9, PT-1 and AD-1 gates |

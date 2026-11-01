@@ -1,9 +1,11 @@
 # Zypact V1 Methodology
 
 - **Status:** Canonical V1 methodology
-- **Version:** 1.1
+- **Version:** 1.2
 - **Method date:** 2026-08-16
 - **Version 1.1 date:** 2026-08-19 (see D-014 in `DECISIONS.md`)
+- **Version 1.2 date:** 2026-10-31 (see D-039 in `DECISIONS.md`)
+- **Default protocol methodology version:** 1.1. This is the current default value a new protocol records; existing protocols keep whatever value they recorded. Document version 1.2 adds planning guidance only and does not change that default.
 - **Initial live surface:** Perplexity Sonar
 - **Authority:** Governs evidence, sampling, observations, uncertainty, retest comparisons, and client-facing methodological language
 
@@ -22,6 +24,20 @@
   Results computed before and after this version are not directly
   comparable for any question whose underlying sample was actually
   mixed.
+- **1.2** (2026-10-31): Adds buyer-question provenance and
+  evidence-classification guidance to §5 Provenance, tied to D-039:
+  evidence grades (observed, adapted, hypothesis), verification
+  statuses, the customer-facing grade labels, and the separation of an
+  approved question's origin from the evidence classification of its
+  wording. Buyer Question Intelligence remains a planning
+  specification, not an implemented capability, and 1.2 is a
+  documentation version only: the current default protocol
+  methodology version remains 1.1, and no runtime change is made. No sampling,
+  observation, uncertainty or comparison rule changes. Existing
+  protocols keep the methodology version they recorded, the database
+  default for new protocols remains 1.1 until a separately authorised
+  change, existing reports are unchanged, and results computed before
+  and after this version are directly comparable.
 
 ## 1. Purpose
 
@@ -121,6 +137,16 @@ Question provenance may be:
 - public category benchmark question.
 
 Question provenance affects relevance. It does not prove that every buyer asks the question.
+
+Each candidate question also carries an evidence grade and a verification status.
+
+- **Observed** means an actual buyer-authored question, quoted as written. It is either from a public source anyone can check (*Observed — verified source*), or from documented, anonymised material the customer supplied and attested (*Observed — customer-provided*). The latter is not independently verified.
+- **Adapted** means a question reworded from cited buyer-authored language, with the change stated.
+- **Hypothesis** means no supporting buyer source, including an undocumented assertion about what buyers ask. A hypothesis is never preselected.
+
+Seller-authored material, including the customer's own website, cannot establish buyer wording, and a review that describes a problem is not an observed question.
+
+An approved question records how it was reached (unchanged, edited, replaced or written by the customer) separately from the evidence classification of its exact wording, which is assessed on its own. Editing never alters the original candidate, its sources or its grade. See `BUYER_QUESTION_INTELLIGENCE.md`.
 
 ### Versioning
 

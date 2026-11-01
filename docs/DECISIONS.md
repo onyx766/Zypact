@@ -415,3 +415,60 @@ Each entry records:
 - **Existing artifacts:** an Outcome Card saved before this change keeps the status it was saved with. Any undelivered card should be rebuilt before delivery. No migration is involved: the status rules live only in `lib/reports/compare-protocols.ts`.
 - **Tests:** `scripts/test-compare-protocols.ts` (cases f and g, including the full 5 vs 5 distribution) and `scripts/test-build-outcome-card.ts` (D-038 case). Both were confirmed to fail against the previous rule.
 - **Revisit trigger:** a change to `Δ_min`, the run plan or the interval method; or any proposal to issue `no_clear_change` while the interval still reaches `Δ_min`.
+
+## D-039 — Buyer questions are recommended from attributable buyer evidence, graded, and approved by the customer as frozen versions
+
+- **Date:** 2026-10-31
+- **Status:** Approved as the planning baseline (Founder decisions Q-D1 to Q-D5 and OD-1 to OD-5). Implementation is not authorised by this decision: each step in `docs/BUYER_QUESTION_INTELLIGENCE.md` section 10 needs its own authorisation.
+- **The need:** buyer feedback is that questions must reflect how buyers describe their own problems, not how sellers describe products. The current intake takes one free-text question per request, and the only automated question generator (`lib/pipeline/generate-buyer-prompts.ts`, legacy and refused) writes questions from the seller's own site copy, with no sources.
+- **Decision:** a URL-first flow recommends up to six candidate questions and preselects up to three: by default two unbranded and one branded-accuracy question.
+  - **What a recommendation weighs:** relevance to the target buyer, fit with the customer's ideal customer profile (ICP), commercial intent, relevance to what the product actually does, and the evidence behind the wording. The evidence grade alone never decides.
+  - **When evidence or relevance is insufficient,** fewer candidates are returned or preselected.
+  - **What the customer can do:** keep, edit, replace or write their own questions, and approve up to three as frozen question versions.
+  - **What approval does not do:** create a protocol, a job or any paid effect.
+- **Evidence grades:**
+  - **Observed — verified source:** an actual buyer-authored question, quoted as written from a public source anyone can check.
+  - **Observed — customer-provided:** an actual buyer-authored question taken from documented, anonymised material the customer supplies (such as a call transcript or support ticket), attested by the customer and not independently verified by Zypact. A customer's assertion about what buyers ask, without the documented material, is never labelled observed.
+  - **Adapted:** a question reworded from cited buyer-authored language. It names its source and states what was changed. A review or post that describes a problem supports at most an adapted question.
+  - **Hypothesis:** no supporting buyer source. It is labelled as such, never preselected, and never described as something buyers ask.
+
+  Seller website copy, whether the customer's or a competitor's, can never establish buyer wording.
+- **Edits are an origin, not a grade.** Each approved version records two separate things:
+  - its **origin**: recommended and unchanged, recommended and edited, replaced with another candidate, or written by the customer;
+  - the **evidence classification of the exact approved wording**, which is assessed independently of the original candidate's grade.
+
+  The original candidate, its sources and its grade are never altered. An edited question is observed only if its exact wording still matches a buyer-authored source; otherwise its wording is classified on its own evidence.
+- **Founder rulings:**
+  - **Q-D1:** research starts with founder-curated and customer-supplied buyer evidence. No paid research call is made before a separately approved, ledgered research budget exists.
+  - **Q-D2:** only permitted, attributable sources. No new Perplexity or other paid research provider is authorised.
+  - **Q-D3 and OD-2:** customers may approve up to three frozen questions. For the first V1 execution, only one question, explicitly selected by an operator, may launch, and only after PG-9 and the relevant execution gates are approved. The other approved questions stay inactive. No paid job is ever created automatically for all three.
+  - **Q-D4 and OD-5:** source terms, privacy and access restrictions are respected. A stored excerpt is at most 300 characters, an absolute limit and not a target; shorter is preferred. Each excerpt keeps its source URL (or, for customer material, its reference) and its retrieval date, without unnecessary personal data.
+  - **Q-D5 and OD-1:** the grade definitions above.
+  - **OD-3:** an approval-grant identifier may populate `buyer_question_versions.approved_by` only when the grant is a durable authorisation record bound to a verified customer email, the correct request and the correct project. The grant identifier is not the customer's identity, and the customer's question approval is not operator approval of paid execution.
+  - **OD-4:**
+    - the customer reviews through a seven-day, revocable invitation, exchanged once for a scoped session;
+    - a session lasts at most 30 minutes, ends after 15 minutes idle, and ends immediately when its invitation is revoked;
+    - token values are never stored: tokens are stored as SHA-256 hashes, and verified email addresses as keyed HMACs;
+    - invitations can be revoked and reissued, and they are separate from report-access and email-verification tokens;
+    - in the pilot, a customer whose session has ended asks for a new link and the founder reissues the invitation.
+- **Separation from paid execution:** the existing founder path `approve_and_launch_snapshot_baseline` (0062, last redefined in 0069) approves a question, approves a protocol and enqueues a job in one step. It stays the path for single-question requests.
+  - A request enrolled in the new flow is refused by it.
+  - Enrolment locks the same `snapshot_requests` row that function locks, and the function checks for enrolment after taking that lock and before creating any question, protocol or job. So enrolment and the legacy launch can never both succeed for one request, whichever starts first.
+  - A question approved by the customer reaches a protocol only through a separate operator launch that names one approved version.
+- **Further rules:**
+  - Evidence is never manufactured to reach six candidates.
+  - Marketing-language detection is a review signal for the curator, not proof that a question is authentic, and it never raises a grade.
+  - The values written to `commercial_value`, `winnability` and `priority` are provisional heuristic mappings from the curator's ratings. They are not validated measures of commercial value, of the chance of winning, or of the probability that an AI assistant recommends the customer.
+  - Customer approval is secure, scoped to one project, atomic for the whole set, and idempotent on replay.
+  - The PG-9 spending HOLD stays in force. Nothing in this flow makes a paid provider call.
+- **Direction:** automated Buyer Language Research remains a core product objective. It follows the manually curated validation phase, and needs a separately approved, ledgered research budget and its own authorisation.
+- **Reason:** a question chosen because it matches the seller's wording measures the seller's vocabulary, not the buyer's, and a model-written question presented as a real buyer question would misstate the evidence. A question can be well evidenced and still be the wrong one to measure, so relevance to the customer's buyers and product is weighed alongside evidence. Grading each candidate by its source, classifying the exact approved wording, and freezing exactly what the customer approved keeps every later observation traceable to the question and the evidence behind it.
+- **Effect:** this entry, `docs/BUYER_QUESTION_INTELLIGENCE.md`, and the proposed replacement of the Provenance subsection in `docs/METHODOLOGY.md` (section 4 of the design). No code, migration, workflow, deployment or database change.
+- **Revisit trigger:**
+  - a request to begin automated or paid research;
+  - any new research provider or source kind;
+  - launching more than one paid protocol per request;
+  - a proposal to label customer-provided material as independently verified;
+  - any customer-facing wording that describes a question as one "buyers ask";
+  - any path by which customer approval could create or approve paid execution;
+  - a change to `approve_and_launch_snapshot_baseline`'s behaviour for single-question requests.

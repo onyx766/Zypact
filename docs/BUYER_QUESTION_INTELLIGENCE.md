@@ -5,6 +5,11 @@
 - **Owner:** Founder/CEO. Each step in section 10 needs its own authorisation.
 - **Last updated:** 2026-10-31
 - **Separate from:** the PG-9 spend gate (D-037). Nothing here touches a paid path, and the PG-9 spending HOLD stays in force.
+- **Amended by D-040 (2026-11-01):** D-040 amends this design's founder-operated steps for self-service customers. These are curation, the ICP and ratings, wording review, launch selection, the access method, and hypothesis acknowledgement.
+  - **Only under D-040's transition rule.** This document's controls stay in force until each replacement is implemented, tested and authorised.
+  - **What is unchanged:** grade definitions, evidence and approval limits, immutability, the separation of question approval from execution, and 0062 coexistence.
+  - **Current state:** step Q1 is complete and merged (#96, `19a644c`).
+  - **More detail:** [`SELF_SERVICE_PRODUCT.md`](SELF_SERVICE_PRODUCT.md) §9 reconciles each control, and §10 gives the revised step order.
 
 ## 1. The problem
 

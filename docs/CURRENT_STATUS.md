@@ -928,7 +928,7 @@ record written at the time the change happens. That did not occur here either.
 
 - **As of:** 2026-11-01
 - **Base:** `main` at `6d81553` (merge of #95, the Q0 documents)
-- **Branch:** `feat/bqi-q1-offline`, not merged
+- **Status:** **complete and merged.** PR #96 merged into `main` as `19a644c`, and its content is identical to the independently reviewed head `841f188`. No production deployment followed: `vercel.json` disables Git deployments for `main`. Single-source primary inference is deferred to a separate decision. The direction for later steps is now D-040 ([`SELF_SERVICE_PRODUCT.md`](SELF_SERVICE_PRODUCT.md)).
 - **Scope:** the pure functions in `lib/buyer-questions/` and their offline tests,
   as defined by the accepted Q1 scope and test plan. Nothing in this section is
   wired into a route, page, worker, RPC or workflow. No migration, database,

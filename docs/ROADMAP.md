@@ -3,6 +3,9 @@
 - **Status:** Canonical sequencing and kill-gate roadmap
 - **Roadmap date:** 2026-08-16
 - **Rule:** Dates describe product planning, not contractor commitments unless included in an accepted milestone agreement
+- **Direction update (D-040, 2026-11-01):** self-service is the product target.
+  - **The sequence is reordered, not removed.** A self-service release with no spend may proceed ahead of phases 5 and 7. Paid self-service and automated research exposure keep their evidence gates. Every kill and reframe gate below is unchanged.
+  - **The dependency-ordered steps** are in [`SELF_SERVICE_PRODUCT.md`](SELF_SERVICE_PRODUCT.md) §10. Each step needs its own authorisation, and D-040's transition rule applies.
 
 ## 1. Operating lanes
 

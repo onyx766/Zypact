@@ -923,3 +923,66 @@ requests #48 through #60 landed on `main` — including the merge of the entire 
 application layer, the production worker going live under D-034, and three
 decisions (D-034, D-035, D-036). Section 15.7's process finding asked for a
 record written at the time the change happens. That did not occur here either.
+
+## 19. Buyer Question Intelligence Q1 — offline rules, run locally, not in CI
+
+- **As of:** 2026-11-01
+- **Base:** `main` at `6d81553` (merge of #95, the Q0 documents)
+- **Branch:** `feat/bqi-q1-offline`, not merged
+- **Scope:** the pure functions in `lib/buyer-questions/` and their offline tests,
+  as defined by the accepted Q1 scope and test plan. Nothing in this section is
+  wired into a route, page, worker, RPC or workflow. No migration, database,
+  network, provider or paid path changed.
+
+### 19.1 Commands added
+
+| Command | Plan cases | Local result on 2026-11-01 |
+|---|---|---|
+| `npm run test:bqi-candidates` | C-01 to C-28 | 229/229 checks passed |
+| `npm run test:bqi-selection` | S-01 to S-18 | 81/81 checks passed |
+| `npm run test:bqi-wording` | W-01 to W-11, P-01 to P-04 | 110/110 checks passed |
+
+These results are after the corrective round authorised on 2026-11-01. A
+review of the first commit (`ed08c3a`) found that approved-wording
+classification accepted unvalidated quoted spans as observed evidence, that
+public links could upgrade a candidate's verification, that near duplicates
+were grouped transitively, that merged duplicates mixed their evidence links,
+and that the feature-list detector was narrower than the plan. Adversarial
+subcases, marked `[R]` under the existing case IDs, fail against `ed08c3a`'s
+library and pass after the correction.
+
+An independent review of the corrected commit (`5bf9473`) then found three
+more defects: a `paraphrase_basis` span could make a buyer's statement
+observed wording; set-level refusals, including colliding source ids, were
+ignored by the wording classifier and founder review; and two texts that are
+empty after observed normalisation ("???", "!!!") matched. Only a validated
+`verbatim` link now establishes observed wording, any set-level refusal refuses
+classification, colliding ids are refused together, and empty wording matches
+nothing. Subcases marked `[R2]` fail against `5bf9473`'s library and pass
+after this correction.
+
+Review of `1c221b5` found two more: founder review could record a buyer's
+statement as `observed`, and `validateCandidate` called without source
+results treated linked sources as valid. Founder review now records only
+`adapted` or `hypothesis`, as the design specifies (`observed` is refused as
+`classification_not_allowed`), and standalone candidate validation validates
+each linked source itself. Subcases marked `[R3]` fail against `1c221b5`'s
+library and pass after this correction.
+
+These three commands are registered in `package.json` but are **not** run by any
+CI workflow. Adding them to CI is a separate decision. With them, `package.json`
+registers 103 `test:*` and 4 `verify:*` commands, and 191 files match
+`scripts/test-*.ts`. These figures supersede section 18.1's command and file
+counts, which were already behind `main` before this branch.
+
+### 19.2 What these tests do not establish
+
+They test rules over in-memory inputs only. No Q0 acceptance criterion in
+[`BUYER_QUESTION_INTELLIGENCE.md`](BUYER_QUESTION_INTELLIGENCE.md) is met by Q1
+alone: enforcement on save, stored rows, the approval RPC, rendered cards and
+pages, and criteria 25 and 32 to 69 all need the later steps (Q2, Q3, Q4, Q4b).
+The marketing-language, personal-data, length and question-shape detectors are
+provisional `v1` review signals, not validated classifiers. Passing them is
+never evidence of buyer authorship. `public_verifiable` records that the
+curator gave a public URL and retrieval date; Q1 fetches nothing, and its text
+match is not independent verification of that source.

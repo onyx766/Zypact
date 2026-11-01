@@ -128,7 +128,10 @@
     "test:0080-report-ready": "tsx scripts/test-0080-report-ready-contract.ts",
     "test:report-pass": "tsx scripts/test-report-pass.ts",
     "test:0081-founder-audits": "tsx scripts/test-0081-founder-created-audits.ts",
-    "test:founder-baseline-control": "tsx scripts/test-founder-baseline-control.ts"
+    "test:founder-baseline-control": "tsx scripts/test-founder-baseline-control.ts",
+    "test:bqi-candidates": "tsx scripts/test-bqi-candidates.ts",
+    "test:bqi-selection": "tsx scripts/test-bqi-selection.ts",
+    "test:bqi-wording": "tsx scripts/test-bqi-wording.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.3.3",

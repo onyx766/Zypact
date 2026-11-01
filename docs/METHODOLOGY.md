@@ -37,7 +37,7 @@
   protocols keep the methodology version they recorded, the database
   default for new protocols remains 1.1 until a separately authorised
   change, existing reports are unchanged, and results computed before
-  and after this version are directly comparable.
+  and after this version are not made more or less comparable by this documentation update; comparability still depends on the recorded measurement conditions.
 
 ## 1. Purpose
 

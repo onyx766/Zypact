@@ -403,6 +403,71 @@ function w06r(): void {
   check("[R] W-06 primary not among the cited sources: refused", !notCited.accepted && notCited.refusals.some((r) => r.code === "primary_source_required"));
 }
 
+
+// ---------------------------- second review of 5bf9473: regressions ([R2])
+// Expected results are written out by hand from D-039 and the independent
+// review findings, not computed with the code under test.
+
+const STATEMENT = "Our approvals take too long";
+
+function statementSet(): ResearchSet {
+  // A buyer's statement, validly cited as the basis of an adapted candidate.
+  return withExtra({
+    sources: [source("stmt", "Our approvals take too long. Nothing we tried helps.")],
+    candidates: [{ ...cand("ad2", "How can a firm speed up invoice approvals?", "adapted", "stmt") }],
+    links: [{ candidateId: "ad2", sourceId: "stmt", relation: "paraphrase_basis", quotedSpan: STATEMENT }],
+  });
+}
+
+function w03r2(): void {
+  const r = classifyApprovedWording({ origin: "recommended_edited", approvedText: STATEMENT, candidateId: "ad2", researchSet: statementSet() });
+  check("[R2] W-03 edit equal to a paraphrase-basis span: pending_review, never observed", r.classification === "pending_review" && r.verification === null, `${r.classification} ${r.verification}`);
+}
+
+function w04r2(): void {
+  const viaBasis = classifyApprovedWording({ origin: "customer_written", approvedText: STATEMENT, primarySourceId: "stmt", researchSet: statementSet() });
+  check("[R2] W-04 customer-written statement matching a paraphrase-basis span: pending_review", viaBasis.classification === "pending_review" && viaBasis.verification === null, `${viaBasis.classification} ${viaBasis.verification}`);
+  const whole = withExtra({ sources: [source("whole", `${STATEMENT}.`)] });
+  const viaExcerpt = classifyApprovedWording({ origin: "customer_written", approvedText: STATEMENT, primarySourceId: "whole", researchSet: whole });
+  check("[R2] W-04 customer-written text equal to an unlinked whole excerpt: pending_review", viaExcerpt.classification === "pending_review" && viaExcerpt.verification === null, `${viaExcerpt.classification} ${viaExcerpt.verification}`);
+  const designated = withExtra({
+    sources: [source("vq", `Asked on the forum: ${INVENTED} Still no answer.`)],
+    candidates: [cand("vq-c", INVENTED, "observed", "vq")],
+    links: [{ candidateId: "vq-c", sourceId: "vq", relation: "verbatim", quotedSpan: INVENTED }],
+  });
+  const viaVerbatim = classifyApprovedWording({ origin: "customer_written", approvedText: INVENTED, primarySourceId: "vq", researchSet: designated });
+  check("[R2] W-04 control: a validated verbatim designation still establishes observed", viaVerbatim.classification === "observed" && viaVerbatim.verification === "public_verifiable");
+
+  const empty = withExtra({
+    sources: [source("bang", "Wait !!! Really")],
+    candidates: [cand("h3", "Which tools do vets use?", "hypothesis")],
+    links: [{ candidateId: "h3", sourceId: "bang", relation: "verbatim", quotedSpan: "!!!" }],
+  });
+  const viaEmpty = classifyApprovedWording({ origin: "customer_written", approvedText: "???", primarySourceId: "bang", researchSet: empty });
+  check("[R2] W-04 customer-written \"???\" against a \"!!!\" span: not observed", viaEmpty.classification !== "observed", `${viaEmpty.classification}`);
+
+  const good = source("dup", OBS_TEXT);
+  const bad = { ...source("dup", OBS_TEXT), excerptSha256: sha256Utf8Hex("tampered") };
+  for (const [label, sources] of [["invalid first", [bad, good]], ["valid first", [good, bad]]] as Array<[string, QuestionSource[]]>) {
+    const set = withExtra({ sources, candidates: [cand("dup-c", OBS_TEXT, "observed", "dup")], links: [link("dup-c", "dup", "verbatim")] });
+    const r = classifyApprovedWording({ origin: "customer_written", approvedText: OBS_TEXT, primarySourceId: "dup", researchSet: set });
+    check(`[R2] W-04 colliding source ids (${label}): refused, never observed`, r.classification === null && r.refusals.some((x) => x.code === "research_set_refused"), `${r.classification} ${r.refusals.map((x) => x.code).join(",")}`);
+  }
+}
+
+function w06r2(): void {
+  const good = source("dup", OBS_TEXT);
+  const bad = { ...source("dup", OBS_TEXT), excerptSha256: sha256Utf8Hex("tampered") };
+  for (const [label, sources] of [["invalid first", [bad, good]], ["valid first", [good, bad]]] as Array<[string, QuestionSource[]]>) {
+    const set = withExtra({ sources });
+    const r = validateFounderClassification({ classification: "observed", approvedText: OBS_TEXT, sourceIds: ["dup"], primarySourceId: "dup", researchSet: set });
+    check(`[R2] W-06 founder observed on a set with colliding source ids (${label}): refused`, !r.accepted && r.refusals.some((x) => x.code === "research_set_refused"));
+  }
+  const tooMany = withExtra({ candidates: [cand("x1", "a?", "hypothesis"), cand("x2", "b?", "hypothesis")] });
+  const r2 = validateFounderClassification({ classification: "adapted", approvedText: "How can firms cut approval time?", sourceIds: ["basis"], primarySourceId: "basis", note: "n", researchSet: tooMany });
+  check("[R2] W-06 founder entry on a set with too many candidates: refused", !r2.accepted && r2.refusals.some((x) => x.code === "research_set_refused"));
+}
+
 // ---------------------------------------------------------------- P cases
 
 const LIB_DIR = join(process.cwd(), "lib", "buyer-questions");
@@ -487,7 +552,7 @@ function main(): void {
   const cases: Array<() => void> = [
     // Each [R] function runs right after its case, under the same case header,
     // and in its own try so one failure cannot hide another.
-    w01, w01r, w02, w02r, w03, w03r, w04, w04r, w05, w06, w06r, w07, w08, w09, w10, w11, p01, p02, p03, p04,
+    w01, w01r, w02, w02r, w03, w03r, w03r2, w04, w04r, w04r2, w05, w06, w06r, w06r2, w07, w08, w09, w10, w11, p01, p02, p03, p04,
   ];
   for (const c of cases) {
     try {
@@ -497,7 +562,7 @@ function main(): void {
     }
   }
   console.log(
-    `\n${checks - failures}/${checks} checks passed (${cases.filter((c) => !c.name.endsWith("r")).length} cases). ` +
+    `\n${checks - failures}/${checks} checks passed (${cases.filter((c) => !/r\d*$/.test(c.name)).length} cases). ` +
       (failures === 0 ? "BQI wording, labels and purity PASSED." : "BQI wording, labels and purity FAILED.")
   );
   process.exit(failures === 0 ? 0 : 1);

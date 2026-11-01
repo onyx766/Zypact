@@ -26,8 +26,13 @@ export function observedForm(text: string): string {
     .replace(/[?.!\s]+$/, "");
 }
 
+/**
+ * Never true for an empty observed form: text made only of whitespace and
+ * terminal punctuation ("???", "!!!") is not wording and matches nothing.
+ */
 export function isObservedMatch(candidateText: string, sourceText: string): boolean {
-  return observedForm(candidateText) === observedForm(sourceText);
+  const candidate = observedForm(candidateText);
+  return candidate.length > 0 && candidate === observedForm(sourceText);
 }
 
 /**
@@ -37,7 +42,7 @@ export function isObservedMatch(candidateText: string, sourceText: string): bool
  */
 export function differsOnlyByUnicodeNormalization(a: string, b: string): boolean {
   if (isObservedMatch(a, b)) return false;
-  return observedForm(a.normalize("NFC")) === observedForm(b.normalize("NFC"));
+  return isObservedMatch(a.normalize("NFC"), b.normalize("NFC"));
 }
 
 const PUNCTUATION_OR_SYMBOL = /[\p{P}\p{S}]/gu;

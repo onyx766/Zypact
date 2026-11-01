@@ -659,7 +659,7 @@ function main(): void {
     }
   }
   console.log(
-    `\n${checks - failures}/${checks} checks passed (${cases.filter((c) => !c.name.endsWith("r")).length} cases). ` +
+    `\n${checks - failures}/${checks} checks passed (${cases.filter((c) => !/r\d*$/.test(c.name)).length} cases). ` +
       (failures === 0 ? "BQI selection rules PASSED." : "BQI selection rules FAILED.")
   );
   process.exit(failures === 0 ? 0 : 1);

@@ -11,6 +11,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { brandPresence, findNameMatches } from "@/lib/buyer-questions/brand-match";
+import { isObservedMatch } from "@/lib/buyer-questions/normalize";
 import { gradeLabel } from "@/lib/buyer-questions/labels";
 import { marketingSignal } from "@/lib/buyer-questions/marketing-signal";
 import { recommend } from "@/lib/buyer-questions/select";
@@ -672,12 +673,42 @@ function c20r(): void {
   check("[R] C-20 passing the detector is no proof of buyer authorship: seller text still refused as observed", r.codes.includes("seller_source_only_as_context") && r.codes.includes("observed_requires_verbatim_buyer_source"));
 }
 
+
+// ---------------------------- second review of 5bf9473: regressions ([R2])
+// Expected results are written out by hand from D-039 and the independent
+// review findings, not computed with the code under test.
+
+function c04r2(): void {
+  check("[R2] C-04 isObservedMatch(\"???\", \"!!!\") is false: empty wording matches nothing", isObservedMatch("???", "!!!") === false);
+  check("[R2] C-04 isObservedMatch(\"  \", \"?\") is false", isObservedMatch("  ", "?") === false);
+  check("[R2] C-04 a real question still matches across terminal punctuation", isObservedMatch("Is it?", "Is it!") === true);
+  const src = source("p1", "public_community", "Wait !!! Really");
+  const r = run(candidate("c1", "???", "observed"), [link("c1", "p1", "verbatim", "!!!")], [src]);
+  check("[R2] C-04 observed \"???\" quoting \"!!!\": refused", r.codes.includes("observed_text_does_not_match_source") && r.v.verification === null, r.codes.join(","));
+}
+
+function c14r2(): void {
+  // Two sources share an id; one has a wrong excerpt hash. Both orders.
+  const good = source("s", "public_community", SRC_TEXT);
+  const bad = source("s", "public_community", SRC_TEXT, { excerptSha256: sha256Utf8Hex("something else") });
+  for (const [label, sources] of [["valid first", [good, bad]], ["invalid first", [bad, good]]] as Array<[string, QuestionSource[]]>) {
+    const set: ResearchSet = { siteContext: SITE, sources, candidates: [candidate("c1", SRC_TEXT, "observed", { primarySourceId: "s" })], links: [link("c1", "s", "verbatim")] };
+    const v = validateResearchSet(set);
+    const codes = v.sources.get("s")!.refusals.map((x) => x.code);
+    check(`[R2] C-14 colliding source ids (${label}): the id's validation carries the hash refusal and the collision`, codes.includes("excerpt_hash_mismatch") && codes.includes("duplicate_source_id"), codes.join(","));
+    const c = v.candidates.get("c1")!;
+    check(`[R2] C-14 colliding source ids (${label}): candidate citing the id refused, no status`, c.refusals.some((x) => x.code === "duplicate_source_id") && c.verification === null);
+    const direct = validateCandidate(set.candidates[0], set.links, sources, SITE);
+    check(`[R2] C-14 colliding source ids (${label}): refused even when validated on its own`, direct.refusals.some((x) => x.code === "duplicate_source_id"));
+  }
+}
+
 function main(): void {
   const cases: Array<() => void> = [
     // Each [R] function runs right after its case, under the same case header,
     // and in its own try so one failure cannot hide another.
-    c01, c02, c02r, c03, c04, c04r, c05, c06, c06r, c07, c08, c09, c10,
-    c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c20r, c21, c22, c23, c24, c25, c26, c27, c28,
+    c01, c02, c02r, c03, c04, c04r, c04r2, c05, c06, c06r, c07, c08, c09, c10,
+    c11, c12, c13, c14, c14r2, c15, c16, c17, c18, c19, c20, c20r, c21, c22, c23, c24, c25, c26, c27, c28,
   ];
   for (const c of cases) {
     try {
@@ -687,7 +718,7 @@ function main(): void {
     }
   }
   console.log(
-    `\n${checks - failures}/${checks} checks passed (${cases.filter((c) => !c.name.endsWith("r")).length} cases). ` +
+    `\n${checks - failures}/${checks} checks passed (${cases.filter((c) => !/r\d*$/.test(c.name)).length} cases). ` +
       (failures === 0 ? "BQI candidate rules PASSED." : "BQI candidate rules FAILED.")
   );
   process.exit(failures === 0 ? 0 : 1);

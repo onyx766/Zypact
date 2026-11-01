@@ -938,9 +938,9 @@ record written at the time the change happens. That did not occur here either.
 
 | Command | Plan cases | Local result on 2026-11-01 |
 |---|---|---|
-| `npm run test:bqi-candidates` | C-01 to C-28 | 214/214 checks passed |
+| `npm run test:bqi-candidates` | C-01 to C-28 | 224/224 checks passed |
 | `npm run test:bqi-selection` | S-01 to S-18 | 81/81 checks passed |
-| `npm run test:bqi-wording` | W-01 to W-11, P-01 to P-04 | 89/89 checks passed |
+| `npm run test:bqi-wording` | W-01 to W-11, P-01 to P-04 | 99/99 checks passed |
 
 These results are after the corrective round authorised on 2026-11-01. A
 review of the first commit (`ed08c3a`) found that approved-wording
@@ -950,6 +950,16 @@ were grouped transitively, that merged duplicates mixed their evidence links,
 and that the feature-list detector was narrower than the plan. Adversarial
 subcases, marked `[R]` under the existing case IDs, fail against `ed08c3a`'s
 library and pass after the correction.
+
+An independent review of the corrected commit (`5bf9473`) then found three
+more defects: a `paraphrase_basis` span could make a buyer's statement
+observed wording; set-level refusals, including colliding source ids, were
+ignored by the wording classifier and founder review; and two texts that are
+empty after observed normalisation ("???", "!!!") matched. Only a validated
+`verbatim` link now establishes observed wording, any set-level refusal refuses
+classification, colliding ids are refused together, and empty wording matches
+nothing. Subcases marked `[R2]` fail against `5bf9473`'s library and pass
+after this correction.
 
 These three commands are registered in `package.json` but are **not** run by any
 CI workflow. Adding them to CI is a separate decision. With them, `package.json`

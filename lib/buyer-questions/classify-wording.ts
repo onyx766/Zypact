@@ -9,7 +9,11 @@
  *      question in a source linked to the candidate (for a
  *      customer-written question, any buyer-authored source in the
  *      research set). Classified `observed` with that source's
- *      verification.
+ *      verification. The only evidence of a buyer-authored question is a
+ *      `verbatim` link: the curator's explicit designation that the quoted
+ *      words are a buyer's question as written. A `paraphrase_basis` link
+ *      or a source's whole excerpt is buyer language, not a question, and
+ *      never establishes observed wording.
  *   3. Anything else is `pending_review`, which is a classification
  *      status, not an evidence grade.
  *
@@ -18,11 +22,12 @@
  * and stays `pending_review`.
  *
  * Only valid evidence can establish observed wording: a valid,
- * buyer-authored source, reached through a non-context link of a candidate
+ * buyer-authored source, reached through a `verbatim` link of a candidate
  * that passed validation, quoting words present in the excerpt on word
- * boundaries (or, for customer-written text, a valid buyer-authored
- * source's whole excerpt). Context links, refused candidates, invented
- * spans and partial-word spans never count. The verification of an
+ * boundaries. Paraphrase-basis and context links, whole excerpts, refused
+ * candidates, invented spans, partial-word spans and empty wording never
+ * count, and a research set with any set-level refusal (for example
+ * colliding source ids) is refused outright. The verification of an
  * observed result is that of an explicitly identified primary source among
  * the matched ones; otherwise the wording stays `pending_review`.
  */
@@ -86,11 +91,10 @@ function isValidBuyerSource(source: QuestionSource, validation: ResearchSetValid
 }
 
 /**
- * The spans a text may match. With a candidate: that candidate's valid
- * non-context links. Without one (customer-written): every valid
- * non-context link in the set, plus whole excerpts of valid buyer-authored
- * sources. Links of refused candidates, context links and unusable spans
- * are never included.
+ * The spans a text may match: valid `verbatim` links, of the given
+ * candidate or, without one (customer-written), of any candidate in the
+ * set. Links of refused candidates, paraphrase-basis and context links,
+ * whole excerpts and unusable spans are never included.
  */
 export function evidenceSpans(
   set: ResearchSet,
@@ -98,12 +102,9 @@ export function evidenceSpans(
   candidateId: string | null
 ): Array<[QuestionSource, string]> {
   const spans: Array<[QuestionSource, string]> = [];
-  if (candidateId === null) {
-    for (const source of set.sources) if (isValidBuyerSource(source, validation)) spans.push([source, source.excerpt]);
-  }
   for (const link of set.links) {
     if (candidateId !== null && link.candidateId !== candidateId) continue;
-    if (link.relation !== "verbatim" && link.relation !== "paraphrase_basis") continue;
+    if (link.relation !== "verbatim") continue;
     if ((validation.candidates.get(link.candidateId)?.refusals.length ?? 1) !== 0) continue;
     const source = set.sources.find((s) => s.id === link.sourceId);
     if (source === undefined || !isValidBuyerSource(source, validation)) continue;
@@ -125,6 +126,9 @@ export function classifyApprovedWording(input: ApprovedWordingInput): WordingCla
 
   const set = input.researchSet;
   const validation = validateResearchSet(set);
+  if (validation.refusals.length > 0) {
+    return refused([{ code: "research_set_refused", detail: validation.refusals.map((r) => r.code).join(",") }]);
+  }
   const provenance: QuestionProvenance = origin === "customer_written" ? "customer_supplied" : "founder_supplied";
 
   let candidate: Candidate | null = null;
@@ -223,6 +227,10 @@ export function validateFounderClassification(input: FounderClassificationInput)
   }
 
   const validation = validateResearchSet(input.researchSet);
+  if (validation.refusals.length > 0) {
+    refusals.push({ code: "research_set_refused", detail: validation.refusals.map((r) => r.code).join(",") });
+    return { accepted: false, classification: null, verification: null, refusals };
+  }
   const cited = input.sourceIds
     .map((id) => input.researchSet.sources.find((s) => s.id === id))
     .filter((s): s is QuestionSource => s !== undefined);

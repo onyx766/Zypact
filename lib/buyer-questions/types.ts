@@ -125,7 +125,8 @@ export type RefusalCode =
   | "unknown_origin"
   | "candidate_required"
   | "unchanged_text_differs"
-  | "classification_not_allowed";
+  | "classification_not_allowed"
+  | "research_set_refused";
 
 /** Review signals (provisional v1): shown to the curator only. */
 export type SignalCode =

@@ -139,6 +139,8 @@ export function validateCandidate(
   const signals: Signal[] = [];
   const text = typeof candidate.text === "string" ? candidate.text : "";
   const sourceById = new Map(sources.map((s) => [s.id, s]));
+  const sourceIdCount = new Map<string, number>();
+  for (const s of sources) sourceIdCount.set(s.id, (sourceIdCount.get(s.id) ?? 0) + 1);
   const ownLinks = links.filter((l) => l.candidateId === candidate.id);
 
   if (text.trim().length === 0) refusals.push({ code: "question_text_empty" });
@@ -163,6 +165,11 @@ export function validateCandidate(
     const source = sourceById.get(link.sourceId);
     if (source === undefined) {
       refusals.push({ code: "link_to_unknown_source", detail: link.sourceId });
+      continue;
+    }
+    // A colliding id cannot say which source's content was meant.
+    if ((sourceIdCount.get(link.sourceId) ?? 0) > 1) {
+      refusals.push({ code: "duplicate_source_id", detail: link.sourceId });
       continue;
     }
     const spanProblem = quotedSpanProblem(link, source);
@@ -310,9 +317,42 @@ export function validateResearchSet(set: ResearchSet): ResearchSetValidation {
     if (!candidateIds.has(l.candidateId)) refusals.push({ code: "link_to_unknown_candidate", detail: l.candidateId });
   }
 
-  const sources = new Map(set.sources.map((s) => [s.id, validateSource(s)]));
-  const candidates = new Map(
-    set.candidates.map((c) => [c.id, validateCandidate(c, set.links, set.sources, set.siteContext, sources)])
-  );
+  // Colliding ids never let one entry's result stand for another's: every
+  // source sharing an id is refused together, with all their refusals and
+  // signals, and so is every candidate sharing an id.
+  const sources = new Map<string, SourceValidation>();
+  for (const s of set.sources) {
+    const v = validateSource(s);
+    const prior = sources.get(s.id);
+    sources.set(
+      s.id,
+      prior === undefined
+        ? v
+        : {
+            sourceId: s.id,
+            refusals: [...prior.refusals.filter((r) => r.code !== "duplicate_source_id"), ...v.refusals, { code: "duplicate_source_id" }],
+            signals: [...prior.signals, ...v.signals],
+          }
+    );
+  }
+  const candidates = new Map<string, CandidateValidation>();
+  for (const c of set.candidates) {
+    const v = validateCandidate(c, set.links, set.sources, set.siteContext, sources);
+    const prior = candidates.get(c.id);
+    candidates.set(
+      c.id,
+      prior === undefined
+        ? v
+        : {
+            ...v,
+            refusals: [...prior.refusals.filter((r) => r.code !== "duplicate_candidate_id"), ...v.refusals, { code: "duplicate_candidate_id" }],
+            signals: [...prior.signals, ...v.signals],
+            verification: null,
+            sourceVerifications: [],
+            primarySourceId: null,
+            primaryUnresolved: false,
+          }
+    );
+  }
   return { refusals, sources, candidates };
 }

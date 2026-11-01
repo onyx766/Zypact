@@ -8,7 +8,7 @@
  */
 
 import { findDuplicates } from "./duplicates";
-import { validateResearchSet, type CandidateValidation } from "./validate-candidate";
+import { validateResearchSet, type CandidateValidation, type SourceEvidence } from "./validate-candidate";
 import {
   MAX_QUESTIONS_PER_APPROVAL_SET,
   type BuyerStage,
@@ -30,6 +30,7 @@ export type DecisionRule =
   | "rating_below_threshold"
   | "marketing_flag_unresolved"
   | "brand_alias_unresolved"
+  | "primary_source_unresolved"
   | "near_duplicate"
   | "stage_diversity"
   | "composition_limit"
@@ -69,9 +70,25 @@ export interface CandidateExplanation {
   mergedInto: string | null;
   /** For a merge representative: the other ids merged into it. */
   mergedFrom: string[];
-  /** Every source link, including those of merged duplicates. */
+  /** This candidate's own source links: the only links its evidence rests on. */
   links: CandidateSourceLink[];
+  /**
+   * For a merge representative: every link of the merged duplicates, each
+   * still naming the candidate it belongs to. Kept for the record; never
+   * evidence for the representative's own wording or grade.
+   */
+  mergedLinks: CandidateSourceLink[];
+  /** For a merge representative: each merged duplicate's own grade and status. */
+  mergedMembers: MergedMember[];
+  /** Valid candidates directly at or above the near-duplicate threshold. */
   nearDuplicates: string[];
+}
+
+export interface MergedMember {
+  candidateId: string;
+  grade: EvidenceGrade;
+  verification: Verification | null;
+  sourceVerifications: SourceEvidence[];
 }
 
 export interface SlotResult {
@@ -144,6 +161,7 @@ function eligibilityBlockers(c: Candidate, v: CandidateValidation): DecisionRule
   }
   if (v.marketing.flagged && !v.marketing.resolved) blockers.push("marketing_flag_unresolved");
   if (v.brandStatus === "unresolved") blockers.push("brand_alias_unresolved");
+  if (v.primaryUnresolved) blockers.push("primary_source_unresolved");
   return blockers;
 }
 
@@ -154,6 +172,7 @@ const BLOCKER_DETAIL: Partial<Record<DecisionRule, string>> = {
   marketing_flag_unresolved:
     "Marketing-language flag not yet resolved with a recorded reason and a linked buyer-authored source.",
   brand_alias_unresolved: "Brand presence depends on a stripped alias the curator has not resolved.",
+  primary_source_unresolved: "No primary supporting source identified; provenance needs review.",
 };
 
 export function recommend(set: ResearchSet): Recommendation {
@@ -168,7 +187,9 @@ export function recommend(set: ResearchSet): Recommendation {
     valid.map((c) => [c.id, eligibilityBlockers(c, validation.candidates.get(c.id) as CandidateValidation)])
   );
 
-  // Exact duplicates merge into one representative: eligible first, then rank.
+  // Exact duplicates (D-039) merge into one representative, chosen by the
+  // approved ranking, which applies among eligible candidates first. Each
+  // member keeps its own grade, links and identity; nothing is transferred.
   const exact = findDuplicates(valid, set.siteContext);
   const mergedInto = new Map<string, string>();
   const mergedFrom = new Map<string, string[]>();
@@ -181,20 +202,19 @@ export function recommend(set: ResearchSet): Recommendation {
     for (const m of members.slice(1)) mergedInto.set(m.id, representative);
   }
   const representatives = valid.filter((c) => !mergedInto.has(c.id));
+  // Near duplicates are direct pairs (never transitive). Only a preselected
+  // candidate can exclude another, so an ineligible one never bridges two.
   const near = findDuplicates(representatives, set.siteContext);
+  const nearOf = (id: string): string[] => near.nearOf.get(id) ?? [];
 
   const eligible = representatives.filter((c) => blockersOf.get(c.id)!.length === 0);
   const decision = new Map<string, { rule: DecisionRule; detail: string }>();
-  const takenGroups = new Set<number>();
+  const chosen: string[] = [];
   const take = (c: Candidate, rule: DecisionRule, detail: string): void => {
     decision.set(c.id, { rule, detail });
-    const group = near.nearGroupOf.get(c.id);
-    if (group !== undefined) takenGroups.add(group);
+    chosen.push(c.id);
   };
-  const freeOfTakenGroup = (c: Candidate): boolean => {
-    const group = near.nearGroupOf.get(c.id);
-    return group === undefined || !takenGroups.has(group);
-  };
+  const notNearChosen = (c: Candidate): boolean => !nearOf(c.id).some((id) => chosen.includes(id));
 
   const unbranded = eligible.filter((c) => c.kind === "unbranded");
   const branded = eligible.filter((c) => c.kind === "branded_accuracy");
@@ -208,7 +228,7 @@ export function recommend(set: ResearchSet): Recommendation {
   if (first !== undefined) {
     take(first, "preselected_unbranded_first", "Highest-ranked eligible unbranded candidate.");
     slotUnbranded[0] = { candidateId: first.id, explanation: "Highest-ranked eligible unbranded candidate." };
-    const remaining = unbranded.slice(1).filter(freeOfTakenGroup);
+    const remaining = unbranded.slice(1).filter(notNearChosen);
     const differentStage = remaining.find((c) => c.buyerStage !== first.buyerStage);
     const second = differentStage ?? remaining[0];
     if (second !== undefined) {
@@ -222,7 +242,7 @@ export function recommend(set: ResearchSet): Recommendation {
       slotUnbranded[1] = { candidateId: second.id, explanation: detail };
     }
   }
-  const brandedChoice = branded.filter(freeOfTakenGroup)[0];
+  const brandedChoice = branded.filter(notNearChosen)[0];
   if (brandedChoice !== undefined) {
     take(brandedChoice, "preselected_branded", "Highest-ranked eligible branded-accuracy candidate.");
     slotBranded = { candidateId: brandedChoice.id, explanation: "Highest-ranked eligible branded-accuracy candidate." };
@@ -248,11 +268,15 @@ export function recommend(set: ResearchSet): Recommendation {
 
   const explanations: CandidateExplanation[] = candidates.map((c) => {
     const v = validation.candidates.get(c.id) as CandidateValidation;
-    const ownLinks = set.links.filter((l) => l.candidateId === c.id);
     const fromIds = mergedFrom.get(c.id) ?? [];
-    const links = sortLinks([...ownLinks, ...set.links.filter((l) => fromIds.includes(l.candidateId))]);
-    const group = near.nearGroupOf.get(c.id);
-    const nearDuplicates = group === undefined ? [] : near.nearGroups[group].filter((id) => id !== c.id);
+    const links = sortLinks(set.links.filter((l) => l.candidateId === c.id));
+    const mergedLinks = sortLinks(set.links.filter((l) => fromIds.includes(l.candidateId)));
+    const mergedMembers: MergedMember[] = fromIds.map((id) => {
+      const member = set.candidates.find((m) => m.id === id) as Candidate;
+      const mv = validation.candidates.get(id) as CandidateValidation;
+      return { candidateId: id, grade: member.grade, verification: mv.verification, sourceVerifications: mv.sourceVerifications };
+    });
+    const nearDuplicates = nearOf(c.id);
     const blockers = blockersOf.get(c.id) ?? [];
 
     let rule: DecisionRule;
@@ -271,10 +295,10 @@ export function recommend(set: ResearchSet): Recommendation {
       detail = blockers.map((b) => BLOCKER_DETAIL[b]).join(" ");
     } else if (decision.has(c.id)) {
       ({ rule, detail } = decision.get(c.id)!);
-    } else if (!freeOfTakenGroup(c)) {
-      const chosen = preselected.filter((id) => nearDuplicates.includes(id));
+    } else if (!notNearChosen(c)) {
+      const of = preselected.filter((id) => nearDuplicates.includes(id));
       rule = "near_duplicate";
-      detail = `Near duplicate of preselected ${chosen.join(", ")}; at most one of a group is preselected.`;
+      detail = `Near duplicate (similarity 0.8 or more) of preselected ${of.join(", ")}; only one may be preselected.`;
     } else if (
       c.kind === "unbranded" &&
       secondRule === "preselected_unbranded_second_different_stage" &&
@@ -312,6 +336,8 @@ export function recommend(set: ResearchSet): Recommendation {
       mergedInto: mergedInto.get(c.id) ?? null,
       mergedFrom: fromIds,
       links,
+      mergedLinks,
+      mergedMembers,
       nearDuplicates,
     };
   });

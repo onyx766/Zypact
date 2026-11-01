@@ -11,7 +11,7 @@
 import { findDuplicates } from "@/lib/buyer-questions/duplicates";
 import { compareRank, recommend, type Recommendation } from "@/lib/buyer-questions/select";
 import { sha256Utf8Hex } from "@/lib/buyer-questions/validate-source";
-import { contentTokens } from "@/lib/buyer-questions/normalize";
+import { STOP_WORDS_V1, contentTokens } from "@/lib/buyer-questions/normalize";
 import { duplicateKey } from "@/lib/buyer-questions/brand-match";
 import type {
   BuyerStage,
@@ -115,6 +115,7 @@ function buildSet(specs: Spec[], site: SiteContext = SITE): ResearchSet {
       adaptationNote: s.grade === "adapted" ? "reworded the poster's complaint as a question" : null,
       ratings: s.r ?? ratings(3, 3, 2, 3),
       curatorRank: s.rank ?? 1,
+      primarySourceId: s.grade === "hypothesis" ? null : `src-${s.id}`,
     };
   });
   return { siteContext: site, sources, candidates, links };
@@ -277,6 +278,7 @@ function s12(): void {
     adaptationNote: "composed accent form",
     ratings: ratings(3, 3, 2, 3),
     curatorRank: 2,
+    primarySourceId: "nfd",
   };
   const withNfc: ResearchSet = { ...set, sources: [...set.sources, source("nfd", nfdSource)], candidates: [...set.candidates, adapted], links: [...set.links, link("nfc", "nfd", "paraphrase_basis")] };
   const rec = recommend(withNfc);
@@ -309,7 +311,7 @@ function s13(): void {
   const rec = recommend(branded);
   const rep = explanation(rec, "d1");
   check("S-13 merged into one representative", rep.mergedFrom.join() === "d2,d3" && explanation(rec, "d2").mergedInto === "d1" && explanation(rec, "d3").mergedInto === "d1");
-  check("S-13 every source link kept", ["src-d1", "src-d2", "src-d3"].every((s) => rep.links.some((l) => l.sourceId === s)));
+  check("S-13 every source link kept", ["src-d1", "src-d2", "src-d3"].every((s) => [...rep.links, ...(rep.mergedLinks ?? [])].some((l) => l.sourceId === s)));
   check("S-13 only the representative preselected", rec.preselected.join() === "d1");
 }
 
@@ -333,9 +335,9 @@ function s14(): void {
   check("S-14 fixture 4/5", ratio(at1, at2).join("/") === "4/5");
   check("S-14 fixture 1.00", (() => { const [i, u] = ratio(one1, one2); return i === u; })());
   const group = (a: string, b: string) => findDuplicates(buildSet([{ id: "p", text: a, grade: "observed" }, { id: "q", text: b, grade: "observed" }]).candidates, SITE);
-  check("S-14 0.79 not grouped", group(below1, below2).nearGroups.length === 0);
-  check("S-14 0.80 grouped", group(at1, at2).nearGroups.length === 1);
-  check("S-14 1.00 grouped", group(one1, one2).nearGroups.length === 1);
+  check("S-14 0.79 not grouped", group(below1, below2).nearOf?.get("p")!.length === 0);
+  check("S-14 0.80 grouped", group(at1, at2).nearOf?.get("p")!.join() === "q");
+  check("S-14 1.00 grouped", group(one1, one2).nearOf?.get("p")!.join() === "q");
   for (const [label, a, b] of [["0.80", at1, at2], ["1.00", one1, one2]]) {
     const rec = recommend(buildSet([
       { id: "p", text: a, grade: "observed", stage: "solution" },
@@ -405,7 +407,8 @@ function generateSet(rand: () => number): ResearchSet {
     let text: string;
     if (pool.length > 0 && rand() < 0.25) {
       const base = pick(pool);
-      text = rand() < 0.5 ? base.toUpperCase() : base.replace("?", " now?");
+      const v = rand();
+      text = v < 0.33 ? base.toUpperCase() : v < 0.66 ? base.replace("?", " now?") : base.replace("?", ` ${pick(VOCAB)}x?`);
     } else {
       const k = 3 + Math.floor(rand() * 4);
       text = `Which tool ${Array.from({ length: k }, () => pick(VOCAB)).join(" ")}${branded ? " with Acme" : ""}?`;
@@ -437,31 +440,74 @@ function shuffle<T>(xs: readonly T[], rand: () => number): T[] {
 const SETS = 2000;
 const SHUFFLES = 20;
 
+/**
+ * Independent reference for near-duplicate similarity, written for the
+ * generator's vocabulary: lower case, punctuation and symbols removed,
+ * "acme" as the brand placeholder, stop words (the v1 list) dropped.
+ * It deliberately does not call duplicateKey or jaccardAtLeast.
+ */
+function refTokens(text: string): Set<string> {
+  const stop = new Set(STOP_WORDS_V1);
+  return new Set(
+    text
+      .normalize("NFC")
+      .toLowerCase()
+      .split(/\s+/)
+      .map((w) => w.replace(/[\p{P}\p{S}]/gu, ""))
+      .filter((w) => w.length > 0)
+      .map((w) => (w === "acme" ? "{brand}" : w))
+      .filter((w) => !stop.has(w))
+  );
+}
+
+function refNear(a: string, b: string): boolean {
+  const x = refTokens(a);
+  const y = refTokens(b);
+  const inter = [...x].filter((t) => y.has(t)).length;
+  const union = x.size + y.size - inter;
+  return union === 0 || inter * 5 >= union * 4;
+}
+
 function s16(): void {
   console.log(`\nS-16 property test over ${SETS} seeded research sets`);
   const rand = mulberry32(0x5eed0001);
   let violations = 0;
   let preselectedTotal = 0;
-  let nearPairsSeen = 0;
+  let nearExclusions = 0;
+  let chains = 0;
+  const firstViolation: string[] = [];
   for (let s = 0; s < SETS; s += 1) {
     const set = generateSet(rand);
     const rec = recommend(set);
     const byId = new Map(set.candidates.map((c) => [c.id, c]));
     const chosen = rec.preselected.map((id) => byId.get(id)!);
     preselectedTotal += chosen.length;
-    const near = findDuplicates(set.candidates, SITE);
-    nearPairsSeen += near.nearGroups.length;
+    const nearExcluded = rec.candidates.filter((e) => e.rule === "near_duplicate");
+    nearExclusions += nearExcluded.length;
+    const texts = set.candidates.map((c) => c.text);
+    if (texts.some((a, i) => texts.some((b, j) => j !== i && !refNear(a, b) && texts.some((m, k) => k !== i && k !== j && refNear(a, m) && refNear(m, b))))) chains += 1;
     const ok =
       chosen.every((c) => c.grade !== "hypothesis") &&
       chosen.filter((c) => c.kind === "unbranded").length <= 2 &&
       chosen.filter((c) => c.kind === "branded_accuracy").length <= 1 &&
       chosen.length <= 3 &&
       rec.preselected.every((id) => rec.candidates.find((e) => e.candidateId === id)!.eligible) &&
-      chosen.every((a, i) => chosen.every((b, j) => i === j || near.nearGroupOf.get(a.id) === undefined || near.nearGroupOf.get(a.id) !== near.nearGroupOf.get(b.id)));
-    if (!ok) violations += 1;
+      // no preselected pair is a near duplicate, by the independent reference
+      chosen.every((a, i) => chosen.every((b, j) => i === j || !refNear(a.text, b.text))) &&
+      // [R] no over-suppression: every near-duplicate exclusion is directly
+      // at or above 0.8 with a preselected candidate, by the reference
+      nearExcluded.every((e) => chosen.some((c) => refNear(byId.get(e.candidateId)!.text, c.text)));
+    if (!ok) {
+      violations += 1;
+      if (firstViolation.length === 0) firstViolation.push(`set ${s}: ${rec.preselected.join(",")}`);
+    }
   }
-  check(`S-16 no invariant violated in ${SETS} sets`, violations === 0, `${preselectedTotal} preselections, ${nearPairsSeen} near-duplicate groups exercised`);
-  check("S-16 generator exercises preselection and near duplicates", preselectedTotal > 500 && nearPairsSeen > 50);
+  check(`S-16 no invariant violated in ${SETS} sets (independent similarity)`, violations === 0, `${violations} violations ${firstViolation.join("")}`);
+  check(
+    "S-16 generator exercises preselection, near-duplicate exclusions and chains",
+    preselectedTotal > 500 && nearExclusions > 25 && chains > 50,
+    `${preselectedTotal} preselections, ${nearExclusions} near-duplicate exclusions, ${chains} sets with a below-0.8 pair bridged by a third`
+  );
 }
 
 function s17(): void {
@@ -526,11 +572,94 @@ function s18(): void {
   check("S-18 no candidate or source absent from the input", foreign === 0);
 }
 
+
+// ------------------------------------------- adversarial regressions ([R])
+// Expected results below are written out by hand from D-039 and the
+// Founder's corrective decisions, not computed with the code under test.
+
+function s12r(): void {
+  const set = buildSet([{ id: "u1", text: Q.a, grade: "observed" }]);
+  const unresolved: ResearchSet = { ...set, candidates: set.candidates.map((c) => ({ ...c, primarySourceId: null })) };
+  const rec = recommend(unresolved);
+  check("[R] S-12 primary source unresolved: not preselected, explained", rec.preselected.length === 0 && explanation(rec, "u1").rule === "primary_source_unresolved");
+  check("[R] S-12 resolving the primary source makes it eligible", recommend(set).preselected.join() === "u1");
+}
+
+function s13r(): void {
+  // Same question, case and punctuation variants: one adapted with the
+  // highest relevance sum, three observed. Approved ranking puts the
+  // adapted one first (sum 12 against 11); the observed members follow in
+  // curator-rank order (2, 3, 4).
+  const obsText = "Which invoicing tool suits a small firm?";
+  const set = buildSet([
+    { id: "m-ada", text: "Which invoicing tool, suits a small firm?", grade: "adapted", r: ratings(3, 3, 3, 3), rank: 1 },
+    { id: "m-obs1", text: obsText, grade: "observed", r: ratings(3, 3, 2, 3), rank: 2 },
+    { id: "m-obs2", text: "which invoicing tool suits a small firm", grade: "observed", r: ratings(3, 3, 2, 3), rank: 3 },
+  ]);
+  const withCustomer: ResearchSet = {
+    ...set,
+    sources: [...set.sources, source("cm", obsText, "customer_material")],
+    candidates: [
+      ...set.candidates,
+      { ...set.candidates[1], id: "m-cust", primarySourceId: "cm", curatorRank: 4 },
+    ],
+    links: [...set.links, link("m-cust", "cm", "verbatim")],
+  };
+  const rec = recommend(withCustomer);
+  const rep = explanation(rec, "m-ada");
+  check("[R] S-13 mixed grades merge into one", rep.mergedFrom.join() === "m-obs1,m-obs2,m-cust" && rec.preselected.join() === "m-ada", `${rep.mergedFrom.join()} | ${rec.preselected.join()}`);
+  check("[R] S-13 representative keeps its own grade and status", rep.grade === "adapted" && rep.verification === "public_verifiable");
+  check("[R] S-13 representative's evidence links are its own only", rep.links.length === 1 && rep.links[0].candidateId === "m-ada" && rep.links[0].relation === "paraphrase_basis");
+  check(
+    "[R] S-13 merged links kept separately, each naming its own candidate",
+    JSON.stringify((rep.mergedLinks ?? []).map((l) => [l.candidateId, l.sourceId, l.relation])) ===
+      JSON.stringify([["m-cust", "cm", "verbatim"], ["m-obs1", "src-m-obs1", "verbatim"], ["m-obs2", "src-m-obs2", "verbatim"]])
+  );
+  check(
+    "[R] S-13 merged members keep their own grades and statuses",
+    JSON.stringify((rep.mergedMembers ?? []).map((m) => [m.candidateId, m.grade, m.verification])) ===
+      JSON.stringify([["m-obs1", "observed", "public_verifiable"], ["m-obs2", "observed", "public_verifiable"], ["m-cust", "observed", "customer_provided"]])
+  );
+  const members = ["m-cust", "m-obs1", "m-obs2"].map((id) => explanation(rec, id));
+  check("[R] S-13 member entries unchanged and marked merged", members.every((m) => m.grade === "observed" && m.mergedInto === "m-ada" && !m.preselected && m.links.every((l) => l.candidateId === m.candidateId)));
+}
+
+function s14r(): void {
+  // A–B and B–C at or above 0.8; A–C below (8/12).
+  const A = "tokA tokB tokC tokD tokE tokF tokG tokH?";
+  const B = "tokA tokB tokC tokD tokE tokF tokG tokH tokI tokJ?";
+  const C = "tokA tokB tokC tokD tokE tokF tokG tokH tokI tokJ tokK tokL?";
+  check("[R] S-14 chain fixture: A-B and B-C near, A-C not (reference)", refNear(A, B) && refNear(B, C) && !refNear(A, C));
+  const hypBridge = recommend(buildSet([
+    { id: "a", text: A, grade: "observed", stage: "solution", rank: 1 },
+    { id: "b", text: B, grade: "hypothesis", stage: "problem", rank: 3 },
+    { id: "c", text: C, grade: "observed", stage: "problem", rank: 2 },
+  ]));
+  check("[R] S-14 ineligible bridge cannot exclude C: A and C preselected", [...hypBridge.preselected].sort().join() === "a,c", hypBridge.preselected.join());
+  const eligibleBridge = recommend(buildSet([
+    { id: "a", text: A, grade: "observed", stage: "solution", rank: 1 },
+    { id: "b", text: B, grade: "observed", stage: "problem", rank: 2 },
+    { id: "c", text: C, grade: "observed", stage: "problem", rank: 3 },
+  ]));
+  check("[R] S-14 eligible bridge: B excluded as A's near duplicate, C still preselected", [...eligibleBridge.preselected].sort().join() === "a,c" && explanation(eligibleBridge, "b").rule === "near_duplicate", eligibleBridge.preselected.join());
+}
+
 function main(): void {
-  const cases = [s01, s02, s03, s04, s05, s06, s07, s08, s09, s10, s11, s12, s13, s14, s15, s16, s17, s18];
-  for (const c of cases) c();
+  const cases: Array<() => void> = [
+    s01, s02, s03, s04, s05, s06, s07, s08, s09, s10, s11,
+    // Each [R] function runs right after its case, under the same case header,
+    // and in its own try so one failure cannot hide another.
+    s12, s12r, s13, s13r, s14, s14r, s15, s16, s17, s18,
+  ];
+  for (const c of cases) {
+    try {
+      c();
+    } catch (error) {
+      check("case completed without an exception", false, error instanceof Error ? error.message : String(error));
+    }
+  }
   console.log(
-    `\n${checks - failures}/${checks} checks passed (${cases.length} cases). ` +
+    `\n${checks - failures}/${checks} checks passed (${cases.filter((c) => !c.name.endsWith("r")).length} cases). ` +
       (failures === 0 ? "BQI selection rules PASSED." : "BQI selection rules FAILED.")
   );
   process.exit(failures === 0 ? 0 : 1);

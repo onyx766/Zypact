@@ -15,6 +15,17 @@
 export const EVIDENCE_GRADES = ["observed", "adapted", "hypothesis"] as const;
 export type EvidenceGrade = (typeof EVIDENCE_GRADES)[number];
 
+/**
+ * Verification is a property of each source: `public_verifiable` means the
+ * curator recorded a public URL and retrieval date that anyone can check;
+ * `customer_provided` means attested customer material. Neither means
+ * Zypact has verified anything: Q1 fetches nothing, and a local string
+ * match is not independent verification of a public source.
+ *
+ * A candidate-level status is derived only from the candidate's explicitly
+ * identified primary supporting source, never from the mere presence of a
+ * public link.
+ */
 export const VERIFICATIONS = ["public_verifiable", "customer_provided"] as const;
 export type Verification = (typeof VERIFICATIONS)[number];
 
@@ -93,6 +104,9 @@ export type RefusalCode =
   | "unknown_buyer_stage"
   | "link_to_unknown_source"
   | "quoted_span_not_in_excerpt"
+  | "quoted_span_not_word_aligned"
+  | "primary_source_invalid"
+  | "primary_source_required"
   | "seller_source_only_as_context"
   | "observed_requires_verbatim_buyer_source"
   | "observed_text_does_not_match_source"
@@ -123,7 +137,8 @@ export type SignalCode =
   | "brand_name_unusable"
   | "brand_alias_unresolved"
   | "unicode_normalization_differs"
-  | "marketing_language";
+  | "marketing_language"
+  | "primary_source_unresolved";
 
 export interface Refusal {
   code: RefusalCode;
@@ -198,13 +213,22 @@ export interface Candidate {
   ratings: RelevanceRatings;
   curatorRank: number;
   marketingFlagResolution?: MarketingFlagResolution | null;
+  /**
+   * The source the curator identifies as the primary support: for
+   * `observed`, a matching verbatim source; for `adapted`, a paraphrase
+   * basis. Absent means provenance is unresolved and needs review.
+   */
+  primarySourceId?: string | null;
 }
 
 export interface CandidateSourceLink {
   candidateId: string;
   sourceId: string;
   relation: LinkRelation;
-  /** The exact words quoted from the excerpt; defaults to the whole excerpt. */
+  /**
+   * The exact words quoted from the excerpt; defaults to the whole excerpt.
+   * Must occur in the excerpt starting and ending on word boundaries.
+   */
   quotedSpan?: string | null;
 }
 

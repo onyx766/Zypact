@@ -3,11 +3,11 @@
  * provisional v1, plan section 4.2).
  *
  * Exact duplicates share a duplicate key and are merged into one
- * candidate, keeping every source link. Near duplicates have content-token
- * Jaccard similarity of at least 0.8 (integer comparison). Near-duplicate
- * groups are the connected components of that relation, so "at most one
- * preselected per group" also means no near-duplicate pair is ever both
- * preselected.
+ * candidate, keeping every source link. Near duplicates are pairs whose
+ * content-token Jaccard similarity is at least 0.8 (integer comparison).
+ * The relation is used pairwise and never closed transitively: two
+ * candidates below 0.8 are never treated as near duplicates because a
+ * third candidate is similar to both.
  */
 
 import { duplicateKey } from "./brand-match";
@@ -19,20 +19,15 @@ export interface DuplicateAnalysis {
   keys: Map<string, string>;
   /** Exact-duplicate groups of two or more ids, each sorted by id. */
   exactGroups: string[][];
-  /** Near-duplicate groups of two or more ids, each sorted by id. */
-  nearGroups: string[][];
-  /** Candidate id to its near-duplicate group index, for grouped ids only. */
-  nearGroupOf: Map<string, number>;
+  /** Candidate id to the ids directly at or above the threshold, sorted. */
+  nearOf: Map<string, string[]>;
 }
 
 function byId(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-/**
- * `candidates` should be the ones still under consideration; the result
- * does not depend on their order.
- */
+/** The result does not depend on the order of `candidates`. */
 export function findDuplicates(candidates: readonly Candidate[], siteContext: SiteContext): DuplicateAnalysis {
   const ordered = [...candidates].sort((a, b) => byId(a.id, b.id));
   const keys = new Map(ordered.map((c) => [c.id, duplicateKey(c.text, siteContext)]));
@@ -44,13 +39,8 @@ export function findDuplicates(candidates: readonly Candidate[], siteContext: Si
   }
   const exactGroups = [...exactByKey.values()].filter((g) => g.length > 1);
 
-  const parent = new Map(ordered.map((c) => [c.id, c.id]));
-  const find = (id: string): string => {
-    let root = id;
-    while (parent.get(root) !== root) root = parent.get(root) as string;
-    return root;
-  };
   const tokens = new Map(ordered.map((c) => [c.id, contentTokens(keys.get(c.id) as string)]));
+  const nearOf = new Map<string, string[]>(ordered.map((c) => [c.id, []]));
   for (let i = 0; i < ordered.length; i += 1) {
     for (let j = i + 1; j < ordered.length; j += 1) {
       const a = ordered[i].id;
@@ -62,20 +52,10 @@ export function findDuplicates(candidates: readonly Candidate[], siteContext: Si
         NEAR_DUPLICATE_THRESHOLD.denominator
       );
       if (similar) {
-        const ra = find(a);
-        const rb = find(b);
-        if (ra !== rb) parent.set(ra < rb ? rb : ra, ra < rb ? ra : rb);
+        (nearOf.get(a) as string[]).push(b);
+        (nearOf.get(b) as string[]).push(a);
       }
     }
   }
-  const components = new Map<string, string[]>();
-  for (const c of ordered) {
-    const root = find(c.id);
-    components.set(root, [...(components.get(root) ?? []), c.id]);
-  }
-  const nearGroups = [...components.values()].filter((g) => g.length > 1).sort((a, b) => byId(a[0], b[0]));
-  const nearGroupOf = new Map<string, number>();
-  nearGroups.forEach((group, index) => group.forEach((id) => nearGroupOf.set(id, index)));
-
-  return { keys, exactGroups, nearGroups, nearGroupOf };
+  return { keys, exactGroups, nearOf };
 }

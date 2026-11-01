@@ -18,6 +18,7 @@ import {
   type Refusal,
   type Signal,
   type SourceKind,
+  type Verification,
 } from "./types";
 
 export const PUBLIC_SOURCE_KINDS: readonly SourceKind[] = [
@@ -37,6 +38,11 @@ export function isPublicKind(kind: SourceKind): boolean {
  */
 export function isSellerSource(source: QuestionSource): boolean {
   return source.kind === "site_copy" || source.buyerAuthored !== true;
+}
+
+/** A source's own verification status, fixed by its kind. */
+export function sourceVerification(source: QuestionSource): Verification {
+  return source.kind === "customer_material" ? "customer_provided" : "public_verifiable";
 }
 
 export function sha256Utf8Hex(text: string): string {

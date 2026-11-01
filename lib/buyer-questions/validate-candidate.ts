@@ -9,7 +9,13 @@
 import { brandPresence } from "./brand-match";
 import { marketingSignal, type MarketingTrigger } from "./marketing-signal";
 import { codePointLength, differsOnlyByUnicodeNormalization, isObservedMatch } from "./normalize";
-import { isPublicKind, isSellerSource, possiblePersonalDataSignal, validateSource, type SourceValidation } from "./validate-source";
+import {
+  isSellerSource,
+  possiblePersonalDataSignal,
+  sourceVerification,
+  validateSource,
+  type SourceValidation,
+} from "./validate-source";
 import {
   BUYER_STAGES,
   LINK_RELATIONS,
@@ -39,8 +45,16 @@ export interface CandidateValidation {
   candidateId: string;
   refusals: Refusal[];
   signals: Signal[];
-  /** Null for a hypothesis, or when the deciding links are invalid. */
+  /**
+   * The primary source's verification. Null for a hypothesis, for a
+   * refused candidate, or while the primary source is unresolved.
+   */
   verification: Verification | null;
+  /** Each valid supporting source with its own status, never merged into one. */
+  sourceVerifications: SourceEvidence[];
+  primarySourceId: string | null;
+  /** Observed or adapted evidence exists but no primary source is identified. */
+  primaryUnresolved: boolean;
   /** Whether the brand (branded accuracy) or any brand or product name (unbranded) is present. */
   brandStatus: BrandStatus;
   marketing: { flagged: boolean; triggers: MarketingTrigger[]; resolved: boolean };
@@ -77,9 +91,37 @@ export function questionShapeSignals(text: string): Signal[] {
   return signals;
 }
 
-function verificationOf(sources: readonly QuestionSource[]): Verification | null {
-  if (sources.length === 0) return null;
-  return sources.some((s) => isPublicKind(s.kind)) ? "public_verifiable" : "customer_provided";
+const WORD_CHAR = /[\p{L}\p{N}\p{M}]/u;
+
+/**
+ * True when `span` occurs in `excerpt` at least once with no letter,
+ * digit or combining mark directly before or after it, so a quote never
+ * starts or ends inside a word.
+ */
+export function spanAtWordBoundary(excerpt: string, span: string): boolean {
+  if (span.length === 0) return false;
+  for (let at = excerpt.indexOf(span); at !== -1; at = excerpt.indexOf(span, at + 1)) {
+    const before = [...excerpt.slice(0, at)].pop();
+    const after = [...excerpt.slice(at + span.length)][0];
+    if ((before === undefined || !WORD_CHAR.test(before)) && (after === undefined || !WORD_CHAR.test(after))) return true;
+  }
+  return false;
+}
+
+/** Null when the link's quoted span is usable; otherwise the refusal code. */
+export function quotedSpanProblem(
+  link: CandidateSourceLink,
+  source: QuestionSource
+): "quoted_span_not_in_excerpt" | "quoted_span_not_word_aligned" | null {
+  if (typeof link.quotedSpan !== "string") return null;
+  if (link.quotedSpan.length === 0 || !source.excerpt.includes(link.quotedSpan)) return "quoted_span_not_in_excerpt";
+  return spanAtWordBoundary(source.excerpt, link.quotedSpan) ? null : "quoted_span_not_word_aligned";
+}
+
+export interface SourceEvidence {
+  sourceId: string;
+  relation: "verbatim" | "paraphrase_basis";
+  verification: Verification;
 }
 
 /**
@@ -123,8 +165,9 @@ export function validateCandidate(
       refusals.push({ code: "link_to_unknown_source", detail: link.sourceId });
       continue;
     }
-    if (typeof link.quotedSpan === "string" && (link.quotedSpan.length === 0 || !source.excerpt.includes(link.quotedSpan))) {
-      refusals.push({ code: "quoted_span_not_in_excerpt", detail: link.sourceId });
+    const spanProblem = quotedSpanProblem(link, source);
+    if (spanProblem !== null) {
+      refusals.push({ code: spanProblem, detail: link.sourceId });
       continue;
     }
     if (link.relation === "context") continue;
@@ -139,7 +182,8 @@ export function validateCandidate(
     (link.relation === "verbatim" ? verbatimBuyer : basisBuyer).push([link, source]);
   }
 
-  let verification: Verification | null = null;
+  // The supporting sources: verbatim for observed, paraphrase basis for adapted.
+  let supporting: Array<[CandidateSourceLink, QuestionSource]> = [];
   if (candidate.grade === "observed") {
     if (verbatimBuyer.length === 0) {
       refusals.push({ code: "observed_requires_verbatim_buyer_source" });
@@ -148,14 +192,44 @@ export function validateCandidate(
       for (const [, source] of mismatched) {
         refusals.push({ code: "observed_text_does_not_match_source", detail: source.id });
       }
-      if (mismatched.length === 0) verification = verificationOf(verbatimBuyer.map(([, s]) => s));
+      if (mismatched.length === 0) supporting = verbatimBuyer;
     }
   } else if (candidate.grade === "adapted") {
     if (basisBuyer.length === 0) refusals.push({ code: "adapted_requires_paraphrase_basis" });
     if (typeof candidate.adaptationNote !== "string" || candidate.adaptationNote.trim().length === 0) {
       refusals.push({ code: "adapted_requires_note" });
     }
-    if (basisBuyer.length > 0) verification = verificationOf(basisBuyer.map(([, s]) => s));
+    supporting = basisBuyer;
+  }
+
+  // Each source keeps its own status. A candidate-level status comes only
+  // from the explicitly identified primary source; the presence of a public
+  // link never upgrades it.
+  const sourceVerifications: SourceEvidence[] = [];
+  for (const [link, source] of supporting) {
+    if (!sourceVerifications.some((e) => e.sourceId === source.id)) {
+      sourceVerifications.push({
+        sourceId: source.id,
+        relation: link.relation as SourceEvidence["relation"],
+        verification: sourceVerification(source),
+      });
+    }
+  }
+  sourceVerifications.sort((a, b) => (a.sourceId < b.sourceId ? -1 : a.sourceId > b.sourceId ? 1 : 0));
+  const primaryId = typeof candidate.primarySourceId === "string" ? candidate.primarySourceId : null;
+  let verification: Verification | null = null;
+  let primaryUnresolved = false;
+  if (sourceVerifications.length > 0) {
+    if (primaryId === null) {
+      primaryUnresolved = true;
+      signals.push({ code: "primary_source_unresolved", detail: sourceVerifications.map((e) => e.sourceId).join(",") });
+    } else {
+      const primary = sourceVerifications.find((e) => e.sourceId === primaryId);
+      if (primary === undefined) refusals.push({ code: "primary_source_invalid", detail: primaryId });
+      else verification = primary.verification;
+    }
+  } else if (primaryId !== null && candidate.grade !== "hypothesis") {
+    refusals.push({ code: "primary_source_invalid", detail: primaryId });
   }
 
   // Diagnostic only, at any grade: the text equals a linked buyer-authored
@@ -202,6 +276,9 @@ export function validateCandidate(
     refusals,
     signals,
     verification: refusals.length === 0 ? verification : null,
+    sourceVerifications: refusals.length === 0 ? sourceVerifications : [],
+    primarySourceId: refusals.length === 0 && verification !== null ? primaryId : null,
+    primaryUnresolved: refusals.length === 0 && primaryUnresolved,
     brandStatus,
     marketing: { flagged: marketing.flagged, triggers: marketing.triggers, resolved },
   };

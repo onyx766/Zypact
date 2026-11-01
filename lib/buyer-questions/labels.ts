@@ -3,6 +3,11 @@
  *
  * "Observed — customer-provided" is never presented as independently
  * verified, and no label says a question is one "buyers ask".
+ *
+ * "Observed — verified source" is D-039's wording for a public source the
+ * curator recorded and anyone can check. Zypact's own text match is not an
+ * independent verification of that source, and these labels apply the
+ * primary source's status only, never one inferred from other links.
  */
 
 import type { EvidenceGrade, Origin, Verification, WordingClassification } from "./types";

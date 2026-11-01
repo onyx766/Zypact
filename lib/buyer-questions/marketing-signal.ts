@@ -5,7 +5,10 @@
  * A flag is shown to the curator and keeps the candidate from being
  * preselected until the curator resolves it with a recorded reason and a
  * buyer-authored source. It never changes a grade, it is not proof of
- * seller authorship, and passing it is not proof of buyer authorship.
+ * seller authorship, and passing it is not proof of buyer authorship:
+ * the detectors are heuristics that miss seller copy (other languages,
+ * unlisted phrases, paraphrase), so the evidence rules, not this signal,
+ * decide whether wording is buyer-authored.
  */
 
 import { wordTrigrams } from "./normalize";
@@ -35,8 +38,24 @@ export const MARKETING_LEXICON_V1: readonly string[] = [
 
 /** A feature list needs at least this many list separators (three or more items). */
 export const FEATURE_LIST_MIN_SEPARATORS_V1 = 2;
-/** Each item after the first must be short to read as a list item. */
-export const FEATURE_LIST_MAX_ITEM_WORDS_V1 = 4;
+/** Each item after the first must be at most this long to read as a noun phrase. */
+export const FEATURE_LIST_MAX_ITEM_WORDS_V1 = 6;
+/**
+ * Separators v1: comma, semicolon, slash, ampersand, a line break (with an
+ * optional bullet), or the words "and", "or", "plus"; a punctuation
+ * separator may be followed by one of those words (", and").
+ */
+const FEATURE_LIST_SEPARATOR_V1 =
+  /\s*(?:[,;/&]|\r?\n\s*(?:[-*\u2022]\s*)?)\s*(?:(?:and|or|plus)\s+)?|\s+(?:and|or|plus)\s+/iu;
+/**
+ * An item starting with one of these words reads as a clause (a question
+ * or a statement), not a noun phrase, so it does not count as a list item.
+ */
+export const FEATURE_LIST_CLAUSE_STARTERS_V1: readonly string[] = [
+  "how", "what", "when", "where", "which", "who", "whom", "whose", "why",
+  "is", "are", "was", "were", "do", "does", "did", "can", "could", "should",
+  "would", "will", "i", "we", "you", "my", "our", "if",
+];
 /** Share of the candidate's word trigrams also found in the site copy. */
 export const SITE_COPY_OVERLAP_V1 = { numerator: 1, denominator: 2 } as const;
 
@@ -64,17 +83,32 @@ function hasLexiconPhrase(text: string): boolean {
 }
 
 /**
- * Three or more items separated by commas or "and", with at least one
- * comma, where every item after the first is short.
+ * The plan's "three or more comma- or 'and'-separated noun phrases",
+ * approximated without a parser: split on the v1 separators; the first
+ * item holds the question stem ("Which tool offers invoicing") and is not
+ * limited; it must be followed directly by at least two list items, each
+ * non-empty, at most six words, and not starting with a clause word. A
+ * trailing clause ("…, and how much is it?") ends the list.
+ *
+ * Known v1 limits: English only; no part-of-speech check, so a list of
+ * verbs or of long phrases is judged by shape alone; a buyer's own list
+ * ("A, B and C") is flagged like a seller's. A flag only asks the curator
+ * to review; not being flagged is never evidence of buyer authorship.
  */
-function looksLikeFeatureList(text: string): boolean {
-  const body = text.trim().replace(/[?.!]+$/, "");
-  if (!body.includes(",")) return false;
-  const items = body.split(/\s*,\s*(?:and\s+)?|\s+and\s+/i).map((item) => item.trim());
-  if (items.length - 1 < FEATURE_LIST_MIN_SEPARATORS_V1) return false;
-  return items
-    .slice(1)
-    .every((item) => item.length > 0 && item.split(/\s+/).length <= FEATURE_LIST_MAX_ITEM_WORDS_V1);
+export function looksLikeFeatureList(text: string): boolean {
+  const body = text.trim().replace(/[?.!\uFF1F]+$/u, "");
+  const items = body.split(FEATURE_LIST_SEPARATOR_V1).map((item) => item.trim());
+  const isListItem = (item: string): boolean => {
+    const words = item.split(/\s+/).filter((w) => w.length > 0);
+    return (
+      words.length > 0 &&
+      words.length <= FEATURE_LIST_MAX_ITEM_WORDS_V1 &&
+      !FEATURE_LIST_CLAUSE_STARTERS_V1.includes(words[0].toLowerCase().replace(/[\p{P}\p{S}]/gu, ""))
+    );
+  };
+  let run = 0;
+  while (run + 1 < items.length && isListItem(items[run + 1])) run += 1;
+  return run >= FEATURE_LIST_MIN_SEPARATORS_V1;
 }
 
 function overlapsSiteCopy(text: string, siteCopy: string): boolean {

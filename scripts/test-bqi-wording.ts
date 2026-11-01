@@ -88,8 +88,9 @@ const NFC_TEXT = "Which café booking app handles group orders?";
 const NFD_TEXT = "Which café booking app handles group orders?";
 const BASIS_TEXT = "Reconciling invoices takes our firm forever and nothing fits.";
 
-function cand(id: string, text: string, grade: EvidenceGrade): Candidate {
+function cand(id: string, text: string, grade: EvidenceGrade, primarySourceId: string | null = null): Candidate {
   return {
+    primarySourceId,
     id,
     text,
     grade,
@@ -116,10 +117,10 @@ function researchSet(): ResearchSet {
       source("site", "Which invoicing tool is best? Acme.", "site_copy"),
     ],
     candidates: [
-      cand("obs-pub", OBS_TEXT, "observed"),
-      cand("obs-cust", "How do we route invoice approvals to two managers?", "observed"),
-      cand("obs-nfc", NFC_TEXT, "observed"),
-      cand("ada", "How can a small firm reconcile invoices faster?", "adapted"),
+      cand("obs-pub", OBS_TEXT, "observed", "pub"),
+      cand("obs-cust", "How do we route invoice approvals to two managers?", "observed", "cust"),
+      cand("obs-nfc", NFC_TEXT, "observed", "nfc"),
+      cand("ada", "How can a small firm reconcile invoices faster?", "adapted", "basis"),
       cand("hyp", "Which tools do clinics use for invoice approvals?", "hypothesis"),
     ],
     links: [
@@ -160,7 +161,7 @@ function w02(): void {
   console.log("\nW-02 edited observed candidate still matching; NFC versus NFD");
   const set = researchSet();
   const still = classifyApprovedWording({ origin: "recommended_edited", approvedText: `  ${OBS_TEXT.replace("?", "")}  `, candidateId: "obs-pub", researchSet: set });
-  check("W-02 whitespace/terminal edit: observed by exact_source_match, public_verifiable", still.classification === "observed" && still.rule === "exact_source_match" && still.verification === "public_verifiable" && still.matchedSourceIds.join() === "pub");
+  check("W-02 whitespace/terminal edit: observed by exact_source_match, public_verifiable", still.classification === "observed" && still.rule === "exact_source_match" && still.verification === "public_verifiable" && (still.matchedSources ?? []).map((m) => m.sourceId).join() === "pub");
   const cust = classifyApprovedWording({ origin: "recommended_edited", approvedText: "How do we route invoice approvals to two managers", candidateId: "obs-cust", researchSet: set });
   check("W-02 customer-material source keeps customer_provided", cust.classification === "observed" && cust.verification === "customer_provided");
   const nfd = classifyApprovedWording({ origin: "recommended_edited", approvedText: NFD_TEXT, candidateId: "obs-nfc", researchSet: set });
@@ -182,7 +183,7 @@ function w03(): void {
 function w04(): void {
   console.log("\nW-04 customer-written text matching a buyer-authored source");
   const set = researchSet();
-  const r = classifyApprovedWording({ origin: "customer_written", approvedText: "how do we route invoice approvals to two managers?".replace("how", "How"), researchSet: set });
+  const r = classifyApprovedWording({ origin: "customer_written", approvedText: "how do we route invoice approvals to two managers?".replace("how", "How"), primarySourceId: "cust", researchSet: set });
   check("W-04 observed by exact_source_match", r.classification === "observed" && r.rule === "exact_source_match" && r.verification === "customer_provided");
   check("W-04 provenance customer_supplied", r.provenance === "customer_supplied");
   const site = classifyApprovedWording({ origin: "customer_written", approvedText: "Which invoicing tool is best? Acme.", researchSet: set });
@@ -205,7 +206,7 @@ function w06(): void {
   check("W-06 adapted without note: refused", !noNote.accepted && noNote.refusals.some((r) => r.code === "adapted_requires_note"));
   const seller = validateFounderClassification({ classification: "adapted", approvedText: text, sourceIds: ["site"], note: "reworded", researchSet: set });
   check("W-06 adapted citing site copy: refused", !seller.accepted);
-  const ok = validateFounderClassification({ classification: "adapted", approvedText: text, sourceIds: ["basis"], note: "narrowed to dentists", researchSet: set });
+  const ok = validateFounderClassification({ classification: "adapted", approvedText: text, sourceIds: ["basis"], primarySourceId: "basis", note: "narrowed to dentists", researchSet: set });
   check("W-06 adapted with basis and note: accepted", ok.accepted && ok.classification === "adapted" && ok.verification === "public_verifiable");
   const hyp = validateFounderClassification({ classification: "hypothesis", approvedText: text, sourceIds: [], researchSet: set });
   check("W-06 hypothesis: accepted", hyp.accepted && hyp.classification === "hypothesis");
@@ -304,6 +305,104 @@ function w11(): void {
   check("W-11 every rationale template is free of banned framing", offending.length === 0, offending[0] ?? "");
 }
 
+
+// ------------------------------------------- adversarial regressions ([R])
+// Expected results below are written out by hand from D-039 and the
+// Founder's corrective decisions, not computed with the code under test.
+
+const INVENTED = "Which payroll tool is cheapest for clinics?";
+
+function withExtra(extra: Partial<ResearchSet>): ResearchSet {
+  const base = researchSet();
+  return {
+    siteContext: base.siteContext,
+    sources: [...base.sources, ...(extra.sources ?? [])],
+    candidates: [...base.candidates, ...(extra.candidates ?? [])],
+    links: [...base.links, ...(extra.links ?? [])],
+  };
+}
+
+function w01r(): void {
+  const set = withExtra({ candidates: [cand("obs-noprimary", OBS_TEXT.replace("small", "two-person"), "observed", null)], sources: [source("pub2", OBS_TEXT.replace("small", "two-person"))], links: [link("obs-noprimary", "pub2", "verbatim")] });
+  const r = classifyApprovedWording({ origin: "recommended_unchanged", approvedText: OBS_TEXT.replace("small", "two-person"), candidateId: "obs-noprimary", researchSet: set });
+  check("[R] W-01 unchanged observed candidate without a primary source: pending_review, no status", r.classification === "pending_review" && r.verification === null && r.signals.some((s) => s.code === "primary_source_unresolved"));
+}
+
+function w02r(): void {
+  // The same question as public and customer material, both linked verbatim.
+  const q = "How do clinics split invoices between two locations?";
+  const set = withExtra({
+    sources: [source("q-pub", q), source("q-cust", q, "customer_material")],
+    candidates: [cand("q", q, "observed", "q-cust")],
+    links: [link("q", "q-pub", "verbatim"), link("q", "q-cust", "verbatim")],
+  });
+  const r = classifyApprovedWording({ origin: "recommended_edited", approvedText: ` ${q.replace("?", "")} `, candidateId: "q", researchSet: set });
+  check("[R] W-02 edit matching public and customer sources, primary customer: customer_provided", r.classification === "observed" && r.verification === "customer_provided");
+  check(
+    "[R] W-02 each matched source keeps its own status",
+    JSON.stringify(r.matchedSources) === JSON.stringify([{ sourceId: "q-cust", verification: "customer_provided" }, { sourceId: "q-pub", verification: "public_verifiable" }])
+  );
+}
+
+function w03r(): void {
+  // An edited candidate whose own verbatim link quotes words that are not in
+  // the excerpt: the candidate is refused, so its span is not evidence.
+  const set = withExtra({
+    sources: [source("thin", "Our invoices take forever to reconcile.")],
+    candidates: [cand("bad", INVENTED, "observed", "thin")],
+    links: [{ candidateId: "bad", sourceId: "thin", relation: "verbatim", quotedSpan: INVENTED }],
+  });
+  const r = classifyApprovedWording({ origin: "recommended_edited", approvedText: INVENTED, candidateId: "bad", researchSet: set });
+  check("[R] W-03 edit matching an invented span of a refused candidate: pending_review", r.classification === "pending_review" && r.verification === null);
+}
+
+function w04r(): void {
+  const thin = source("thin", "Our invoices take forever to reconcile.");
+  const cases: Array<[string, ResearchSet]> = [
+    [
+      "invented span on a context link of a refused candidate",
+      withExtra({ sources: [thin], candidates: [cand("h", "Which tools do vets use?", "hypothesis")], links: [{ candidateId: "h", sourceId: "thin", relation: "context", quotedSpan: INVENTED }] }),
+    ],
+    [
+      "invented span on a verbatim link of a refused candidate",
+      withExtra({ sources: [thin], candidates: [cand("o", INVENTED, "observed", "thin")], links: [{ candidateId: "o", sourceId: "thin", relation: "verbatim", quotedSpan: INVENTED }] }),
+    ],
+    [
+      "word-aligned span present in the excerpt, but only on a context link",
+      withExtra({
+        sources: [source("ctx", `Someone asked: ${INVENTED} No answer yet.`)],
+        candidates: [cand("h2", "Which tools do vets use?", "hypothesis")],
+        links: [{ candidateId: "h2", sourceId: "ctx", relation: "context", quotedSpan: INVENTED }],
+      }),
+    ],
+    [
+      "partial-word span",
+      withExtra({
+        sources: [source("pw", `X${INVENTED.slice(0, -1)}s`)],
+        candidates: [cand("o2", INVENTED, "observed", "pw")],
+        links: [{ candidateId: "o2", sourceId: "pw", relation: "verbatim", quotedSpan: INVENTED.slice(0, -1) }],
+      }),
+    ],
+  ];
+  for (const [label, set] of cases) {
+    const r = classifyApprovedWording({ origin: "customer_written", approvedText: INVENTED, primarySourceId: set.sources[set.sources.length - 1].id, researchSet: set });
+    check(`[R] W-04 customer-written, ${label}: pending_review, never observed`, r.classification === "pending_review" && r.verification === null, `${r.classification} ${r.verification}`);
+  }
+  const noPrimary = classifyApprovedWording({ origin: "customer_written", approvedText: "How do we route invoice approvals to two managers?", researchSet: researchSet() });
+  check("[R] W-04 match without an identified primary source: pending_review, matched sources listed", noPrimary.classification === "pending_review" && (noPrimary.matchedSources ?? []).map((m) => m.sourceId).join() === "cust" && noPrimary.signals.some((s) => s.code === "primary_source_unresolved"));
+}
+
+function w06r(): void {
+  const set = withExtra({ sources: [source("cm2", "Splitting invoices across our two clinics is a mess.", "customer_material")] });
+  const text = "How can clinics split invoices across locations?";
+  const none = validateFounderClassification({ classification: "adapted", approvedText: text, sourceIds: ["basis", "cm2"], note: "generalised", researchSet: set });
+  check("[R] W-06 adapted with mixed bases and no primary: refused", !none.accepted && none.refusals.some((r) => r.code === "primary_source_required"));
+  const cust = validateFounderClassification({ classification: "adapted", approvedText: text, sourceIds: ["basis", "cm2"], primarySourceId: "cm2", note: "generalised", researchSet: set });
+  check("[R] W-06 adapted with mixed bases, primary customer: customer_provided", cust.accepted && cust.verification === "customer_provided");
+  const notCited = validateFounderClassification({ classification: "adapted", approvedText: text, sourceIds: ["cm2"], primarySourceId: "basis", note: "generalised", researchSet: set });
+  check("[R] W-06 primary not among the cited sources: refused", !notCited.accepted && notCited.refusals.some((r) => r.code === "primary_source_required"));
+}
+
 // ---------------------------------------------------------------- P cases
 
 const LIB_DIR = join(process.cwd(), "lib", "buyer-questions");
@@ -385,10 +484,20 @@ function p04(): void {
 }
 
 function main(): void {
-  const cases = [w01, w02, w03, w04, w05, w06, w07, w08, w09, w10, w11, p01, p02, p03, p04];
-  for (const c of cases) c();
+  const cases: Array<() => void> = [
+    // Each [R] function runs right after its case, under the same case header,
+    // and in its own try so one failure cannot hide another.
+    w01, w01r, w02, w02r, w03, w03r, w04, w04r, w05, w06, w06r, w07, w08, w09, w10, w11, p01, p02, p03, p04,
+  ];
+  for (const c of cases) {
+    try {
+      c();
+    } catch (error) {
+      check("case completed without an exception", false, error instanceof Error ? error.message : String(error));
+    }
+  }
   console.log(
-    `\n${checks - failures}/${checks} checks passed (${cases.length} cases). ` +
+    `\n${checks - failures}/${checks} checks passed (${cases.filter((c) => !c.name.endsWith("r")).length} cases). ` +
       (failures === 0 ? "BQI wording, labels and purity PASSED." : "BQI wording, labels and purity FAILED.")
   );
   process.exit(failures === 0 ? 0 : 1);

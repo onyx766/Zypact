@@ -938,9 +938,18 @@ record written at the time the change happens. That did not occur here either.
 
 | Command | Plan cases | Local result on 2026-11-01 |
 |---|---|---|
-| `npm run test:bqi-candidates` | C-01 to C-28 | 186/186 checks passed |
-| `npm run test:bqi-selection` | S-01 to S-18 | 70/70 checks passed |
-| `npm run test:bqi-wording` | W-01 to W-11, P-01 to P-04 | 77/77 checks passed |
+| `npm run test:bqi-candidates` | C-01 to C-28 | 214/214 checks passed |
+| `npm run test:bqi-selection` | S-01 to S-18 | 81/81 checks passed |
+| `npm run test:bqi-wording` | W-01 to W-11, P-01 to P-04 | 89/89 checks passed |
+
+These results are after the corrective round authorised on 2026-11-01. A
+review of the first commit (`ed08c3a`) found that approved-wording
+classification accepted unvalidated quoted spans as observed evidence, that
+public links could upgrade a candidate's verification, that near duplicates
+were grouped transitively, that merged duplicates mixed their evidence links,
+and that the feature-list detector was narrower than the plan. Adversarial
+subcases, marked `[R]` under the existing case IDs, fail against `ed08c3a`'s
+library and pass after the correction.
 
 These three commands are registered in `package.json` but are **not** run by any
 CI workflow. Adding them to CI is a separate decision. With them, `package.json`
@@ -955,4 +964,7 @@ They test rules over in-memory inputs only. No Q0 acceptance criterion in
 alone: enforcement on save, stored rows, the approval RPC, rendered cards and
 pages, and criteria 25 and 32 to 69 all need the later steps (Q2, Q3, Q4, Q4b).
 The marketing-language, personal-data, length and question-shape detectors are
-provisional `v1` review signals, not validated classifiers.
+provisional `v1` review signals, not validated classifiers. Passing them is
+never evidence of buyer authorship. `public_verifiable` records that the
+curator gave a public URL and retrieval date; Q1 fetches nothing, and its text
+match is not independent verification of that source.

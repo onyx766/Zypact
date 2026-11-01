@@ -109,7 +109,20 @@ function link(candidateId: string, sourceId: string, relation: LinkRelation, quo
   return { candidateId, sourceId, relation, quotedSpan: quotedSpan ?? null };
 }
 
-function run(c: Candidate, links: CandidateSourceLink[], sources: QuestionSource[], site: SiteContext = SITE) {
+/**
+ * Fixture convenience: when a test does not say otherwise (primarySourceId
+ * undefined), the candidate's first supporting link names its primary
+ * source explicitly, as a curator would. `null` means "not identified".
+ */
+function withPrimary(c: Candidate, links: CandidateSourceLink[]): Candidate {
+  if (c.primarySourceId !== undefined) return c;
+  const relation = c.grade === "observed" ? "verbatim" : c.grade === "adapted" ? "paraphrase_basis" : null;
+  const first = links.find((l) => l.candidateId === c.id && l.relation === relation);
+  return { ...c, primarySourceId: first ? first.sourceId : null };
+}
+
+function run(c0: Candidate, links: CandidateSourceLink[], sources: QuestionSource[], site: SiteContext = SITE) {
+  const c = withPrimary(c0, links);
   const set: ResearchSet = { siteContext: site, sources, candidates: [c], links };
   const v = validateResearchSet(set).candidates.get(c.id)!;
   return { v, codes: v.refusals.map((r) => r.code), signals: v.signals.map((s) => s.code) };
@@ -490,7 +503,7 @@ function c26(): void {
       check(`C-26 ${brand} [${state}] "${fullQ}": full form definitive`, full.brandDefinitive && !full.signals.some((s) => s.code === "brand_alias_unresolved"));
 
       const evalKind = (kind: QuestionKind) => {
-        const c = candidate("c1", aliasQ, "adapted", { kind });
+        const c = candidate("c1", aliasQ, "adapted", { kind, primarySourceId: "p1" });
         const set: ResearchSet = { siteContext: site, sources: [basis], candidates: [c], links: [link("c1", "p1", "paraphrase_basis")] };
         const v = validateResearchSet(set).candidates.get("c1")!;
         const rec = recommend(set);
@@ -556,11 +569,125 @@ function c28(): void {
   check("C-28 brand \"Acme\" matches \"acme.io\" through part key", matched("Is acme.io reliable", brandSite("Acme")));
 }
 
+
+// ------------------------------------------- adversarial regressions ([R])
+// Expected results below are written out by hand from D-039 and the
+// Founder's corrective decisions, not computed with the code under test.
+
+function c02r(): void {
+  const buyer = source("p1", "public_community", SRC_TEXT);
+  const r = run(candidate("c1", SRC_TEXT, "observed"), [link("c1", "p1", "context")], [buyer]);
+  check("[R] C-02 context-only link to a buyer source: observed refused", r.codes.includes("observed_requires_verbatim_buyer_source") && r.v.verification === null);
+}
+
+function c04r(): void {
+  const text = "Which invoicing tool suits a small accounting firm?";
+  const partial = source("p1", "public_community", "XWhich invoicing tool suits a small accounting firmly");
+  const r1 = run(candidate("c1", text, "observed"), [link("c1", "p1", "verbatim", "Which invoicing tool suits a small accounting firm")], [partial]);
+  check("[R] C-04 span starting and ending inside words: refused", r1.codes.includes("quoted_span_not_word_aligned") && r1.v.verification === null, r1.codes.join(","));
+  const tail = source("p2", "public_community", "Honestly which invoicing tool suits a small accounting firmware team");
+  const r2 = run(candidate("c1", text, "observed"), [link("c1", "p2", "verbatim", "which invoicing tool suits a small accounting firm")], [tail]);
+  check("[R] C-04 span ending inside a word: refused", r2.codes.includes("quoted_span_not_word_aligned"));
+  const invented = source("p3", "public_community", "Our invoices take forever to reconcile.");
+  const r3 = run(candidate("c1", text, "observed"), [link("c1", "p3", "verbatim", text)], [invented]);
+  check("[R] C-04 invented span not in the excerpt: refused", r3.codes.includes("quoted_span_not_in_excerpt"));
+  const aligned = source("p4", "public_community", `Q: ${text} Thanks!`);
+  const r4 = run(candidate("c1", text, "observed"), [link("c1", "p4", "verbatim", text)], [aligned]);
+  check("[R] C-04 span bounded by spaces and punctuation: accepted", r4.codes.length === 0 && r4.v.verification === "public_verifiable", r4.codes.join(","));
+  const edges = source("p5", "public_community", text);
+  const r5 = run(candidate("c1", text, "observed"), [link("c1", "p5", "verbatim", text)], [edges]);
+  check("[R] C-04 span equal to the whole excerpt: accepted", r5.codes.length === 0);
+}
+
+function c06r(): void {
+  const cm = source("m1", "customer_material", SRC_TEXT);
+  const pub = source("p1", "public_community", SRC_TEXT);
+  const both = [link("c1", "m1", "verbatim"), link("c1", "p1", "verbatim")];
+  const asCustomer = run(candidate("c1", SRC_TEXT, "observed", { primarySourceId: "m1" }), both, [cm, pub]);
+  check("[R] C-06 customer + public verbatim, primary customer: customer_provided", asCustomer.codes.length === 0 && asCustomer.v.verification === "customer_provided");
+  check(
+    "[R] C-06 each source keeps its own status",
+    JSON.stringify((asCustomer.v.sourceVerifications ?? []).map((e) => [e.sourceId, e.verification])) ===
+      JSON.stringify([["m1", "customer_provided"], ["p1", "public_verifiable"]])
+  );
+  const asPublic = run(candidate("c1", SRC_TEXT, "observed", { primarySourceId: "p1" }), both, [cm, pub]);
+  check("[R] C-06 primary public: public_verifiable", asPublic.v.verification === "public_verifiable");
+  const none = run(candidate("c1", SRC_TEXT, "observed", { primarySourceId: null }), both, [cm, pub]);
+  check("[R] C-06 no primary: no candidate status, review signal, not refused", none.codes.length === 0 && none.v.verification === null && none.signals.includes("primary_source_unresolved"));
+  const basis = source("b1", "public_review", "Invoicing is painful for our firm.");
+  const ctx = run(
+    candidate("c1", SRC_TEXT, "observed", { primarySourceId: "m1" }),
+    [link("c1", "m1", "verbatim"), link("c1", "b1", "paraphrase_basis"), link("c1", "b1", "context")],
+    [cm, basis]
+  );
+  check("[R] C-06 customer verbatim + public basis/context: customer_provided", ctx.codes.length === 0 && ctx.v.verification === "customer_provided");
+  const notSupporting = run(
+    candidate("c1", SRC_TEXT, "observed", { primarySourceId: "b1" }),
+    [link("c1", "m1", "verbatim"), link("c1", "b1", "paraphrase_basis")],
+    [cm, basis]
+  );
+  check("[R] C-06 primary that is not a verbatim support of an observed candidate: refused", notSupporting.codes.includes("primary_source_invalid"));
+  const adaptedText = "How can a small firm make invoicing less painful?";
+  const mixedAdapted = run(
+    candidate("c1", adaptedText, "adapted", { primarySourceId: "m1" }),
+    [link("c1", "m1", "paraphrase_basis"), link("c1", "b1", "paraphrase_basis")],
+    [cm, basis]
+  );
+  check("[R] C-06 adapted with customer + public bases, primary customer: customer_provided", mixedAdapted.codes.length === 0 && mixedAdapted.v.verification === "customer_provided");
+  const mixedAdaptedNone = run(
+    candidate("c1", adaptedText, "adapted", { primarySourceId: null }),
+    [link("c1", "m1", "paraphrase_basis"), link("c1", "b1", "paraphrase_basis")],
+    [cm, basis]
+  );
+  check("[R] C-06 adapted mixed bases, no primary: never upgraded to public", mixedAdaptedNone.v.verification === null && mixedAdaptedNone.signals.includes("primary_source_unresolved"));
+}
+
+function c20r(): void {
+  const listForms = [
+    "Which tool offers invoicing and payroll and expense tracking?",
+    "Which tool offers invoicing; payroll; expense tracking?",
+    "Which tool offers invoicing / payroll / expense tracking?",
+    "Which tool offers invoicing, payroll or expense tracking?",
+    "Which tool offers invoicing, payroll & expense tracking?",
+    "Which tool offers automated multi-entity invoice approvals, real-time payroll sync across regions, and expense tracking?",
+    "Which tool offers:\n- invoicing\n- payroll\n- expenses?",
+    "What tool has invoicing, payroll, expense tracking, and how much is it?",
+  ];
+  for (const text of listForms) {
+    check(`[R] C-20 feature list flagged: ${JSON.stringify(text)}`, marketingSignal(text, SITE).triggers.includes("feature_list" as never));
+  }
+  const notLists = [
+    "Which tool offers invoicing, payroll?",
+    "Is it worth paying for invoicing or should we stay on spreadsheets?",
+    "My accountant and I disagree on approval limits, who is right?",
+    "Should I switch from spreadsheets to an invoicing app, and when?",
+  ];
+  for (const text of notLists) {
+    check(`[R] C-20 not a feature list: ${JSON.stringify(text)}`, !marketingSignal(text, SITE).triggers.includes("feature_list" as never));
+  }
+  const plain = "Which invoicing tool suits a small accounting firm?";
+  check("[R] C-20 fixture passes every detector", !marketingSignal(plain, SITE).flagged);
+  const sellerCopy = source("s1", "site_copy", plain);
+  const r = run(candidate("c1", plain, "observed"), [link("c1", "s1", "verbatim")], [sellerCopy]);
+  check("[R] C-20 passing the detector is no proof of buyer authorship: seller text still refused as observed", r.codes.includes("seller_source_only_as_context") && r.codes.includes("observed_requires_verbatim_buyer_source"));
+}
+
 function main(): void {
-  const cases = [c01, c02, c03, c04, c05, c06, c07, c08, c09, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28];
-  for (const c of cases) c();
+  const cases: Array<() => void> = [
+    // Each [R] function runs right after its case, under the same case header,
+    // and in its own try so one failure cannot hide another.
+    c01, c02, c02r, c03, c04, c04r, c05, c06, c06r, c07, c08, c09, c10,
+    c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c20r, c21, c22, c23, c24, c25, c26, c27, c28,
+  ];
+  for (const c of cases) {
+    try {
+      c();
+    } catch (error) {
+      check("case completed without an exception", false, error instanceof Error ? error.message : String(error));
+    }
+  }
   console.log(
-    `\n${checks - failures}/${checks} checks passed (${cases.length} cases). ` +
+    `\n${checks - failures}/${checks} checks passed (${cases.filter((c) => !c.name.endsWith("r")).length} cases). ` +
       (failures === 0 ? "BQI candidate rules PASSED." : "BQI candidate rules FAILED.")
   );
   process.exit(failures === 0 ? 0 : 1);

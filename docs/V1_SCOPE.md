@@ -4,6 +4,7 @@
 - **Scope date:** 2026-08-16
 - **Offer:** Evidence-Backed Shortlist Diagnostic + Registered Retest
 - **Initial live surface:** Perplexity Sonar
+- **Direction update (D-040, 2026-11-01):** the product target is now self-service. This amends §2 (founder-operated first pilots) and §4.1 (Request Demo as the primary CTA, hybrid disclosure, no self-serve checkout). It does so **only under D-040's transition rule**: every control in this document stays in force until its replacement is implemented, tested and separately authorised. The reconciliation is in [`SELF_SERVICE_PRODUCT.md`](SELF_SERVICE_PRODUCT.md) §9.
 
 ## 1. V1 promise
 

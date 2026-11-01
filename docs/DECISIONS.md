@@ -472,3 +472,99 @@ Each entry records:
   - any customer-facing wording that describes a question as one "buyers ask";
   - any path by which customer approval could create or approve paid execution;
   - a change to `approve_and_launch_snapshot_baseline`'s behaviour for single-question requests.
+
+## D-040 — Zypact's product target is self-service; routine customer operations do not depend on the founder
+
+- **Date:** 2026-11-01
+- **Status:** Approved by the Founder as the official product direction. The architecture is frozen. **This decision authorises no implementation, automated research or paid execution:** every step in [`SELF_SERVICE_PRODUCT.md`](SELF_SERVICE_PRODUCT.md) section 10 needs its own authorisation.
+- **Transition rule:** each approved control stays in force until its replacement is implemented, tested and authorised. Section 9 of the design reconciles each control.
+- **Decision:** customers can do the following without routine founder action:
+  - sign up;
+  - analyse their website with a bounded, deterministic diagnostic;
+  - build and approve evidence-graded buyer questions;
+  - verify domain ownership for their workspace;
+  - authorise bounded paid execution;
+  - follow their registered results.
+
+  The founder handles exceptions, support and governance:
+  - **exceptions:** one queue, and every item carries its reason;
+  - **governance:** ceilings, kill switches, the provider and source allowlists, rule-version promotion, research budgets, audit sampling and holds.
+- **Approvals:**
+  - **Identity is not a grant.** Account identity is never an approval grant. Each approval is an immutable record of one action, bound to:
+    - the authenticated customer, workspace, project and request;
+    - the exact approved versions, or for execution, the protocol and ceiling;
+    - the database timestamp;
+    - the session and step-up event;
+    - the consent text shown.
+  - **`approved_by`** references the approval record, not the account.
+  - **Question approval never authorises execution.**
+  - **Revocation.** An execution authorisation may be revoked by an append-only revocation record. No new claim, reservation or send may rely on a revoked authorisation.
+    - PT-1, AD-1 and X1 must check revocation, transactionally, at every transition that permits new spend: the claim, the reservation and the send marker.
+    - Sends committed before the revocation, or already in flight, keep their documented boundary.
+    - No approval, ledger or evidence record is ever altered.
+- **Sessions:**
+  - Account sessions and D-039 review-invitation sessions are separate types, with separate tokens and separate storage. Neither converts into the other.
+  - OD-4's limits on invitation sessions are unchanged.
+  - Revocation is checked on every request.
+  - In an account session, step-up is required before any approval, revocation or spend authorisation.
+- **First release (no paid AI call):** the Website Buyer-Readiness Diagnostic, plus the buyer-question workspace.
+  - **Bounds:** at most 10 pages; RFC 9309 robots handling; SSRF-safe fetching; rate limits; no model call; no composite score.
+  - **Results:** each check is `pass`, `issue`, `info` or `unknown` with a reason, and states what it does not establish.
+  - **No AI claims:** the diagnostic makes no claim about AI readability, visibility or answers.
+- **Domain ownership:**
+  - Verification and revocation are per workspace, by DNS TXT record, well-known file or meta tag.
+  - A verified domain unlocks paid execution, automated research and brand-owned reports, for that workspace's own records only.
+  - Verification never grants access to another workspace's records.
+- **Automated research:**
+  - **Classes.** Outputs are suggested wording (`hypothesis`), source-supported (`adapted` at most) or observed (verified source).
+  - **Placement.** An output takes a class only when that class's own requirements pass independently; otherwise it is `hypothesis` or `pending_review`. Nothing is ever upgraded.
+  - **Observed evidence.** Automated "observed" also needs a retained, lawful, access-restricted verification record from which every deterministic check can be re-run offline. If no adequate record can be kept or verified, the output is not graded observed. When such a record must be deleted, an append-only evidence-review record marks the claim as no longer evidenced.
+  - **Privacy.** Privacy-sensitive items are quarantined or excluded, and are never evidence. Other stored material is minimised, under a recorded lawful basis, with defined retention and deletion.
+  - **Exposure gate.** Customers see automated output only after the evaluation and audit gate, which states its error bounds as confidence bounds with founder-set thresholds. No claim of zero error is made.
+- **Spending and dispatch:**
+  - PG-9 V3.4 stays frozen and on HOLD.
+  - Per-tenant limits (PT-1) and automated worker dispatch with an automated provenance gate (AD-1) are separate design changes, each separately gated. They must not weaken the global ceiling, the reservation-before-call rule or the independent provenance comparison.
+  - Until both are approved and shipped, these remain in place: the global D-037 gate, one job per operator start (D-034), the founder start routes (D-035) and the manual provenance check.
+- **Unchanged:**
+  - from D-039: grade definitions, evidence and approval limits, immutability, separation of question approval from execution, and enrolment with 0062 coexistence;
+  - D-037;
+  - the PG-9 and PR-B HOLD;
+  - delivery states;
+  - tenant isolation enforced in the database;
+  - continuous monitoring stays deferred;
+  - no causal, revenue or "buyers ask" claims.
+- **Amends**, each only under the transition rule:
+  - **D-039:** curation, relevance ratings, wording review, launch selection, the access method for self-service customers, and hypothesis-launch acknowledgement;
+  - **D-034:** by AD-1 only;
+  - **V1_SCOPE §2 and §4.1;**
+  - **ROADMAP sequencing.**
+- **New invariants:**
+  1. Automation never assigns "observed" unless every deterministic check passes on retained, re-verifiable evidence. A model's output is never evidence.
+  2. Neither a customer nor a founder review can assign "observed".
+  3. Every system action records its actor, rule and rule version.
+  4. Every approval is an immutable, action-specific record; identity alone is never a grant. Revocation is append-only and stops only future reliance, and it is checked at every transition that permits new spend.
+  5. Paid execution requires a workspace-verified domain, an unrevoked execution-authorisation record showing the ceiling, and step-up.
+  6. Spending ceilings are enforced in the database and never weakened by a later change.
+  7. No live worker starts without an independent provenance comparison.
+- **Reason:** the target product is a self-service SaaS. The founder's routine operator work does not scale: D-039 had seven founder steps per customer, and each paid job needed an operator start. Each routine step therefore becomes a deterministic, audited rule or an authenticated customer action. The evidence, authorisation, isolation and spending controls stay at least as strong, and an explicit transition rule ensures no approved control lapses before its replacement exists.
+- **Effect:**
+  - [`SELF_SERVICE_PRODUCT.md`](SELF_SERVICE_PRODUCT.md), the design, reconciliation, roadmap and dependencies;
+  - this entry;
+  - notes that point to D-040 in `V1_SCOPE.md`, `ROADMAP.md` and `BUYER_QUESTION_INTELLIGENCE.md`;
+  - the Q1 status in `CURRENT_STATUS.md`.
+
+  No code, migration, workflow, deployment, setting or database change. Q1 is complete and merged (#96, `19a644c`). Q2–Q5, PT-1 and AD-1 are not authorised. Adding the Q1 tests to CI, and single-source primary inference, are separate future decisions.
+- **Revisit trigger:**
+  - any path that upgrades a class or grade without new evidence;
+  - assigning or keeping automated "observed" without a retained verification record;
+  - using account identity as an approval;
+  - any path where new spend relies on a revoked authorisation, or where a new-spend transition skips the revocation check;
+  - merging session types;
+  - cross-workspace access through domain verification;
+  - relaxing domain verification;
+  - a composite diagnostic score, or any diagnostic claim about AI answers;
+  - retaining full page snapshots outside the verification-record purpose without legal approval;
+  - any change to V3.4 outside PT-1 or AD-1 review;
+  - continuous monitoring;
+  - a new provider or source kind;
+  - raising an evaluation threshold after a breach.

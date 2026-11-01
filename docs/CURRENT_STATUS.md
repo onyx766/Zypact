@@ -938,9 +938,9 @@ record written at the time the change happens. That did not occur here either.
 
 | Command | Plan cases | Local result on 2026-11-01 |
 |---|---|---|
-| `npm run test:bqi-candidates` | C-01 to C-28 | 224/224 checks passed |
+| `npm run test:bqi-candidates` | C-01 to C-28 | 229/229 checks passed |
 | `npm run test:bqi-selection` | S-01 to S-18 | 81/81 checks passed |
-| `npm run test:bqi-wording` | W-01 to W-11, P-01 to P-04 | 99/99 checks passed |
+| `npm run test:bqi-wording` | W-01 to W-11, P-01 to P-04 | 110/110 checks passed |
 
 These results are after the corrective round authorised on 2026-11-01. A
 review of the first commit (`ed08c3a`) found that approved-wording
@@ -960,6 +960,14 @@ empty after observed normalisation ("???", "!!!") matched. Only a validated
 classification, colliding ids are refused together, and empty wording matches
 nothing. Subcases marked `[R2]` fail against `5bf9473`'s library and pass
 after this correction.
+
+Review of `1c221b5` found two more: founder review could record a buyer's
+statement as `observed`, and `validateCandidate` called without source
+results treated linked sources as valid. Founder review now records only
+`adapted` or `hypothesis`, as the design specifies (`observed` is refused as
+`classification_not_allowed`), and standalone candidate validation validates
+each linked source itself. Subcases marked `[R3]` fail against `1c221b5`'s
+library and pass after this correction.
 
 These three commands are registered in `package.json` but are **not** run by any
 CI workflow. Adding them to CI is a separate decision. With them, `package.json`

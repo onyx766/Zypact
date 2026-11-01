@@ -38,7 +38,9 @@ import { linkedSpan, quotedSpanProblem, validateResearchSet, type ResearchSetVal
 import { isSellerSource, sourceVerification } from "./validate-source";
 import {
   ORIGINS,
+  isEvidenceGrade,
   isOrigin,
+  isWordingClassification,
   type Candidate,
   type ClassificationRule,
   type EvidenceGrade,
@@ -190,15 +192,21 @@ export function classifyApprovedWording(input: ApprovedWordingInput): WordingCla
   return pending(provenance, signals);
 }
 
-/** Classifications a founder review may record. `pending_review` is not one. */
-export const FOUNDER_REVIEW_CLASSIFICATIONS: readonly EvidenceGrade[] = ["observed", "adapted", "hypothesis"];
+/**
+ * Classifications a founder review may record: `adapted` or `hypothesis`
+ * only, as the design specifies for resolving `pending_review`. `observed`
+ * is a known evidence grade but not a founder-review outcome: observed
+ * wording is established only by a validated `verbatim` designation through
+ * `classifyApprovedWording`. `pending_review` is not an outcome either.
+ */
+export const FOUNDER_REVIEW_CLASSIFICATIONS: readonly EvidenceGrade[] = ["adapted", "hypothesis"];
 
 export interface FounderClassificationInput {
   classification: string;
   approvedText: string;
-  /** Buyer-authored sources cited as the verbatim source or the paraphrase basis. */
+  /** Buyer-authored sources cited as the paraphrase basis of an `adapted` entry. */
   sourceIds: readonly string[];
-  /** Required for observed and adapted: the cited source whose status applies. */
+  /** Required for `adapted`: the cited source whose status applies. */
   primarySourceId?: string | null;
   note?: string | null;
   researchSet: ResearchSet;
@@ -213,15 +221,17 @@ export interface FounderClassificationResult {
 
 /**
  * A founder review entry, recorded as a new classification that never
- * alters the first. `adapted` needs a buyer-authored basis and a note;
- * `observed` needs a buyer-authored source whose whole excerpt the exact
- * text matches. Both need an explicit primary source among those.
+ * alters the first. It may record `adapted` (a buyer-authored basis, a note
+ * and an explicit primary source among the cited bases) or `hypothesis`.
+ * Any other known grade or status (`observed`, `pending_review`, an origin)
+ * is refused as `classification_not_allowed`; anything else as
+ * `unknown_grade`.
  */
 export function validateFounderClassification(input: FounderClassificationInput): FounderClassificationResult {
   const refusals: Refusal[] = [];
   const grade = input.classification;
   if (!(FOUNDER_REVIEW_CLASSIFICATIONS as readonly string[]).includes(grade)) {
-    const known = (ORIGINS as readonly string[]).includes(grade) || grade === "pending_review";
+    const known = isEvidenceGrade(grade) || isWordingClassification(grade) || (ORIGINS as readonly string[]).includes(grade);
     refusals.push({ code: known ? "classification_not_allowed" : "unknown_grade", detail: grade });
     return { accepted: false, classification: null, verification: null, refusals };
   }
@@ -243,10 +253,6 @@ export function validateFounderClassification(input: FounderClassificationInput)
     if (buyerSources.length === 0) refusals.push({ code: "adapted_requires_paraphrase_basis" });
     if (typeof input.note !== "string" || input.note.trim().length === 0) refusals.push({ code: "adapted_requires_note" });
     supporting = buyerSources;
-  } else if (grade === "observed") {
-    supporting = buyerSources.filter((s) => isObservedMatch(input.approvedText, s.excerpt));
-    if (buyerSources.length === 0) refusals.push({ code: "observed_requires_verbatim_buyer_source" });
-    else if (supporting.length === 0) refusals.push({ code: "observed_text_does_not_match_source" });
   }
 
   let verification: Verification | null = null;

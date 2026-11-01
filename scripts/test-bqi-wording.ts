@@ -460,12 +460,68 @@ function w06r2(): void {
   const bad = { ...source("dup", OBS_TEXT), excerptSha256: sha256Utf8Hex("tampered") };
   for (const [label, sources] of [["invalid first", [bad, good]], ["valid first", [good, bad]]] as Array<[string, QuestionSource[]]>) {
     const set = withExtra({ sources });
-    const r = validateFounderClassification({ classification: "observed", approvedText: OBS_TEXT, sourceIds: ["dup"], primarySourceId: "dup", researchSet: set });
-    check(`[R2] W-06 founder observed on a set with colliding source ids (${label}): refused`, !r.accepted && r.refusals.some((x) => x.code === "research_set_refused"));
+    // R3: founder review no longer records observed, so this check uses an
+    // otherwise valid adapted entry to keep proving the set-level refusal.
+    const r = validateFounderClassification({ classification: "adapted", approvedText: "How can firms cut approval time?", sourceIds: ["dup"], primarySourceId: "dup", note: "n", researchSet: set });
+    check(`[R2] W-06 founder entry on a set with colliding source ids (${label}): refused`, !r.accepted && r.refusals.some((x) => x.code === "research_set_refused"));
   }
   const tooMany = withExtra({ candidates: [cand("x1", "a?", "hypothesis"), cand("x2", "b?", "hypothesis")] });
   const r2 = validateFounderClassification({ classification: "adapted", approvedText: "How can firms cut approval time?", sourceIds: ["basis"], primarySourceId: "basis", note: "n", researchSet: tooMany });
   check("[R2] W-06 founder entry on a set with too many candidates: refused", !r2.accepted && r2.refusals.some((x) => x.code === "research_set_refused"));
+}
+
+
+// ---------------------------- third review of 1c221b5: regressions ([R3])
+// Expected results are written out by hand from the design (founder review
+// records adapted or hypothesis only) and the independent review findings,
+// not computed with the code under test.
+
+function w06r3(): void {
+  const stmt = statementSet();
+  const statement = validateFounderClassification({ classification: "observed", approvedText: STATEMENT, sourceIds: ["stmt"], primarySourceId: "stmt", researchSet: stmt });
+  check(
+    "[R3] W-06 founder observed for a buyer statement (\"Our approvals take too long\"): refused as classification_not_allowed",
+    !statement.accepted && statement.classification === null && statement.verification === null &&
+      statement.refusals.length === 1 && statement.refusals[0].code === "classification_not_allowed" && statement.refusals[0].detail === "observed",
+    statement.refusals.map((x) => x.code).join(",")
+  );
+  // The reviewer's exact reproduction: a cited buyer-authored source whose
+  // whole excerpt is the statement itself (1c221b5 accepted it as observed).
+  const exact = withExtra({ sources: [source("stmt-only", `${STATEMENT}.`)] });
+  const exactR = validateFounderClassification({ classification: "observed", approvedText: STATEMENT, sourceIds: ["stmt-only"], primarySourceId: "stmt-only", researchSet: exact });
+  check(
+    "[R3] W-06 founder observed citing a source whose excerpt is exactly the statement: refused, never observed/public_verifiable",
+    !exactR.accepted && exactR.classification === null && exactR.verification === null &&
+      exactR.refusals.map((x) => x.code).join() === "classification_not_allowed",
+    `${exactR.accepted} ${exactR.classification} ${exactR.verification} ${exactR.refusals.map((x) => x.code).join(",")}`
+  );
+  const question = validateFounderClassification({ classification: "observed", approvedText: OBS_TEXT, sourceIds: ["pub"], primarySourceId: "pub", researchSet: researchSet() });
+  check(
+    "[R3] W-06 founder observed even for an exact buyer question: refused as classification_not_allowed (path closed, not filtered)",
+    !question.accepted && question.classification === null && question.refusals.map((x) => x.code).join() === "classification_not_allowed",
+    question.refusals.map((x) => x.code).join(",")
+  );
+  const adapted = validateFounderClassification({ classification: "adapted", approvedText: "How can firms cut approval time?", sourceIds: ["stmt"], primarySourceId: "stmt", note: "reworded the statement as a question", researchSet: stmt });
+  check("[R3] W-06 control: founder adapted with basis, primary and note still accepted", adapted.accepted && adapted.classification === "adapted" && adapted.verification === "public_verifiable");
+  const hyp = validateFounderClassification({ classification: "hypothesis", approvedText: STATEMENT, sourceIds: [], researchSet: stmt });
+  check("[R3] W-06 control: founder hypothesis still accepted", hyp.accepted && hyp.classification === "hypothesis" && hyp.verification === null);
+  const viaVerbatim = classifyApprovedWording({ origin: "recommended_edited", approvedText: ` ${OBS_TEXT}`, candidateId: "obs-pub", researchSet: researchSet() });
+  check("[R3] W-06 control: observed still reached through a validated verbatim designation", viaVerbatim.classification === "observed" && viaVerbatim.rule === "exact_source_match" && viaVerbatim.verification === "public_verifiable");
+}
+
+function w07r3(): void {
+  const set = researchSet();
+  const cases: Array<[string, string]> = [
+    ["observed", "classification_not_allowed"],
+    ["pending_review", "classification_not_allowed"],
+    ["recommended_edited", "classification_not_allowed"],
+    ["customer_edited", "unknown_grade"],
+    ["verified", "unknown_grade"],
+  ];
+  for (const [value, code] of cases) {
+    const r = validateFounderClassification({ classification: value, approvedText: OBS_TEXT, sourceIds: ["pub"], primarySourceId: "pub", note: "n", researchSet: set });
+    check(`[R3] W-07 founder review "${value}": refused as ${code}`, !r.accepted && r.refusals.map((x) => x.code).join() === code, r.refusals.map((x) => x.code).join(","));
+  }
 }
 
 // ---------------------------------------------------------------- P cases
@@ -552,7 +608,7 @@ function main(): void {
   const cases: Array<() => void> = [
     // Each [R] function runs right after its case, under the same case header,
     // and in its own try so one failure cannot hide another.
-    w01, w01r, w02, w02r, w03, w03r, w03r2, w04, w04r, w04r2, w05, w06, w06r, w06r2, w07, w08, w09, w10, w11, p01, p02, p03, p04,
+    w01, w01r, w02, w02r, w03, w03r, w03r2, w04, w04r, w04r2, w05, w06, w06r, w06r2, w06r3, w07, w07r3, w08, w09, w10, w11, p01, p02, p03, p04,
   ];
   for (const c of cases) {
     try {

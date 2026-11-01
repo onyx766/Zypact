@@ -125,8 +125,10 @@ export interface SourceEvidence {
 }
 
 /**
- * Validates one candidate against its own links. `sourceValidations`,
- * when given, marks links to refused sources as refused too.
+ * Validates one candidate against its own links. A linked source's
+ * validation is taken from `sourceValidations` when it has an entry for
+ * that source; otherwise the source is validated here. A missing or
+ * incomplete map never makes a source count as valid (fail closed).
  */
 export function validateCandidate(
   candidate: Candidate,
@@ -182,7 +184,8 @@ export function validateCandidate(
       refusals.push({ code: "seller_source_only_as_context", detail: link.sourceId });
       continue;
     }
-    if ((sourceValidations?.get(source.id)?.refusals.length ?? 0) > 0) {
+    const sourceCheck = sourceValidations?.get(source.id) ?? validateSource(source);
+    if (sourceCheck.refusals.length > 0) {
       refusals.push({ code: "linked_source_refused", detail: link.sourceId });
       continue;
     }

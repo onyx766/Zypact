@@ -687,6 +687,38 @@ function c04r2(): void {
   check("[R2] C-04 observed \"???\" quoting \"!!!\": refused", r.codes.includes("observed_text_does_not_match_source") && r.v.verification === null, r.codes.join(","));
 }
 
+// ---------------------------- third review of 1c221b5: regressions ([R3])
+// Expected results are written out by hand, not computed with the code
+// under test: standalone validation must fail closed on linked sources.
+
+function c14r3(): void {
+  const badHash = source("p1", "public_community", SRC_TEXT, { excerptSha256: sha256Utf8Hex("not the excerpt") });
+  const obs = candidate("c1", SRC_TEXT, "observed", { primarySourceId: "p1" });
+  const links = [link("c1", "p1", "verbatim")];
+  const none = validateCandidate(obs, links, [badHash], SITE);
+  check(
+    "[R3] C-14 standalone, no source map, invalid excerpt hash: refused",
+    none.refusals.some((x) => x.code === "linked_source_refused") && none.verification === null && none.sourceVerifications.length === 0,
+    none.refusals.map((x) => x.code).join(",")
+  );
+  const other = source("p2", "public_community", "Unrelated excerpt?");
+  const incomplete = validateCandidate(obs, links, [badHash, other], SITE, new Map([["p2", validateSource(other)]]));
+  check("[R3] C-14 standalone, map missing the linked source's entry: refused", incomplete.refusals.some((x) => x.code === "linked_source_refused") && incomplete.verification === null);
+  const noConfirm = validateCandidate(obs, links, [source("p1", "public_community", SRC_TEXT, { personalDataRemoved: false })], SITE);
+  check("[R3] C-14 standalone, source without personal-data confirmation: refused", noConfirm.refusals.some((x) => x.code === "linked_source_refused"));
+  const custObs = candidate("c1", SRC_TEXT, "observed", { primarySourceId: "m1" });
+  const noAttest = validateCandidate(custObs, [link("c1", "m1", "verbatim")], [source("m1", "customer_material", SRC_TEXT, { customerAttestedAt: null })], SITE);
+  check("[R3] C-14 standalone, customer material without attestation: refused", noAttest.refusals.some((x) => x.code === "linked_source_refused"));
+  const good = source("p1", "public_community", SRC_TEXT);
+  const standalone = validateCandidate(obs, links, [good], SITE);
+  const viaSet = validateResearchSet({ siteContext: SITE, sources: [good], candidates: [obs], links }).candidates.get("c1")!;
+  check(
+    "[R3] C-14 control: a valid source without a map gives the same result as the research-set path",
+    standalone.refusals.length === 0 && standalone.verification === "public_verifiable" &&
+      JSON.stringify(standalone) === JSON.stringify(viaSet)
+  );
+}
+
 function c14r2(): void {
   // Two sources share an id; one has a wrong excerpt hash. Both orders.
   const good = source("s", "public_community", SRC_TEXT);
@@ -708,7 +740,7 @@ function main(): void {
     // Each [R] function runs right after its case, under the same case header,
     // and in its own try so one failure cannot hide another.
     c01, c02, c02r, c03, c04, c04r, c04r2, c05, c06, c06r, c07, c08, c09, c10,
-    c11, c12, c13, c14, c14r2, c15, c16, c17, c18, c19, c20, c20r, c21, c22, c23, c24, c25, c26, c27, c28,
+    c11, c12, c13, c14, c14r2, c14r3, c15, c16, c17, c18, c19, c20, c20r, c21, c22, c23, c24, c25, c26, c27, c28,
   ];
   for (const c of cases) {
     try {

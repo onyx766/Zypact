@@ -245,6 +245,24 @@ function detectors(sql: string): Array<[string, string, boolean, string]> {
       && f1.search(/pg_advisory_xact_lock/) < f1.search(/where w\.idempotency_key = p_idempotency_key/));
   add("QS-24", "F1 reports a key conflict as a status, not by catching", /'IDEMPOTENCY_KEY_CONFLICT'::text/.test(f1));
 
+  // ── R6: invitation lock and decision-point clock ──
+  const iSes = f4.search(/from public\.question_review_sessions s\s+where s\.token_hash = [^;]*\s+for update;/);
+  const iInv = f4.search(/from public\.question_review_invitations i\s+where i\.id = v_session\.invitation_id\s+for share;/);
+  const iSet = f4.search(/from public\.question_research_sets rs\s+where rs\.id = v_session\.research_set_id and rs\.project_id = v_session\.project_id\s+for update;/);
+  const iClock = f4.indexOf("v_check_at := clock_timestamp();");
+  const iCheck = f4.indexOf("or v_session.absolute_expires_at <= v_check_at");
+  add("QS-25", "F4 locks the invitation FOR SHARE", iInv > 0);
+  add("QS-25", "lock order is session, then invitation, then research set", iSes > 0 && iSes < iInv && iInv < iSet, `${iSes} ${iInv} ${iSet}`);
+  add("QS-25", "one clock_timestamp() is taken after all three locks and before every check",
+    iClock > iSet && iCheck > iClock && (f4.match(/clock_timestamp\(\)/g) ?? []).length === 1);
+  add("QS-25", "F4 never uses now() (transaction start) for any decision or timestamp", !/\bnow\(\)/.test(f4));
+  add("QS-25", "absolute, idle and invitation expiry all use the decision instant",
+    /v_session\.absolute_expires_at <= v_check_at/.test(f4) && /v_session\.last_seen_at <= v_check_at - interval '15 minutes'/.test(f4)
+      && /v_invitation\.expires_at <= v_check_at/.test(f4));
+  add("QS-25", "approved_at and last_seen_at are the decision instant",
+    /v_version_ids, v_hashes, v_check_at, 'review_invitation'/.test(f4)
+      && (f4.match(/set last_seen_at = greatest\(last_seen_at, v_check_at\)/g) ?? []).length === 3);
+
   return out;
 }
 
@@ -367,6 +385,11 @@ function detectors(sql: string): Array<[string, string, boolean, string]> {
     ["a globally unique key again", "  idempotency_key        text not null check (btrim(idempotency_key) <> ''),", "  idempotency_key        text not null unique check (btrim(idempotency_key) <> ''),", "scoped to the research set"],
     ["catching unique_violation in F7", "  returning id into v_member_id;\n\n  return query select 'ADDED'::text, v_member_id;", "  returning id into v_member_id;\n  exception when unique_violation then null;\n\n  return query select 'ADDED'::text, v_member_id;", "catches unique_violation"],
     ["dropping F1's advisory lock", "  perform pg_advisory_xact_lock(hashtextextended('zypact.q2p.create_workspace:' || p_idempotency_key, 0));\n", "", "advisory lock before its key lookup"],
+    ["dropping the invitation lock", "where i.id = v_session.invitation_id\n   for share;", "where i.id = v_session.invitation_id;", "F4 locks the invitation FOR SHARE"],
+    ["locking the research set before the invitation", "  select i.* into v_invitation from public.question_review_invitations i\n   where i.id = v_session.invitation_id\n   for share;\n", "", "lock order is session, then invitation"],
+    ["judging expiry by transaction start", "  v_check_at := clock_timestamp();", "  v_check_at := now();", "one clock_timestamp() is taken after all three locks"],
+    ["one expiry check reverting to now()", "or v_invitation.expires_at <= v_check_at", "or v_invitation.expires_at <= now()", "never uses now()"],
+    ["approved_at defaulting to transaction start", "v_version_ids, v_hashes, v_check_at, 'review_invitation'", "v_version_ids, v_hashes, now(), 'review_invitation'", "approved_at and last_seen_at are the decision instant"],
     ["adding an enrolment table (Q2′-1b)", "create table public.question_sources (", "create table public.bqi_enrollments (\n  id uuid\n);\n\ncreate table public.question_sources (", "no PG-9, 0082 or Q2′-1b object"],
   ];
   for (const [label, needle, replacement, detectorFragment] of mutations) {

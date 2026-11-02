@@ -1465,6 +1465,17 @@ $$;
 -- research set is the session's; the request's current email HMAC and key id
 -- are the invitation's. Replays require all of this too.
 --
+-- Locks and time (R6): session FOR UPDATE, then invitation FOR SHARE, then
+-- research set FOR UPDATE — always in that order. Every expiry and idle check
+-- uses one clock_timestamp() taken after all three locks are held (never the
+-- transaction start), and that same instant is the approval's approved_at and
+-- the session's new last_seen_at. A revocation committed before the locks is
+-- seen (READ COMMITTED) or fails the call with 40001 (REPEATABLE READ,
+-- SERIALIZABLE); a revocation attempted while an authorised approval holds
+-- the locks waits for it. lock_timeout (5 s) fails a long wait with 55P03.
+-- Future revocation or reissue paths that touch both rows must lock the
+-- session before the invitation, or PostgreSQL may abort one side with 40P01.
+--
 -- Idempotency (D-021 form; no exception absorption), only after authorisation:
 --   the request fingerprint is a canonical jsonb of the research set, the
 --   consent text version and hash, and the set of items (origin, candidate,
@@ -1544,6 +1555,7 @@ declare
   v_win integer;
   v_rationale text;
   v_refuse constant text := 'question_set_refused';
+  v_check_at timestamptz;
 begin
   -- Authorisation: the session token, hashed with its purpose label.
   if p_session_token is null or length(p_session_token) < 32 then
@@ -1557,15 +1569,34 @@ begin
     raise exception using errcode = '42501', message = v_refuse;
   end if;
 
+  -- The invitation is locked FOR SHARE, so a revocation (an UPDATE of this
+  -- row) either committed before this lock — and is seen, or, under
+  -- REPEATABLE READ / SERIALIZABLE with an older snapshot, raises 40001 — or
+  -- waits until this approval has committed. Lock order is always session,
+  -- then invitation, then research set; nothing here locks them in another
+  -- order.
   select i.* into v_invitation from public.question_review_invitations i
-   where i.id = v_session.invitation_id;
+   where i.id = v_session.invitation_id
+   for share;
 
-  if v_session.revoked_at is not null
-     or v_session.absolute_expires_at <= now()
-     or v_session.last_seen_at <= now() - interval '15 minutes'
+  -- Serialise approvals of this research set (locked before the decision, so
+  -- expiry is judged after every wait).
+  select rs.* into v_set from public.question_research_sets rs
+   where rs.id = v_session.research_set_id and rs.project_id = v_session.project_id
+   for update;
+
+  -- The authorisation decision point: one wall-clock instant, taken after all
+  -- three locks are held, used for every expiry and idle check, for the
+  -- session's last_seen_at, and as the approval timestamp.
+  v_check_at := clock_timestamp();
+
+  if v_set.id is null
+     or v_session.revoked_at is not null
+     or v_session.absolute_expires_at <= v_check_at
+     or v_session.last_seen_at <= v_check_at - interval '15 minutes'
      or v_invitation.revoked_at is not null
      or v_invitation.superseded_by is not null
-     or v_invitation.expires_at <= now()
+     or v_invitation.expires_at <= v_check_at
      or v_invitation.exchanged_at is null
      or v_invitation.email_verified_at is null
      -- Scope is the session's, never the caller's.
@@ -1573,14 +1604,6 @@ begin
      -- The request's current address must still be the invited one.
      or p_current_email_hmac is distinct from v_invitation.email_hmac
      or p_current_email_hmac_key_id is distinct from v_invitation.email_hmac_key_id then
-    raise exception using errcode = '42501', message = v_refuse;
-  end if;
-
-  -- Serialise approvals of this research set.
-  select rs.* into v_set from public.question_research_sets rs
-   where rs.id = v_session.research_set_id and rs.project_id = v_session.project_id
-   for update;
-  if not found then
     raise exception using errcode = '42501', message = v_refuse;
   end if;
 
@@ -1660,7 +1683,7 @@ begin
       return query select 'IDEMPOTENCY_KEY_CONFLICT'::text, null::uuid, null::uuid[];
       return;
     end if;
-    update public.question_review_sessions set last_seen_at = greatest(last_seen_at, now())
+    update public.question_review_sessions set last_seen_at = greatest(last_seen_at, v_check_at)
      where id = v_session.id;
     return query select 'ALREADY_APPROVED'::text, v_existing.id, v_existing.approved_version_ids;
     return;
@@ -1671,7 +1694,7 @@ begin
       return query select 'SET_ALREADY_APPROVED'::text, null::uuid, null::uuid[];
       return;
     end if;
-    update public.question_review_sessions set last_seen_at = greatest(last_seen_at, now())
+    update public.question_review_sessions set last_seen_at = greatest(last_seen_at, v_check_at)
      where id = v_session.id;
     return query select 'ALREADY_APPROVED'::text, v_existing.id, v_existing.approved_version_ids;
     return;
@@ -1679,14 +1702,14 @@ begin
 
   insert into public.approval_records (
     id, workspace_id, project_id, snapshot_request_id, research_set_id, action_type,
-    approved_version_ids, prompt_hashes, session_type, session_id,
+    approved_version_ids, prompt_hashes, approved_at, session_type, session_id,
     verified_email_hmac, email_hmac_key_id, consent_text_version, consent_text_sha256,
     idempotency_key, set_fingerprint,
     actor_type, actor_invitation_id, actor_session_id
   ) values (
     v_record_id, v_session.workspace_id, v_session.project_id, v_session.snapshot_request_id, v_set.id,
     'approve_buyer_question_set',
-    v_version_ids, v_hashes, 'review_invitation', v_session.id,
+    v_version_ids, v_hashes, v_check_at, 'review_invitation', v_session.id,
     v_invitation.email_hmac, v_invitation.email_hmac_key_id, p_consent_text_version, p_consent_text_sha256,
     p_idempotency_key, v_fp,
     'invitation_holder', v_invitation.id, v_session.id
@@ -1772,7 +1795,7 @@ begin
     );
   end loop;
 
-  update public.question_review_sessions set last_seen_at = greatest(last_seen_at, now())
+  update public.question_review_sessions set last_seen_at = greatest(last_seen_at, v_check_at)
    where id = v_session.id;
 
   return query select 'APPROVED'::text, v_record_id, v_version_ids;

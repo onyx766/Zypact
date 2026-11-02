@@ -2282,6 +2282,187 @@ assert "QR-38w (weakened, no version row). duplicate add, READ COMMITTED: S2 fai
 r38c="$(qr38 public.add_workspace_member 'read committed' no "${ACCT_X}")"
 assert "QR-38c. F7, duplicate add, READ COMMITTED: the same (workspace, account) membership is returned" "${r38c}" "ALREADY_MEMBER|blocked|1"
 
+# ── Q2′-1 R6 — invitation lock and decision-point clock ─────────────────
+# Approval SQL for one review's own observed candidate, through <function>.
+r6_call() { # <review json> <function> [token field]
+  printf "select status from %s('%s', '%s', jsonb_build_array(jsonb_build_object('origin','recommended_unchanged','candidate_id','%s','text','%s','prompt_hash',public._q2p_sha256_hex('%s'))), 'r6-%s', 'consent-v1', repeat('c',64), '%s', 'k1');" \
+    "$2" "$(q2p_json "$1" "${3:-ses_token}")" "$(q2p_json "$1" rs)" "$(q2p_json "$1" c_obs)" "${Q2P_TEXT}" "${Q2P_TEXT}" "$(q2p_json "$1" rs)" "$(q2p_json "$1" hmac)"
+}
+r6_out() { q2p_out "$1" | grep -oE '^(APPROVED|ERROR:  [0-9A-Z]{5})$' | tail -n1; }
+r6_approvals() { q2p_sql "select count(*) from public.approval_records where research_set_id='$(q2p_json "$1" rs)';"; }
+r6_review() { q2p_sql "select level2_fixture.make_review('${WS1}', '${PROJ1}', '${REQ1}', '$1');"; }
+r6_revoke_inv() { echo "update public.question_review_invitations set revoked_at = clock_timestamp() where id = '$(q2p_json "$1" inv)';"; }
+
+# R6-A — revocation committed BEFORE authorisation, stale snapshot (snapshot taken first).
+r6_stale() { # <isolation> <function> → "outcome|approvals"
+  local R; R="$(r6_review "r6a-${1// /_}-${2##*.}")"
+  q2p_open A 7
+  q2p_send 7 "begin isolation level $1; select 1;"
+  q2p_idle_in_tx A || echo "barrier A failed" >&2
+  q2p_sql "$(r6_revoke_inv "${R}")" >/dev/null
+  q2p_send 7 "$(r6_call "${R}" "$2")"
+  q2p_send 7 "commit;"
+  q2p_settled A || true
+  q2p_close A 7
+  echo "$(r6_out A)|$(r6_approvals "${R}")"
+}
+assert "R6-A. READ COMMITTED, revocation committed before the call (transaction opened earlier): refused, nothing written" \
+  "$(r6_stale 'read committed' public.approve_buyer_question_set)" "ERROR:  42501|0"
+assert "R6-A. REPEATABLE READ, stale snapshot: 40001, nothing written" \
+  "$(r6_stale 'repeatable read' public.approve_buyer_question_set)" "ERROR:  40001|0"
+assert "R6-A. SERIALIZABLE, stale snapshot: 40001, nothing written" \
+  "$(r6_stale 'serializable' public.approve_buyer_question_set)" "ERROR:  40001|0"
+assert "R6-A (weakened, no invitation lock). REPEATABLE READ stale snapshot: APPROVED despite the committed revocation" \
+  "$(r6_stale 'repeatable read' level2_fixture.approve_set_no_invitation_lock)" "APPROVED|1"
+R6N="$(r6_review r6a-new)"; q2p_sql "$(r6_revoke_inv "${R6N}")" >/dev/null
+assert "R6-A. a new transaction after the revocation: refused" \
+  "$(sqlstate_as_role service_role "perform public.approve_buyer_question_set('$(q2p_json "${R6N}" ses_token)', '$(q2p_json "${R6N}" rs)', jsonb_build_array(jsonb_build_object('origin','recommended_unchanged','candidate_id','$(q2p_json "${R6N}" c_obs)','text','${Q2P_TEXT}','prompt_hash',public._q2p_sha256_hex('${Q2P_TEXT}'))), 'r6-new', 'consent-v1', repeat('c',64), '$(q2p_json "${R6N}" hmac)', 'k1');")" "42501"
+
+# R6-B — a revocation in progress (uncommitted) when the approval starts; it commits while the approval waits.
+r6_concurrent() { # <isolation> <function> → "approval waited|outcome|approvals"
+  local R waited; R="$(r6_review "r6b-${1// /_}-${2##*.}")"
+  q2p_open V 8; q2p_open A 7
+  q2p_send 8 "begin; $(r6_revoke_inv "${R}")"
+  q2p_idle_in_tx V || echo "barrier V failed" >&2
+  q2p_send 7 "begin isolation level $1; $(r6_call "${R}" "$2")"
+  if q2p_lock_wait A; then waited=waited; else waited=not_waited; fi
+  q2p_send 8 "commit;"
+  q2p_settled A || true
+  q2p_send 7 "commit;"
+  q2p_close V 8; q2p_close A 7
+  echo "${waited}|$(r6_out A)|$(r6_approvals "${R}")"
+}
+assert "R6-B. READ COMMITTED: the approval waits on the invitation, then sees the revocation: refused" \
+  "$(r6_concurrent 'read committed' public.approve_buyer_question_set)" "waited|ERROR:  42501|0"
+assert "R6-B. REPEATABLE READ: the approval waits, then 40001" \
+  "$(r6_concurrent 'repeatable read' public.approve_buyer_question_set)" "waited|ERROR:  40001|0"
+assert "R6-B. SERIALIZABLE: the approval waits, then 40001" \
+  "$(r6_concurrent 'serializable' public.approve_buyer_question_set)" "waited|ERROR:  40001|0"
+assert "R6-B (weakened, no invitation lock). READ COMMITTED: the approval does not wait and is APPROVED from the pre-revocation row" \
+  "$(r6_concurrent 'read committed' level2_fixture.approve_set_no_invitation_lock)" "not_waited|APPROVED|1"
+
+# R6-C — a revocation attempted while an AUTHORISED approval is in flight (paused after its decision).
+r6_inflight() { # <invitation|session> <function> → "revoker|outcome|approved before revoked (commit order)"
+  local R rb rev; R="$(r6_review "r6c-$1-${2##*.}")"
+  q2p_open A 7; q2p_open V 8
+  q2p_send 7 "set l2.pause = 'on'; $(r6_call "${R}" "$2")"
+  q2p_wait "select exists(select 1 from pg_stat_activity where application_name='q2p_A' and wait_event='PgSleep');" || echo "barrier A failed" >&2
+  if [[ "$1" == invitation ]]; then
+    q2p_send 8 "$(r6_revoke_inv "${R}")"
+    rev="(select revoked_at from public.question_review_invitations where id='$(q2p_json "${R}" inv)')"
+  else
+    q2p_send 8 "update public.question_review_sessions set revoked_at = clock_timestamp() where id = '$(q2p_json "${R}" ses)';"
+    rev="(select revoked_at from public.question_review_sessions where id='$(q2p_json "${R}" ses)')"
+  fi
+  rb=undetermined
+  for _ in $(seq 1 40); do
+    if [[ "$(q2p_sql "select exists(select 1 from pg_stat_activity where application_name='q2p_V' and wait_event_type='Lock');")" == t ]]; then rb=revoker_waits; break; fi
+    if [[ "$(q2p_sql "select exists(select 1 from pg_stat_activity where application_name='q2p_V' and state='idle');")" == t ]]; then rb=revoker_not_blocked; break; fi
+    sleep 0.05
+  done
+  q2p_settled A || true; q2p_settled V || true
+  q2p_close A 7; q2p_close V 8
+  echo "${rb}|$(r6_out A)|$(q2p_sql "select coalesce((select (a.approved_at < ${rev})::text from public.approval_records a where a.research_set_id='$(q2p_json "${R}" rs)'), 'none');")"
+}
+assert "R6-C. invitation revoked during an authorised approval: the revocation waits; approval first, then revocation" \
+  "$(r6_inflight invitation public.approve_buyer_question_set)" "revoker_waits|APPROVED|true"
+assert "R6-C. session revoked during an authorised approval: the revocation waits (unchanged)" \
+  "$(r6_inflight session public.approve_buyer_question_set)" "revoker_waits|APPROVED|true"
+assert "R6-C (weakened, no invitation lock). the invitation revocation is not blocked and commits during the approval" \
+  "$(r6_inflight invitation level2_fixture.approve_set_no_invitation_lock | cut -d'|' -f1,2)" "revoker_not_blocked|APPROVED"
+
+# R6-D — expiry during a long transaction (the transaction began before expiry).
+r6_long() { # <kind> <function> → "outcome|approvals"
+  local R; R="$(q2p_sql "select level2_fixture.make_expiring_review('${WS1}', '${PROJ1}', '${REQ1}', 'r6d-$1-${2##*.}', '$1', interval '3 seconds');")"
+  q2p_open A 7
+  q2p_send 7 "begin; select 1;"
+  q2p_idle_in_tx A || true
+  q2p_send 7 "select pg_sleep(4);"
+  q2p_send 7 "$(r6_call "${R}" "$2" exp_token)"
+  q2p_send 7 "commit;"
+  q2p_settled A || true
+  q2p_wait "select not exists(select 1 from pg_stat_activity where application_name='q2p_A' and state <> 'idle');" || true
+  q2p_close A 7
+  echo "$(r6_out A)|$(r6_approvals "${R}")"
+}
+assert "R6-D. absolute expiry passes during a long transaction: refused at the decision point" "$(r6_long absolute public.approve_buyer_question_set)" "ERROR:  42501|0"
+assert "R6-D. idle limit passes during a long transaction: refused" "$(r6_long idle public.approve_buyer_question_set)" "ERROR:  42501|0"
+assert "R6-D. invitation (and its session) expire during a long transaction: refused" "$(r6_long invitation public.approve_buyer_question_set)" "ERROR:  42501|0"
+assert "R6-D (weakened, transaction-start clock). absolute expiry during a long transaction: APPROVED" \
+  "$(r6_long absolute level2_fixture.approve_set_transaction_clock)" "APPROVED|1"
+assert "R6-D (weakened, transaction-start clock). idle limit during a long transaction: APPROVED" \
+  "$(r6_long idle level2_fixture.approve_set_transaction_clock)" "APPROVED|1"
+
+# R6-E — expiry while waiting for a lock (the session or the research set is held past expiry).
+r6_lockwait() { # <session|research_set> <function> → "outcome|approvals"
+  local R lockq; R="$(q2p_sql "select level2_fixture.make_expiring_review('${WS1}', '${PROJ1}', '${REQ1}', 'r6e-$1-${2##*.}', 'absolute', interval '2 seconds');")"
+  if [[ "$1" == session ]]; then
+    lockq="select 1 from public.question_review_sessions where token_hash = public._q2p_token_hash('zypact.question_review_session.v1', '$(q2p_json "${R}" exp_token)') for update;"
+  else
+    lockq="select 1 from public.question_research_sets where id = '$(q2p_json "${R}" rs)' for update;"
+  fi
+  q2p_open H 8; q2p_open A 7
+  q2p_send 8 "begin; ${lockq}"
+  q2p_idle_in_tx H || true
+  q2p_send 7 "$(r6_call "${R}" "$2" exp_token)"
+  q2p_lock_wait A || echo "barrier A failed" >&2
+  q2p_send 8 "select pg_sleep(3); commit;"
+  q2p_settled A || true
+  q2p_wait "select not exists(select 1 from pg_stat_activity where application_name in ('q2p_A','q2p_H') and state <> 'idle');" || true
+  q2p_close H 8; q2p_close A 7
+  echo "$(r6_out A)|$(r6_approvals "${R}")"
+}
+assert "R6-E. expiry passes while the approval waits for the session lock: refused after the wait" "$(r6_lockwait session public.approve_buyer_question_set)" "ERROR:  42501|0"
+assert "R6-E. expiry passes while the approval waits for the research-set lock: refused after the wait" "$(r6_lockwait research_set public.approve_buyer_question_set)" "ERROR:  42501|0"
+assert "R6-E (weakened, transaction-start clock). expiry during the session-lock wait: APPROVED" \
+  "$(r6_lockwait session level2_fixture.approve_set_transaction_clock)" "APPROVED|1"
+
+# R6-F — lock order and deadlock: a revoke-all transaction in the WRONG order (invitation, then
+# session) against an approval (session, then invitation) deadlocks; PostgreSQL aborts one side.
+# Fail closed: never both a committed revocation and an approval that saw an unrevoked row.
+R6F="$(r6_review r6f-deadlock)"
+q2p_open V 8; q2p_open A 7
+q2p_send 8 "begin; $(r6_revoke_inv "${R6F}")"
+q2p_idle_in_tx V || true
+q2p_send 7 "$(r6_call "${R6F}" public.approve_buyer_question_set)"
+q2p_lock_wait A || echo "barrier A failed" >&2
+q2p_send 8 "update public.question_review_sessions set revoked_at = clock_timestamp() where id = '$(q2p_json "${R6F}" ses)'; commit;"
+q2p_settled A || true; q2p_settled V || true
+q2p_wait "select not exists(select 1 from pg_stat_activity where application_name in ('q2p_A','q2p_V') and state <> 'idle');" || true
+q2p_close V 8; q2p_close A 7
+R6F_DL="$(cat "${Q2P_DIR}/A.out" "${Q2P_DIR}/V.out" | grep -c 'ERROR:  40P01')"
+R6F_APPR="$(r6_approvals "${R6F}")"
+R6F_REV="$(q2p_sql "select (revoked_at is not null)::text from public.question_review_invitations where id='$(q2p_json "${R6F}" inv)';")"
+assert "R6-F. wrong-order revoke-all vs approval: exactly one side aborted with 40P01" "${R6F_DL}" "1"
+assert "R6-F. fail-closed: either the approval or the revocation took effect, never both" \
+  "$([[ ( "${R6F_APPR}" == 1 && "${R6F_REV}" == false ) || ( "${R6F_APPR}" == 0 && "${R6F_REV}" == true ) ]] && echo consistent || echo "approvals=${R6F_APPR} revoked=${R6F_REV}")" "consistent"
+# The documented order (session, then invitation) never deadlocks: the approval waits, then is refused.
+R6G="$(r6_review r6g-order)"
+q2p_open V 8; q2p_open A 7
+q2p_send 8 "begin; update public.question_review_sessions set revoked_at = clock_timestamp() where id = '$(q2p_json "${R6G}" ses)';"
+q2p_idle_in_tx V || true
+q2p_send 7 "$(r6_call "${R6G}" public.approve_buyer_question_set)"
+q2p_lock_wait A || echo "barrier A failed" >&2
+q2p_send 8 "$(r6_revoke_inv "${R6G}") commit;"
+q2p_settled A || true; q2p_settled V || true
+q2p_close V 8; q2p_close A 7
+assert "R6-G. revoke-all in the documented order (session, then invitation): no deadlock; approval refused" \
+  "$(cat "${Q2P_DIR}/A.out" "${Q2P_DIR}/V.out" | grep -c 'ERROR:  40P01')|$(r6_out A)|$(r6_approvals "${R6G}")" "0|ERROR:  42501|0"
+
+# R6-H — the approval timestamp is the decision instant (not the transaction start).
+R6H="$(r6_review r6h-time)"
+q2p_open A 7
+q2p_send 7 "begin; select 1;"
+q2p_idle_in_tx A || true
+q2p_send 7 "select pg_sleep(2); $(r6_call "${R6H}" public.approve_buyer_question_set) select (approved_at > now() + interval '1 second')::text from public.approval_records where research_set_id = '$(q2p_json "${R6H}" rs)'; commit;"
+q2p_settled A || true
+q2p_wait "select not exists(select 1 from pg_stat_activity where application_name='q2p_A' and state <> 'idle');" || true
+q2p_close A 7
+assert "R6-H. approved_at is the decision instant, after a 2 s delay inside the transaction (not now())" \
+  "$(q2p_out A | grep -E '^(true|false)$' | tail -n1)" "true"
+assert "R6-H. the session's last_seen_at equals the approval's approved_at" \
+  "$(q2p_sql "select (s.last_seen_at = a.approved_at)::text from public.approval_records a join public.question_review_sessions s on s.id = a.session_id where a.research_set_id = '$(q2p_json "${R6H}" rs)';")" "true"
+
 # QR-39 — no unintended writes to anything that existed before Q2′-1.
 r39="$(q2p_sql "select level2_fixture.verify_baseline();")"
 assert "QR-39. baseline captured over every pre-existing table" "${Q2P_BASELINE_TABLES}" \

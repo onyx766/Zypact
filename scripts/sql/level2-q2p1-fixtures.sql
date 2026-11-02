@@ -493,3 +493,87 @@ begin
   return missing || '|' || array_to_string(grown, ',');
 end;
 $$;
+
+-- ── R6: invitation lock and decision-point clock ──────────────────────
+
+-- Weakened copies of F4, one textual change each.
+do $w$
+declare v text;
+begin
+  v := pg_get_functiondef('public.approve_buyer_question_set(text,uuid,jsonb,text,text,text,text,text)'::regprocedure);
+  if strpos(v, E'where i.id = v_session.invitation_id\n   for share;') = 0 then raise exception 'weak R6a: anchor missing'; end if;
+  v := replace(v, E'where i.id = v_session.invitation_id\n   for share;', 'where i.id = v_session.invitation_id;');
+  v := replace(v, 'FUNCTION public.approve_buyer_question_set(', 'FUNCTION level2_fixture.approve_set_no_invitation_lock(');
+  execute v;
+
+  v := pg_get_functiondef('public.approve_buyer_question_set(text,uuid,jsonb,text,text,text,text,text)'::regprocedure);
+  if strpos(v, 'v_check_at := clock_timestamp();') = 0 then raise exception 'weak R6b: anchor missing'; end if;
+  v := replace(v, 'v_check_at := clock_timestamp();', 'v_check_at := now();');
+  v := replace(v, 'FUNCTION public.approve_buyer_question_set(', 'FUNCTION level2_fixture.approve_set_transaction_clock(');
+  execute v;
+end;
+$w$;
+
+-- Pause an approval AFTER its authorisation decision (its locks held): when
+-- l2.pause = 'on', the first wording classification insert sleeps 3 s.
+create function level2_fixture.pause_after_authorisation()
+returns trigger
+language plpgsql
+as $$
+begin
+  if current_setting('l2.pause', true) = 'on' then
+    perform pg_sleep(3);
+  end if;
+  return new;
+end;
+$$;
+create trigger l2_pause_after_authorisation
+  before insert on public.approved_wording_classifications
+  for each row execute function level2_fixture.pause_after_authorisation();
+
+-- A reviewable research set whose session and invitation expire p_in from
+-- now (wall clock); the idle variant leaves the session p_idle_left before
+-- its 15-minute idle limit.
+create function level2_fixture.make_expiring_review(p_ws uuid, p_project uuid, p_request uuid, p_label text,
+                                                    p_kind text, p_in interval)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  r jsonb := level2_fixture.make_review(p_ws, p_project, p_request, p_label);
+  c timestamptz := clock_timestamp();
+  tok text := rpad('exp-' || p_label || '-', 48, 'e');
+begin
+  if p_kind = 'absolute' then
+    insert into public.question_review_sessions (invitation_id, workspace_id, project_id, snapshot_request_id, research_set_id,
+      token_hash, absolute_expires_at, last_seen_at, created_at, actor_type, rule_id, rule_version)
+    select i.id, i.workspace_id, i.project_id, i.snapshot_request_id, i.research_set_id,
+           public._q2p_token_hash('zypact.question_review_session.v1', tok), c + p_in, c, c, 'system', 'invitation_exchange', 'v1'
+      from public.question_review_invitations i where i.id = (r ->> 'inv')::uuid;
+  elsif p_kind = 'idle' then
+    insert into public.question_review_sessions (invitation_id, workspace_id, project_id, snapshot_request_id, research_set_id,
+      token_hash, absolute_expires_at, last_seen_at, created_at, actor_type, rule_id, rule_version)
+    select i.id, i.workspace_id, i.project_id, i.snapshot_request_id, i.research_set_id,
+           public._q2p_token_hash('zypact.question_review_session.v1', tok),
+           c + interval '10 minutes', c - interval '15 minutes' + p_in, c - interval '20 minutes', 'system', 'invitation_exchange', 'v1'
+      from public.question_review_invitations i where i.id = (r ->> 'inv')::uuid;
+  elsif p_kind = 'invitation' then
+    -- A second invitation for the same set, expiring p_in from now, with a
+    -- session that expires with it (a session may not outlive its invitation).
+    insert into public.question_review_invitations (workspace_id, project_id, snapshot_request_id, research_set_id,
+      email_hmac, email_hmac_key_id, email_verified_at, token_hash, expires_at, exchanged_at, created_at, actor_type, actor_operator_id)
+    values (p_ws, p_project, p_request, (r ->> 'rs')::uuid, r ->> 'hmac', 'k1', c,
+      public._q2p_token_hash('zypact.question_review_invitation.v1', 'expinv-' || p_label),
+      c + p_in, c, c - interval '7 days' + p_in + interval '1 second', 'founder', '00000000-0000-4000-8000-0000000000f0');
+    insert into public.question_review_sessions (invitation_id, workspace_id, project_id, snapshot_request_id, research_set_id,
+      token_hash, absolute_expires_at, last_seen_at, created_at, actor_type, rule_id, rule_version)
+    select i.id, i.workspace_id, i.project_id, i.snapshot_request_id, i.research_set_id,
+           public._q2p_token_hash('zypact.question_review_session.v1', tok), c + p_in, c, c, 'system', 'invitation_exchange', 'v1'
+      from public.question_review_invitations i
+     where i.token_hash = public._q2p_token_hash('zypact.question_review_invitation.v1', 'expinv-' || p_label);
+  end if;
+  return r || jsonb_build_object('exp_token', tok);
+end;
+$$;

@@ -10,8 +10,33 @@ import "./landing-v1.css";
  * scripts/test-landing-page.ts, which cannot require a stylesheet.
  */
 import "./tailwind.css";
+/**
+ * The landing page's own stylesheets. Imported here, not from the page, for
+ * the same reason as tailwind.css above; every selector in them is scoped
+ * under `.lx`, which only app/page.tsx renders, so no other route is touched.
+ */
+import "@/components/landing/styles/base.css";
+import "@/components/landing/styles/hero.css";
+import "@/components/landing/styles/story.css";
+import "@/components/landing/styles/evidence.css";
+import "@/components/landing/styles/outcomes.css";
+import "@/components/landing/styles/chrome.css";
+
+import { Newsreader } from "next/font/google";
 
 import { CANONICAL_SITE_URL } from "@/lib/seo/site";
+
+/**
+ * Display serif for the landing headlines, self-hosted by next/font. It only
+ * defines `--font-display` on <html>; nothing reads that variable outside the
+ * `.lx` landing scope, so other routes render exactly as before.
+ */
+const display = Newsreader({
+  subsets: ["latin"],
+  style: ["normal"],
+  variable: "--font-display",
+  display: "swap",
+});
 
 /**
  * Site-wide defaults for every page that does not state its own.
@@ -57,7 +82,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" className={display.variable}>
       <body>{children}</body>
     </html>
   );

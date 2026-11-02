@@ -1,19 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { Menu, X } from "lucide-react";
+import { ArrowRight, Menu, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ZypactWordmark } from "@/components/marketing/zypact-mark";
 
+// Root-relative, because /about renders this header too.
 const navLinks = [
-  { label: "About", href: "/about" },
-  { label: "Method", href: "/method" },
-  { label: "How it works", href: "#how-it-works" },
-  { label: "What you get", href: "#features" },
-  { label: "Evidence", href: "#evidence" },
-  { label: "Scope", href: "#scope" },
-  { label: "FAQ", href: "#faq" },
+  { label: "How it works", href: "/#how-it-works", spy: "how-it-works" },
+  { label: "Method", href: "/#method", spy: "method" },
+  { label: "Evidence", href: "/#evidence", spy: "evidence" },
+  { label: "Reports", href: "/#reports", spy: "reports" },
+  { label: "FAQ", href: "/#faq", spy: "faq" },
 ] as const;
 
 /**
@@ -25,7 +24,10 @@ export function SiteHeader() {
   const [open, setOpen] = useState(false);
 
   return (
-    <header className="sticky top-0 z-50 border-b border-border/60 bg-background/80 backdrop-blur-md">
+    <header
+      data-lx-header
+      className="lx-header sticky top-0 z-50 border-b border-border/60 bg-background/80 backdrop-blur-md"
+    >
       <div className="shell flex h-[64px] items-center justify-between gap-6 sm:h-[68px] sm:gap-8">
         <div className="flex items-center gap-8 lg:gap-10">
           <ZypactWordmark
@@ -40,7 +42,8 @@ export function SiteHeader() {
               <a
                 key={link.href}
                 href={link.href}
-                className="text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+                data-spy={link.spy}
+                className="lx-header__link text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
               >
                 {link.label}
               </a>
@@ -55,8 +58,15 @@ export function SiteHeader() {
           customers through their own secure report link instead.
         */}
         <div className="flex items-center gap-2 sm:gap-2.5">
-          <Button asChild size="sm" className="rounded-full px-4">
-            <a href="/scan">Request demo</a>
+          <Button asChild size="sm" className="lx-header__cta rounded-full px-4">
+            <a href="/scan">
+              Request demo
+              <ArrowRight
+                className="ml-1.5 h-3.5 w-3.5"
+                strokeWidth={2}
+                aria-hidden="true"
+              />
+            </a>
           </Button>
           <button
             type="button"
@@ -93,6 +103,8 @@ export function SiteHeader() {
           ))}
         </nav>
       </div>
+
+      <span className="lx-progress" data-lx-progress aria-hidden="true" />
     </header>
   );
 }

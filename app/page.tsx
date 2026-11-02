@@ -1,40 +1,55 @@
 import type { Metadata } from "next";
 import {
-  ArrowRight,
+  ArrowDown,
+  ArrowUp,
   BarChart3,
-  Check,
-  ChevronDown,
-  ClipboardList,
+  CircleCheck,
+  CircleHelp,
+  Crosshair,
   Database,
-  FileCheck,
-  MinusCircle,
+  Equal,
+  FlaskConical,
+  Gauge,
+  Layers,
+  Lightbulb,
+  MessageSquareText,
+  PenLine,
+  RefreshCw,
   Repeat,
   Search,
   ShieldCheck,
-  TrendingDown,
-  TrendingUp,
+  Target,
+  Trophy,
 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  ExampleAnswer,
-  RetestComparison,
-} from "@/components/marketing/answer-evidence";
-import { EvidenceDashboard } from "@/components/marketing/evidence-dashboard";
-import {
-  CheckItem,
-  IconTile,
-  PanelCard,
-  SectionHeading,
-  SectionLabel,
-  StepItem,
-  toneAt,
-} from "@/components/marketing/section-kit";
+import { AtmosphereCanvas } from "@/components/landing/canvas/atmosphere-canvas";
+import { Contact } from "@/components/landing/contact";
+import { CtaBand } from "@/components/landing/cta-band";
+import { Evidence } from "@/components/landing/evidence";
+import { FaqSection } from "@/components/landing/faq-section";
+import { Hero } from "@/components/landing/hero";
+import { HowItWorks } from "@/components/landing/how-it-works";
+import { LandingMotion } from "@/components/landing/landing-motion";
+import { Method } from "@/components/landing/method";
+import { Outcomes } from "@/components/landing/outcomes";
+import { Report } from "@/components/landing/report";
+import { Scope } from "@/components/landing/scope";
+import { SiteFooter } from "@/components/landing/site-footer";
+import { Why } from "@/components/landing/why";
 import { SiteHeader } from "@/components/marketing/site-header";
-import { ZypactWordmark } from "@/components/marketing/zypact-mark";
 import { ThemeRoot } from "@/components/theme-root";
 import { CANONICAL_SITE_URL } from "@/lib/seo/site";
+
+/*
+ * Copy lives here, where scripts/test-landing-page.ts can see it; the landing
+ * components only lay it out. Every statement below was checked against
+ * docs/METHODOLOGY.md and docs/V1_SCOPE.md when the page moved to the
+ * mountain/teal design: where the design mock said more than V1 can stand
+ * behind (plural questions, "AI visibility", "over time", "improve results",
+ * a lift badge, "a clear result, every time"), the slot carries the honest
+ * statement instead. Metadata and JSON-LD are untouched: they are frozen
+ * while the Perplexity self-test retest is outstanding.
+ */
 
 // One canonical origin for the whole site, so the homepage cannot advertise
 // a different host than the sitemap, robots.txt and every other canonical.
@@ -85,156 +100,287 @@ function getJsonLd() {
   };
 }
 
-/** Hero chips. Short enough to stay on one line each at phone width. */
-const heroChips = [
-  { label: "Approved protocol", icon: ShieldCheck },
-  { label: "Exact evidence", icon: Database },
-  { label: "Prompt-scoped", icon: Search },
-  { label: "Registered retest", icon: Repeat },
-] as const;
+/* ------------------------------------------------------------------ Hero */
 
-const guarantees = [
-  { label: "Approved protocol", icon: ShieldCheck },
-  { label: "Bounded sampling", icon: BarChart3 },
-  { label: "Exact evidence", icon: Database },
-  { label: "Prompt-scoped", icon: Search },
-  { label: "Registered retest", icon: Repeat },
-  { label: "Honest outcomes", icon: ClipboardList },
-] as const;
+const hero = {
+  eyebrow: "Evidence-backed diagnostic",
+  headlineLines: ["Turn AI answers", "into evidence."],
+  lede: "Zypact records how Perplexity answers one commercially important buyer question, preserves the exact evidence, and checks the same question again after one registered change.",
+  primaryCta: { label: "Request demo", href: DEMO_URL },
+  // There is no public sample report (client reports are token-protected),
+  // so this opens the labelled synthetic preview further down the page.
+  secondaryCta: { label: "See an example report", href: "#reports" },
+  chips: [
+    { label: "Approved protocol", icon: ShieldCheck },
+    { label: "Exact evidence", icon: Database },
+    { label: "Registered retest", icon: Repeat },
+  ],
+  scopeLine:
+    "Perplexity Sonar only, a directional proxy · One approved question · Launched by Zypact after approval · No guaranteed outcome",
+} as const;
 
-const steps = [
-  {
-    number: 1,
-    title: "Approve",
-    icon: ClipboardList,
-    copy: "Fix the question, surface, sampling plan, limits and decision rule before any paid provider call.",
-  },
-  {
-    number: 2,
-    title: "Observe",
-    icon: Search,
-    copy: "Run the bounded Perplexity baseline and preserve every request, response and source exactly.",
-  },
-  {
-    number: 3,
-    title: "Retest",
-    icon: Repeat,
-    copy: "Register one change, wait out the observation window, then ask the same question again.",
-  },
-  {
-    number: 4,
-    title: "Review outcome",
-    icon: FileCheck,
-    copy: "Read the Outcome Card: what moved, what the evidence supports, and what it cannot.",
-  },
-] as const;
+/* ------------------------------------------------------------------- Why */
 
-const features = [
-  {
-    title: "Approved protocol",
-    icon: ShieldCheck,
-    copy: "Surface, sampling, limits and the decision rule are fixed and versioned before a single paid call.",
+const why = {
+  id: "features",
+  eyebrow: "Why Zypact",
+  title: "One buyer question. Exact evidence. An honest retest.",
+  lede: "A structured, evidence-based way to see how Perplexity answers one buyer question, and whether that answer moves after one registered change.",
+  cards: [
+    {
+      title: "See whether it moved",
+      copy: "Compare the same approved question before and after one registered change.",
+      icon: Target,
+    },
+    {
+      title: "Trust the evidence",
+      copy: "Keep exact answers, sources, and context for every test.",
+      icon: Layers,
+    },
+    {
+      title: "Decide what to test next",
+      copy: "One evidence-backed change to try, with its limits stated.",
+      icon: Lightbulb,
+    },
+  ],
+} as const;
+
+/* ---------------------------------------------------------- How it works */
+
+const howItWorks = {
+  id: "how-it-works",
+  eyebrow: "How it works",
+  title: "From one question to an honest outcome.",
+  lede: "Nothing runs until the question, limits, sampling plan and observation window are approved. After that Zypact launches the controlled baseline.",
+  steps: [
+    {
+      title: "Approve",
+      copy: "Fix the question, sampling plan and limits before any paid call.",
+      icon: CircleCheck,
+    },
+    {
+      title: "Observe",
+      copy: "Record a bounded Perplexity baseline, with every answer preserved.",
+      icon: Search,
+    },
+    {
+      title: "Register change",
+      copy: "Make one change, such as new content or sharper positioning. Zypact records it and when it went live.",
+      icon: PenLine,
+    },
+    {
+      title: "Retest",
+      copy: "Ask the same question again once the observation window closes.",
+      icon: RefreshCw,
+    },
+    {
+      title: "Review outcome",
+      copy: "See the observed difference, the evidence behind it, and the uncertainty that remains.",
+      icon: BarChart3,
+    },
+  ],
+} as const;
+
+/* ---------------------------------------------------------------- Method */
+
+const method = {
+  id: "method",
+  eyebrow: "The method",
+  title: "A repeatable, transparent method.",
+  lede: "The question, surface, sampling plan and decision rule are fixed before anything runs, so the baseline and the retest are comparable rather than merely sequential.",
+  link: {
+    label:
+      "See how Zypact tests whether a content change moved the same Perplexity buyer question",
+    href: "/perplexity-content-change-test",
   },
-  {
-    title: "Exact evidence",
-    icon: Database,
-    copy: "Every request, response, source and integrity check is preserved insert-only and stays inspectable.",
-  },
-  {
-    title: "Prompt-scoped observation",
-    icon: BarChart3,
-    copy: "Competitors and positions for that one question. No universal score, no market-wide claim.",
-  },
-  {
-    title: "Registered retest",
-    icon: Repeat,
-    copy: "One recorded intervention, an explicit observation window, and the same question asked again.",
-  },
-] as const;
+  columns: [
+    {
+      title: "Approved protocol",
+      copy: "Surface, sampling, limits and the decision rule are fixed and versioned before a single paid call.",
+      icon: ShieldCheck,
+    },
+    {
+      title: "Preserved evidence",
+      copy: "Exact answers, sources, and metadata are saved for every run.",
+      icon: Layers,
+    },
+    {
+      title: "Prompt-scoped observation",
+      copy: "Competitors and positions for that one question. No universal score, no market-wide claim.",
+      icon: Crosshair,
+    },
+    {
+      title: "Registered retest",
+      copy: "One recorded change, an explicit observation window, and the same question asked again.",
+      icon: RefreshCw,
+    },
+  ],
+} as const;
+
+/* -------------------------------------------------------------- Evidence */
+
+const evidence = {
+  id: "evidence",
+  eyebrow: "The evidence",
+  title: "Exact answers, preserved.",
+  lede: "Every run keeps the exact request, the response and the sources the answer cited, stored insert-only. The same approved question is asked again after one registered change.",
+} as const;
+
+/* -------------------------------------------------------------- Outcomes */
 
 /**
- * The four outcome statuses, shown with equal visual weight.
- *
- * This occupies the band the approved design gives to headline metrics. It
- * deliberately carries no adoption or performance numbers: V1 is pre-pilot, so
- * any such figure would be invented. These are the real, auditable results a
- * retest can produce, and presenting them evenly is itself the claim — none is
- * the "good" outcome the product is steering toward.
+ * The four Outcome Card results, with equal size, tone and motion: none is the
+ * "good" outcome the product steers toward. Each front states what the result
+ * requires, not just its direction: `increase_observed` needs the interval to
+ * clear zero AND the move to reach Δ_min, so "more presence" alone would also
+ * describe pairs the engine calls `no_clear_change`. The back states the
+ * implemented rule (lib/reports/compare-protocols.ts, D-038); it is detail
+ * only, so nothing a reader must see lives there. Δ_min is fixed for every V1
+ * protocol, hence "set", never "agreed" or "you said".
  */
-const outcomes = [
-  {
-    label: "Increase observed",
-    icon: TrendingUp,
-    copy: "The retest shows more presence for the same question.",
-  },
-  {
-    label: "Decrease observed",
-    icon: TrendingDown,
-    copy: "The retest shows less presence for the same question.",
-  },
-  {
-    label: "No clear change",
-    icon: MinusCircle,
-    copy: "Movement stays inside the uncertainty the protocol allows.",
-  },
-  {
-    label: "Inconclusive",
-    icon: ClipboardList,
-    copy: "Evidence cannot support a direction, and says so plainly.",
-  },
-] as const;
+const outcomes = {
+  id: "outcomes",
+  eyebrow: "The outcome",
+  title: "Every retest ends in one of four results.",
+  lede: "None of the four is the result we steer toward, and each states its evidence and limits. Incomplete or inconsistent evidence fails closed, and nothing is delivered as certainty it cannot support.",
+  outcomes: [
+    {
+      label: "Increase observed",
+      code: "increase_observed",
+      copy: "More presence for the same question, beyond both the sample's uncertainty and the minimum change set before the retest.",
+      rule: "Mentions rose by at least the minimum change set before the retest, and the 95% interval on the change stays above zero.",
+      icon: ArrowUp,
+    },
+    {
+      label: "Decrease observed",
+      code: "decrease_observed",
+      copy: "Less presence for the same question, beyond both the sample's uncertainty and the minimum change set before the retest.",
+      rule: "Mentions fell by at least the minimum change set before the retest, and the 95% interval on the change stays below zero.",
+      icon: ArrowDown,
+    },
+    {
+      label: "No clear change",
+      code: "no_clear_change",
+      copy: "The evidence rules out a move as large as the minimum change set before the retest.",
+      rule: "The 95% interval on the change sits inside the minimum change in both directions. Smaller shifts may still exist.",
+      icon: Equal,
+    },
+    {
+      label: "Inconclusive",
+      code: "inconclusive",
+      copy: "The evidence cannot settle whether a move of the minimum size happened, for example too few readable runs or too wide an interval.",
+      rule: "The interval on the change still reaches the minimum change, or a phase falls below the readable-run floor or is not comparable, so a move of that size can be neither confirmed nor ruled out.",
+      icon: CircleHelp,
+    },
+  ],
+} as const;
 
-/** What the approved protocol fixes before any paid call. */
-const protocolPoints = [
-  "Prompt-scoped measurement, never a market-wide score",
-  "Exact provider evidence, with the sources the answer cited",
-  "Controlled, registered retests of the same approved question",
-  "Honest outcomes, including the uncertainty the sample allows",
-] as const;
+/* ---------------------------------------------------------------- Report */
 
-/** What the engagement actually fixes. Process commitments, not outcomes. */
-const impactPoints = [
-  "One commercially important buyer question, agreed before anything runs",
-  "Exact provider evidence, preserved insert-only and inspectable",
-  "Failed and excluded attempts kept visible in the denominator",
-  "An honest outcome, including when nothing clearly changed",
-] as const;
+const report = {
+  id: "reports",
+  eyebrow: "The report",
+  title: "From answers to action.",
+  lede: "No score. What the evidence shows for one question: whether Perplexity named you, who else it named, how uncertain that is, and one change worth testing.",
+  cardTitle: "AI answer snapshot",
+  cardLabel: "Synthetic preview",
+  items: [
+    {
+      title: "Answers",
+      copy: "Every run of your approved question, named or not, with its exact answer preserved.",
+      icon: MessageSquareText,
+    },
+    {
+      title: "Sources",
+      copy: "The sources each answer cited, preserved with the run.",
+      icon: Layers,
+    },
+    {
+      title: "Competitors",
+      copy: "Which other brands are named for that question, and in how many runs.",
+      icon: Trophy,
+    },
+    {
+      // "Uncertainty", not "Certainty": the method reports how unsure a
+      // sample leaves you; it never delivers certainty.
+      title: "Uncertainty",
+      copy: "How sure the sample lets us be, and what it cannot tell you.",
+      icon: Gauge,
+    },
+    {
+      title: "Change to test",
+      copy: "One evidence-backed change to try, and what would count as a result.",
+      icon: FlaskConical,
+    },
+  ],
+} as const;
 
 /**
  * Canonical V1 delivery gates. `blocked` never delivers.
  *
- * Tones are the shared status tokens rather than fixed hexes, so the three
- * gates keep their contrast in both themes and match the status colours the
- * founder console already uses for the same three states.
+ * `integrity_passed` says "may": automatic sending also depends on the
+ * deployment's auto-delivery switch, so the page promises the gate, not the
+ * send. Tones are the shared status tokens, re-pointed at the landing palette
+ * inside `.lx`, so the three gates keep their contrast and their meaning is
+ * also carried by the status text, never by colour alone.
  */
 const deliveryGates = [
   {
     status: "integrity_passed",
     tone: "bg-success",
-    copy: "Outcome Card and report delivered automatically.",
+    copy: "Report and Outcome Card may be delivered automatically.",
   },
   {
     status: "needs_review",
     tone: "bg-warning",
-    copy: "Exception held for founder review before delivery.",
+    copy: "Held for founder review before delivery.",
   },
   {
     status: "blocked",
     tone: "bg-destructive",
-    copy: "No conclusion or report delivered as certainty.",
+    copy: "Never delivered. No conclusion or report delivered as certainty.",
   },
 ] as const;
+
+/* ----------------------------------------------------------------- Scope */
+
+const scopeNotes = [
+  {
+    label: "Scope and limits",
+    title: "What V1 does not claim",
+    copy: "Perplexity Sonar is the only live V1 surface, and it is presented as a directional proxy rather than the whole AI-search market. V1 produces no market-wide score, no multi-model coverage, no guaranteed recommendation, and no causal or revenue attribution. Observed movement is not proof of causality or revenue impact.",
+  },
+  {
+    label: "Fails closed",
+    title: "When the evidence will not support a conclusion",
+    copy: "Incomplete or inconsistent evidence fails closed. A partial or unsafe result is reviewed or blocked, not delivered as certainty. Failed and excluded attempts stay visible in the denominator rather than being quietly dropped to make a cleaner number.",
+  },
+] as const;
+
+/* ------------------------------------------------------------------- FAQ */
+
+const faq = {
+  id: "faq",
+  eyebrow: "FAQ",
+  title: "Common questions.",
+  lede: "Quick answers about how Zypact works, what it measures, and how to get started.",
+} as const;
 
 const faqs = [
   {
     question: "What does Zypact V1 include?",
     answer:
-      "One approved buyer question, a bounded Perplexity protocol, exact baseline evidence, prompt-scoped competitor observations, one registered intervention, an explicit observation window, an automated same-question retest, and an auditable Outcome Card.",
+      "One approved buyer question, a bounded Perplexity protocol, exact baseline evidence, prompt-scoped competitor observations, one registered intervention, an explicit observation window, a same-question retest, and an auditable Outcome Card.",
   },
   {
     question: "Which AI platform does V1 test?",
     answer:
       "Perplexity Sonar is the only live V1 surface. Zypact does not claim automated coverage of ChatGPT, Gemini, Claude, Copilot, or the entire AI-search market.",
+  },
+  {
+    question: "How is the evidence captured and kept?",
+    answer:
+      "Each run's exact provider request and response are stored insert-only with a SHA-256 hash, together with the sources the answer cited and the question and protocol version they belong to. Authorization headers and secrets are never stored.",
   },
   {
     question: "Why is there no fixed number of runs?",
@@ -268,552 +414,134 @@ const faqs = [
   },
 ] as const;
 
-const footerColumns = [
-  {
-    heading: "Product",
-    links: [
-      { label: "About Zypact", href: "/about" },
-      { label: "Methodology", href: "/method" },
-      { label: "How it works", href: "#how-it-works" },
-      { label: "What you get", href: "#features" },
-      { label: "Evidence", href: "#evidence" },
-      { label: "Request demo", href: DEMO_URL },
-    ],
-  },
-  {
-    heading: "Method",
-    links: [
-      { label: "About Zypact", href: "/about" },
-      { label: "Methodology", href: "/method" },
-      { label: "Scope and limits", href: "#scope" },
-      { label: "Outcome statuses", href: "#outcomes" },
-      { label: "FAQ", href: "#faq" },
-    ],
-  },
-  {
-    heading: "Get started",
-    links: [
-      { label: "Request demo", href: DEMO_URL },
-      { label: "See the method", href: "/method" },
-    ],
-  },
-] as const;
+/* ------------------------------------------------------- CTA and contact */
+
+const cta = {
+  title: "See how Perplexity answers your buyer question — with evidence.",
+  copy: "Get a walkthrough of the method and what a report contains. No AI call runs until the question and protocol are approved.",
+  cta: { label: "Request demo", href: DEMO_URL },
+} as const;
+
+const contact = {
+  id: "contact",
+  eyebrow: "Get in touch",
+  title: "Talk to the Zypact team.",
+  copy: "Request a demo or reach out directly. We're happy to answer your questions, walk through the method, and explore your use case.",
+  people: [
+    {
+      name: "Kevin",
+      role: "Technical Co-founder / CTO",
+      email: "kevin@zypact.com",
+    },
+    { name: "Nathalie", role: "CEO", email: "nathalie@zypact.com" },
+  ],
+} as const;
+
+/* ---------------------------------------------------------------- Footer */
+
+const footer = {
+  tagline:
+    "Record, preserve and retest how Perplexity answers one buyer question.",
+  columns: [
+    {
+      heading: "Product",
+      links: [
+        { label: "How it works", href: "#how-it-works" },
+        { label: "Reports", href: "#reports" },
+        { label: "About Zypact", href: "/about" },
+      ],
+    },
+    {
+      heading: "Method",
+      links: [
+        { label: "Evidence", href: "#evidence" },
+        { label: "Outcome statuses", href: "#outcomes" },
+        { label: "Scope and limits", href: "#scope" },
+      ],
+    },
+    {
+      heading: "Contact",
+      links: [
+        { label: "Request demo", href: DEMO_URL },
+        { label: "Contact us", href: "#contact" },
+        { label: "FAQ", href: "#faq" },
+      ],
+    },
+  ],
+  bottomLine:
+    "Perplexity Sonar V1 · Launched by Zypact after approval · No guaranteed outcome",
+  copyright: "© 2026 Zypact",
+} as const;
 
 export default function LandingPage() {
   return (
-    <ThemeRoot theme="light">
+    <ThemeRoot theme="light" className="lx">
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(getJsonLd()) }}
       />
+      <LandingMotion />
+      <AtmosphereCanvas />
+      <div className="lx-grain" aria-hidden="true" />
 
-      <div className="min-h-screen bg-background">
-        <SiteHeader />
+      <SiteHeader />
 
-        {/* -------------------------------------------------------------- Hero */}
-        <section className="relative isolate overflow-hidden">
+      <main className="relative z-[1]">
+        <Hero {...hero} />
+        <Why {...why} />
+        <HowItWorks {...howItWorks} />
+        <Method {...method} />
+        <Evidence {...evidence} />
+        <Outcomes {...outcomes} />
+
+        <Report {...report}>
+          <div className="lx-gates" data-reveal>
+            <p className="lx-gates__title">What reaches you, and when</p>
+            <dl className="lx-gates__list" data-stagger="120">
+              {deliveryGates.map((gate) => (
+                <div key={gate.status} className="lx-gate" data-reveal>
+                  <dt className="lx-gate__status">
+                    <span
+                      className={`lx-gate__dot ${gate.tone}`}
+                      aria-hidden="true"
+                    />
+                    {gate.status}
+                  </dt>
+                  <dd className="lx-gate__copy">{gate.copy}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </Report>
+
+        <Scope id="scope" notes={scopeNotes} />
+
+        <FaqSection {...faq}>
           {/*
-            Ambient glow behind the hero. `isolate` on the section keeps the
-            negative z-index from escaping behind the page background.
+            Native <details>, so every answer opens with no JavaScript and
+            keeps the built-in disclosure semantics. `list-none` alone leaves
+            Safari's marker, so it is hidden explicitly in chrome.css.
           */}
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 -top-40 -z-10 h-[520px] bg-[radial-gradient(60%_60%_at_50%_0%,hsl(var(--primary)/0.16),transparent_70%)]"
-          />
-
-          <div className="shell grid items-center gap-12 pb-16 pt-12 sm:pb-20 sm:pt-16 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] lg:gap-14 lg:pb-28 lg:pt-20">
-            <div className="max-w-xl">
-              <Badge>Evidence-backed diagnostic</Badge>
-
-              <h1 className="mt-5 text-balance text-[34px] font-extrabold leading-[1.06] tracking-tightest sm:text-[46px] lg:text-[56px]">
-                Turn AI answers
-                <br />
-                <span className="text-primary">into evidence</span>
-              </h1>
-
-              <p className="mt-5 max-w-md text-pretty text-[15px] leading-relaxed text-muted-foreground sm:text-[16px]">
-                Zypact records how Perplexity answers one commercially important
-                buyer question, preserves the exact evidence, and checks the
-                same question again after one registered change.
-              </p>
-
-              {/* Buttons go full-width on phones so neither becomes a tap target
-                  narrower than the thumb that has to hit it. */}
-              <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-                <Button asChild size="lg" className="w-full sm:w-auto">
-                  <a href={DEMO_URL}>
-                    Request demo
-                    <ArrowRight className="h-4 w-4" strokeWidth={2.25} />
-                  </a>
-                </Button>
-                <Button
-                  asChild
-                  size="lg"
-                  variant="outline"
-                  className="w-full sm:w-auto"
-                >
-                  <a href="#how-it-works">See the method</a>
-                </Button>
-              </div>
-
-              <ul className="mt-8 flex flex-wrap gap-2">
-                {heroChips.map((chip) => (
-                  <li
-                    key={chip.label}
-                    className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-2 text-[12px] font-semibold tracking-tight text-foreground/80"
-                  >
-                    <chip.icon
-                      className="h-3.5 w-3.5 shrink-0 text-primary"
-                      strokeWidth={2}
-                      aria-hidden="true"
-                    />
-                    {chip.label}
-                  </li>
-                ))}
-              </ul>
-
-              <p className="mt-6 text-[11px] font-semibold uppercase leading-relaxed tracking-[0.1em] text-muted-foreground">
-                Perplexity Sonar only · One approved question · Automated after
-                approval · No guaranteed outcome
-              </p>
-            </div>
-
-            <div id="evidence" className="scroll-mt-24">
-              <EvidenceDashboard />
-            </div>
-          </div>
-        </section>
-
-        {/* ---------------------------------------------------- Guarantee strip */}
-        <section className="border-y border-border bg-surface-subtle">
-          <div className="shell flex flex-col gap-6 py-8 lg:flex-row lg:items-center lg:gap-12">
-            <p className="shrink-0 text-[11px] font-semibold uppercase leading-[1.5] tracking-[0.12em] text-muted-foreground">
-              What every V1
-              <br className="hidden lg:block" /> engagement fixes
-            </p>
-            <ul className="grid flex-1 grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:flex lg:flex-wrap lg:items-center lg:justify-between">
-              {guarantees.map((item) => (
-                <li
-                  key={item.label}
-                  className="flex items-center gap-2 text-[13px] font-semibold tracking-tight text-foreground/80 sm:text-[14px] lg:whitespace-nowrap"
-                >
-                  <item.icon
-                    className="h-[17px] w-[17px] shrink-0 text-primary"
-                    strokeWidth={1.9}
-                    aria-hidden="true"
-                  />
-                  {item.label}
-                </li>
-              ))}
-            </ul>
-          </div>
-        </section>
-
-        {/* ------------------------------------------------- Approved protocol */}
-        <section className="bg-background py-16 sm:py-20 lg:py-24">
-          <div className="shell grid gap-10 lg:grid-cols-2 lg:items-center lg:gap-16">
-            <div>
-              <SectionLabel>An approved protocol</SectionLabel>
-              <h2 className="mt-5 text-balance text-[27px] font-extrabold leading-[1.15] tracking-tightest sm:text-[33px] lg:text-[38px]">
-                A repeatable way to observe
-                <br className="hidden sm:block" /> what one AI surface answers
-              </h2>
-              <p className="mt-4 text-pretty text-[14px] leading-relaxed text-muted-foreground sm:text-[15px]">
-                The question, the surface, the sampling plan and the decision
-                rule are fixed and versioned before anything runs — so the
-                baseline and the retest are comparable rather than merely
-                sequential.
-              </p>
-
-              <p className="mt-5 text-[14px] leading-relaxed">
-                <a
-                  href="/perplexity-content-change-test"
-                  className="font-semibold text-primary underline-offset-4 hover:underline"
-                >
-                  See how Zypact tests whether a content change moved the same
-                  Perplexity buyer question
-                </a>
-              </p>
-
-              <ul className="mt-7 grid gap-3.5">
-                {protocolPoints.map((point) => (
-                  <CheckItem key={point} icon={Check}>
-                    {point}
-                  </CheckItem>
-                ))}
-              </ul>
-            </div>
-
-            <ExampleAnswer />
-          </div>
-        </section>
-
-        {/* ---------------------------------------------------------- Features */}
-        <section
-          id="features"
-          className="scroll-mt-20 bg-background py-16 sm:py-20 lg:py-24"
-        >
-          <div className="shell">
-            <SectionHeading
-              label="Why Zypact"
-              title={
-                <>
-                  Everything you need for
-                  <br className="hidden sm:block" /> one defensible decision
-                </>
-              }
-              lede="Narrow by design, and auditable end to end."
-            />
-
-            <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:mt-14 lg:grid-cols-4">
-              {features.map((feature, index) => (
-                <PanelCard key={feature.title} className="flex flex-col">
-                  <IconTile icon={feature.icon} tone={toneAt(index)} />
-                  <h3 className="mt-5 text-[15px] font-bold tracking-tight">
-                    {feature.title}
-                  </h3>
-                  <p className="mt-2.5 text-[13px] leading-relaxed text-muted-foreground">
-                    {feature.copy}
-                  </p>
-                </PanelCard>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        {/* ------------------------------------------------------- Real impact */}
-        <section className="border-y border-border bg-surface-subtle py-16 sm:py-20 lg:py-24">
-          <div className="shell grid gap-10 lg:grid-cols-2 lg:items-center lg:gap-16">
-            <div>
-              <SectionLabel>What you actually get</SectionLabel>
-              <h2 className="mt-5 text-balance text-[27px] font-extrabold leading-[1.15] tracking-tightest sm:text-[33px] lg:text-[38px]">
-                A result you can put
-                <br className="hidden sm:block" /> in front of anyone
-              </h2>
-              <p className="mt-4 text-pretty text-[14px] leading-relaxed text-muted-foreground sm:text-[15px]">
-                Every number on the report links back to the provider evidence
-                that produced it, so a sceptical reader can follow the whole
-                chain rather than take the conclusion on trust.
-              </p>
-
-              <ul className="mt-7 grid gap-3.5">
-                {impactPoints.map((point) => (
-                  <CheckItem key={point} icon={Check}>
-                    {point}
-                  </CheckItem>
-                ))}
-              </ul>
-            </div>
-
-            {/*
-              The approved design puts a lifestyle photo and a "+32% engagement"
-              stat card here. Both are replaced: the figure would be an invented
-              causal claim, which the methodology forbids outright. The delivery
-              gates are the honest equivalent — they tell a prospect what will
-              and will not reach them, which is the reassurance the slot is for.
-            */}
-            <PanelCard className="bg-card/60 p-5 sm:p-7">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                What reaches you, and when
-              </p>
-              <dl className="mt-5 grid gap-3">
-                {deliveryGates.map((gate) => (
-                  <div
-                    key={gate.status}
-                    className="rounded-xl border border-border bg-background p-4"
-                  >
-                    <dt className="flex items-center gap-2.5 font-mono text-[12px] font-semibold tracking-tight">
-                      <span
-                        className={`h-2 w-2 shrink-0 rounded-full ${gate.tone}`}
-                        aria-hidden="true"
-                      />
-                      {gate.status}
-                    </dt>
-                    <dd className="mt-2 text-[12.5px] leading-relaxed text-muted-foreground">
-                      {gate.copy}
-                    </dd>
-                  </div>
-                ))}
-              </dl>
-            </PanelCard>
-          </div>
-        </section>
-
-        {/* ------------------------------------------------- Outcome band */}
-        <section
-          id="outcomes"
-          className="scroll-mt-20 bg-background py-16 sm:py-20 lg:py-24"
-        >
-          <div className="shell">
-            <SectionHeading
-              label="Outcome statuses"
-              title="Every retest ends in one of four results"
-              lede="Presented with equal weight. Incomplete or inconsistent evidence fails closed, and nothing is delivered as certainty it cannot support."
-            />
-
-            <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              {outcomes.map((outcome, index) => (
-                <PanelCard key={outcome.label}>
-                  <IconTile icon={outcome.icon} tone={toneAt(index)} />
-                  <p className="mt-5 text-[15px] font-bold tracking-tight">
-                    {outcome.label}
-                  </p>
-                  <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
-                    {outcome.copy}
-                  </p>
-                </PanelCard>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        {/* ------------------------------------------------------ How it works */}
-        <section
-          id="how-it-works"
-          className="scroll-mt-20 border-y border-border bg-surface-subtle py-16 sm:py-20 lg:py-24"
-        >
-          <div className="shell">
-            <SectionHeading
-              label="How it works"
-              title="From one question to an honest outcome"
-              lede="Nothing runs until the question, limits, sampling plan and observation window are approved. After that Zypact launches the controlled baseline."
-            />
-
-            <div className="mt-12 grid gap-8 sm:grid-cols-2 sm:gap-6 lg:mt-14 lg:grid-cols-4">
-              {steps.map((step, index) => (
-                <div key={step.title} className="relative">
-                  <StepItem
-                    number={step.number}
-                    icon={step.icon}
-                    tone={toneAt(index)}
-                    title={step.title}
-                    copy={step.copy}
-                  />
-                  {/* Connector, drawn only between steps and only once they sit
-                      side by side. */}
-                  {index < steps.length - 1 ? (
-                    <ArrowRight
-                      aria-hidden="true"
-                      className="absolute -right-3 top-4 hidden h-4 w-4 text-muted-foreground/50 lg:block"
-                      strokeWidth={2}
-                    />
-                  ) : null}
+          <div className="lx-faq" data-stagger="70">
+            {faqs.map((item) => (
+              <details key={item.question} className="lx-faq__item" data-reveal>
+                <summary className="lx-faq__summary">
+                  <span className="lx-faq__q">{item.question}</span>
+                  <span className="lx-faq__icon" aria-hidden="true" />
+                </summary>
+                <div className="lx-faq__answer">
+                  <p>{item.answer}</p>
                 </div>
-              ))}
-            </div>
-
-            <div className="mt-12 flex justify-center">
-              <Button asChild variant="outline" className="w-full sm:w-auto">
-                <a href="#scope">Scope and limits</a>
-              </Button>
-            </div>
-          </div>
-        </section>
-
-        {/* --------------------------------------------------- Retest comparison */}
-        <section className="bg-background py-16 sm:py-20 lg:py-24">
-          <div className="shell grid gap-10 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] lg:items-center lg:gap-16">
-            <div>
-              <SectionLabel>Registered retest</SectionLabel>
-              <h2 className="mt-5 text-balance text-[27px] font-extrabold leading-[1.15] tracking-tightest sm:text-[33px] lg:text-[38px]">
-                The same question,
-                <br className="hidden sm:block" /> asked again on purpose
-              </h2>
-              <p className="mt-4 text-pretty text-[14px] leading-relaxed text-muted-foreground sm:text-[15px]">
-                A retest is only meaningful if nothing else moved. Zypact holds
-                the question and protocol identical, records the one change that
-                was made, waits out the observation window, then reports what
-                the evidence will and will not support.
-              </p>
-
-              <div className="mt-8">
-                <Button asChild size="lg" className="w-full sm:w-auto">
-                  <a href={DEMO_URL}>
-                    Request demo
-                    <ArrowRight className="h-4 w-4" strokeWidth={2.25} />
-                  </a>
-                </Button>
-              </div>
-            </div>
-
-            <RetestComparison />
-          </div>
-        </section>
-
-        {/* ---------------------------------------------------- Scope and limits */}
-        <section
-          id="scope"
-          className="scroll-mt-20 bg-background py-16 sm:py-20 lg:py-24"
-        >
-          <div className="shell">
-            <div className="rounded-2xl border border-border bg-surface-muted p-6 sm:p-8 lg:p-12">
-              <div className="grid gap-10 lg:grid-cols-2 lg:gap-16">
-                <div>
-                  <SectionLabel>Scope and limits</SectionLabel>
-                  <h2 className="mt-5 text-[22px] font-bold leading-snug tracking-tight sm:text-[26px]">
-                    What V1 does not claim
-                  </h2>
-                  <p className="mt-4 text-pretty text-[13.5px] leading-relaxed text-muted-foreground sm:text-[14px]">
-                    Perplexity Sonar is the only live V1 surface, and it is
-                    presented as a directional proxy rather than the whole
-                    AI-search market. V1 produces no market-wide score, no
-                    multi-model coverage, no guaranteed recommendation, and no
-                    causal or revenue attribution. Observed movement is not proof
-                    of causality or revenue impact.
-                  </p>
-                </div>
-
-                <div>
-                  <SectionLabel>Fails closed</SectionLabel>
-                  <h3 className="mt-5 text-[22px] font-bold leading-snug tracking-tight sm:text-[26px]">
-                    When the evidence will not support a conclusion
-                  </h3>
-                  <p className="mt-4 text-pretty text-[13.5px] leading-relaxed text-muted-foreground sm:text-[14px]">
-                    Incomplete or inconsistent evidence fails closed. A partial
-                    or unsafe result is reviewed or blocked, not delivered as
-                    certainty. Failed and excluded attempts stay visible in the
-                    denominator rather than being quietly dropped to make a
-                    cleaner number.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* --------------------------------------------------------------- FAQ */}
-        <section
-          id="faq"
-          className="scroll-mt-20 border-t border-border bg-surface-subtle py-16 sm:py-20 lg:py-24"
-        >
-          <div className="shell grid gap-10 lg:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)] lg:gap-16">
-            <div className="lg:sticky lg:top-24 lg:self-start">
-              <SectionHeading
-                align="left"
-                label="FAQ"
-                title={
-                  <>
-                    Frequently asked
-                    <br className="hidden sm:block" /> questions
-                  </>
-                }
-                lede="Clear boundaries are part of the product. A partial or unsafe result is reviewed or blocked, not delivered as certainty."
-              />
-            </div>
-
-            {/*
-              One bordered card per question, as the approved design shows,
-              rather than the hairline-divided rows this previously used. Still
-              a native <details>, so it opens with no JavaScript and keeps the
-              built-in disclosure semantics for assistive technology.
-            */}
-            <div className="grid gap-3">
-              {faqs.map((faq) => (
-                <details
-                  key={faq.question}
-                  className="group rounded-xl border border-border bg-card px-4 transition-colors hover:border-primary/30 sm:px-5"
-                >
-                  {/* `list-none` alone leaves Safari's disclosure triangle, so
-                      the marker is hidden explicitly, as the admin accordions
-                      and every legacy stylesheet here already do. */}
-                  <summary className="flex cursor-pointer list-none items-center gap-4 py-4 text-[14px] font-semibold tracking-tight [&::-webkit-details-marker]:hidden sm:text-[15px]">
-                    <span className="flex-1 text-pretty">{faq.question}</span>
-                    <ChevronDown
-                      aria-hidden="true"
-                      className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180"
-                      strokeWidth={2}
-                    />
-                  </summary>
-                  <p className="pb-4 pr-8 text-[13px] leading-relaxed text-muted-foreground sm:text-[13.5px]">
-                    {faq.answer}
-                  </p>
-                </details>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        {/* --------------------------------------------------------- Final CTA */}
-        <section className="bg-background px-4 py-16 sm:px-6 sm:py-20">
-          <div className="mx-auto max-w-[1200px]">
-            {/*
-              The approved design uses a blue-to-purple gradient banner. Rebuilt
-              on the theme tokens so it holds its contrast on a dark page, with
-              the copy sitting on `panel` rather than on the gradient itself.
-            */}
-            <div className="relative isolate overflow-hidden rounded-3xl border border-border bg-panel px-6 py-12 sm:px-10 sm:py-14 lg:px-14">
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(90%_140%_at_0%_0%,hsl(var(--primary)/0.35),transparent_60%),radial-gradient(80%_140%_at_100%_100%,hsl(var(--chart-4)/0.32),transparent_60%)]"
-              />
-
-              <div className="flex flex-col gap-8 lg:flex-row lg:items-center lg:justify-between">
-                <div>
-                  <Badge variant="onDark">Ready to get started?</Badge>
-                  <h2 className="mt-5 max-w-2xl text-balance text-[26px] font-extrabold leading-[1.15] tracking-tightest text-panel-foreground sm:text-[32px] lg:text-[36px]">
-                    Bring one buyer question worth examining.
-                  </h2>
-                  <p className="mt-4 max-w-xl text-pretty text-[14px] leading-relaxed text-panel-muted">
-                    Requesting a demo does not approve a protocol or start an AI
-                    call.
-                  </p>
-                </div>
-                <Button
-                  asChild
-                  size="lg"
-                  variant="onDark"
-                  className="w-full shrink-0 sm:w-auto"
-                >
-                  <a href={DEMO_URL}>
-                    Request demo
-                    <ArrowRight className="h-4 w-4" strokeWidth={2.25} />
-                  </a>
-                </Button>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* ------------------------------------------------------------ Footer */}
-        <footer className="border-t border-border bg-background">
-          <div className="shell grid gap-10 py-14 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.4fr)_repeat(3,minmax(0,1fr))]">
-            <div>
-              <ZypactWordmark className="text-primary" />
-              <p className="mt-4 text-[13px] text-muted-foreground">
-                Evidence, not estimates.
-              </p>
-            </div>
-
-            {footerColumns.map((column) => (
-              <nav key={column.heading} aria-label={column.heading}>
-                <p className="text-[13px] font-bold tracking-tight">
-                  {column.heading}
-                </p>
-                <ul className="mt-4 space-y-2.5">
-                  {column.links.map((link) => (
-                    <li key={link.label}>
-                      <a
-                        href={link.href}
-                        className="text-[13px] text-muted-foreground transition-colors hover:text-foreground"
-                      >
-                        {link.label}
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              </nav>
+              </details>
             ))}
           </div>
+        </FaqSection>
 
-          <div className="shell flex flex-col gap-2 border-t border-border py-6 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-[12px] text-muted-foreground">
-              Perplexity Sonar V1 · Launched by Zypact after approval · No guaranteed
-              outcome
-            </p>
-            <p className="text-[12px] text-muted-foreground">© 2026 Zypact</p>
-          </div>
-        </footer>
-      </div>
+        <CtaBand {...cta} />
+        <Contact {...contact} />
+      </main>
+
+      <SiteFooter {...footer} />
     </ThemeRoot>
   );
 }

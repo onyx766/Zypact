@@ -20,6 +20,9 @@
  */
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import {
+  allowlistDrift, allowlistWith, INVALID_MIGRATION_NAMES, ledgerRefuses, migrationLedger, TIMESTAMP_FIXTURE,
+} from "./lib/migration-names";
 
 let failures = 0;
 function assert(label: string, ok: boolean, detail = ""): void {
@@ -37,6 +40,11 @@ globalThis.fetch = ((..._a: unknown[]) => {
 }) as unknown as typeof fetch;
 
 const MIGRATIONS = path.join(process.cwd(), "supabase", "migrations");
+
+// QD-6: every migration file is parsed by the shared rules (exact four-digit
+// allowlist, validated 14-digit timestamps), so each "no later migration"
+// guard below also examines a timestamped migration.
+const ledger = (extra: Record<string, string> = {}) => migrationLedger(MIGRATIONS, extra);
 const NEW_FILE = "0075_m7_detectable_change_at_approval.sql";
 const OLD_FILE = "0049_m4_fix_protocol_rpc_status_ambiguities.sql";
 
@@ -68,31 +76,43 @@ const helper = fnBody(rawNew, "_smallest_detectable_change");
   assert("0049 is still readable as the prior definition", oldApprove !== "");
   assert("0075 defines the new helper exactly once", helper !== "");
 
-  const files = readdirSync(MIGRATIONS)
-    .filter((f) => /^\d{4}_.*\.sql$/.test(f))
-    .map((f) => ({ f, n: Number(f.slice(0, 4)) }))
-    .sort((a, b) => a.n - b.n);
+  const files = ledger();
   assert("0075 is present in the ledger", files.some((x) => x.f === NEW_FILE));
 
-  const definers = files.filter((x) =>
-    /create\s+(or\s+replace\s+)?function\s+public\.approve_protocol\s*\(/i.test(
-      stripComments(readFileSync(path.join(MIGRATIONS, x.f), "utf8"))
-    )
+  const definersIn = (list: typeof files) => list.filter((x) =>
+    /create\s+(or\s+replace\s+)?function\s+public\.approve_protocol\s*\(/i.test(stripComments(x.sql))
   );
+  const definers = definersIn(files);
   assert(
     "0075 is the LAST migration to define approve_protocol",
     definers.length > 0 && definers[definers.length - 1].f === NEW_FILE,
     definers.map((d) => d.f).join(" -> ")
   );
 
-  for (const { f, n } of files.filter((x) => x.n > 75)) {
-    const sql = stripComments(readFileSync(path.join(MIGRATIONS, f), "utf8"));
+  const touchesApprove = (sql: string) =>
+    /create\s+(or\s+replace\s+)?function[\s\S]{0,120}?approve_protocol\s*\(/i.test(sql);
+  for (const { f, n, sql } of files.filter((x) => x.n > 75)) {
     assert(
       `${f} leaves approve_protocol alone`,
-      !/create\s+(or\s+replace\s+)?function[\s\S]{0,120}?approve_protocol\s*\(/i.test(sql),
+      !touchesApprove(stripComments(sql)),
       String(n)
     );
   }
+
+  // QD-6: a timestamped migration is examined, never skipped.
+  for (const { label, extra, allow } of INVALID_MIGRATION_NAMES) {
+    assert(`the migration ledger refuses ${label}`, ledgerRefuses(MIGRATIONS, extra, allowlistWith(allow)));
+  }
+  const drift = allowlistDrift(readdirSync(MIGRATIONS));
+  assert("the migrations directory matches the exact four-digit allowlist", drift.length === 0, drift.join("; "));
+  const withFixture = ledger({
+    [TIMESTAMP_FIXTURE]: "create or replace function public.approve_protocol(p_a uuid)\nreturns void language sql as $x$ select 1 $x$;",
+  });
+  const fixtureDefiners = definersIn(withFixture);
+  assert("a timestamped redefinition becomes the last definer, so the LAST-definer check fails",
+    fixtureDefiners[fixtureDefiners.length - 1]?.f === TIMESTAMP_FIXTURE);
+  assert("the later-migration scan catches a timestamped redefinition",
+    withFixture.filter((x) => x.n > 75).some(({ sql }) => touchesApprove(stripComments(sql))));
 }
 
 /* ═══════════════ 2. the differential assertion ═══════════════ */

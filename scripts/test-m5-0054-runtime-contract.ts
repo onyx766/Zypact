@@ -87,6 +87,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, copyFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { allowlistDrift, parseMigrationName } from "./lib/migration-names";
 
 let totalAssertions = 0;
 let passedAssertions = 0;
@@ -3750,16 +3751,23 @@ create table if not exists public._m5_0054_rt_test_table (id text primary key);
 // ------------------------------------------------------------------
 const MAX_MIGRATION_VERSION = 54;
 const NUMBERED_MIGRATION_RE = /^(\d{4})_[a-z0-9_]+\.sql$/;
+// QD-6: names are classified by the shared rules (exact four-digit
+// allowlist, validated 14-digit timestamps). A timestamped migration is later
+// than every numbered one, so it falls outside any <= maxVersion selection.
 
 type MigrationSelectionResult = { ok: true; files: string[] } | { ok: false; reason: string };
 
-function selectNumberedMigrations(entries: string[], maxVersion: number): MigrationSelectionResult {
+function selectNumberedMigrations(
+  entries: string[],
+  maxVersion: number,
+  allowlist?: ReadonlySet<string>
+): MigrationSelectionResult {
   const sqlFiles = entries.filter((f) => f.endsWith(".sql"));
   const parsed: { file: string; version: number }[] = [];
   for (const f of sqlFiles) {
-    const m = NUMBERED_MIGRATION_RE.exec(f);
-    if (!m) return { ok: false, reason: `invalid numbered migration name: ${f}` };
-    parsed.push({ file: f, version: Number(m[1]) });
+    const r = parseMigrationName(f, allowlist);
+    if (!r.ok) return { ok: false, reason: r.code === "malformed" ? `invalid numbered migration name: ${f}` : r.reason };
+    parsed.push({ file: f, version: r.version });
   }
   const seen = new Set<number>();
   for (const { version, file } of parsed) {
@@ -3790,7 +3798,47 @@ function runMigrationSelectionPreflight(): void {
     console.log(`  ✗ FATAL: selection is not exactly 0001-0054 (got ${realResult.files.length} files)`);
     process.exit(1);
   }
-  console.log(`  ✓ real directory selects exactly 0001-0054 (${realResult.files.length} files), 0055+ excluded\n`);
+  console.log(`  ✓ real directory selects exactly 0001-0054 (${realResult.files.length} files), 0055+ excluded`);
+
+  // QD-6: a valid timestamped migration is accepted and, like 0055+, excluded;
+  // every malformed, non-later, non-calendar or duplicated one is refused.
+  const fixtureRange = (n: number) => Array.from({ length: n }, (_, i) => `${String(i + 1).padStart(4, "0")}_fixture.sql`);
+  // Synthetic four-digit names are allow-listed for these self-tests only.
+  const FIXTURES = new Set([...fixtureRange(60), "0010_duplicate_fixture.sql", "0083_fixture.sql"]);
+  const timestampResult = selectNumberedMigrations(
+    [...fixtureRange(54), "0083_fixture.sql", "20261102000000_q2p_fixture.sql"], MAX_MIGRATION_VERSION, FIXTURES);
+  if (!timestampResult.ok || timestampResult.files.length !== 54 || timestampResult.files.some((f) => f.startsWith("2026"))) {
+    console.log("  ✗ FATAL: a valid timestamped migration was refused or selected into <=54");
+    process.exit(1);
+  }
+  console.log("  ✓ TIMESTAMP: a valid 14-digit migration is accepted and excluded from the <=54 selection");
+  for (const [label, extra] of [
+    ["a date-only (8-digit) version", ["20261102_x.sql"]],
+    ["a non-digit inside the version", ["2026110200000a_x.sql"]],
+    ["a 13-digit version", ["2026110200000_x.sql"]],
+    ["a version equal to production's 0081 row", ["20260924023646_x.sql"]],
+    ["a version below production's 0081 row", ["20260101000000_x.sql"]],
+    ["a non-calendar version (month 13)", ["20261302000000_x.sql"]],
+    ["a non-calendar version (31 November)", ["20261131000000_x.sql"]],
+    ["an uppercase name", ["20261102000000_Q2P.sql"]],
+    ["a four-digit name not on the allowlist", ["0086_new_thing.sql"]],
+    ["a duplicate timestamp version", ["20261102000000_a.sql", "20261102000000_b.sql"]],
+  ] as const) {
+    const r = selectNumberedMigrations([...fixtureRange(54), ...extra], MAX_MIGRATION_VERSION, FIXTURES);
+    if (r.ok) {
+      console.log(`  ✗ FATAL: ${label} was not detected`);
+      process.exit(1);
+    }
+    console.log(`  ✓ NEGATIVE: ${label} is detected — ${r.reason}`);
+  }
+  // QD-6: the real directory and the exact four-digit allowlist agree.
+  const drift = allowlistDrift(readdirSync(realDir));
+  if (drift.length > 0) {
+    console.log(`  ✗ FATAL: the real directory and the exact four-digit allowlist disagree — ${drift.join("; ")}`);
+    process.exit(1);
+  }
+  console.log("  ✓ ALLOWLIST: the real directory matches the exact four-digit allowlist");
+  console.log("");
 }
 
 // ----------------------------------------------------------------------

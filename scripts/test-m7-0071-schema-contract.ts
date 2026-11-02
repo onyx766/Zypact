@@ -13,6 +13,9 @@
  */
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import {
+  allowlistDrift, allowlistWith, INVALID_MIGRATION_NAMES, ledgerRefuses, migrationLedger, TIMESTAMP_FIXTURE,
+} from "./lib/migration-names";
 
 let failures = 0;
 function assert(label: string, ok: boolean, detail = ""): void {
@@ -30,6 +33,11 @@ globalThis.fetch = ((..._a: unknown[]) => {
 }) as unknown as typeof fetch;
 
 const MIGRATIONS = path.join(process.cwd(), "supabase", "migrations");
+
+// QD-6: every migration file is parsed by the shared rules (exact four-digit
+// allowlist, validated 14-digit timestamps), so each "no later migration"
+// guard below also examines a timestamped migration.
+const ledger = (extra: Record<string, string> = {}) => migrationLedger(MIGRATIONS, extra);
 const FILE = "0071_m7_registered_interventions.sql";
 const RAW = readFileSync(path.join(MIGRATIONS, FILE), "utf8");
 
@@ -218,22 +226,40 @@ const TRIGGER_FN = section(/create or replace function public\._reject_registere
   // window inside confirm_intervention_implementation, and its own contract
   // re-verifies every guarantee asserted here. Naming the permitted definer
   // keeps that an explicit, reviewed exception rather than a silent one.
-  const later = readdirSync(MIGRATIONS)
-    .filter((f) => /^\d{4}_.*\.sql$/.test(f) && Number(f.slice(0, 4)) > 71)
-    .map((f) => ({ f, sql: readFileSync(path.join(MIGRATIONS, f), "utf8") }));
+  const later = ledger().filter((x) => x.n > 71);
+  const redefines = (name: string, sql: string) =>
+    new RegExp(`(create|drop|alter)\\s+(or\\s+replace\\s+)?function[\\s\\S]{0,80}?public\\.${name}\\s*\\(`, "i").test(sql);
+  const lifecycleRedefiners = (list: typeof later) => list
+    .filter(({ sql }) => /create or replace function public\.(confirm_intervention_implementation|_reject_registered_intervention_edit)/i.test(sql))
+    .map(({ f }) => f);
 
   for (const name of ["register_intervention", "approve_intervention"]) {
     assert(`no later migration redefines ${name}`,
-      later.every(({ sql }) =>
-        !new RegExp(`(create|drop|alter)\\s+(or\\s+replace\\s+)?function[\\s\\S]{0,80}?public\\.${name}\\s*\\(`, "i").test(sql)));
+      later.every(({ sql }) => !redefines(name, sql)));
   }
 
-  const redefiners = later
-    .filter(({ sql }) => /create or replace function public\.(confirm_intervention_implementation|_reject_registered_intervention_edit)/i.test(sql))
-    .map(({ f }) => f);
+  const redefiners = lifecycleRedefiners(later);
   assert("the lifecycle functions are extended only by 0072",
     redefiners.every((f) => f.startsWith("0072_")),
     redefiners.join(", ") || "none");
+
+  // QD-6: a timestamped migration is examined, never skipped.
+  for (const { label, extra, allow } of INVALID_MIGRATION_NAMES) {
+    assert(`the migration ledger refuses ${label}`, ledgerRefuses(MIGRATIONS, extra, allowlistWith(allow)));
+  }
+  const drift = allowlistDrift(readdirSync(MIGRATIONS));
+  assert("the migrations directory matches the exact four-digit allowlist", drift.length === 0, drift.join("; "));
+  for (const name of ["register_intervention", "approve_intervention"]) {
+    const withFixture = ledger({
+      [TIMESTAMP_FIXTURE]: `create or replace function public.${name}(p_a uuid)\nreturns void language sql as $x$ select 1 $x$;`,
+    }).filter((x) => x.n > 71);
+    assert(`a timestamped migration redefining ${name} is caught`,
+      withFixture.some(({ f, sql }) => f === TIMESTAMP_FIXTURE && redefines(name, sql)));
+  }
+  assert("a timestamped extension of a lifecycle function is caught as not-0072",
+    lifecycleRedefiners(ledger({
+      [TIMESTAMP_FIXTURE]: "create or replace function public.confirm_intervention_implementation(p_a uuid)\nreturns void language sql as $x$ select 1 $x$;",
+    }).filter((x) => x.n > 71)).includes(TIMESTAMP_FIXTURE));
 }
 
 /* ═══════════════ 6. every detector is proved to bite ═══════════════ */

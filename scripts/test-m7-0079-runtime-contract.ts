@@ -18,6 +18,7 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { allowlistDrift, FOUR_DIGIT_ALLOWLIST, migrationVersion } from "./lib/migration-names";
 
 const REPO = process.cwd();
 const OPT_IN = "ZYPACT_M7_0079_RUNTIME_TEST";
@@ -51,13 +52,14 @@ function setTomlScalar(text: string, section: string, key: string, value: string
   });
   return { text: out.join("\n"), replacements: n };
 }
-function selectMigrations(entries: string[], upTo: number): string[] {
+// QD-6: names are classified by the shared rules (exact four-digit
+// allowlist, validated 14-digit timestamps). A timestamped migration is later
+// than every numbered one, so it is never part of a 1..N selection.
+function selectMigrations(entries: string[], upTo: number, allowlist?: ReadonlySet<string>): string[] {
   const seen = new Map<number, string>();
   for (const e of entries) {
     if (!e.endsWith(".sql")) continue;
-    const m = /^(\d{4})_[A-Za-z0-9_]+\.sql$/.exec(e);
-    if (!m) throw new Error(`malformed migration filename: ${e}`);
-    const n = Number.parseInt(m[1], 10);
+    const n = migrationVersion(e, allowlist);
     if (seen.has(n)) throw new Error(`duplicate migration ${n}`);
     seen.set(n, e);
   }
@@ -70,7 +72,52 @@ function selectMigrations(entries: string[], upTo: number): string[] {
   return files;
 }
 
+/**
+ * Static, before the opt-in gate: proves the selector on the real directory
+ * and on in-memory lists, so a timestamped migration can neither break it nor
+ * slip past it. Never counted among the runtime checks.
+ */
+function migrationSelectionPreflight(): void {
+  const range = (n: number) => Array.from({ length: n }, (_, i) => `${String(i + 1).padStart(4, "0")}_fixture.sql`);
+  // Synthetic four-digit names are allow-listed for these self-tests only.
+  const fixtures = new Set([...range(MAXV), "0083_fixture.sql", "0010_duplicate_fixture.sql"]);
+  const selects = (entries: string[], allow: ReadonlySet<string> = fixtures): string[] | null => {
+    try { return selectMigrations(entries, MAXV, allow); } catch { return null; }
+  };
+  const refused = (entries: string[]): boolean => selects(entries) === null;
+  const realEntries = readdirSync(path.join(REPO, "supabase", "migrations"));
+  const real = selects(realEntries, FOUR_DIGIT_ALLOWLIST);
+  const withTimestamp = selects([...range(MAXV), "0083_fixture.sql", "20261102000000_q2p_fixture.sql"]);
+  const cases: Array<[string, boolean]> = [
+    [`the real directory selects exactly 0001..${MAXV}`,
+      real !== null && real.length === MAXV && real.every((f, i) => f.startsWith(`${String(i + 1).padStart(4, "0")}_`))],
+    ["a valid 14-digit migration is accepted and not selected",
+      withTimestamp !== null && withTimestamp.length === MAXV && !withTimestamp.some((f) => f.startsWith("2026"))],
+    ["a date-only (8-digit) version is refused", refused([...range(MAXV), "20261102_x.sql"])],
+    ["a non-digit inside the version is refused", refused([...range(MAXV), "2026110200000a_x.sql"])],
+    ["a 13-digit version is refused", refused([...range(MAXV), "2026110200000_x.sql"])],
+    ["a version equal to production's 0081 row is refused", refused([...range(MAXV), "20260924023646_x.sql"])],
+    ["a version below production's 0081 row is refused", refused([...range(MAXV), "20260101000000_x.sql"])],
+    ["a non-calendar version (month 13) is refused", refused([...range(MAXV), "20261302000000_x.sql"])],
+    ["a non-calendar version (31 November) is refused", refused([...range(MAXV), "20261131000000_x.sql"])],
+    ["an uppercase timestamped name is refused", refused([...range(MAXV), "20261102000000_Q2P.sql"])],
+    ["a duplicate timestamp version is refused",
+      refused([...range(MAXV), "20261102000000_a.sql", "20261102000000_b.sql"])],
+    ["a duplicate numbered version is still refused", refused([...range(MAXV), "0010_duplicate_fixture.sql"])],
+    ["a gap is still refused", refused(range(MAXV).filter((f) => !f.startsWith("0002_")))],
+    ["a four-digit name not on the allowlist is refused", refused([...range(MAXV), "0086_new_thing.sql"])],
+    ["the real directory matches the exact four-digit allowlist", allowlistDrift(realEntries).length === 0],
+  ];
+  console.log("Preflight: migration selection (static, no Docker)");
+  for (const [name, ok] of cases) console.log(`  ${ok ? "✓" : "✗"} ${name}`);
+  if (cases.some(([, ok]) => !ok)) {
+    console.log("✗ FATAL: migration-selection preflight failed. Nothing else will run.");
+    process.exit(1);
+  }
+}
+
 async function main(): Promise<void> {
+  migrationSelectionPreflight();
   if (process.env[OPT_IN] !== "1") {
     console.log(
       `SKIP — this harness creates a disposable local Supabase stack and is opt-in.\n` +

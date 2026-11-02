@@ -20,6 +20,9 @@
  */
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import {
+  allowlistDrift, allowlistWith, INVALID_MIGRATION_NAMES, ledgerRefuses, migrationLedger, TIMESTAMP_FIXTURE,
+} from "./lib/migration-names";
 
 let failures = 0;
 function assert(label: string, ok: boolean, detail = ""): void {
@@ -37,6 +40,11 @@ globalThis.fetch = ((..._a: unknown[]) => {
 }) as unknown as typeof fetch;
 
 const MIGRATIONS = path.join(process.cwd(), "supabase", "migrations");
+
+// QD-6: every migration file is parsed by the shared rules (exact four-digit
+// allowlist, validated 14-digit timestamps), so each "no later migration"
+// guard below also examines a timestamped migration.
+const ledger = (extra: Record<string, string> = {}) => migrationLedger(MIGRATIONS, extra);
 const FILE = "0076_m7_outcome_card_artifacts.sql";
 const RAW = readFileSync(path.join(MIGRATIONS, FILE), "utf8");
 const SQL = RAW.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*--.*$/gm, "");
@@ -214,21 +222,35 @@ const ASSERT_FN = fn("_assert_outcome_card_artifact_input");
     assert(label, !re.test(FLAT));
   }
 
-  assert("no later migration redefines any function this migration owns",
-    readdirSync(MIGRATIONS)
-      .filter((f) => /^\d{4}_.*\.sql$/.test(f) && Number(f.slice(0, 4)) > 76)
-      .every((f) => {
-        const stripped = readFileSync(path.join(MIGRATIONS, f), "utf8")
-          .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*--.*$/gm, "");
-        return [
-          "save_outcome_card_artifact", "begin_outcome_card_delivery",
-          "finalize_outcome_card_delivery", "release_outcome_card_delivery_claim",
-          "outcome_card_artifact_revision",
-        ].every((name) => {
-          const re = new RegExp(`(create|drop|alter)\\s+(or\\s+replace\\s+)?function[\\s\\S]{0,120}?\\b${name}\\b`, "i");
-          return !re.test(stripped);
-        });
-      }));
+  const OWNED = [
+    "save_outcome_card_artifact", "begin_outcome_card_delivery",
+    "finalize_outcome_card_delivery", "release_outcome_card_delivery_claim",
+    "outcome_card_artifact_revision",
+  ];
+  const laterClean = (list: ReturnType<typeof ledger>) => list
+    .filter((x) => x.n > 76)
+    .every(({ sql }) => {
+      const stripped = sql
+        .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*--.*$/gm, "");
+      return OWNED.every((name) => {
+        const re = new RegExp(`(create|drop|alter)\\s+(or\\s+replace\\s+)?function[\\s\\S]{0,120}?\\b${name}\\b`, "i");
+        return !re.test(stripped);
+      });
+    });
+  assert("no later migration redefines any function this migration owns", laterClean(ledger()));
+
+  // QD-6: a timestamped migration is examined, never skipped.
+  for (const { label, extra, allow } of INVALID_MIGRATION_NAMES) {
+    assert(`the migration ledger refuses ${label}`, ledgerRefuses(MIGRATIONS, extra, allowlistWith(allow)));
+  }
+  const drift = allowlistDrift(readdirSync(MIGRATIONS));
+  assert("the migrations directory matches the exact four-digit allowlist", drift.length === 0, drift.join("; "));
+  for (const name of OWNED) {
+    assert(`a timestamped redefinition of ${name} is caught`,
+      !laterClean(ledger({
+        [TIMESTAMP_FIXTURE]: `create or replace function public.${name}(p_a uuid)\nreturns void language sql as $x$ select 1 $x$;`,
+      })));
+  }
 }
 
 /* ═══════════════ 6. every detector is proved to bite ═══════════════ */

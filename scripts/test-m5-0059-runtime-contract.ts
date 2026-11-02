@@ -41,9 +41,17 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync, existsSy
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  allowlistDrift, allowlistWith, INVALID_MIGRATION_NAMES, ledgerRefuses, migrationLedger, TIMESTAMP_FIXTURE,
+} from "./lib/migration-names";
 
 const REPO_ROOT = process.cwd();
 const MIGRATIONS_DIR = path.join(REPO_ROOT, "supabase", "migrations");
+
+// QD-6: every migration file is parsed by the shared rules (exact four-digit
+// allowlist, validated 14-digit timestamps), so each "no later migration"
+// guard below also examines a timestamped migration.
+const ledger = (extra: Record<string, string> = {}) => migrationLedger(MIGRATIONS_DIR, extra);
 const OPT_IN = "ZYPACT_M5_0059_RUNTIME_TEST";
 const DEFAULT_DOCKER_BIN_DIR = "/Applications/Docker.app/Contents/Resources/bin";
 const DOCKER_BIN_DIR = process.env.ZYPACT_DOCKER_BIN_DIR ?? DEFAULT_DOCKER_BIN_DIR;
@@ -263,7 +271,34 @@ function printAdvisors(label: string, entries: AdvEntry[]): void {
 
 /* ═══════════════════════════════ main ═══════════════════════════════════ */
 
+/**
+ * Static, before the opt-in gate: the step-5 selection reads every migration
+ * through `ledger()`, so prove here that a timestamped migration is validated
+ * and ordered after 0059 (never selected into 1..59), and that every invalid
+ * name fails instead of being skipped. Never counted among the runtime checks.
+ */
+function migrationSelectionPreflight(): void {
+  const real = ledger().filter((x) => x.n >= 1 && x.n <= 59);
+  const withFixture = ledger({ [TIMESTAMP_FIXTURE]: "select 1;" });
+  const cases: Array<[string, boolean]> = [
+    ["the real directory selects exactly 0001..0059", real.length === 59 && real.every((x, i) => x.n === i + 1)],
+    ["a valid 14-digit migration is accepted, ordered last and not selected",
+      withFixture[withFixture.length - 1]?.f === TIMESTAMP_FIXTURE &&
+        withFixture.filter((x) => x.n >= 1 && x.n <= 59).length === 59],
+    ...INVALID_MIGRATION_NAMES.map(({ label, extra, allow }): [string, boolean] =>
+      [`${label} is refused`, ledgerRefuses(MIGRATIONS_DIR, extra, allowlistWith(allow))]),
+    ["the migrations directory matches the exact four-digit allowlist", allowlistDrift(readdirSync(MIGRATIONS_DIR)).length === 0],
+  ];
+  console.log("Preflight: migration selection (static, no Docker)");
+  for (const [name, ok] of cases) console.log(`  ${ok ? "✓" : "✗"} ${name}`);
+  if (cases.some(([, ok]) => !ok)) {
+    console.log("✗ FATAL: migration-selection preflight failed. Nothing else will run.");
+    process.exit(1);
+  }
+}
+
 async function main(): Promise<void> {
+  migrationSelectionPreflight();
   if (process.env[OPT_IN] !== "1") {
     skip(`${OPT_IN} is not set to "1". Set it explicitly to run this contract `
       + `(e.g. ${OPT_IN}=1 npm run test:m5-0059-runtime).`);
@@ -356,11 +391,8 @@ async function main(): Promise<void> {
 
     // ── 5. 0001..0058 first ────────────────────────────────────────────────
     console.log("\n[5] Migrations 0001..0058, selected by number and applied in order");
-    const numbered = readdirSync(MIGRATIONS_DIR)
-      .filter((f) => /^\d{4}_.*\.sql$/.test(f))
-      .map((f) => ({ f, n: Number(f.slice(0, 4)) }))
-      .filter((x) => x.n >= 1 && x.n <= 59)
-      .sort((a, b) => a.n - b.n);
+    const numbered = ledger()
+      .filter((x) => x.n >= 1 && x.n <= 59);
     check("migration-count", "exactly 59 numbered migrations are selected", numbered.length === 59, String(numbered.length));
     check("migration-contiguous", "their numbers run 1..59 with no gap and no duplicate",
       numbered.every((x, i) => x.n === i + 1));

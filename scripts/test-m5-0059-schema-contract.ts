@@ -24,6 +24,9 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import {
+  allowlistDrift, allowlistWith, INVALID_MIGRATION_NAMES, ledgerRefuses, migrationLedger, TIMESTAMP_FIXTURE,
+} from "./lib/migration-names";
 
 /** Mechanical network guard: this contract must never reach anything. */
 let realFetchCalls = 0;
@@ -33,6 +36,11 @@ globalThis.fetch = ((..._a: unknown[]) => {
 }) as unknown as typeof fetch;
 
 const ROOT = process.cwd();
+
+// QD-6: every migration file is parsed by the shared rules (exact four-digit
+// allowlist, validated 14-digit timestamps), so each "no later migration"
+// guard below also examines a timestamped migration.
+const ledger = (extra: Record<string, string> = {}) => migrationLedger(path.join(ROOT, "supabase/migrations"), extra);
 const MIGRATION = path.join(ROOT, "supabase/migrations/0059_m5_phase3d_targeted_claim.sql");
 const GLOBAL_MIGRATION = path.join(
   ROOT, "supabase/migrations/0054_m5_worker_probe_result_and_alert_outbox.sql"
@@ -347,20 +355,29 @@ const DETECTORS: Detector[] = [
       .test(sql);
   }
 
-  const later = readdirSync(path.join(ROOT, "supabase/migrations"))
-    .filter((f) => /^\d{4}_.*\.sql$/.test(f))
-    .map((f) => ({ f, n: Number(f.slice(0, 4)) }))
-    .filter((x) => x.n > 54)
-    .sort((a2, b2) => a2.n - b2.n);
+  const later = ledger().filter((x) => x.n > 54);
 
   assert("there is at least one migration after 0054 to examine", later.length > 0,
     String(later.length));
   assert("0059 is among them", later.some((x) => x.f === "0059_m5_phase3d_targeted_claim.sql"));
 
-  for (const { f } of later) {
-    const body = stripComments(readFileSync(path.join(ROOT, "supabase/migrations", f), "utf8"));
-    assert(`${f} leaves the global claim function alone`, !touchesGlobalClaim(body), f);
+  for (const { f, sql } of later) {
+    assert(`${f} leaves the global claim function alone`, !touchesGlobalClaim(stripComments(sql)), f);
   }
+
+  // QD-6: a timestamped migration is examined, never skipped.
+  for (const { label, extra, allow } of INVALID_MIGRATION_NAMES) {
+    assert(`the migration ledger refuses ${label}`, ledgerRefuses(path.join(ROOT, "supabase/migrations"), extra, allowlistWith(allow)));
+  }
+  const drift = allowlistDrift(readdirSync(path.join(ROOT, "supabase/migrations")));
+  assert("the migrations directory matches the exact four-digit allowlist", drift.length === 0, drift.join("; "));
+  const withFixture = ledger({
+    [TIMESTAMP_FIXTURE]: "create or replace function public.claim_protocol_execution_job(p_worker_id text, p_lease_seconds integer)\nreturns void language sql as $x$ select 1 $x$;",
+  }).filter((x) => x.n > 54);
+  assert("a timestamped migration orders after every numbered one and is examined",
+    withFixture[withFixture.length - 1]?.f === TIMESTAMP_FIXTURE);
+  assert("the scan catches a timestamped migration that redefines the global function",
+    withFixture.some(({ sql }) => touchesGlobalClaim(stripComments(sql))));
 
   // The scanner itself must be shown to bite, on each of the four verbs.
   for (const [verb, snippet] of [

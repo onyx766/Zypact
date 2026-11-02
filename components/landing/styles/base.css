@@ -1,0 +1,793 @@
+/*
+ * Zypact landing — design tokens, type, surfaces and motion primitives.
+ *
+ * WHY THIS IS IMPORTED FROM app/layout.tsx
+ * ----------------------------------------
+ * scripts/test-landing-page.ts requires app/page.tsx under tsx, which cannot
+ * load a stylesheet, so nothing in the page's module graph may import CSS.
+ * Loading globally is safe because every selector below is scoped under `.lx`,
+ * the class app/page.tsx passes to ThemeRoot's themed element. No other route
+ * renders that class.
+ *
+ * SPECIFICITY
+ * -----------
+ * Write every rule as `.lx .thing` (0-2-0). app/globals.css still styles bare
+ * `a:hover` (0-1-1) and `h1`/`h2` (0-0-1), and a lone `.thing` (0-1-0) loses
+ * to the first. Tailwind utilities are also 0-2-0 (`.v2-root .x`); this file
+ * loads after app/tailwind.css, so on a genuine tie these rules win — keep
+ * properties that utilities set on the same element out of these rules.
+ *
+ * MOTION IS DECLARATIVE
+ * ---------------------
+ * Markup opts in with data attributes; components/landing/landing-motion.tsx
+ * is the single client driver. Every initially hidden state sits behind
+ * `prefers-reduced-motion: no-preference` and carries a CSS failsafe, so the
+ * page is never stranded invisible if the driver fails to boot. The global
+ * reduced-motion rule in app/tailwind.css additionally collapses every CSS
+ * animation and transition inside `.v2-root`.
+ */
+
+/* ===================================================================== Tokens */
+
+.lx {
+  /*
+   * The shadcn token contract, re-pointed at the landing palette. Tokens are
+   * inherited custom properties, so declaring them here re-skins Button, Badge
+   * and every utility inside the landing without touching the founder console.
+   */
+  --background: 39 47% 94%;
+  --foreground: 172 42% 13%;
+  --card: 40 60% 98%;
+  --card-foreground: 172 42% 13%;
+  --popover: 40 60% 98%;
+  --popover-foreground: 172 42% 13%;
+  --primary: 173 56% 18%;
+  --primary-foreground: 40 60% 97%;
+  --secondary: 38 38% 90%;
+  --secondary-foreground: 172 42% 13%;
+  --muted: 38 38% 90%;
+  --muted-foreground: 168 9% 34%;
+  --accent: 149 30% 90%;
+  --accent-foreground: 173 56% 18%;
+  --border: 37 28% 85%;
+  --input: 37 28% 85%;
+  --ring: 173 56% 26%;
+  --success: 152 48% 28%;
+  --warning: 30 80% 34%;
+  --info: 200 45% 34%;
+  --destructive: 4 62% 43%;
+  --surface: 40 60% 98%;
+  --surface-subtle: 40 45% 96%;
+  --surface-muted: 39 36% 91%;
+  --panel: 174 55% 13%;
+  --panel-foreground: 40 45% 96%;
+  --panel-muted: 162 18% 74%;
+  --chart-1: 173 56% 24%;
+  --chart-2: 160 40% 36%;
+  --chart-3: 31 73% 50%;
+  --chart-4: 196 30% 38%;
+  --chart-5: 8 60% 52%;
+
+  /* Landing-only palette. HSL channel triplets, like the contract above. */
+  --lx-ink-2: 172 22% 24%;
+  --lx-amber: 31 73% 58%;
+  --lx-amber-ink: 28 72% 34%;
+  --lx-teal: 172 45% 32%;
+  --lx-sea: 178 32% 44%;
+  --lx-mist: 176 18% 84%;
+  --lx-mint: 150 36% 91%;
+  --lx-mint-ink: 152 48% 26%;
+  --lx-rose: 8 68% 95%;
+  --lx-rose-ink: 4 62% 40%;
+  --lx-slate: 200 20% 93%;
+  --lx-slate-ink: 200 18% 30%;
+  --lx-sand: 37 72% 91%;
+  --lx-sand-ink: 28 72% 32%;
+  --lx-shadow: 172 45% 10%;
+
+  --lx-radius-sm: 12px;
+  --lx-radius: 18px;
+  --lx-radius-lg: 26px;
+
+  /* Layered, tinted shadows read as depth on cream without going muddy. */
+  --lx-elev-1: 0 1px 2px hsl(var(--lx-shadow) / 0.05),
+    0 2px 6px -2px hsl(var(--lx-shadow) / 0.06);
+  --lx-elev-2: 0 1px 2px hsl(var(--lx-shadow) / 0.05),
+    0 12px 28px -12px hsl(var(--lx-shadow) / 0.18);
+  --lx-elev-3: 0 2px 4px hsl(var(--lx-shadow) / 0.06),
+    0 30px 60px -24px hsl(var(--lx-shadow) / 0.32),
+    0 60px 120px -60px hsl(var(--lx-shadow) / 0.28);
+
+  --lx-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --lx-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --lx-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --lx-persp: 1100px;
+
+  --lx-font-display: var(--font-display, "Newsreader"), "Iowan Old Style",
+    "Palatino Linotype", Georgia, serif;
+
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+  /*
+   * `clip`, not `hidden`: it trims 3D overhang and canvas bleed without making
+   * this element a scroll container, so the sticky header keeps working.
+   */
+  overflow-x: clip;
+}
+
+.lx ::selection {
+  background: hsl(var(--lx-amber) / 0.32);
+  color: hsl(var(--foreground));
+}
+
+/* Anchor jumps clear the sticky header. */
+.lx [id] {
+  scroll-margin-top: 88px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* app/globals.css turns smooth scrolling on for every page. */
+  html:has(.lx) {
+    scroll-behavior: auto;
+  }
+}
+
+/* ======================================================================= Type */
+
+.lx .lx-display {
+  font-family: var(--lx-font-display);
+  font-weight: 500;
+  letter-spacing: -0.022em;
+  line-height: 1.04;
+  max-width: none;
+  color: hsl(var(--foreground));
+  font-optical-sizing: auto;
+  text-wrap: balance;
+}
+
+.lx .lx-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  line-height: 1.4;
+  text-transform: uppercase;
+  color: hsl(var(--lx-ink-2));
+}
+
+.lx .lx-eyebrow--rule::before {
+  content: "";
+  width: 22px;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+.lx .lx-on-dark .lx-eyebrow,
+.lx .lx-eyebrow--on-dark {
+  color: hsl(var(--panel-muted));
+}
+
+/*
+ * Dark bands (How it works, CTA, footer) put `lx-on-dark` on the section.
+ * `--heading` is what app/globals.css paints `a:hover`, `h1` and `h2` with;
+ * left at the page ink, every hovered link in a dark band would vanish.
+ */
+.lx .lx-on-dark {
+  --heading: hsl(var(--panel-foreground));
+  color: hsl(var(--panel-foreground));
+}
+
+.lx .lx-on-dark .lx-display {
+  color: hsl(var(--panel-foreground));
+}
+
+.lx .lx-on-dark .lx-lede {
+  color: hsl(var(--panel-muted));
+}
+
+.lx .lx-lede {
+  color: hsl(var(--muted-foreground));
+  font-size: 15px;
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
+@media (min-width: 640px) {
+  .lx .lx-lede {
+    font-size: 16px;
+  }
+}
+
+/* ===================================================================== Buttons */
+
+.lx .lx-btn {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 0 22px;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  translate: var(--mx, 0px) var(--my, 0px);
+  transition: translate 0.5s var(--lx-ease-spring),
+    transform 0.35s var(--lx-ease-out), box-shadow 0.35s var(--lx-ease-out),
+    background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease;
+}
+
+.lx .lx-btn--sm {
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.lx .lx-btn--primary {
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  box-shadow: 0 1px 0 hsl(0 0% 100% / 0.12) inset,
+    0 10px 24px -12px hsl(var(--primary) / 0.7);
+}
+
+.lx .lx-btn--primary:hover {
+  color: hsl(var(--primary-foreground));
+  background: hsl(173 56% 14%);
+  box-shadow: 0 1px 0 hsl(0 0% 100% / 0.12) inset,
+    0 16px 32px -14px hsl(var(--primary) / 0.85);
+  transform: translateY(-1px);
+}
+
+.lx .lx-btn--ghost {
+  background: hsl(var(--card) / 0.55);
+  color: hsl(var(--foreground));
+  box-shadow: inset 0 0 0 1.5px hsl(var(--foreground) / 0.78);
+}
+
+.lx .lx-btn--ghost:hover {
+  color: hsl(var(--foreground));
+  background: hsl(var(--card));
+  box-shadow: inset 0 0 0 1.5px hsl(var(--foreground));
+  transform: translateY(-1px);
+}
+
+/* For the dark panels (CTA band, footer). */
+.lx .lx-btn--light {
+  background: hsl(var(--panel-foreground));
+  color: hsl(var(--panel));
+  box-shadow: 0 14px 30px -16px hsl(0 0% 0% / 0.55);
+}
+
+.lx .lx-btn--light:hover {
+  color: hsl(var(--panel));
+  background: hsl(0 0% 100%);
+  transform: translateY(-1px);
+}
+
+/* A light sweep across the button on hover. */
+.lx .lx-btn::before {
+  content: "";
+  position: absolute;
+  inset: -2px auto -2px -60%;
+  z-index: -1;
+  width: 45%;
+  background: linear-gradient(
+    100deg,
+    transparent,
+    hsl(0 0% 100% / 0.28),
+    transparent
+  );
+  transform: skewX(-18deg) translateX(0);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.lx .lx-btn--ghost::before {
+  background: linear-gradient(
+    100deg,
+    transparent,
+    hsl(var(--lx-amber) / 0.22),
+    transparent
+  );
+}
+
+.lx .lx-btn:hover::before {
+  opacity: 1;
+  animation: lx-sweep 0.9s var(--lx-ease-out) forwards;
+}
+
+.lx .lx-btn__arrow {
+  width: 16px;
+  height: 16px;
+  transition: transform 0.35s var(--lx-ease-spring);
+}
+
+.lx .lx-btn:hover .lx-btn__arrow {
+  transform: translateX(4px);
+}
+
+/* ======================================================================= Cards */
+
+.lx .lx-card {
+  position: relative;
+  border-radius: var(--lx-radius);
+  background: hsl(var(--card));
+  box-shadow: var(--lx-elev-2), inset 0 0 0 1px hsl(var(--border) / 0.9);
+}
+
+.lx .lx-card--soft {
+  background: hsl(var(--card) / 0.72);
+  box-shadow: var(--lx-elev-1), inset 0 0 0 1px hsl(var(--border) / 0.8);
+}
+
+/* Small uppercase "Synthetic" chip. The landing guard counts these labels. */
+.lx .lx-synthetic {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  padding: 3px 9px;
+  background: hsl(var(--lx-sand));
+  color: hsl(var(--lx-sand-ink));
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+/* ========================================================== 3D: tilt + depth */
+
+/*
+ * Pointer tilt. The driver writes --rx/--ry (rotation), --gx/--gy (glare
+ * position) and --ga (glare opacity) while a fine pointer is over the element,
+ * and clears them on leave; the transition below is the spring back.
+ *
+ * Never put data-tilt on the same element as data-reveal: both own `transform`.
+ * Wrap instead — reveal on the outer element, tilt on the inner one.
+ *
+ * `overflow: hidden` on a tilted element flattens its 3D children (it is a
+ * grouping property), so depth layers need a tilted element without it; clip
+ * inner content on a child instead.
+ */
+.lx [data-tilt] {
+  --rx: 0deg;
+  --ry: 0deg;
+  --gx: 50%;
+  --gy: 50%;
+  --ga: 0;
+  --lift: 0px;
+  position: relative;
+  transform: perspective(var(--lx-persp)) rotateX(var(--rx)) rotateY(var(--ry))
+    translate3d(0, var(--lift), 0);
+  transform-style: preserve-3d;
+  transition: transform 0.7s var(--lx-ease-out),
+    box-shadow 0.5s var(--lx-ease-out);
+}
+
+.lx [data-tilt].is-tilting {
+  --lift: -4px;
+  transition: transform 0.14s linear, box-shadow 0.5s var(--lx-ease-out);
+  will-change: transform;
+}
+
+.lx [data-tilt].lx-card.is-tilting {
+  box-shadow: var(--lx-elev-3), inset 0 0 0 1px hsl(var(--border));
+}
+
+/* Specular glare that follows the pointer. Opt in with data-tilt-glare. */
+.lx [data-tilt-glare]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(
+    520px circle at var(--gx) var(--gy),
+    hsl(0 0% 100% / 0.42),
+    hsl(0 0% 100% / 0.08) 32%,
+    transparent 60%
+  );
+  mix-blend-mode: soft-light;
+  opacity: var(--ga);
+  transition: opacity 0.45s ease;
+}
+
+.lx .lx-3d {
+  transform-style: preserve-3d;
+}
+
+/* Depth layers inside a tilted element. Every ancestor up to the tilted
+   element needs .lx-3d (preserve-3d) for these to separate. */
+.lx .lx-z-1 {
+  transform: translateZ(14px);
+}
+.lx .lx-z-2 {
+  transform: translateZ(28px);
+}
+.lx .lx-z-3 {
+  transform: translateZ(46px);
+}
+.lx .lx-z-4 {
+  transform: translateZ(70px);
+}
+
+/* =============================================================== Flip cards */
+
+/*
+ * <div class="lx-flip" data-flip tabindex="0">
+ *   <div class="lx-flip__inner">
+ *     <div class="lx-flip__face">front</div>
+ *     <div class="lx-flip__face lx-flip__face--back">back</div>
+ *   </div>
+ * </div>
+ *
+ * Flips on hover for fine pointers, on keyboard focus, and on tap (the driver
+ * toggles .is-flipped for coarse pointers). Both faces stay in the DOM and in
+ * the accessibility tree, so nothing is hidden from assistive technology.
+ * The front face sets the height; the back is absolutely stacked on it.
+ */
+.lx .lx-flip {
+  position: relative;
+  perspective: 1400px;
+  border-radius: var(--lx-radius);
+  outline-offset: 4px;
+}
+
+.lx .lx-flip__inner {
+  position: relative;
+  height: 100%;
+  border-radius: inherit;
+  transform-style: preserve-3d;
+  transition: transform 0.9s var(--lx-ease-out);
+}
+
+.lx .lx-flip__face {
+  position: relative;
+  height: 100%;
+  border-radius: inherit;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.lx .lx-flip__face--back {
+  position: absolute;
+  inset: 0;
+  transform: rotateY(180deg);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .lx .lx-flip:hover .lx-flip__inner {
+    transform: rotateY(180deg);
+  }
+}
+
+.lx .lx-flip:focus-visible .lx-flip__inner,
+.lx .lx-flip.is-flipped .lx-flip__inner {
+  transform: rotateY(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* No rotation at all: show the back face beneath the front instead. */
+  .lx .lx-flip__inner,
+  .lx .lx-flip:hover .lx-flip__inner,
+  .lx .lx-flip:focus-visible .lx-flip__inner,
+  .lx .lx-flip.is-flipped .lx-flip__inner {
+    transform: none;
+  }
+  .lx .lx-flip__face--back {
+    position: relative;
+    inset: auto;
+    margin-top: 10px;
+    transform: none;
+  }
+}
+
+/* =================================================================== Reveal */
+
+/*
+ * data-reveal            fade + rise (default, same as "up")
+ * data-reveal="left"     slide in from the left      "right" from the right
+ * data-reveal="scale"    settle from 94%             "blur"  sharpen into focus
+ * data-reveal="rotate"   swing up out of 3D space    "flip"  turn in about Y
+ * data-reveal="mask"     wipe upward (no fade)
+ * data-stagger="90" on a parent spaces its reveals 90ms apart; an inline
+ * `--lx-delay` on a child wins.
+ *
+ * Elements that start hidden get a failsafe animation that shows them anyway
+ * if the driver has not marked the page ready after 2.4s.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .lx [data-reveal] {
+    transition-property: opacity, transform, filter, clip-path;
+    transition-duration: var(--lx-reveal-dur, 1.05s);
+    transition-timing-function: var(--lx-ease-out);
+    transition-delay: var(--lx-delay, 0ms);
+  }
+
+  .lx [data-reveal]:not(.is-in) {
+    opacity: 0;
+    transform: translate3d(0, 34px, 0);
+  }
+
+  .lx [data-reveal="left"]:not(.is-in) {
+    transform: translate3d(-44px, 0, 0);
+  }
+
+  .lx [data-reveal="right"]:not(.is-in) {
+    transform: translate3d(44px, 0, 0);
+  }
+
+  .lx [data-reveal="scale"]:not(.is-in) {
+    transform: scale(0.94);
+  }
+
+  .lx [data-reveal="blur"]:not(.is-in) {
+    filter: blur(12px);
+    transform: translate3d(0, 14px, 0);
+  }
+
+  .lx [data-reveal="rotate"]:not(.is-in) {
+    transform: perspective(1200px) rotateX(18deg) rotateY(-9deg)
+      translate3d(0, 48px, -90px);
+    transform-origin: 50% 100%;
+  }
+
+  .lx [data-reveal="flip"]:not(.is-in) {
+    transform: perspective(1200px) rotateY(-32deg) translate3d(0, 0, -70px);
+    transform-origin: 0% 50%;
+  }
+
+  .lx [data-reveal="mask"]:not(.is-in) {
+    opacity: 1;
+    transform: none;
+    clip-path: inset(0 0 100% 0);
+  }
+
+  .lx [data-reveal="mask"] {
+    clip-path: inset(0 0 0 0);
+  }
+
+  .lx:not([data-motion="ready"]) [data-reveal]:not(.is-in) {
+    animation: lx-failsafe 0.01ms linear 2.4s forwards;
+  }
+}
+
+/* SVG strokes that draw themselves in. Put pathLength="1" on the path. */
+@media (prefers-reduced-motion: no-preference) {
+  .lx [data-draw] {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    transition: stroke-dashoffset var(--lx-draw-dur, 1.8s) var(--lx-ease-in-out)
+      var(--lx-delay, 0ms);
+  }
+
+  .lx [data-draw].is-in {
+    stroke-dashoffset: 0;
+  }
+
+  .lx:not([data-motion="ready"]) [data-draw]:not(.is-in) {
+    animation: lx-failsafe-draw 0.01ms linear 2.4s forwards;
+  }
+}
+
+/* ===================================================== Pointer spotlight */
+
+/* data-spotlight: a soft light that follows the pointer across a surface. */
+.lx [data-spotlight] {
+  --sx: 50%;
+  --sy: 50%;
+  --sa: 0;
+  position: relative;
+}
+
+.lx [data-spotlight]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(
+    560px circle at var(--sx) var(--sy),
+    hsl(var(--lx-sea) / 0.22),
+    transparent 62%
+  );
+  opacity: var(--sa);
+  transition: opacity 0.6s ease;
+}
+
+/* ============================================================ Intro on load */
+
+/*
+ * Load-time choreography for the hero. Pure CSS, so it runs before hydration
+ * and with JavaScript disabled. `--i` orders the elements.
+ *
+ * .lx-line masks a line of display type; its child rises into view.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .lx .lx-intro {
+    animation: lx-intro-rise 1.15s var(--lx-ease-out)
+      calc(120ms + var(--i, 0) * 95ms) both;
+  }
+
+  .lx .lx-intro--fade {
+    animation-name: lx-intro-fade;
+  }
+
+  .lx .lx-line > span {
+    animation: lx-line-rise 1.25s var(--lx-ease-out)
+      calc(180ms + var(--i, 0) * 110ms) both;
+  }
+}
+
+.lx .lx-line {
+  display: block;
+  overflow: hidden;
+  /* Room for descenders without letting the masked line clip them. */
+  padding-bottom: 0.1em;
+  margin-bottom: -0.1em;
+}
+
+.lx .lx-line > span {
+  display: block;
+}
+
+/* ============================================================== Utilities */
+
+/* Scroll progress hairline. The driver writes --progress (0..1). */
+.lx .lx-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  transform-origin: 0 50%;
+  transform: scaleX(var(--progress, 0));
+  background: linear-gradient(
+    90deg,
+    hsl(var(--lx-teal)),
+    hsl(var(--lx-sea)),
+    hsl(var(--lx-amber))
+  );
+  pointer-events: none;
+}
+
+/*
+ * Film grain over the whole page: one tiny procedural SVG tile, rasterised
+ * once by the browser, so it costs nothing per frame.
+ */
+.lx .lx-grain {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  opacity: 0.06;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.1 0 0 0 0 0.16 0 0 0 0 0.15 0 0 0 1.1 0'/></filter><rect width='100%' height='100%' filter='url(%23g)'/></svg>");
+}
+
+/* Visually hidden, still announced. */
+.lx .lx-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Floating idle motion for hero objects. */
+@media (prefers-reduced-motion: no-preference) {
+  .lx .lx-float {
+    animation: lx-float 7s ease-in-out infinite;
+  }
+  .lx .lx-float--slow {
+    animation-duration: 11s;
+  }
+  .lx .lx-spin-slow {
+    animation: lx-spin 28s linear infinite;
+  }
+  .lx .lx-pulse-dot {
+    animation: lx-pulse-dot 2.4s ease-out infinite;
+  }
+}
+
+/* ============================================================== Keyframes */
+
+@keyframes lx-failsafe {
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+    clip-path: none;
+  }
+}
+
+@keyframes lx-failsafe-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes lx-intro-rise {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 26px, 0);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+
+@keyframes lx-intro-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes lx-line-rise {
+  from {
+    transform: translate3d(0, 108%, 0) rotate(2.5deg);
+    transform-origin: 0 100%;
+  }
+  to {
+    transform: none;
+  }
+}
+
+@keyframes lx-sweep {
+  from {
+    transform: skewX(-18deg) translateX(0);
+  }
+  to {
+    transform: skewX(-18deg) translateX(420%);
+  }
+}
+
+@keyframes lx-float {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, -10px, 0);
+  }
+}
+
+@keyframes lx-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes lx-pulse-dot {
+  0% {
+    box-shadow: 0 0 0 0 hsl(var(--pulse, var(--success)) / 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 9px hsl(var(--pulse, var(--success)) / 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 hsl(var(--pulse, var(--success)) / 0);
+  }
+}

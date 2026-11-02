@@ -1,0 +1,6 @@
+/*
+ * Zypact landing — Site header, FAQ, CTA band, Contact and Footer (components/marketing/site-header.tsx, components/landing/faq.css hooks in app/page.tsx, cta.tsx, contact.tsx, footer.tsx).
+ *
+ * Scoped under `.lx` like base.css; see that file for the specificity and
+ * motion contracts every rule here follows.
+ */

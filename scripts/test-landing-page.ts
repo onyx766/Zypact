@@ -75,6 +75,20 @@ async function main(): Promise<void> {
   check("both evidence panels are labelled synthetic", (answerEvidenceSource.match(/Synthetic/g) ?? []).length >= 2);
 
   /*
+   * The page once labelled a synthetic 2 → 7 of 15 retest increase_observed,
+   * a status the comparison engine never returns for that pair (Δ 0.33 is
+   * below the fixed V1 Δ_min of 0.60). The illustration now takes its status
+   * and intervals from the engine itself (components/marketing/
+   * synthetic-retest.ts); these guards keep the page and the method agreeing.
+   */
+  const synthetic = require("@/components/marketing/synthetic-retest");
+  check("synthetic retest is an increase under the real rule", synthetic.syntheticComparison.status === "increase_observed");
+  check("synthetic retest shows the status the engine returned", flat.includes(synthetic.syntheticComparison.status));
+  check("synthetic intervals are the engine's Wilson bounds", flat.includes(synthetic.percentRange(synthetic.syntheticBaselineInterval)) && flat.includes(synthetic.percentRange(synthetic.syntheticRetestInterval)));
+  check("no lift badge in percentage points", !/\+\s?\d+\s?pp\b/i.test(flat));
+  check("synthetic preview states its non-causal reading", flat.includes("not proof the change caused it"));
+
+  /*
    * `/login` is the allowlisted founder console entrance and V1 creates no
    * customer account, so no public marketing surface may advertise a sign-in.
    */

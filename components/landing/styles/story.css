@@ -1,0 +1,1207 @@
+/*
+ * Zypact landing — Why, How it works and Method sections
+ * (components/landing/why.tsx, how-it-works.tsx, method.tsx).
+ *
+ * Scoped under `.lx` like base.css; see that file for the specificity and
+ * motion contracts every rule here follows. Layout, spacing and type sizes
+ * live in Tailwind utilities on the markup; this file owns surfaces, 3D,
+ * hover choreography and ambient motion, and never sets a property that a
+ * utility on the same element also sets.
+ *
+ * Every hidden or transformed starting state and every infinite animation is
+ * behind `prefers-reduced-motion: no-preference`. Hover-only states that
+ * reveal nothing essential (a lift, a glow, an underline) live outside it;
+ * the global reduced-motion rule makes their transitions instant.
+ */
+
+/* ======================================================================== Why */
+
+.lx .lx-why {
+  /* Scroll parallax amplitude for the leaf; full strength from lg. */
+  --lx-why-amp: 0.5;
+}
+
+/* ---------------------------------------------------------------- Cards */
+
+.lx .lx-why-card--mint {
+  --lx-why-tint: var(--lx-mint);
+  --lx-why-ink: var(--lx-teal);
+}
+
+.lx .lx-why-card--slate {
+  --lx-why-tint: var(--lx-slate);
+  --lx-why-ink: var(--primary);
+}
+
+.lx .lx-why-card--amber {
+  --lx-why-tint: var(--lx-sand);
+  --lx-why-ink: var(--lx-amber-ink);
+}
+
+.lx .lx-why-card {
+  /* A faint top sheen over the warm-white card surface. */
+  background: linear-gradient(
+      180deg,
+      hsl(0 0% 100% / 0.6),
+      hsl(0 0% 100% / 0) 42%
+    ),
+    hsl(var(--card));
+}
+
+/* A soft wash of the card's tint blooms out from behind the icon. */
+.lx .lx-why-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(
+    260px circle at 50px 50px,
+    hsl(var(--lx-why-tint) / 0.85),
+    hsl(var(--lx-why-tint) / 0) 72%
+  );
+  opacity: 0;
+  transition: opacity 0.6s var(--lx-ease-out);
+}
+
+.lx .lx-why-card:hover {
+  --lift: -8px;
+  box-shadow: var(--lx-elev-3), inset 0 0 0 1px hsl(var(--border));
+}
+
+.lx .lx-why-card:hover::before {
+  opacity: 1;
+}
+
+/* Serif card titles, as in the design. */
+.lx .lx-why-card__title {
+  width: fit-content;
+  font-family: var(--lx-font-display);
+  font-weight: 560;
+  letter-spacing: -0.012em;
+  color: hsl(var(--foreground));
+}
+
+/* A thin amber rule draws itself under the title. */
+.lx .lx-why-card__title::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -7px;
+  height: 1.5px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    hsl(var(--lx-amber)),
+    hsl(var(--lx-amber) / 0.2)
+  );
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+  transition: transform 0.65s var(--lx-ease-out);
+}
+
+.lx .lx-why-card:hover .lx-why-card__title::after {
+  transform: scaleX(1);
+}
+
+/* ------------------------------------------------------------ Card icon */
+
+.lx .lx-why-icon {
+  position: relative;
+  display: block;
+  width: 44px;
+  height: 44px;
+  flex: none;
+}
+
+.lx .lx-why-icon__disc {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  color: hsl(var(--lx-why-ink));
+  background: hsl(var(--lx-why-tint));
+  box-shadow: inset 0 0 0 1px hsl(var(--lx-why-ink) / 0.14),
+    0 8px 18px -10px hsl(var(--lx-why-ink) / 0.55);
+  transition: transform 0.6s var(--lx-ease-spring),
+    box-shadow 0.5s var(--lx-ease-out);
+}
+
+.lx .lx-why-icon__glyph {
+  width: 20px;
+  height: 20px;
+  transition: transform 0.6s var(--lx-ease-spring);
+}
+
+.lx .lx-why-card:hover .lx-why-icon__glyph {
+  transform: scale(1.1) rotate(-8deg);
+}
+
+/* "pulse": concentric rings ripple out from the disc. */
+.lx .lx-why-icon--pulse::before,
+.lx .lx-why-icon--pulse::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1.5px hsl(var(--lx-why-ink) / 0.5);
+  opacity: 0;
+  pointer-events: none;
+}
+
+/*
+ * "stack": layered plates fan out behind the disc, back in depth too, so a
+ * tilting card shows them separating. Painted before the disc, so they stay
+ * behind it even where a browser flattens the 3D.
+ */
+.lx .lx-why-icon--stack::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: hsl(var(--lx-why-ink) / 0.14);
+  box-shadow: 5px 5px 0 0 hsl(var(--lx-why-ink) / 0.07);
+  opacity: 0;
+  transform: translate3d(0, 0, -4px);
+  transition: transform 0.6s var(--lx-ease-spring), opacity 0.35s ease;
+  pointer-events: none;
+}
+
+.lx .lx-why-card:hover .lx-why-icon--stack::before {
+  opacity: 1;
+  transform: translate3d(5px, 5px, -12px);
+}
+
+.lx .lx-why-card:hover .lx-why-icon--stack .lx-why-icon__disc {
+  transform: translate3d(-2px, -2px, 6px);
+}
+
+/* "glow": the disc lights up amber. */
+.lx .lx-why-icon--glow::before {
+  content: "";
+  position: absolute;
+  inset: -16px;
+  border-radius: 999px;
+  background: radial-gradient(
+    circle,
+    hsl(var(--lx-amber) / 0.5),
+    hsl(var(--lx-amber) / 0) 68%
+  );
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity 0.5s ease, transform 0.8s var(--lx-ease-out);
+  pointer-events: none;
+}
+
+.lx .lx-why-card:hover .lx-why-icon--glow::before {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.lx .lx-why-card:hover .lx-why-icon--glow .lx-why-icon__disc {
+  box-shadow: inset 0 0 0 1px hsl(var(--lx-amber) / 0.45),
+    0 0 0 4px hsl(var(--lx-amber) / 0.14),
+    0 10px 26px -8px hsl(var(--lx-amber) / 0.75);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .lx .lx-why-card:hover .lx-why-icon--pulse::before {
+    animation: lx-why-ring 1.8s var(--lx-ease-out) infinite;
+  }
+
+  .lx .lx-why-card:hover .lx-why-icon--pulse::after {
+    animation: lx-why-ring 1.8s var(--lx-ease-out) 0.6s infinite;
+  }
+
+  .lx .lx-why-card:hover .lx-why-icon--glow::before {
+    animation: lx-why-glow 2.6s var(--lx-ease-in-out) 0.8s infinite alternate;
+  }
+}
+
+/* ------------------------------------------------------------ Leaf window */
+
+/*
+ * Below lg the leaf closes the section as a full-bleed band on the left;
+ * from lg it fills the left of the section. The wrapper clips on every side:
+ * the leaf box overhangs the viewport's left edge and the section's bottom
+ * edge, so breathing and parallax never pull a straight edge into view.
+ */
+.lx .lx-why-leaf-wrap {
+  position: relative;
+  height: clamp(300px, 80vw, 440px);
+  margin-top: 72px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.lx .lx-why-leaf {
+  position: absolute;
+  top: 28px;
+  bottom: -56px;
+  left: -10%;
+  width: 84%;
+  transform-origin: 0% 100%;
+}
+
+.lx .lx-why-leaf__breathe {
+  position: absolute;
+  inset: 0;
+  transform-origin: 8% 96%;
+}
+
+/*
+ * The window's silhouette, in the same 600 x 720 box as the hairline and
+ * veil paths in why.tsx — edit them together. Stretched to the box, so it
+ * keeps its leaf shape at every breakpoint.
+ */
+.lx .lx-why-leaf__shape {
+  position: absolute;
+  inset: 0;
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 720' preserveAspectRatio='none'><path d='M0 168C120 96 330 34 590 4C586 200 480 520 262 720L0 720Z'/></svg>")
+    center / 100% 100% no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 720' preserveAspectRatio='none'><path d='M0 168C120 96 330 34 590 4C586 200 480 520 262 720L0 720Z'/></svg>")
+    center / 100% 100% no-repeat;
+}
+
+.lx .lx-why-leaf__veil {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.lx .lx-why-stop {
+  stop-color: hsl(var(--card));
+}
+
+.lx .lx-why-stop--amber {
+  stop-color: hsl(var(--lx-amber));
+}
+
+/*
+ * Warm light along the tip, and a fall into the dark band's colour at the
+ * foot, so the leaf's foreground ridges run on into How it works.
+ */
+.lx .lx-why-leaf__shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+      180deg,
+      hsl(var(--panel) / 0) 58%,
+      hsl(var(--panel) / 0.5) 86%,
+      hsl(var(--panel) / 0.88)
+    ),
+    linear-gradient(
+      200deg,
+      hsl(var(--lx-amber) / 0.14),
+      hsl(var(--lx-amber) / 0) 38%
+    );
+}
+
+/*
+ * The amber hairline echoing the leaf's edge. Drawn in by data-draw; butt
+ * caps (the default), because a round cap would show a dot at the path's
+ * end before the stroke has drawn.
+ */
+.lx .lx-why-leaf__line {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  fill: none;
+  stroke-width: 2;
+}
+
+@media (min-width: 768px) {
+  .lx .lx-why-leaf-wrap {
+    margin-top: 88px;
+  }
+
+  .lx .lx-why-leaf {
+    left: -8%;
+    width: 62%;
+  }
+
+  .lx .lx-why-leaf__line {
+    stroke-width: 1.5;
+  }
+}
+
+@media (min-width: 1024px) {
+  .lx .lx-why {
+    --lx-why-amp: 1;
+  }
+
+  .lx .lx-why-leaf-wrap {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 50vw;
+    height: auto;
+    margin: 0;
+  }
+
+  .lx .lx-why-leaf {
+    top: 88px;
+    left: -6vw;
+    width: 36vw;
+  }
+
+  .lx .lx-why-leaf__line {
+    stroke-width: 1.2;
+  }
+}
+
+@media (min-width: 1280px) {
+  .lx .lx-why-leaf {
+    width: min(40vw, 900px);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* --p (0 → 1 as the section passes) comes from data-scroll on the wrap. */
+  .lx .lx-why-leaf {
+    transform: translate3d(
+        0,
+        calc((var(--p, 0.5) - 0.5) * 56px * var(--lx-why-amp)),
+        0
+      )
+      rotate(calc((var(--p, 0.5) - 0.5) * 5deg * var(--lx-why-amp)));
+  }
+
+  .lx .lx-why-leaf__breathe {
+    animation: lx-why-breathe 16s var(--lx-ease-in-out) infinite alternate;
+  }
+
+  /* The veil drifts against the leaf, a second petal at its own depth. */
+  .lx .lx-why-leaf__veil {
+    transform: translate3d(
+      calc((var(--p, 0.5) - 0.5) * -60px * var(--lx-why-amp)),
+      0,
+      0
+    );
+  }
+}
+
+/* =============================================================== How it works */
+
+.lx .lx-how__depth {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(
+      70% 90% at 84% -12%,
+      hsl(var(--lx-sea) / 0.24),
+      hsl(var(--lx-sea) / 0) 62%
+    ),
+    radial-gradient(
+      55% 80% at -8% 112%,
+      hsl(var(--lx-teal) / 0.34),
+      hsl(var(--lx-teal) / 0) 62%
+    ),
+    linear-gradient(
+      180deg,
+      hsl(var(--lx-shadow) / 0) 35%,
+      hsl(var(--lx-shadow) / 0.4)
+    );
+}
+
+/* Procedural topographic contours, barely there. */
+.lx .lx-how__contours {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: -1;
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: hsl(var(--panel-foreground));
+  stroke-opacity: 0.075;
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+.lx .lx-how__contours path {
+  vector-effect: non-scaling-stroke;
+}
+
+/* ---------------------------------------------------------------- Layout */
+
+/*
+ * Phone: a vertical list, node left of its text, joined by vertical wires.
+ * md: three over two, centred. lg: one row of five on equal columns with no
+ * gap, so each wire can measure from its own column's centre.
+ */
+.lx .lx-how-steps {
+  position: relative;
+  display: grid;
+  row-gap: 40px;
+}
+
+.lx .lx-how-step {
+  position: relative;
+}
+
+.lx .lx-how-step__body {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  column-gap: 20px;
+  align-items: start;
+}
+
+.lx .lx-how-step__body > .lx-how-node {
+  grid-row: 1 / span 3;
+}
+
+.lx .lx-how-step__num,
+.lx .lx-how-step__title,
+.lx .lx-how-step__copy {
+  position: relative;
+  grid-column: 2;
+}
+
+@media (min-width: 768px) {
+  .lx .lx-how-steps {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    column-gap: 20px;
+    row-gap: 52px;
+  }
+
+  .lx .lx-how-step {
+    grid-column: span 2;
+    padding: 0 6px;
+  }
+
+  .lx .lx-how-step:nth-child(4) {
+    grid-column: 2 / span 2;
+  }
+
+  .lx .lx-how-step__body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+}
+
+@media (min-width: 1024px) {
+  .lx .lx-how-steps {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    column-gap: 0;
+  }
+
+  .lx .lx-how-step,
+  .lx .lx-how-step:nth-child(4) {
+    grid-column: auto;
+  }
+}
+
+/* ------------------------------------------------------------- Step text */
+
+.lx .lx-how-step__num {
+  margin-top: 2px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  line-height: 1.4;
+  color: hsl(var(--lx-amber));
+  font-variant-numeric: tabular-nums;
+}
+
+.lx .lx-how-step__title {
+  margin-top: 4px;
+  color: hsl(var(--panel-foreground) / 0.94);
+  transition: color 0.35s ease;
+}
+
+.lx .lx-how-step__copy {
+  margin-top: 6px;
+  color: hsl(var(--panel-muted));
+  transition: color 0.35s ease;
+}
+
+@media (min-width: 768px) {
+  .lx .lx-how-step__num {
+    margin-top: 22px;
+  }
+
+  .lx .lx-how-step__title {
+    margin-top: 6px;
+  }
+
+  .lx .lx-how-step__copy {
+    max-width: 220px;
+    margin-top: 8px;
+  }
+}
+
+/* ------------------------------------------------------- Hover surface */
+
+/* A faint glass panel gathers around the hovered step. */
+.lx .lx-how-step__body::before {
+  content: "";
+  position: absolute;
+  inset: -12px -12px -14px;
+  border-radius: 22px;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    hsl(var(--panel-foreground) / 0.07),
+    hsl(var(--panel-foreground) / 0.025)
+  );
+  box-shadow: inset 0 0 0 1px hsl(var(--panel-foreground) / 0.09),
+    0 28px 56px -28px hsl(0 0% 0% / 0.6);
+  opacity: 0;
+  transform: scale(0.94);
+  transition: opacity 0.45s ease, transform 0.6s var(--lx-ease-out);
+}
+
+@media (min-width: 768px) {
+  .lx .lx-how-step__body::before {
+    inset: -18px -12px -20px;
+  }
+}
+
+.lx .lx-how-step__body:hover::before {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.lx .lx-how-step__body:hover .lx-how-step__title {
+  color: hsl(var(--panel-foreground));
+}
+
+.lx .lx-how-step__body:hover .lx-how-step__copy {
+  color: hsl(var(--panel-foreground) / 0.86);
+}
+
+/* ------------------------------------------------------------------ Node */
+
+.lx .lx-how-node {
+  position: relative;
+  display: block;
+  width: 56px;
+  height: 56px;
+  flex: none;
+  transition: transform 0.6s var(--lx-ease-spring);
+}
+
+/* Rises out of the step, in depth when the step is tilting. */
+.lx .lx-how-step__body:hover .lx-how-node {
+  transform: translate3d(0, -4px, 30px);
+}
+
+.lx .lx-how-node__core {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: hsl(var(--panel-foreground));
+  background-color: hsl(var(--lx-teal));
+  background-image: radial-gradient(
+    circle at 32% 26%,
+    hsl(171 44% 44%),
+    hsl(var(--lx-teal)) 58%,
+    hsl(173 50% 25%)
+  );
+  box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.18),
+    inset 0 -8px 14px hsl(var(--lx-shadow) / 0.28),
+    0 0 0 1px hsl(var(--lx-sea) / 0.4),
+    0 12px 26px -12px hsl(0 0% 0% / 0.7);
+  transition: box-shadow 0.45s var(--lx-ease-out);
+}
+
+.lx .lx-how-node__core svg {
+  width: 22px;
+  height: 22px;
+}
+
+.lx .lx-how-step__body:hover .lx-how-node__core {
+  box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.22),
+    inset 0 -8px 14px hsl(var(--lx-shadow) / 0.24),
+    0 0 0 1px hsl(var(--lx-sea) / 0.7),
+    0 0 0 6px hsl(var(--lx-sea) / 0.14),
+    0 22px 36px -14px hsl(0 0% 0% / 0.75);
+}
+
+/* The outcome node is bronze: amber steeped in the band's teal. */
+.lx .lx-how-step--last .lx-how-node__core {
+  background-color: hsl(var(--lx-amber-ink));
+  background-image: none;
+  background-image: radial-gradient(
+    circle at 32% 26%,
+    color-mix(in oklab, hsl(var(--lx-amber)) 80%, hsl(var(--panel))),
+    color-mix(in oklab, hsl(var(--lx-amber)) 58%, hsl(var(--panel))) 58%,
+    color-mix(in oklab, hsl(var(--lx-amber)) 40%, hsl(var(--panel)))
+  );
+  box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.2),
+    inset 0 -8px 14px hsl(var(--lx-shadow) / 0.3),
+    0 0 0 1px hsl(var(--lx-amber) / 0.4),
+    0 12px 26px -12px hsl(0 0% 0% / 0.7);
+}
+
+.lx .lx-how-step--last .lx-how-step__body:hover .lx-how-node__core {
+  box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.24),
+    inset 0 -8px 14px hsl(var(--lx-shadow) / 0.26),
+    0 0 0 1px hsl(var(--lx-amber) / 0.7),
+    0 0 0 6px hsl(var(--lx-amber) / 0.14),
+    0 22px 36px -14px hsl(0 0% 0% / 0.75);
+}
+
+/* Dashed orbit; turns slowly while its step is hovered. */
+.lx .lx-how-node__orbit {
+  position: absolute;
+  left: -10px;
+  top: -10px;
+  width: 76px;
+  height: 76px;
+  overflow: visible;
+  opacity: 0.5;
+  transition: opacity 0.4s ease;
+}
+
+.lx .lx-how-node__ring {
+  fill: none;
+  stroke: hsl(var(--panel-foreground));
+  stroke-opacity: 0.5;
+  stroke-width: 1;
+  stroke-dasharray: 2 5.5;
+  stroke-linecap: round;
+}
+
+.lx .lx-how-node__moon {
+  fill: hsl(var(--lx-amber));
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+
+.lx .lx-how-step__body:hover .lx-how-node__orbit,
+.lx .lx-how-step__body:hover .lx-how-node__moon {
+  opacity: 1;
+}
+
+/* Halo that answers the travelling pulse (keyed to --i, see below). */
+.lx .lx-how-node__glow {
+  position: absolute;
+  inset: -18px;
+  border-radius: 999px;
+  background: radial-gradient(
+    circle,
+    hsl(var(--lx-sea) / 0.7),
+    hsl(var(--lx-sea) / 0) 66%
+  );
+  opacity: 0;
+  pointer-events: none;
+}
+
+.lx .lx-how-step--last .lx-how-node__glow {
+  background: radial-gradient(
+    circle,
+    hsl(var(--lx-amber) / 0.55),
+    hsl(var(--lx-amber) / 0) 66%
+  );
+}
+
+/* ------------------------------------------------------------------ Wires */
+
+/*
+ * The connector from a step to the next: a stroke and an arrowhead that draw
+ * in (data-draw), and a track the pulse runs along. Phone: vertical, from
+ * under this node to just above the next. lg: horizontal at node height,
+ * from this column's centre to the next one's. Hidden at md, where the
+ * steps wrap.
+ */
+.lx .lx-how-wire {
+  position: absolute;
+  left: 22px;
+  top: 70px;
+  bottom: -26px;
+  width: 12px;
+  pointer-events: none;
+}
+
+.lx .lx-how-wire__line {
+  position: absolute;
+  overflow: visible;
+  fill: none;
+  stroke: hsl(var(--panel-foreground) / 0.3);
+  stroke-width: 1.25;
+}
+
+.lx .lx-how-wire__line--x {
+  display: none;
+}
+
+/* Each stroke runs into the arrowhead's tip, 4px in from the wire's end. */
+.lx .lx-how-wire__line--y {
+  left: 5px;
+  top: 0;
+  width: 2px;
+  height: calc(100% - 4px);
+}
+
+/* Butt caps on everything data-draw strokes; see .lx-why-leaf__line. */
+.lx .lx-how-wire__head {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 12px;
+  height: 12px;
+  overflow: visible;
+  fill: none;
+  stroke: hsl(var(--panel-foreground) / 0.55);
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+  transform: rotate(90deg);
+}
+
+.lx .lx-how-wire__track {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 6px;
+  width: 12px;
+  overflow: hidden;
+}
+
+/* The pulse: an amber spark with a short tail. Hidden until animated. */
+.lx .lx-how-wire__spark {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: radial-gradient(
+      circle at 50% calc(100% - 5px),
+      hsl(var(--lx-amber)) 0 2.2px,
+      hsl(var(--lx-amber) / 0.45) 3.4px,
+      hsl(var(--lx-amber) / 0) 6.5px
+    ),
+    linear-gradient(
+        180deg,
+        hsl(var(--lx-amber) / 0) 25%,
+        hsl(var(--lx-amber) / 0.75)
+      )
+      50% 0 / 2px 100% no-repeat;
+}
+
+@media (min-width: 768px) {
+  .lx .lx-how-wire {
+    display: none;
+  }
+}
+
+@media (min-width: 1024px) {
+  .lx .lx-how-wire {
+    display: block;
+    left: calc(50% + 42px);
+    right: calc(-50% + 42px);
+    top: 22px;
+    bottom: auto;
+    width: auto;
+    height: 12px;
+  }
+
+  .lx .lx-how-wire__line--x {
+    display: block;
+    left: 0;
+    top: 5px;
+    width: calc(100% - 4px);
+    height: 2px;
+  }
+
+  .lx .lx-how-wire__line--y {
+    display: none;
+  }
+
+  .lx .lx-how-wire__head {
+    left: auto;
+    right: 0;
+    top: 0;
+    bottom: auto;
+    transform: none;
+  }
+
+  .lx .lx-how-wire__track {
+    left: 0;
+    right: 6px;
+    top: 0;
+    bottom: 0;
+    width: auto;
+  }
+
+  .lx .lx-how-wire__spark {
+    background: radial-gradient(
+        circle at calc(100% - 5px) 50%,
+        hsl(var(--lx-amber)) 0 2.2px,
+        hsl(var(--lx-amber) / 0.45) 3.4px,
+        hsl(var(--lx-amber) / 0) 6.5px
+      ),
+      linear-gradient(
+          90deg,
+          hsl(var(--lx-amber) / 0) 25%,
+          hsl(var(--lx-amber) / 0.75)
+        )
+        0 50% / 100% 2px no-repeat;
+  }
+}
+
+/* ---------------------------------------------------------- Pulse loop */
+
+/*
+ * One 6.4s cycle, five 1.28s slots. In slot i the spark crosses wire i
+ * (1.09s of travel), and node i's halo flares as the spark from wire i - 1
+ * arrives, so a single pulse appears to run from the first step to the
+ * last. The cycle is the same on every wire and every node, so they stay in
+ * lockstep at any wire length.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .lx .lx-how-wire__spark {
+    animation: lx-how-spark-y 6.4s var(--lx-ease-in-out) infinite;
+    animation-delay: calc(var(--i, 0) * 1.28s);
+  }
+
+  .lx .lx-how-node__glow {
+    animation: lx-how-glow 6.4s var(--lx-ease-out) infinite;
+    animation-delay: calc(var(--i, 0) * 1.28s - 0.44s);
+  }
+
+  .lx .lx-how-node__orbit {
+    animation: lx-spin 12s linear infinite paused;
+  }
+
+  .lx .lx-how-step__body:hover .lx-how-node__orbit {
+    animation-play-state: running;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) and (min-width: 1024px) {
+  .lx .lx-how-wire__spark {
+    animation-name: lx-how-spark-x;
+  }
+}
+
+/* ===================================================================== Method */
+
+.lx .lx-method-divider {
+  width: 1px;
+  background: linear-gradient(
+    180deg,
+    hsl(var(--foreground) / 0),
+    hsl(var(--foreground) / 0.16) 18%,
+    hsl(var(--foreground) / 0.16) 82%,
+    hsl(var(--foreground) / 0)
+  );
+}
+
+/*
+ * The guarded contextual link: an inline text link whose amber underline
+ * sweeps across every line it wraps onto, with an arrow that nudges out.
+ */
+.lx .lx-method-link {
+  padding: 6px 0;
+  border-radius: 3px;
+  color: hsl(var(--primary));
+  background-image: linear-gradient(hsl(var(--lx-amber)), hsl(var(--lx-amber))),
+    linear-gradient(hsl(var(--primary) / 0.22), hsl(var(--primary) / 0.22));
+  background-position: 0 calc(100% - 4px), 0 calc(100% - 4px);
+  background-repeat: no-repeat;
+  background-size: 0% 1.5px, 100% 1px;
+  transition: background-size 0.75s var(--lx-ease-out), color 0.25s ease;
+}
+
+.lx .lx-method-link:hover,
+.lx .lx-method-link:focus-visible {
+  color: hsl(var(--foreground));
+  background-size: 100% 1.5px, 100% 1px;
+}
+
+.lx .lx-method-link:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 3px;
+}
+
+.lx .lx-method-link__arrow {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  margin-left: 6px;
+  vertical-align: -2px;
+  color: hsl(var(--lx-amber-ink));
+  transition: transform 0.4s var(--lx-ease-spring);
+}
+
+.lx .lx-method-link:hover .lx-method-link__arrow,
+.lx .lx-method-link:focus-visible .lx-method-link__arrow {
+  transform: translate(3px, -3px);
+}
+
+/* -------------------------------------------------------------- Columns */
+
+.lx .lx-method-col {
+  position: relative;
+  padding: 10px 0;
+}
+
+@media (min-width: 640px) {
+  .lx .lx-method-col {
+    padding: 10px 8px;
+  }
+}
+
+/* Hairlines: horizontal between stacked columns, vertical side by side. */
+.lx .lx-method-col::before,
+.lx .lx-method-col::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+}
+
+.lx .lx-method-col::after {
+  top: 0;
+  left: 6%;
+  right: 6%;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    hsl(var(--foreground) / 0),
+    hsl(var(--foreground) / 0.13) 20%,
+    hsl(var(--foreground) / 0.13) 80%,
+    hsl(var(--foreground) / 0)
+  );
+}
+
+.lx .lx-method-col:first-child::after {
+  display: none;
+}
+
+.lx .lx-method-col::before {
+  display: none;
+  top: 12%;
+  bottom: 12%;
+  left: 0;
+  width: 1px;
+  background: linear-gradient(
+    180deg,
+    hsl(var(--foreground) / 0),
+    hsl(var(--foreground) / 0.13) 18%,
+    hsl(var(--foreground) / 0.13) 82%,
+    hsl(var(--foreground) / 0)
+  );
+}
+
+@media (min-width: 640px) {
+  .lx .lx-method-col:nth-child(-n + 2)::after {
+    display: none;
+  }
+
+  .lx .lx-method-col:nth-child(2n)::before {
+    display: block;
+  }
+}
+
+@media (min-width: 1024px) {
+  .lx .lx-method-col::after {
+    display: none;
+  }
+
+  .lx .lx-method-col::before {
+    display: block;
+  }
+
+  .lx .lx-method-col:first-child::before {
+    display: none;
+  }
+}
+
+/* The column's card: invisible at rest; a warm surface rises on hover. */
+.lx .lx-method-card {
+  border-radius: var(--lx-radius);
+}
+
+.lx .lx-method-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(
+      180deg,
+      hsl(0 0% 100% / 0.7),
+      hsl(0 0% 100% / 0) 55%
+    ),
+    hsl(var(--card));
+  box-shadow: var(--lx-elev-2), inset 0 0 0 1px hsl(var(--border) / 0.9);
+  opacity: 0;
+  transform: translate3d(0, 12px, 0) scale(0.96);
+  transition: opacity 0.45s ease, transform 0.65s var(--lx-ease-out),
+    box-shadow 0.5s var(--lx-ease-out);
+}
+
+.lx .lx-method-card:hover {
+  --lift: -6px;
+}
+
+.lx .lx-method-card:hover::before {
+  opacity: 1;
+  transform: none;
+}
+
+.lx .lx-method-card.is-tilting::before {
+  box-shadow: var(--lx-elev-3), inset 0 0 0 1px hsl(var(--border));
+}
+
+.lx .lx-method-card--mint {
+  --lx-method-tint: var(--lx-mint);
+  --lx-method-ink: var(--lx-teal);
+}
+
+.lx .lx-method-card--slate {
+  --lx-method-tint: var(--lx-slate);
+  --lx-method-ink: var(--primary);
+}
+
+.lx .lx-method-card--amber {
+  --lx-method-tint: var(--lx-sand);
+  --lx-method-ink: var(--lx-amber-ink);
+}
+
+.lx .lx-method-icon {
+  position: relative;
+  display: block;
+  width: 40px;
+  height: 40px;
+  flex: none;
+}
+
+/* Turns once about Y, like a coin, when its column is hovered. */
+.lx .lx-method-icon__coin {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  color: hsl(var(--lx-method-ink));
+  background: hsl(var(--lx-method-tint));
+  box-shadow: inset 0 0 0 1px hsl(var(--lx-method-ink) / 0.3);
+  transition: box-shadow 0.4s ease;
+}
+
+.lx .lx-method-icon__coin svg {
+  width: 18px;
+  height: 18px;
+}
+
+.lx .lx-method-card:hover .lx-method-icon__coin {
+  box-shadow: inset 0 0 0 1px hsl(var(--lx-method-ink) / 0.5),
+    0 8px 18px -8px hsl(var(--lx-method-ink) / 0.55);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .lx .lx-method-card:hover .lx-method-icon__coin {
+    animation: lx-method-coin 1s var(--lx-ease-out);
+  }
+}
+
+/* ================================================================= Keyframes */
+
+@keyframes lx-why-ring {
+  0% {
+    opacity: 0.85;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.9);
+  }
+}
+
+@keyframes lx-why-glow {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0.6;
+    transform: scale(1.18);
+  }
+}
+
+@keyframes lx-why-breathe {
+  from {
+    transform: scale(1) rotate(0deg);
+  }
+  to {
+    transform: scale(1.03) rotate(-1.4deg);
+  }
+}
+
+@keyframes lx-how-spark-x {
+  0% {
+    opacity: 0;
+    transform: translate3d(-100%, 0, 0);
+  }
+  3% {
+    opacity: 1;
+  }
+  17% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+  21%,
+  100% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes lx-how-spark-y {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -100%, 0);
+  }
+  3% {
+    opacity: 1;
+  }
+  17% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+  21%,
+  100% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes lx-how-glow {
+  0% {
+    opacity: 0;
+    transform: scale(0.7);
+  }
+  4% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+  18%,
+  100% {
+    opacity: 0;
+    transform: scale(1.45);
+  }
+}
+
+@keyframes lx-method-coin {
+  from {
+    transform: rotateY(0deg);
+  }
+  to {
+    transform: rotateY(360deg);
+  }
+}

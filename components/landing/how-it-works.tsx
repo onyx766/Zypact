@@ -123,7 +123,7 @@ export function HowItWorks({ id, eyebrow, title, lede, steps }: HowItWorksProps)
                 className={cn("lx-how-step", isLast && "lx-how-step--last")}
                 style={vars({ "--i": index })}
               >
-                <div className="lx-how-step__body" data-tilt="10">
+                <div className="lx-how-step__body" data-tilt="24">
                   <span className="lx-how-node" aria-hidden="true">
                     <span className="lx-how-node__glow" />
                     <svg

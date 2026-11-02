@@ -65,7 +65,7 @@
 }
 
 .lx .lx-why-card:hover {
-  --lift: -8px;
+  --lift: -16px;
   box-shadow: var(--lx-elev-3), inset 0 0 0 1px hsl(var(--border));
 }
 
@@ -137,7 +137,7 @@
 }
 
 .lx .lx-why-card:hover .lx-why-icon__glyph {
-  transform: scale(1.1) rotate(-8deg);
+  transform: scale(1.28) rotate(-24deg);
 }
 
 /* "pulse": concentric rings ripple out from the disc. */
@@ -596,7 +596,7 @@
 
 /* Rises out of the step, in depth when the step is tilting. */
 .lx .lx-how-step__body:hover .lx-how-node {
-  transform: translate3d(0, -4px, 30px);
+  transform: translate3d(0, -12px, 52px) scale(1.14);
 }
 
 .lx .lx-how-node__core {
@@ -1046,7 +1046,7 @@
 }
 
 .lx .lx-method-card:hover {
-  --lift: -6px;
+  --lift: -16px;
 }
 
 .lx .lx-method-card:hover::before {

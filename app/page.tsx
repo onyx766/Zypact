@@ -454,7 +454,6 @@ const footer = {
     {
       heading: "Method",
       links: [
-        { label: "Methodology", href: "/method" },
         { label: "Evidence", href: "#evidence" },
         { label: "Outcome statuses", href: "#outcomes" },
         { label: "Scope and limits", href: "#scope" },

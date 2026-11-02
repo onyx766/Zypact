@@ -63,7 +63,7 @@ export function Why({ id, eyebrow, title, lede, cards }: WhyProps) {
             return (
               <li key={card.title} data-reveal="rotate" className="relative">
                 <article
-                  data-tilt="9"
+                  data-tilt="20"
                   data-tilt-glare
                   className={cn(
                     "lx-card lx-why-card flex h-full flex-col p-6 lg:p-7",

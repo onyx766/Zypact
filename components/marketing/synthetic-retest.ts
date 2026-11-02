@@ -25,7 +25,7 @@ import type { ProtocolReportInterval } from "@/lib/reports/protocol-report-types
 
 export const SYNTHETIC_QUESTION = "Which ERP fits a mid-market manufacturer?";
 
-/** Preserved runs per phase. Equal phases, as /method's 0.27 note assumes. */
+/** Preserved runs per phase. Equal phases, as the 0.27 figure below assumes. */
 export const SYNTHETIC_RUNS = 15;
 export const SYNTHETIC_BASELINE_NAMED = 2;
 export const SYNTHETIC_RETEST_NAMED = 12;
@@ -36,8 +36,7 @@ export const V1_MINIMUM_USEFUL_CHANGE = 0.6;
 /**
  * Smallest change detectable at 15 preserved runs per phase, from the
  * signed-off detectable-change table verified against the deployed
- * `_smallest_detectable_change` (CURRENT_STATUS.md §16). app/method/page.tsx
- * cites this figure, so change both pages together or neither.
+ * `_smallest_detectable_change` (CURRENT_STATUS.md §16).
  */
 export const DETECTABLE_CHANGE_AT_15 = "0.27";
 

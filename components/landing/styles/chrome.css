@@ -1,6 +1,283 @@
 /*
- * Zypact landing — Site header, FAQ, CTA band, Contact and Footer (components/marketing/site-header.tsx, components/landing/faq.css hooks in app/page.tsx, cta.tsx, contact.tsx, footer.tsx).
+ * Zypact landing — Site header, FAQ, CTA band, Contact and Footer
+ * (components/marketing/site-header.tsx, FAQ markup in app/page.tsx,
+ * components/landing/cta-band.tsx, contact.tsx, site-footer.tsx).
  *
  * Scoped under `.lx` like base.css; see that file for the specificity and
- * motion contracts every rule here follows.
+ * motion contracts every rule here follows. The header also renders on /about,
+ * outside `.lx`, where none of this applies.
  */
+
+/* ==================================================================== Header */
+
+.lx .lx-header {
+  transition: box-shadow 0.4s var(--lx-ease-out);
+}
+
+.lx .lx-header[data-scrolled] {
+  box-shadow: 0 10px 30px -22px hsl(var(--lx-shadow) / 0.5);
+}
+
+.lx .lx-header__link {
+  position: relative;
+}
+
+.lx .lx-header__link::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -6px;
+  height: 1.5px;
+  border-radius: 2px;
+  background: hsl(var(--lx-amber));
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+  transition: transform 0.45s var(--lx-ease-out);
+}
+
+.lx .lx-header__link[data-active] {
+  color: hsl(var(--foreground));
+}
+
+.lx .lx-header__link[data-active]::after {
+  transform: scaleX(1);
+}
+
+.lx .lx-header__cta {
+  border-radius: 10px;
+}
+
+/* ======================================================================= FAQ */
+
+.lx .lx-faq {
+  display: grid;
+  gap: 9px;
+}
+
+.lx .lx-faq__item {
+  border-radius: var(--lx-radius-sm);
+  background: hsl(var(--card) / 0.72);
+  box-shadow: var(--lx-elev-1), inset 0 0 0 1px hsl(var(--border) / 0.85);
+  /* Repeats the [data-reveal] list: a bare hover transition would replace it. */
+  transition: opacity 1.05s var(--lx-ease-out) var(--lx-delay, 0ms),
+    transform 1.05s var(--lx-ease-out) var(--lx-delay, 0ms),
+    background-color 0.3s ease, box-shadow 0.3s ease,
+    translate 0.55s var(--lx-ease-spring);
+}
+
+.lx .lx-faq__item:hover,
+.lx .lx-faq__item[open] {
+  background: hsl(var(--card));
+}
+
+.lx .lx-faq__item:hover {
+  translate: 10px 0;
+  box-shadow: var(--lx-elev-2), inset 0 0 0 1px hsl(var(--lx-teal) / 0.28);
+}
+
+.lx .lx-faq__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  border-radius: inherit;
+  cursor: pointer;
+  list-style: none;
+}
+
+/* Safari keeps its marker despite `list-style: none`. */
+.lx .lx-faq__summary::-webkit-details-marker {
+  display: none;
+}
+
+.lx .lx-faq__q {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: hsl(var(--foreground));
+}
+
+/* A CSS chevron, so the icon turns without any JavaScript. */
+.lx .lx-faq__icon {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin: -3px 4px 0 0;
+  border-right: 1.75px solid hsl(var(--lx-ink-2));
+  border-bottom: 1.75px solid hsl(var(--lx-ink-2));
+  transform: rotate(45deg);
+  transition: transform 0.55s var(--lx-ease-spring),
+    margin 0.4s var(--lx-ease-out);
+}
+
+.lx .lx-faq__item[open] .lx-faq__icon {
+  margin-top: 3px;
+  transform: rotate(-135deg);
+}
+
+.lx .lx-faq__answer {
+  padding: 0 18px 16px;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: hsl(var(--muted-foreground));
+}
+
+/* ================================================================== CTA band */
+
+.lx .lx-cta {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border-radius: var(--lx-radius-lg);
+  background: hsl(var(--panel));
+  box-shadow: var(--lx-elev-3);
+}
+
+/*
+ * The range sits to the right; the wash keeps the copy on an even dark ground,
+ * and it is the only thing holding contrast there.
+ */
+.lx .lx-cta__ridge {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+}
+
+.lx .lx-cta__ridge::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    hsl(var(--panel)) 22%,
+    hsl(var(--panel) / 0.82) 52%,
+    hsl(var(--panel) / 0.12) 100%
+  );
+}
+
+.lx .lx-cta__body {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  padding: 36px 26px;
+}
+
+@media (min-width: 640px) {
+  .lx .lx-cta__body {
+    padding: 44px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .lx .lx-cta__body {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 48px;
+    padding: 48px 56px;
+  }
+}
+
+/* =================================================================== Contact */
+
+.lx .lx-contact-card {
+  overflow: hidden;
+  background: hsl(var(--card) / 0.86);
+}
+
+/* The folded corner wedge. */
+.lx .lx-contact-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 92px;
+  height: 44px;
+  clip-path: polygon(0 0, 100% 0, 100% 100%);
+  border-top-right-radius: inherit;
+  transform-origin: 100% 0;
+  transition: transform 0.7s var(--lx-ease-spring);
+}
+
+.lx .lx-contact-card:hover::before {
+  transform: scale(1.55);
+}
+
+.lx .lx-contact-card--teal::before {
+  background: linear-gradient(
+    200deg,
+    hsl(var(--lx-sea) / 0.75),
+    hsl(var(--lx-mist))
+  );
+}
+
+.lx .lx-contact-card--amber::before {
+  background: linear-gradient(
+    200deg,
+    hsl(var(--lx-amber) / 0.85),
+    hsl(var(--lx-sand))
+  );
+}
+
+.lx .lx-contact-mail {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+  margin-top: 22px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+  overflow-wrap: anywhere;
+}
+
+.lx .lx-contact-mail:hover {
+  color: hsl(var(--lx-teal));
+}
+
+.lx .lx-contact-mail svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  transition: transform 0.6s var(--lx-ease-spring);
+}
+
+.lx .lx-contact-card:hover .lx-contact-mail svg {
+  transform: scale(1.3) rotate(-14deg);
+}
+
+/* ==================================================================== Footer */
+
+.lx .lx-footer {
+  background: hsl(var(--panel));
+}
+
+.lx .lx-footer__brand p {
+  color: hsl(var(--panel-muted));
+}
+
+.lx .lx-footer__link {
+  font-size: 13.5px;
+  color: hsl(var(--panel-muted));
+  transition: color 0.25s ease;
+}
+
+.lx .lx-footer__link:hover {
+  color: hsl(var(--panel-foreground));
+}
+
+.lx .lx-footer__rule {
+  border-top: 1px solid hsl(var(--panel-foreground) / 0.12);
+  color: hsl(var(--panel-muted));
+}
+
+@media (min-width: 1024px) {
+  .lx .lx-footer__brand {
+    padding-right: 32px;
+    border-right: 1px solid hsl(var(--panel-foreground) / 0.14);
+  }
+}

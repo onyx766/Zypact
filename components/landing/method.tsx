@@ -75,7 +75,7 @@ export function Method({ id, eyebrow, title, lede, link, columns }: MethodProps)
             return (
               <li key={column.title} data-reveal="flip" className="lx-method-col">
                 <article
-                  data-tilt="7"
+                  data-tilt="18"
                   data-tilt-glare
                   className={cn(
                     "lx-method-card flex h-full flex-col px-6 pb-7 pt-6",

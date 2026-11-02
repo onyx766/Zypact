@@ -1,6 +1,174 @@
 /*
- * Zypact landing — Evidence section and Report section (components/landing/evidence.tsx, report.tsx, components/marketing/answer-evidence.tsx).
+ * Zypact landing — Evidence section and Report section
+ * (components/landing/evidence.tsx, report.tsx,
+ * components/marketing/answer-evidence.tsx).
  *
  * Scoped under `.lx` like base.css; see that file for the specificity and
  * motion contracts every rule here follows.
  */
+
+/* ==================================================================== Report */
+
+.lx .lx-report-visual {
+  position: relative;
+  max-width: 400px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 18px 0 18px 26px;
+}
+
+/* The teal sheet behind the card, turned the other way. */
+.lx .lx-report-plate {
+  position: absolute;
+  inset: 54px 44px 6px 0;
+  border-radius: var(--lx-radius-lg);
+  background: linear-gradient(
+    160deg,
+    hsl(var(--lx-mint)),
+    hsl(var(--lx-sea)) 58%,
+    hsl(var(--lx-teal))
+  );
+  transform: rotate(-10deg);
+  box-shadow: var(--lx-elev-2);
+  transition: transform 0.9s var(--lx-ease-spring);
+}
+
+@media (hover: hover) {
+  .lx .lx-report-visual:hover .lx-report-plate {
+    transform: rotate(-17deg) translate3d(-10px, 8px, 0);
+  }
+}
+
+.lx .lx-report-card {
+  --lift: 0px;
+  padding: 22px;
+  border-radius: var(--lx-radius-lg);
+  background: hsl(var(--card));
+  box-shadow: var(--lx-elev-3), inset 0 0 0 1px hsl(var(--border) / 0.9);
+  rotate: 6deg;
+  transition: transform 0.9s var(--lx-ease-spring),
+    rotate 0.9s var(--lx-ease-spring);
+}
+
+.lx .lx-report-card.is-tilting {
+  rotate: 0deg;
+}
+
+.lx .lx-report-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.lx .lx-report-card__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 700;
+  color: hsl(var(--primary));
+}
+
+.lx .lx-report-card__title {
+  margin-top: 20px;
+  font-family: var(--lx-font-display);
+  font-size: 23px;
+  font-weight: 560;
+  letter-spacing: -0.012em;
+  line-height: 1.2;
+  color: hsl(var(--foreground));
+}
+
+.lx .lx-report-rows {
+  display: grid;
+  gap: 7px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lx .lx-report-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: hsl(var(--surface-muted) / 0.62);
+  font-size: 13px;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+}
+
+.lx .lx-report-row svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: hsl(var(--lx-teal));
+}
+
+.lx .lx-report-row--accent {
+  background: hsl(var(--lx-sand));
+}
+
+.lx .lx-report-row--accent svg {
+  color: hsl(var(--lx-amber-ink));
+}
+
+.lx .lx-report-list {
+  padding: 0;
+  list-style: none;
+}
+
+.lx .lx-report-item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  column-gap: 12px;
+  row-gap: 2px;
+  padding: 11px 0;
+  border-bottom: 1px solid hsl(var(--border) / 0.8);
+}
+
+.lx .lx-report-item:last-child {
+  border-bottom: 0;
+}
+
+.lx .lx-report-item svg {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  color: hsl(var(--primary));
+  transition: transform 0.6s var(--lx-ease-spring);
+}
+
+.lx .lx-report-item:hover svg {
+  transform: scale(1.35) rotate(-14deg);
+}
+
+.lx .lx-report-item__title {
+  font-size: 14px;
+  font-weight: 700;
+  color: hsl(var(--foreground));
+  transition: translate 0.6s var(--lx-ease-spring);
+}
+
+.lx .lx-report-item:hover .lx-report-item__title {
+  translate: 6px 0;
+}
+
+.lx .lx-report-item__copy {
+  grid-column: 2;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: hsl(var(--muted-foreground));
+}
+
+@media (min-width: 640px) {
+  .lx .lx-report-item {
+    grid-template-columns: 18px 120px minmax(0, 1fr);
+  }
+
+  .lx .lx-report-item__copy {
+    grid-column: 3;
+  }
+}

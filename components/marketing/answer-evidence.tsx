@@ -1,5 +1,14 @@
 import { ArrowRight, Quote, Sparkles } from "lucide-react";
 
+import {
+  DETECTABLE_CHANGE_AT_15,
+  SYNTHETIC_BASELINE_NAMED,
+  SYNTHETIC_QUESTION,
+  SYNTHETIC_RETEST_NAMED,
+  SYNTHETIC_RUNS,
+  syntheticComparison,
+} from "@/components/marketing/synthetic-retest";
+
 /**
  * The two concrete-evidence panels from the approved design: one AI answer with
  * its citations, and a baseline/retest pair for the same question.
@@ -18,19 +27,6 @@ import { ArrowRight, Quote, Sparkles } from "lucide-react";
  *    §19 forbids "this fix caused the lift", so the copy states the opposite
  *    explicitly rather than staying silent and letting the layout imply it.
  */
-
-const APPROVED_QUESTION =
-  "Which tools help a B2B SaaS team measure how AI assistants answer buyer questions?";
-
-/** Preserved runs behind the illustrative baseline/retest pair. */
-const PRESERVED_RUNS = 15;
-
-/**
- * Smallest change detectable at 15 preserved runs, from the signed-off
- * detectable-change table verified against the deployed `_smallest_detectable_change`
- * (see CURRENT_STATUS.md §16). Kept in sync with that row, not rounded to taste.
- */
-const DETECTABLE_CHANGE = "0.27";
 
 const citedSources = [
   {
@@ -95,7 +91,7 @@ export function ExampleAnswer() {
             Approved question
           </p>
           <p className="mt-2 text-pretty text-[13px] font-semibold leading-relaxed tracking-tight">
-            {APPROVED_QUESTION}
+            {SYNTHETIC_QUESTION}
           </p>
         </div>
 
@@ -106,11 +102,11 @@ export function ExampleAnswer() {
             aria-hidden="true"
           />
           <p className="mt-2.5 text-pretty text-[12.5px] leading-relaxed text-foreground/85">
-            Teams comparing this category usually weigh how much of the
-            underlying evidence a vendor will show
-            <Cite n={1} /> against how narrowly its results are scoped
-            <Cite n={2} />. Several products publish the exact provider
-            responses behind each finding
+            Mid-market manufacturers usually weigh how well a system handles
+            shop-floor planning
+            <Cite n={1} /> against how long its rollout takes
+            <Cite n={2} />. Several vendors publish implementation timelines
+            for plants of this size
             <Cite n={3} />.
           </p>
         </div>
@@ -158,16 +154,16 @@ const retestPair = [
     phase: "Baseline",
     meta: "Before the registered change",
     excerpt:
-      "Teams comparing this category usually weigh how much of the underlying evidence a vendor will show against how narrowly its results are scoped.",
-    cited: 2,
+      "Mid-market manufacturers usually weigh how well a system handles shop-floor planning against how long its rollout takes.",
+    named: SYNTHETIC_BASELINE_NAMED,
     accent: false,
   },
   {
     phase: "Retest",
     meta: "After the observation window",
     excerpt:
-      "Several products publish the exact provider responses behind each finding, so a reader can follow the chain rather than take the conclusion on trust.",
-    cited: 7,
+      "Several vendors publish implementation timelines for plants of this size, so a buyer can compare rollouts before speaking to sales.",
+    named: SYNTHETIC_RETEST_NAMED,
     accent: true,
   },
 ] as const;
@@ -215,12 +211,12 @@ export function RetestComparison() {
 
             <div className="mt-4 rounded-lg border border-border bg-background px-3 py-2.5">
               <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-                Your brand cited in
+                Your brand named in
               </p>
               <p className="mt-1 text-[15px] font-bold tracking-tight tabular-nums">
-                {side.cited}{" "}
+                {side.named}{" "}
                 <span className="text-[12px] font-medium text-muted-foreground">
-                  of {PRESERVED_RUNS} preserved runs
+                  of {SYNTHETIC_RUNS} preserved runs
                 </span>
               </p>
             </div>
@@ -231,10 +227,11 @@ export function RetestComparison() {
       <div className="flex flex-col gap-3 border-t border-border px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
         <span className="inline-flex items-center gap-2 self-start rounded-full bg-success/10 px-3 py-1.5 font-mono text-[11px] font-semibold text-success">
           <ArrowRight className="h-3 w-3" strokeWidth={2.5} aria-hidden="true" />
-          increase_observed
+          {syntheticComparison.status}
         </span>
         <p className="text-[11px] leading-relaxed text-muted-foreground">
-          Synthetic illustration: smallest detectable change at {PRESERVED_RUNS} equal runs: {DETECTABLE_CHANGE}
+          Synthetic illustration. Smallest change {SYNTHETIC_RUNS} runs can
+          detect, at equal phases: {DETECTABLE_CHANGE_AT_15}
         </p>
       </div>
 

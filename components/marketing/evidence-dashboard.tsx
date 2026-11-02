@@ -324,7 +324,7 @@ export function EvidenceDashboard() {
             <div className="lx-float lx-float--slow lx-3d">
               <div
                 className="lx-dash-device"
-                data-tilt="7"
+                data-tilt="14"
                 data-tilt-glare=""
               >
                 <div className="lx-dash-screen lx-3d">

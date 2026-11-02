@@ -76,6 +76,7 @@ export const LEGACY_GONE: readonly string[] = [
   "/how-it-works",
   "/contact",
   "/methodology",
+  "/method",
   "/pricing",
   "/privacy",
   "/100",
@@ -128,7 +129,6 @@ export const DISALLOWED_PATH_PREFIXES: readonly string[] = [
 export const INDEXABLE_PATHS: readonly string[] = [
   "/",
   "/about",
-  "/method",
   "/scan",
   "/perplexity-content-change-test",
 ] as const;

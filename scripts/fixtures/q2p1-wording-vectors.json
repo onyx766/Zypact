@@ -1,0 +1,157 @@
+{
+  "about": "Q2-1 wording classification compatibility vectors. Each vector is one research set with one source and one candidate. Field q1 is the expected result of lib/buyer-questions classifyApprovedWording (checked offline by scripts/test-q2p-schema-contract.ts); field db is the expected first classification written by approve_buyer_question_set (checked by the Level 2 harness). Format: classification/rule/verification, empty for null; refused when Q1 refuses the research set. Rule: the database never records observed unless Q1 does, with the same verification. Expected values are written by hand. No string may contain a single quote, because the file is passed to SQL as a literal.",
+  "vectors": [
+    {
+      "id": "V1-unchanged-observed-public",
+      "origin": "recommended_unchanged",
+      "grade": "observed",
+      "sourceKind": "public_community",
+      "excerpt": "Which invoicing tool works best for a small accounting firm?",
+      "links": [
+        {
+          "relation": "verbatim",
+          "span": "Which invoicing tool works best for a small accounting firm?"
+        }
+      ],
+      "candidateText": "Which invoicing tool works best for a small accounting firm?",
+      "approvedText": "Which invoicing tool works best for a small accounting firm?",
+      "q1": "observed/inherited_unchanged/public_verifiable",
+      "db": "observed/inherited_unchanged/public_verifiable"
+    },
+    {
+      "id": "V2-unchanged-observed-customer-provided",
+      "origin": "recommended_unchanged",
+      "grade": "observed",
+      "sourceKind": "customer_material",
+      "excerpt": "How do we route invoice approvals to two managers?",
+      "links": [
+        {
+          "relation": "verbatim",
+          "span": "How do we route invoice approvals to two managers?"
+        }
+      ],
+      "candidateText": "How do we route invoice approvals to two managers?",
+      "approvedText": "How do we route invoice approvals to two managers?",
+      "q1": "observed/inherited_unchanged/customer_provided",
+      "db": "observed/inherited_unchanged/customer_provided"
+    },
+    {
+      "id": "V3-edited-near-match-whitespace-and-punctuation",
+      "origin": "recommended_edited",
+      "grade": "observed",
+      "sourceKind": "public_community",
+      "excerpt": "Which invoicing tool works best for a small accounting firm?",
+      "links": [
+        {
+          "relation": "verbatim",
+          "span": "Which invoicing tool works best for a small accounting firm?"
+        }
+      ],
+      "candidateText": "Which invoicing tool works best for a small accounting firm?",
+      "approvedText": "  Which invoicing tool works best for a small accounting firm  ",
+      "q1": "observed/exact_source_match/public_verifiable",
+      "db": "pending_review//"
+    },
+    {
+      "id": "V4-edited-unicode-normalisation-only",
+      "origin": "recommended_edited",
+      "grade": "observed",
+      "sourceKind": "public_community",
+      "excerpt": "Which café booking app handles group orders?",
+      "links": [
+        {
+          "relation": "verbatim",
+          "span": "Which café booking app handles group orders?"
+        }
+      ],
+      "candidateText": "Which café booking app handles group orders?",
+      "approvedText": "Which café booking app handles group orders?",
+      "q1": "pending_review//",
+      "db": "pending_review//"
+    },
+    {
+      "id": "V5-customer-written-equal-to-a-span",
+      "origin": "customer_written",
+      "grade": "observed",
+      "sourceKind": "public_community",
+      "excerpt": "Which invoicing tool works best for a small accounting firm?",
+      "links": [
+        {
+          "relation": "verbatim",
+          "span": "Which invoicing tool works best for a small accounting firm?"
+        }
+      ],
+      "candidateText": "Which invoicing tool works best for a small accounting firm?",
+      "approvedText": "Which invoicing tool works best for a small accounting firm?",
+      "q1": "pending_review//",
+      "db": "pending_review//"
+    },
+    {
+      "id": "V6-unchanged-hypothesis",
+      "origin": "recommended_unchanged",
+      "grade": "hypothesis",
+      "sourceKind": "public_community",
+      "excerpt": "Our invoices take forever to reconcile.",
+      "links": [],
+      "candidateText": "Which tools do clinics use for invoice approvals?",
+      "approvedText": "Which tools do clinics use for invoice approvals?",
+      "q1": "hypothesis/inherited_unchanged/",
+      "db": "hypothesis/inherited_unchanged/"
+    },
+    {
+      "id": "V7-unchanged-adapted-with-basis",
+      "origin": "recommended_unchanged",
+      "grade": "adapted",
+      "sourceKind": "public_community",
+      "excerpt": "Reconciling invoices takes our firm forever and nothing fits.",
+      "links": [
+        {
+          "relation": "paraphrase_basis",
+          "span": null
+        }
+      ],
+      "candidateText": "How can a small firm reconcile invoices faster?",
+      "approvedText": "How can a small firm reconcile invoices faster?",
+      "q1": "adapted/inherited_unchanged/public_verifiable",
+      "db": "adapted/inherited_unchanged/public_verifiable"
+    },
+    {
+      "id": "V8-observed-candidate-text-not-its-span",
+      "origin": "recommended_unchanged",
+      "grade": "observed",
+      "sourceKind": "public_community",
+      "excerpt": "Which tool? Honestly, which invoicing tool works best for a small accounting firm?",
+      "links": [
+        {
+          "relation": "verbatim",
+          "span": "Which tool?"
+        }
+      ],
+      "candidateText": "Which invoicing tool works best for a small accounting firm?",
+      "approvedText": "Which invoicing tool works best for a small accounting firm?",
+      "q1": "pending_review//",
+      "db": "pending_review//"
+    },
+    {
+      "id": "V9-edited-to-an-exact-verbatim-span",
+      "origin": "recommended_edited",
+      "grade": "adapted",
+      "sourceKind": "public_community",
+      "excerpt": "Which invoicing tool works best for a small accounting firm? We waste hours.",
+      "links": [
+        {
+          "relation": "paraphrase_basis",
+          "span": null
+        },
+        {
+          "relation": "verbatim",
+          "span": "Which invoicing tool works best for a small accounting firm?"
+        }
+      ],
+      "candidateText": "What invoicing tool suits a small accounting firm best?",
+      "approvedText": "Which invoicing tool works best for a small accounting firm?",
+      "q1": "observed/exact_source_match/public_verifiable",
+      "db": "observed/exact_source_match/public_verifiable"
+    }
+  ]
+}

@@ -13,6 +13,9 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import { classifyApprovedWording } from "@/lib/buyer-questions/classify-wording";
+import type { Candidate, CandidateSourceLink, Origin, QuestionSource, ResearchSet, SourceKind } from "@/lib/buyer-questions/types";
+import { sha256Utf8Hex } from "@/lib/buyer-questions/validate-source";
 import { LAST_PRE_TIMESTAMP_LEDGER_VERSION, migrationLedger, parseMigrationName } from "./lib/migration-names";
 
 let failures = 0;
@@ -203,6 +206,45 @@ function detectors(sql: string): Array<[string, string, boolean, string]> {
   const f8 = functionBody(sql, "remove_workspace_member");
   add("QS-20", "F8 refuses the last active owner", /if v_others = 0 then\s+raise exception using errcode = 'P0001', message = 'last_active_owner';/.test(f8));
 
+  // ── Remediation round (R1–R4) ──
+  const inv = t.get("question_review_invitations") ?? "";
+  add("QS-21", "an exchanged invitation must carry a verified email (an unexchanged one need not)",
+    /check \(\s*exchanged_at is null or email_verified_at is not null\)/.test(inv));
+  add("QS-21", "a session can only be created for an exchanged, email-verified invitation",
+    /i\.exchanged_at is not null and i\.email_verified_at is not null\) then\s+raise exception using errcode = '23514', message = 'q2p_session_needs_exchanged_verified_invitation'/.test(functionBody(sql, "_q2p_session_within_invitation")));
+  add("QS-21", "F4 refuses an invitation without a verified email",
+    /or v_invitation\.exchanged_at is null\s+or v_invitation\.email_verified_at is null/.test(f4));
+  add("QS-22", "every observed classification in F4 is guarded by the source-backed span check",
+    (f4.match(/v_class := 'observed'/g) ?? []).length === 2
+      && /v_cand\.evidence_grade = 'observed'\s+and public\._q2p_observed_span_ok\(v_cand\.id, v_cand\.primary_source_id, v_texts\[v_i\], v_cand\.verification\) then\s+v_class := 'observed'/.test(f4)
+      && /if public\._q2p_observed_span_ok\(v_cand\.id, v_cand\.primary_source_id, v_texts\[v_i\], v_verif\) then\s+v_class := 'observed'/.test(f4));
+  add("QS-22", "every adapted classification in F4 is guarded by the basis check",
+    (f4.match(/v_class := 'adapted'/g) ?? []).length === 1
+      && /v_cand\.evidence_grade = 'adapted'\s+and public\._q2p_adapted_basis_ok\(v_cand\.id, v_cand\.primary_source_id, v_cand\.verification\) then\s+v_class := 'adapted'/.test(f4));
+  const spanOk = functionBody(sql, "_q2p_observed_span_ok");
+  add("QS-22", "the span check requires a byte-exact verbatim span on a buyer-authored, non-site-copy, same-verification, intact source",
+    /l\.relation = 'verbatim'/.test(spanOk) && /l\.quoted_span = p_text/.test(spanOk) && /s\.buyer_authored/.test(spanOk)
+      && /s\.source_kind <> 'site_copy'/.test(spanOk) && /s\.verification = p_verification/.test(spanOk)
+      && /s\.excerpt_sha256 = public\._q2p_sha256_hex\(s\.excerpt\)/.test(spanOk)
+      && /_q2p_span_at_word_boundary\(s\.excerpt, l\.quoted_span\)/.test(spanOk));
+  add("QS-23", "the F4 fingerprint is a canonical jsonb, items sorted by prompt hash",
+    /v_fp := public\._q2p_sha256_hex\(jsonb_build_object\(/.test(f4) && /order by u\.prompt_hash\)/.test(f4)
+      && /'consent_text_version', p_consent_text_version/.test(f4) && /'consent_text_sha256', p_consent_text_sha256/.test(f4)
+      && /'research_set_id', v_set\.id/.test(f4) && !/array_to_string/.test(f4));
+  add("QS-23", "idempotency keys are scoped to the research set",
+    /unique \(research_set_id, idempotency_key\)/.test(ar) && !/idempotency_key\s+text not null unique/.test(ar));
+  add("QS-23", "explicit conflict statuses exist and come after authorisation",
+    f4.indexOf("IDEMPOTENCY_KEY_CONFLICT") > f4.indexOf("v_invitation.email_verified_at is null")
+      && f4.indexOf("SET_ALREADY_APPROVED") > f4.indexOf("v_invitation.email_verified_at is null")
+      && f4.indexOf("IDEMPOTENCY_KEY_CONFLICT") > 0);
+  add("QS-24", "no Q2′-1 function catches unique_violation (D-021/D-023)", !/when\s+unique_violation/i.test(sql));
+  add("QS-24", "no Q2′-1 function swallows serialization failures", !/when\s+(serialization_failure|others)\s+then\s+(return|null)/i.test(sql));
+  const f1 = functionBody(sql, "create_workspace_with_owner");
+  add("QS-24", "F1 takes the key's advisory lock before its key lookup",
+    f1.search(/pg_advisory_xact_lock\(hashtextextended\('zypact\.q2p\.create_workspace:' \|\| p_idempotency_key, 0\)\)/) > 0
+      && f1.search(/pg_advisory_xact_lock/) < f1.search(/where w\.idempotency_key = p_idempotency_key/));
+  add("QS-24", "F1 reports a key conflict as a status, not by catching", /'IDEMPOTENCY_KEY_CONFLICT'::text/.test(f1));
+
   return out;
 }
 
@@ -237,7 +279,8 @@ function detectors(sql: string): Array<[string, string, boolean, string]> {
   const allowed = (p: string) =>
     /^supabase\/migrations\/\d{14}_q2p1_[a-z0-9_]+\.sql$/.test(p)
     || ["scripts/test-q2p-schema-contract.ts", "scripts/test-snapshot-worker-postgres-level2.sh",
-        "scripts/sql/level2-q2p1-fixtures.sql", "package.json", "docs/CURRENT_STATUS.md", "docs/DECISIONS.md"].includes(p);
+        "scripts/sql/level2-q2p1-fixtures.sql", "scripts/fixtures/q2p1-wording-vectors.json",
+        "package.json", "docs/CURRENT_STATUS.md", "docs/DECISIONS.md"].includes(p);
   const outside = [...changed].filter((p) => !allowed(p));
   assert("QS-15 every changed path is in the Q2′-1 allowed set", outside.length === 0, outside.join(","));
   assert("QS-15 no PG-9 file changed", ![...changed].some((p) => /pg9/i.test(p)));
@@ -246,6 +289,49 @@ function detectors(sql: string): Array<[string, string, boolean, string]> {
   const appFiles = git(["ls-files", "lib", "app"]).split("\n").filter((p) => /\.(ts|tsx)$/.test(p));
   const leaks = appFiles.filter((p) => readFileSync(path.join(ROOT, p), "utf8").includes("level2_fixture"));
   assert("QS-19 no application file mentions level2_fixture", leaks.length === 0, leaks.join(","));
+}
+
+/* ═══════════════ 3b. Q1 compatibility (shared vectors) ═══════════════ */
+{
+  console.log("\n[3b] Q1 compatibility — scripts/fixtures/q2p1-wording-vectors.json");
+  interface Vector {
+    id: string; origin: Origin; grade: Candidate["grade"]; sourceKind: SourceKind; excerpt: string;
+    links: Array<{ relation: CandidateSourceLink["relation"]; span: string | null }>;
+    candidateText: string; approvedText: string; q1: string; db: string;
+  }
+  const vectors: Vector[] = JSON.parse(readFileSync(path.join(ROOT, "scripts/fixtures/q2p1-wording-vectors.json"), "utf8")).vectors;
+  assert("the vector file has at least 9 vectors", vectors.length >= 9, String(vectors.length));
+  for (const v of vectors) {
+    const src: QuestionSource = v.sourceKind === "customer_material"
+      ? { id: "s", kind: v.sourceKind, buyerAuthored: true, customerReference: "ticket-s", customerAttestedAt: "2026-10-01",
+          retrievedAt: "2026-09-30", excerpt: v.excerpt, excerptSha256: sha256Utf8Hex(v.excerpt), personalDataRemoved: true }
+      : { id: "s", kind: v.sourceKind, buyerAuthored: v.sourceKind !== "site_copy", url: "https://forum.example.org/s",
+          retrievedAt: "2026-10-02", excerpt: v.excerpt, excerptSha256: sha256Utf8Hex(v.excerpt), personalDataRemoved: true };
+    const reason = "fits the stated need";
+    const cand: Candidate = {
+      id: "c", text: v.candidateText, grade: v.grade, kind: "unbranded", buyerStage: "solution",
+      adaptationNote: v.grade === "adapted" ? "reworded the complaint as a question" : null,
+      ratings: { buyerRelevance: { value: 3, reason }, icpFit: { value: 3, reason }, commercialIntent: { value: 2, reason }, productRelevance: { value: 3, reason } },
+      curatorRank: 1, primarySourceId: v.links.length > 0 ? "s" : null,
+    };
+    const set: ResearchSet = {
+      siteContext: { brandNames: [{ name: "Acme" }], productNames: [], siteCopy: "" },
+      sources: [src], candidates: [cand],
+      links: v.links.map((l) => ({ candidateId: "c", sourceId: "s", relation: l.relation, quotedSpan: l.span })),
+    };
+    const r = classifyApprovedWording({
+      origin: v.origin, approvedText: v.approvedText,
+      candidateId: v.origin === "customer_written" ? null : "c", researchSet: set,
+    });
+    const got = r.classification === null ? "refused" : `${r.classification}/${r.rule ?? ""}/${r.verification ?? ""}`;
+    assert(`Q1 ${v.id}: ${v.q1}`, got === v.q1, got);
+    const [dbClass, , dbVerif] = v.db.split("/");
+    const [q1Class, , q1Verif] = v.q1 === "refused" ? ["refused", "", ""] : v.q1.split("/");
+    assert(`compat ${v.id}: the database never records observed unless Q1 does, with the same verification`,
+      dbClass !== "observed" || (q1Class === "observed" && dbVerif === q1Verif));
+    assert(`compat ${v.id}: the database result is Q1's or pending_review (never a different grade)`,
+      v.db === v.q1 || dbClass === "pending_review");
+  }
 }
 
 /* ═══════════════ 4. every detector is proved to bite ═══════════════ */
@@ -270,6 +356,17 @@ function detectors(sql: string): Array<[string, string, boolean, string]> {
     ["dropping FOR SHARE from F6", "and m.removed_at is null\n   for share;", "and m.removed_at is null;", "F6 holds FOR SHARE"],
     ["reading memberships before the version row in F8", "  update public.workspace_membership_versions\n     set version = version + 1, updated_at = now()\n   where workspace_membership_versions.workspace_id = p_workspace_id;\n  if not found then\n    raise exception using errcode = '22023', message = 'q2p_workspace_not_found';\n  end if;\n\n  select m.* into v_target", "  perform 1 from public.workspace_members;\n  update public.workspace_membership_versions\n     set version = version + 1, updated_at = now()\n   where workspace_membership_versions.workspace_id = p_workspace_id;\n  if not found then\n    raise exception using errcode = '22023', message = 'q2p_workspace_not_found';\n  end if;\n\n  select m.* into v_target", "remove_workspace_member writes the version row before"],
     ["dropping the last-owner refusal", "if v_others = 0 then", "if false then", "refuses the last active owner"],
+    ["dropping the exchanged-needs-verified-email check", "constraint question_review_invitations_exchange_needs_verified_email check (\n    exchanged_at is null or email_verified_at is not null),", "", "exchanged invitation must carry a verified email"],
+    ["letting a session exist for an unexchanged invitation", "and i.exchanged_at is not null and i.email_verified_at is not null) then", "and true) then", "a session can only be created for an exchanged"],
+    ["dropping F4's email-verified condition", "     or v_invitation.email_verified_at is null\n", "", "F4 refuses an invitation without a verified email"],
+    ["inheriting observed without the span check", "and public._q2p_observed_span_ok(v_cand.id, v_cand.primary_source_id, v_texts[v_i], v_cand.verification) then", "then", "every observed classification in F4 is guarded"],
+    ["inheriting adapted without the basis check", "and public._q2p_adapted_basis_ok(v_cand.id, v_cand.primary_source_id, v_cand.verification) then", "then", "every adapted classification in F4 is guarded"],
+    ["accepting site copy in the span check", "          and s.source_kind <> 'site_copy'\n          and s.verification = p_verification\n          and s.excerpt_sha256 = public._q2p_sha256_hex(s.excerpt)\n          and strpos", "          and s.verification = p_verification\n          and s.excerpt_sha256 = public._q2p_sha256_hex(s.excerpt)\n          and strpos", "byte-exact verbatim span"],
+    ["an order-dependent fingerprint", "                     order by u.prompt_hash)", "                     )", "canonical jsonb, items sorted"],
+    ["dropping consent from the fingerprint", "    'consent_text_sha256', p_consent_text_sha256,\n", "", "canonical jsonb, items sorted"],
+    ["a globally unique key again", "  idempotency_key        text not null check (btrim(idempotency_key) <> ''),", "  idempotency_key        text not null unique check (btrim(idempotency_key) <> ''),", "scoped to the research set"],
+    ["catching unique_violation in F7", "  returning id into v_member_id;\n\n  return query select 'ADDED'::text, v_member_id;", "  returning id into v_member_id;\n  exception when unique_violation then null;\n\n  return query select 'ADDED'::text, v_member_id;", "catches unique_violation"],
+    ["dropping F1's advisory lock", "  perform pg_advisory_xact_lock(hashtextextended('zypact.q2p.create_workspace:' || p_idempotency_key, 0));\n", "", "advisory lock before its key lookup"],
     ["adding an enrolment table (Q2′-1b)", "create table public.question_sources (", "create table public.bqi_enrollments (\n  id uuid\n);\n\ncreate table public.question_sources (", "no PG-9, 0082 or Q2′-1b object"],
   ];
   for (const [label, needle, replacement, detectorFragment] of mutations) {

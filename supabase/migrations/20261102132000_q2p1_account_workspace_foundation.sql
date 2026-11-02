@@ -587,6 +587,11 @@ create table public.question_review_invitations (
     unique (id, workspace_id, project_id, snapshot_request_id, research_set_id),
   constraint question_review_invitations_seven_days check (
     expires_at > created_at and expires_at <= created_at + interval '7 days'),
+  -- An invitation may be issued before the address is verified, but never
+  -- exchanged without it (D-039: verified at exchange, or copied from the
+  -- request's existing verification).
+  constraint question_review_invitations_exchange_needs_verified_email check (
+    exchanged_at is null or email_verified_at is not null),
   -- A reissue revokes the invitation it supersedes.
   constraint question_review_invitations_superseded_is_revoked check (
     superseded_by is null or revoked_at is not null),
@@ -662,13 +667,19 @@ create table public.question_review_sessions (
   constraint question_review_sessions_actor_system check (actor_type = 'system')
 );
 
--- A session never outlives its invitation.
+-- A session exists only for an invitation that has been exchanged with a
+-- verified email, and never outlives that invitation.
 create or replace function public._q2p_session_within_invitation()
 returns trigger
 language plpgsql
 set search_path = pg_catalog, pg_temp
 as $$
 begin
+  if not exists (select 1 from public.question_review_invitations i
+                  where i.id = new.invitation_id
+                    and i.exchanged_at is not null and i.email_verified_at is not null) then
+    raise exception using errcode = '23514', message = 'q2p_session_needs_exchanged_verified_invitation';
+  end if;
   if not exists (select 1 from public.question_review_invitations i
                   where i.id = new.invitation_id and new.absolute_expires_at <= i.expires_at) then
     raise exception using errcode = '23514', message = 'q2p_session_outlives_invitation';
@@ -728,7 +739,7 @@ create table public.approval_records (
   email_hmac_key_id      text not null check (btrim(email_hmac_key_id) <> ''),
   consent_text_version   text not null check (btrim(consent_text_version) <> ''),
   consent_text_sha256    text not null check (consent_text_sha256 ~ '^[0-9a-f]{64}$'),
-  idempotency_key        text not null unique check (btrim(idempotency_key) <> ''),
+  idempotency_key        text not null check (btrim(idempotency_key) <> ''),
   set_fingerprint        text not null check (set_fingerprint ~ '^[0-9a-f]{64}$'),
   actor_type             text not null,
   actor_account_id       uuid,
@@ -745,6 +756,9 @@ create table public.approval_records (
     references public.question_research_sets(id, workspace_id, project_id, snapshot_request_id),
   -- Once a research set has an approved set, only that exact set replays.
   constraint approval_records_one_per_set unique (research_set_id),
+  -- Idempotency keys are scoped to the research set (as D-021 scopes them to
+  -- a job): the same key on another set is that set's own request.
+  constraint approval_records_set_key unique (research_set_id, idempotency_key),
   constraint approval_records_arrays_align check (
     cardinality(approved_version_ids) = cardinality(prompt_hashes)),
   constraint approval_records_session_actor_agree check (
@@ -1144,8 +1158,9 @@ end;
 $$;
 
 -- F1: creates the workspace, its version row and its first owner, atomically.
--- Idempotent on the key: the same key and body return the same result; the
--- same key with a different body is refused.
+-- Idempotent on the key (D-021 form, no exception absorption): the same key
+-- and body return ALREADY_CREATED with that workspace; the same key with a
+-- different body returns IDEMPOTENCY_KEY_CONFLICT and writes nothing.
 create or replace function public.create_workspace_with_owner(
   p_account_id uuid,
   p_name text,
@@ -1170,38 +1185,36 @@ begin
   if p_account_id is null or coalesce(btrim(p_name), '') = '' or coalesce(btrim(p_idempotency_key), '') = '' then
     raise exception using errcode = '22023', message = 'q2p_invalid_workspace_args';
   end if;
-  v_fp := public._q2p_sha256_hex(p_account_id::text || E'\n' || p_name);
+  -- Canonical request fingerprint (D-021 form).
+  v_fp := public._q2p_sha256_hex(jsonb_build_object(
+    'action', 'create_workspace_with_owner', 'account_id', p_account_id, 'name', p_name)::text);
+
+  -- Serialise every call with this key. Under READ COMMITTED the lookup below
+  -- then sees a concurrent winner that has committed. Under REPEATABLE READ or
+  -- SERIALIZABLE the snapshot may predate it: the insert then hits the unique
+  -- key and 23505 propagates — it is never caught to return a row.
+  perform pg_advisory_xact_lock(hashtextextended('zypact.q2p.create_workspace:' || p_idempotency_key, 0));
 
   select w.* into v_ws from public.workspaces w where w.idempotency_key = p_idempotency_key;
   if found then
     if v_ws.request_fingerprint <> v_fp then
-      raise exception using errcode = '22023', message = 'q2p_idempotency_key_reused';
+      return query select 'IDEMPOTENCY_KEY_CONFLICT'::text, null::uuid, null::uuid;
+      return;
     end if;
+    -- The owner created in the same transaction as this workspace: the
+    -- earliest membership of the fingerprinted account.
     select m.id into v_member_id from public.workspace_members m
      where m.workspace_id = v_ws.id and m.account_id = p_account_id
-     order by m.added_at limit 1;
+     order by m.added_at, m.id limit 1;
     return query select 'ALREADY_CREATED'::text, v_ws.id, v_member_id;
     return;
   end if;
 
-  begin
-    insert into public.workspaces (name, idempotency_key, request_fingerprint,
-      actor_type, actor_operator_id, rule_id, rule_version)
-    values (p_name, p_idempotency_key, v_fp,
-      p_actor_type, p_actor_operator_id, p_rule_id, p_rule_version)
-    returning * into v_ws;
-  exception when unique_violation then
-    -- A concurrent call with the same key committed first: replay it.
-    select w.* into v_ws from public.workspaces w where w.idempotency_key = p_idempotency_key;
-    if v_ws.request_fingerprint <> v_fp then
-      raise exception using errcode = '22023', message = 'q2p_idempotency_key_reused';
-    end if;
-    select m.id into v_member_id from public.workspace_members m
-     where m.workspace_id = v_ws.id and m.account_id = p_account_id
-     order by m.added_at limit 1;
-    return query select 'ALREADY_CREATED'::text, v_ws.id, v_member_id;
-    return;
-  end;
+  insert into public.workspaces (name, idempotency_key, request_fingerprint,
+    actor_type, actor_operator_id, rule_id, rule_version)
+  values (p_name, p_idempotency_key, v_fp,
+    p_actor_type, p_actor_operator_id, p_rule_id, p_rule_version)
+  returning * into v_ws;
 
   insert into public.workspace_membership_versions (workspace_id, version) values (v_ws.id, 0);
   update public.workspace_membership_versions
@@ -1297,18 +1310,16 @@ begin
     return;
   end if;
 
-  begin
-    insert into public.workspace_members (workspace_id, account_id, role,
-      actor_type, actor_operator_id, rule_id, rule_version)
-    values (p_workspace_id, p_account_id, 'owner',
-      p_actor_type, p_actor_operator_id, p_rule_id, p_rule_version)
-    returning id into v_member_id;
-  exception when unique_violation then
-    select m.id into v_member_id from public.workspace_members m
-     where m.workspace_id = p_workspace_id and m.account_id = p_account_id and m.removed_at is null;
-    return query select 'ALREADY_MEMBER'::text, v_member_id;
-    return;
-  end;
+  -- No handler: the version-row write above serialises every membership change
+  -- of this workspace, so under READ COMMITTED the check above already sees a
+  -- concurrent duplicate that committed, and under REPEATABLE READ or
+  -- SERIALIZABLE the version-row write raised 40001. A 23505 here can only come
+  -- from a writer that bypassed this function, and it propagates.
+  insert into public.workspace_members (workspace_id, account_id, role,
+    actor_type, actor_operator_id, rule_id, rule_version)
+  values (p_workspace_id, p_account_id, 'owner',
+    p_actor_type, p_actor_operator_id, p_rule_id, p_rule_version)
+  returning id into v_member_id;
 
   return query select 'ADDED'::text, v_member_id;
 end;
@@ -1380,6 +1391,64 @@ $$;
 -- ════════════════════════════════════════════════════════════════════════
 -- 11. F4 — approve_buyer_question_set (invitation-session path)
 -- ════════════════════════════════════════════════════════════════════════
+
+-- Source-backed evidence checks used for every observed or adapted wording
+-- classification F4 writes (strict; see the F4 header for the divergence
+-- from Q1). Each re-reads the stored rows at approval time, so a row that
+-- reached the table by any path is checked again before it can promote text.
+
+-- True only when p_text is, byte for byte, the quoted span of a verbatim link
+-- from the candidate to p_source_id, and that source is buyer-authored, is
+-- not site copy, carries verification p_verification, still hashes to its
+-- stored excerpt hash, and still contains the span on word boundaries.
+create or replace function public._q2p_observed_span_ok(
+  p_candidate_id uuid, p_source_id uuid, p_text text, p_verification text
+) returns boolean
+language sql
+stable
+set search_path = pg_catalog, pg_temp
+as $$
+  select p_candidate_id is not null and p_source_id is not null and p_text is not null
+     and p_verification is not null
+     and exists (
+       select 1
+         from public.question_candidate_sources l
+         join public.question_sources s on s.id = l.source_id
+        where l.candidate_id = p_candidate_id
+          and l.source_id = p_source_id
+          and l.relation = 'verbatim'
+          and l.quoted_span = p_text
+          and s.buyer_authored
+          and s.source_kind <> 'site_copy'
+          and s.verification = p_verification
+          and s.excerpt_sha256 = public._q2p_sha256_hex(s.excerpt)
+          and strpos(s.excerpt, l.quoted_span) > 0
+          and public._q2p_span_at_word_boundary(s.excerpt, l.quoted_span));
+$$;
+
+-- True only when the candidate's p_source_id is a paraphrase basis from a
+-- buyer-authored, non-site-copy source carrying verification p_verification,
+-- whose excerpt still hashes to its stored hash.
+create or replace function public._q2p_adapted_basis_ok(
+  p_candidate_id uuid, p_source_id uuid, p_verification text
+) returns boolean
+language sql
+stable
+set search_path = pg_catalog, pg_temp
+as $$
+  select p_candidate_id is not null and p_source_id is not null and p_verification is not null
+     and exists (
+       select 1
+         from public.question_candidate_sources l
+         join public.question_sources s on s.id = l.source_id
+        where l.candidate_id = p_candidate_id
+          and l.source_id = p_source_id
+          and l.relation = 'paraphrase_basis'
+          and s.buyer_authored
+          and s.source_kind <> 'site_copy'
+          and s.verification = p_verification
+          and s.excerpt_sha256 = public._q2p_sha256_hex(s.excerpt));
+$$;
 -- service_role only (the server route). The actor and the scope come only
 -- from the hash of the presented session token. One uniform refusal for any
 -- authorisation or scope failure. All-or-nothing; idempotent; exact-text
@@ -1390,18 +1459,44 @@ $$;
 -- p_items: a JSON array of 1-3 objects
 --   {"origin": "...", "candidate_id": "<uuid>|null", "text": "...", "prompt_hash": "<sha256 hex of text>"}
 --
--- The first wording classification is a conservative subset of Q1's
--- classifyApprovedWording: it can under-claim, never over-claim.
---   * unchanged or replaced text (equal to the candidate's): the candidate's
---     grade, rule inherited_unchanged — except observed or adapted without a
---     primary source, which stays pending_review (Q1: primary unresolved);
---   * edited or customer-written text: observed with exact_source_match only
---     when the text equals, byte for byte, the quoted span of one of the
---     candidate's verbatim links to a buyer-authored source AND that source is
---     the candidate's primary source; otherwise pending_review.
---   Q1's normalisation-tolerant match and caller-chosen primary source are
---   not reproduced here; founder review may later record adapted or
---   hypothesis (never observed).
+-- Authorisation (uniform refusal 42501 on any failure): the session is
+-- unrevoked, within its absolute and idle limits; its invitation is
+-- unrevoked, not superseded, unexpired, exchanged and email-verified; the
+-- research set is the session's; the request's current email HMAC and key id
+-- are the invitation's. Replays require all of this too.
+--
+-- Idempotency (D-021 form; no exception absorption), only after authorisation:
+--   the request fingerprint is a canonical jsonb of the research set, the
+--   consent text version and hash, and the set of items (origin, candidate,
+--   prompt hash), sorted by prompt hash — the order in which questions are
+--   submitted has no meaning in an approval, so it is ignored. Keys are
+--   scoped to the research set. Under the research-set row lock:
+--     same key, same fingerprint   -> ALREADY_APPROVED (the original record)
+--     same key, other fingerprint  -> IDEMPOTENCY_KEY_CONFLICT (no write)
+--     other key, same fingerprint  -> ALREADY_APPROVED (the original record)
+--     other key, other fingerprint -> SET_ALREADY_APPROVED (no write)
+--
+-- Wording classification: strictly source-backed, never weaker than Q1.
+--   observed  only when the approved text is, byte for byte, the quoted span
+--             of a verbatim link from the candidate's PRIMARY source, and that
+--             source is buyer-authored, not site copy, carries the
+--             verification recorded, still hashes to its excerpt hash and
+--             still contains the span on word boundaries
+--             (_q2p_observed_span_ok). Unchanged or replaced text inherits
+--             observed under rule inherited_unchanged only if this holds for
+--             the candidate's own verification; edited text is observed under
+--             exact_source_match with the primary source's verification.
+--   adapted   (unchanged or replaced only) only when the primary source is a
+--             paraphrase basis from a buyer-authored, non-site-copy source with
+--             the candidate's verification (_q2p_adapted_basis_ok).
+--   hypothesis (unchanged or replaced) is inherited as is.
+--   Everything else — including customer-written text — is pending_review.
+-- Verification is never upgraded: customer_provided stays customer_provided.
+-- Divergence from Q1 (lib/buyer-questions/classify-wording.ts), always in the
+-- conservative direction: Q1 accepts whitespace, terminal-punctuation and
+-- other normalisation-tolerant matches (isObservedMatch) and a caller-chosen
+-- primary source; here those cases are pending_review for founder review,
+-- which may record adapted or hypothesis but never observed.
 
 create or replace function public.approve_buyer_question_set(
   p_session_token text,
@@ -1472,6 +1567,7 @@ begin
      or v_invitation.superseded_by is not null
      or v_invitation.expires_at <= now()
      or v_invitation.exchanged_at is null
+     or v_invitation.email_verified_at is null
      -- Scope is the session's, never the caller's.
      or p_research_set_id is distinct from v_session.research_set_id
      -- The request's current address must still be the invited one.
@@ -1544,23 +1640,41 @@ begin
     v_version_ids := v_version_ids || gen_random_uuid();
   end loop;
 
-  v_fp := public._q2p_sha256_hex(array_to_string(array(
-    select v_origins[k] || ':' || coalesce(v_cand_ids[k]::text, '') || ':' || v_hashes[k]
-      from generate_subscripts(v_hashes, 1) k order by k), '|'));
+  -- Canonical request fingerprint (D-021 form): order-independent over items.
+  v_fp := public._q2p_sha256_hex(jsonb_build_object(
+    'action', 'approve_buyer_question_set',
+    'research_set_id', v_set.id,
+    'consent_text_version', p_consent_text_version,
+    'consent_text_sha256', p_consent_text_sha256,
+    'items', (select jsonb_agg(jsonb_build_object(
+                       'origin', u.origin, 'candidate_id', u.candidate_id, 'prompt_hash', u.prompt_hash)
+                     order by u.prompt_hash)
+                from unnest(v_origins, v_cand_ids, v_hashes) as u(origin, candidate_id, prompt_hash))
+  )::text);
 
-  -- Idempotency: one approved set per research set; a key is bound to one set.
-  select a.* into v_existing from public.approval_records a where a.research_set_id = v_set.id;
+  -- Idempotency, under the research-set lock taken above.
+  select a.* into v_existing from public.approval_records a
+   where a.research_set_id = v_set.id and a.idempotency_key = p_idempotency_key;
   if found then
-    if v_existing.set_fingerprint = v_fp then
-      update public.question_review_sessions set last_seen_at = greatest(last_seen_at, now())
-       where id = v_session.id;
-      return query select 'ALREADY_APPROVED'::text, v_existing.id, v_existing.approved_version_ids;
+    if v_existing.set_fingerprint <> v_fp then
+      return query select 'IDEMPOTENCY_KEY_CONFLICT'::text, null::uuid, null::uuid[];
       return;
     end if;
-    raise exception using errcode = '42501', message = v_refuse;
+    update public.question_review_sessions set last_seen_at = greatest(last_seen_at, now())
+     where id = v_session.id;
+    return query select 'ALREADY_APPROVED'::text, v_existing.id, v_existing.approved_version_ids;
+    return;
   end if;
-  if exists (select 1 from public.approval_records a where a.idempotency_key = p_idempotency_key) then
-    raise exception using errcode = '42501', message = v_refuse;
+  select a.* into v_existing from public.approval_records a where a.research_set_id = v_set.id;
+  if found then
+    if v_existing.set_fingerprint <> v_fp then
+      return query select 'SET_ALREADY_APPROVED'::text, null::uuid, null::uuid[];
+      return;
+    end if;
+    update public.question_review_sessions set last_seen_at = greatest(last_seen_at, now())
+     where id = v_session.id;
+    return query select 'ALREADY_APPROVED'::text, v_existing.id, v_existing.approved_version_ids;
+    return;
   end if;
 
   insert into public.approval_records (
@@ -1584,25 +1698,26 @@ begin
       select c.* into v_cand from public.question_candidates c where c.id = v_cand_ids[v_i];
     end if;
 
-    -- First wording classification (conservative; see the header).
+    -- First wording classification: strictly source-backed (see the header).
     v_class := 'pending_review'; v_rule := null; v_verif := null; v_basis := '{}';
     if v_origins[v_i] in ('recommended_unchanged', 'replaced_with_candidate') then
       if v_cand.evidence_grade = 'hypothesis' then
         v_class := 'hypothesis'; v_rule := 'inherited_unchanged';
-      elsif v_cand.primary_source_id is not null then
-        v_class := v_cand.evidence_grade; v_rule := 'inherited_unchanged';
+      elsif v_cand.evidence_grade = 'observed'
+            and public._q2p_observed_span_ok(v_cand.id, v_cand.primary_source_id, v_texts[v_i], v_cand.verification) then
+        v_class := 'observed'; v_rule := 'inherited_unchanged';
+        v_verif := v_cand.verification; v_basis := array[v_cand.primary_source_id];
+      elsif v_cand.evidence_grade = 'adapted'
+            and public._q2p_adapted_basis_ok(v_cand.id, v_cand.primary_source_id, v_cand.verification) then
+        v_class := 'adapted'; v_rule := 'inherited_unchanged';
         v_verif := v_cand.verification; v_basis := array[v_cand.primary_source_id];
       end if;
     elsif v_origins[v_i] = 'recommended_edited' and v_cand.primary_source_id is not null then
-      select s.verification into v_verif
-        from public.question_candidate_sources l
-        join public.question_sources s on s.id = l.source_id
-       where l.candidate_id = v_cand.id and l.source_id = v_cand.primary_source_id
-         and l.relation = 'verbatim' and l.quoted_span = v_texts[v_i]
-         and s.buyer_authored and s.source_kind <> 'site_copy'
-       limit 1;
-      if v_verif is not null then
+      select s.verification into v_verif from public.question_sources s where s.id = v_cand.primary_source_id;
+      if public._q2p_observed_span_ok(v_cand.id, v_cand.primary_source_id, v_texts[v_i], v_verif) then
         v_class := 'observed'; v_rule := 'exact_source_match'; v_basis := array[v_cand.primary_source_id];
+      else
+        v_verif := null;
       end if;
     end if;
 
@@ -1683,6 +1798,8 @@ revoke all on function public._q2p_invitation_guard() from public, anon, authent
 revoke all on function public._q2p_session_within_invitation() from public, anon, authenticated, service_role;
 revoke all on function public._q2p_session_guard() from public, anon, authenticated, service_role;
 revoke all on function public._q2p_require_founder_or_system(text, uuid, text, text) from public, anon, authenticated, service_role;
+revoke all on function public._q2p_observed_span_ok(uuid, uuid, text, text) from public, anon, authenticated, service_role;
+revoke all on function public._q2p_adapted_basis_ok(uuid, uuid, text) from public, anon, authenticated, service_role;
 
 -- F6: no role executes it directly.
 revoke all on function public.assert_current_account_member(uuid) from public, anon, authenticated, service_role;

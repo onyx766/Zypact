@@ -986,3 +986,234 @@ provisional `v1` review signals, not validated classifiers. Passing them is
 never evidence of buyer authorship. `public_verifiable` records that the
 curator gave a public URL and retrieval date; Q1 fetches nothing, and its text
 match is not independent verification of that source.
+
+## 20. Q2′-1 account-first data foundation — local commits only, not pushed, not applied anywhere
+
+- **As of:** 2026-11-02
+- **Base:** `main` at `13ccdc1` (merge of #97, the D-040 documents)
+- **Status:** **local only, awaiting independent review of the email-binding
+  correction.** Five local commits form a straight line on
+  `feat/q2p1-account-foundation`: `13ccdc1` → `0d3f3f6` (B1 revision 3,
+  migration-name rules) → `20e5755` (Q2′-1) → `6a258f6` (remediation R1–R4) →
+  `f7ce558` (remediation R6) → the email-binding commit that adds this
+  paragraph. The independent source review of the first four commits requested
+  changes: F4 compared a caller-supplied email HMAC with the invitation's own
+  value and never read the persisted request address, so an approval succeeded
+  after that address changed (reproduced locally). The fifth commit corrects
+  that (20.2, "Email binding") and the two documentation errors the review
+  found (D-041's guard count, D-042's tenant-pinning claim). Nothing
+  has been pushed. No pull request, cloud CI run or Vercel Preview exists, and
+  no SQL from this branch has run against any Supabase project. The migration
+  has run only in disposable local PostgreSQL containers with
+  `--network none`. **No result here is independently reviewed, and the
+  author does not self-certify it.** The next decision is independent review,
+  not production deployment.
+- **Scope:** one migration,
+  `supabase/migrations/20261102132000_q2p1_account_workspace_foundation.sql`,
+  the first with a 14-digit version (D-041), plus its tests. It implements the
+  closed database foundation for D-040's account and workspace model. Nothing
+  in this section is wired into a route, page, worker or workflow, and no
+  TypeScript adapter exists (Founder decision D-2). F3, F5 and
+  `bqi_enrollments` moved to Q2′-1b (Founder decision D-1). No provider, paid
+  path, spend gate, PG-9 file or existing migration changed.
+
+### 20.1 What the migration adds
+
+- **15 new tables,** all closed: RLS enabled with no policies, and every
+  privilege revoked from `public`, `anon`, `authenticated` and
+  `service_role`. Rows are reached only through the functions below.
+- **Tenant pinning:** the nine project-scoped tables (research sets, sources,
+  candidates, candidate sources, invitations, sessions, approval records,
+  version origins and wording classifications) are pinned by a composite
+  foreign key to `(project_id, workspace_id)` in `workspace_projects`, so
+  their rows cannot name a project from another workspace. The other six are
+  not project-pinned. `workspaces` is the root, and `workspace_projects` is
+  the pin itself. `workspace_members` and `workspace_membership_versions`
+  carry `workspace_id` only. `exception_items` and `exception_events` have a
+  nullable `workspace_id` and no project (limitation 10).
+- **Actors:** four actor types (`customer_account`, `invitation_holder`,
+  `founder`, `system`), checked by `_q2p_actor_shape_ok` and by composite
+  foreign keys to memberships and sessions.
+- **Functions,** each `SECURITY DEFINER`, owned by the migration role, with
+  `search_path = public, pg_temp` and `lock_timeout = 5s`:
+
+| Function | Purpose | Granted to |
+|---|---|---|
+| F1 `create_workspace_with_owner` | workspace and first owner, idempotent by key | `service_role` only |
+| F2 `assign_project_to_workspace` | pins an existing project to one workspace | `service_role` only |
+| F4 `approve_buyer_question_set` | records a customer approval from an invitation session; takes **no email value** from the caller; **no paid effect, no job, no protocol** | `service_role` only |
+| F6 `assert_current_account_member` | binds the account from `request.jwt.claims` and checks membership `FOR SHARE` | no role |
+| F7 `add_workspace_member` | adds a member | `service_role` only |
+| F8 `remove_workspace_member` | removes a member | `service_role` only |
+
+### 20.2 Security invariants, and the test that holds each one
+
+| Invariant | Enforced by | Tests |
+|---|---|---|
+| Membership changes are serialised | every change first increments the workspace's row in `workspace_membership_versions`, so it serialises under READ COMMITTED and raises `40001` under REPEATABLE READ and SERIALIZABLE | QR two-session cases, weakened copy |
+| R1: only a verified email can approve | table check `exchanged_at is null or email_verified_at is not null`. A session needs an exchanged, verified invitation and never outlives it. F4 refuses when `email_verified_at` is null. | QR, QS |
+| R2: "observed" only with a source-backed span | `_q2p_observed_span_ok`: a byte-exact verbatim span of the primary source, buyer-authored, not site copy, the same verification, the hash intact, on word boundaries. `adapted` needs `_q2p_adapted_basis_ok`. Anything else is `pending_review`. | 9 Q1 vectors (`scripts/fixtures/q2p1-wording-vectors.json`), QR |
+| R3: approval idempotency is bound to content | a canonical fingerprint over the action, research set, consent text version and hash, and the items sorted by prompt hash, so it does not depend on order. `unique (research_set_id, idempotency_key)`. `ALREADY_APPROVED`, `IDEMPOTENCY_KEY_CONFLICT` and `SET_ALREADY_APPROVED` are returned only after full authorisation. A replay needs a valid session. | QR, QS |
+| R4: no swallowed errors | no `unique_violation` handlers. F1 takes a transaction advisory lock on its key and returns `IDEMPOTENCY_KEY_CONFLICT`. `40001`, `23505`, `40P01` and `55P03` propagate, and nothing is written. | QS mutations, QR |
+| R6: a revocation or expiry is decided at the decision instant | F4 locks the session `FOR UPDATE`, then the invitation `FOR SHARE`, then the snapshot request `FOR SHARE`, then the research set `FOR UPDATE`, always in that order. After the locks it takes one `clock_timestamp()` and uses it for absolute, idle and invitation expiry, `last_seen_at` and `approval_records.approved_at`. F4 contains no `now()`. | R6-A to R6-H (25 assertions), QS-25 |
+| Email binding: the request's persisted address, never a caller value, authorises | each invitation carries `request_email_binding`, a `NOT NULL` SHA-256 of a domain label, the invitation id and the request's `normalized_email`. A `BEFORE INSERT` trigger derives it from the request row, read `FOR SHARE`, and refuses any caller-supplied value (`22023`). It is immutable (`55000`). F4 takes no email argument. It reads the request's address `FOR SHARE` and refuses (`42501`) unless the binding recomputed from it matches, before any idempotency status, so a replay is refused too. | QR-41 to QR-43, QS-26 |
+| Grants and ownership | every function owned by the migration role, `EXECUTE` exactly as in 20.1; no table privilege for any API role | QS, the role preconditions in each Level 2 run |
+| Nothing that existed before is written | baseline and verify around the whole Q2′-1 block | QR-39 |
+
+Each concurrency and refusal invariant also has a **weakened proof**. The
+fixtures take the function from `pg_get_functiondef`, make one textual change
+(for example, removing the invitation lock, using the transaction clock,
+removing the binding comparison, or reading the request without a lock), and
+the same case then shows the defect: an approval after a committed
+revocation, a revoker that isn't blocked, an approval after expiry, or an
+approval after the request's address changed.
+
+### 20.3 Commands and local results at the email-binding commit
+
+The evidence package records the exact commit, the logs and two identical
+production-order runs.
+
+| Command or run | Venue | Result |
+|---|---|---|
+| `npm run test:q2p-schema` (QS-01 to QS-26, Q1 compatibility, 46 mutation self-tests) | offline | 209/209 |
+| `scripts/test-snapshot-worker-postgres-level2.sh` | PostgreSQL 16-alpine `sha256:0cefaabd…31ab`, `--network none` | 634 passed, 0 failed (386 Q2′-1, including 30 for QR-41 to QR-43; 25 R6; 220 existing; 3 role preconditions) |
+| Production-order run: Q2′-1 applied through the named-file procedure before 0083, the full Q2′-1 suite, QR-35, then 0083 by the reserved-version procedure; schema compared with CI order | PostgreSQL 17.6 `sha256:00bc8661…2929`, `--network none` | 426 passed, 0 failed, in two identical runs (388 QR + 25 R6 + 10 P + 3 roles); schema dump equals CI order |
+| The 21 B1 test suites | offline | logs byte-identical to the `f7ce558` run |
+| The 9 M0 CI-workflow suites | offline | all pass |
+| `npm run typecheck`, `npm run build:verify` | local | pass, pass |
+| `git diff --check f7ce558..HEAD` | local | clean |
+
+At `f7ce558` the same runs gave 178/178, 605/0 and 397/0 (×2). The Level 2
+difference is QR-20's caller-HMAC case, removed because the parameter no
+longer exists, and the 30 new assertions. Every other assertion line is
+unchanged.
+
+**Known failures, unchanged and not counted as passes.** None of these runs in CI.
+
+- `m7-0071`: 2 failures, caused by 0077. `m7-0073`: 1 failure, caused by 0079. Both fail on `main` too.
+- `snapshot-send-idempotency`: 6 passed and 18 failed, identical to `main`.
+- `bqi-wording` P-04: fails, because it compares changed paths against Q1's plan, and this branch is not Q1.
+- `pg9-harness-offline`: fails closed on any timestamped migration, by design. PG-9 evidence stays pinned to commits at or before `13ccdc1`, and is never evidence for Q2′-1.
+- Skipped (opt-in or CI-only): `m0-0057-runtime`, the Docker bodies of the B1 runtime harnesses, and the Docker half of the hosting contract.
+
+The local runs used plain PostgreSQL images, not the Supabase stack, and
+macOS shims for `timeout` and millisecond `date`. CI pulls its image by tag,
+not digest. **No CI run has executed any of this.**
+
+`package.json` now registers 104 `test:*` and 4 `verify:*` commands. 192 files
+match `scripts/test-*.ts`, and `supabase/migrations/` holds 83 files: the 82
+historical files plus `20261102132000`. These figures supersede section 19.1's.
+
+### 20.4 Known limitations
+
+1. **A revocation that waits can carry an earlier `revoked_at`.** When a
+   revocation `UPDATE` waits on F4's `FOR SHARE`, PostgreSQL computes its
+   `clock_timestamp()` before the wait. The revocation correctly commits after
+   the approval, but its timestamp can be earlier than `approved_at`. No
+   Q2′-1 code writes `revoked_at`. Q4′'s revocation path must lock the row
+   first, then stamp the time.
+2. **The lock order is a convention for future code:** session, then
+   invitation, then snapshot request, then research set. A path that breaks it
+   can deadlock with F4. PostgreSQL then aborts one side with `40P01`, which
+   fails closed (R6-F; QR-43 for the request).
+3. `buyer_question_versions.approved_at` is still written by the unmodified
+   0047 function, which uses `now()`. The authoritative instant is
+   `approval_records.approved_at`.
+4. The invitation-expiry case in R6-D also expires the session, because a
+   session may not outlive its invitation. Invitation expiry on its own is
+   covered statically.
+5. Classification is stricter than Q1: a near match that Q1 grades observed
+   becomes `pending_review` here.
+6. The order of questions in an approval is treated as meaningless.
+7. F1 under REPEATABLE READ raises `23505` instead of returning a status.
+8. There are no RPCs to issue, exchange, revoke or reissue an invitation. That is Q4′.
+9. `service_role` is the trust boundary. Who holds that key is unresolved (A4, on HOLD).
+10. `exception_items.workspace_id` and `exception_events.workspace_id` are
+    nullable. An event with a null `workspace_id` escapes its composite
+    foreign key to the item's workspace (`MATCH SIMPLE`).
+11. **A restored address makes an existing invitation valid again.** F4
+    compares the request's current address with the binding. If the address
+    changes, every invitation bound to it stops authorising. If it is changed
+    back to the exact original `normalized_email`, an invitation that is
+    otherwise still valid (unrevoked, unexpired, with a live session)
+    authorises again (QR-41, documented). No path changes an address today;
+    any future one that must make a change final has to revoke the request's
+    outstanding invitations in the same transaction.
+12. **The binding is an unkeyed SHA-256, not an HMAC.**
+    - **Who can exploit it.** Anyone who obtains an invitation row (its id and
+      binding) can test guessed addresses offline. Work addresses are easy to
+      guess: the domain comes from the request. That includes anyone holding
+      an export, dump, replica, log or backup copy of
+      `question_review_invitations` without `snapshot_requests`, and anyone
+      holding a binding after the request's address is erased. **The risk
+      does not depend on plaintext access.**
+    - **Under the current access model:**
+      - no API role can read the table;
+      - the owner can read it, and can also read the plaintext address;
+      - no code exports the table, logs the binding or erases addresses.
+    - **Judgement:** acceptable for the Q2′-1 foundation under that model.
+      It is not acceptable once the invitations table is exported, replicated
+      or retained separately from the requests table, or once address
+      erasure exists.
+    - **Removing the risk** needs a keyed binding, which needs a new secret.
+      That is outside this authorisation; the credential model is unchanged.
+15. **The binding proves email continuity, not recipient identity.** It shows
+    that the request's persisted address has not changed since the invitation
+    was issued. It does not show that the invitation was sent to, or verified
+    by, that address: `email_hmac` and `email_verified_at` are written by the
+    issuer, and the database holds no key to compare `email_hmac` with the
+    request's address. No Q2′-1 code issues or exchanges invitations; the
+    tests insert them as the owner. Recipient matching must be enforced by
+    Q4′, at two gates:
+    - **The issue RPC** (owner-run, `SECURITY DEFINER`) takes no recipient
+      address parameter. The server sends the token only to the request's
+      `normalized_email`, read under lock, and stores that address's keyed
+      `email_hmac`.
+    - **The exchange RPC** is the only writer of `exchanged_at` and
+      `email_verified_at`. It sets them only after proof of possession of that
+      same address (the delivered token). Under the lock order session,
+      invitation, request, it re-checks the binding, and the server re-checks
+      that the address's keyed HMAC equals the invitation's `email_hmac`.
+
+    Until both exist, nothing in the database stops an invitation from being
+    inserted with another address's `email_hmac` and verification time.
+    Q4′'s issue and exchange RPCs are therefore a gate before any customer
+    use (20.6).
+13. **The `REPEATABLE READ` cost:** any update of the request row after F4's
+    snapshot, including an unrelated worker status change, fails the approval
+    closed with `40001` (QR-43). Under `READ COMMITTED` the approval waits
+    instead.
+14. A change of `work_email` alone, such as its display case, does not affect
+    the binding. Only `normalized_email` is bound.
+
+### 20.5 What these tests do not establish
+
+- **No production behaviour.** They do not establish production grants,
+  Supabase role behaviour, PostgREST exposure, or whether the production role
+  can call `pg_control_system()`.
+- **No end-to-end path.** No route, session token, email verification or
+  customer flow exists to exercise the functions. S1 (JWT binding) has not
+  run against any Supabase project.
+- **Not run by CI,** and not independently reviewed.
+
+### 20.6 Remaining gates before production
+
+Each gate needs its own authorisation, in this order:
+
+1. Independent review of the email-binding commit. `0d3f3f6`, `20e5755`,
+   `6a258f6` and `f7ce558` were reviewed, with REQUEST CHANGES.
+2. Push and pull request, with advance notice that CI's Level 2 job will apply
+   every migration, including 0083 and Q2′-1, to a disposable database, that
+   the M0 workflows will run, and that a Vercel Preview will be built.
+3. The read-only production preflight from `PROD_PREFLIGHT_SPEC.md` (P3),
+   including production grants and access to `pg_control_system()`. It has
+   not run.
+4. 0083 applied to production by the reserved-version procedure (D-041,
+   strategy B).
+5. Q2′-1 applied to production by the named-file procedure (D-041).
+6. S1 JWT binding shown on a non-production Supabase project (G1), before any
+   customer use.
+7. Q4′'s issue and exchange RPCs enforcing recipient matching (20.4, item 15),
+   before any customer use of invitations.
+
+Q2′-1b, Q2′-2, PG-9, PR-B, A3, A4 and G4-C remain on HOLD.

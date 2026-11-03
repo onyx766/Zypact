@@ -3,7 +3,9 @@
 -- Every object here is NEW. This migration redefines no existing function,
 -- alters no existing table, and touches no paid-execution object:
 --   * no write to protocols, protocol_execution_jobs, protocol_external_calls,
---     spend_controls, buyer_question_launch_selections or snapshot_requests;
+--     spend_controls, buyer_question_launch_selections or snapshot_requests
+--     (snapshot_requests is only read and row-locked FOR SHARE, by the
+--     invitation binding trigger and by F4);
 --   * approve_and_launch_snapshot_baseline (0069) is unchanged — the
 --     coexistence check (F5), enrolment (F3) and bqi_enrollments are Q2′-1b;
 --   * nothing here is reachable by a customer: the only executable functions
@@ -564,6 +566,10 @@ create table public.question_review_invitations (
   email_hmac           text not null check (email_hmac ~ '^[0-9a-f]{64}$'),
   email_hmac_key_id    text not null check (btrim(email_hmac_key_id) <> ''),
   email_verified_at    timestamptz,
+  -- The request's persisted address at issue, bound to this invitation
+  -- (_q2p_request_email_binding). Derived by a BEFORE INSERT trigger from
+  -- snapshot_requests, never supplied by a caller, and immutable.
+  request_email_binding text not null check (request_email_binding ~ '^[0-9a-f]{64}$'),
   token_hash           text not null unique check (token_hash ~ '^[0-9a-f]{64}$'),
   expires_at           timestamptz not null,
   exchanged_at         timestamptz,
@@ -628,6 +634,70 @@ $$;
 create trigger question_review_invitations_guard
   before update or delete on public.question_review_invitations
   for each row execute function public._q2p_invitation_guard();
+
+-- The invitation is bound to the address persisted on its snapshot request
+-- at issue: a domain-separated SHA-256 of the invitation id and the
+-- request's normalized_email. No secret is needed, because the database
+-- compares its own rows; the per-invitation input keeps two invitations'
+-- bindings unlinkable. A caller-supplied value is refused.
+--
+-- Disclosure: this is an unkeyed SHA-256, not an HMAC. Anyone who obtains a
+-- row of this table (its id and binding) can test guessed addresses offline,
+-- and work addresses are guessable; that includes anyone holding an export,
+-- dump, replica or log of this table without the requests table. Inside the
+-- database no API role can read it; the owner can, and can also read the
+-- plaintext address, but the risk does not depend on plaintext access. It is
+-- never returned by F4, copied to approval_records or logged by this code.
+--
+-- Continuity, not recipient identity: the binding proves the request's
+-- persisted address is unchanged since the invitation was issued. It does
+-- not prove the invitation was sent to, or verified by, that address:
+-- email_hmac and email_verified_at are written by the issuer, and the
+-- database holds no key to compare email_hmac with the request's address.
+-- Q4′'s issue and exchange RPCs must enforce recipient matching.
+--
+-- Restore: F4 compares the request's CURRENT address with the binding. If
+-- the address changes, every invitation bound to it stops authorising; if it
+-- is changed back to the exact original normalized_email, an invitation that
+-- is otherwise still valid (unrevoked, unexpired, live session) authorises
+-- again. Any future path that changes a request's address must revoke its
+-- outstanding invitations in the same transaction if a change is to be final.
+create or replace function public._q2p_request_email_binding(p_invitation_id uuid, p_normalized_email text)
+returns text
+language sql
+immutable
+strict
+set search_path = pg_catalog, pg_temp
+as $$
+  select public._q2p_sha256_hex('zypact.q2p.invitation_request_email.v1' || chr(31)
+         || p_invitation_id::text || chr(31) || p_normalized_email)
+$$;
+
+create or replace function public._q2p_invitation_bind_request_email()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  v_email text;
+begin
+  if new.request_email_binding is not null then
+    raise exception using errcode = '22023', message = 'request_email_binding_is_derived';
+  end if;
+  select r.normalized_email into v_email from public.snapshot_requests r
+   where r.id = new.snapshot_request_id
+   for share;
+  if v_email is null then
+    raise exception using errcode = '23503', message = 'invitation_request_missing';
+  end if;
+  new.request_email_binding := public._q2p_request_email_binding(new.id, v_email);
+  return new;
+end;
+$$;
+
+create trigger question_review_invitations_bind_request_email
+  before insert on public.question_review_invitations
+  for each row execute function public._q2p_invitation_bind_request_email();
 
 create table public.question_review_sessions (
   id                   uuid primary key default gen_random_uuid(),
@@ -1462,12 +1532,15 @@ $$;
 -- Authorisation (uniform refusal 42501 on any failure): the session is
 -- unrevoked, within its absolute and idle limits; its invitation is
 -- unrevoked, not superseded, unexpired, exchanged and email-verified; the
--- research set is the session's; the request's current email HMAC and key id
--- are the invitation's. Replays require all of this too.
+-- research set is the session's; the snapshot request's PERSISTED
+-- normalized_email, read under lock, still matches the invitation's
+-- request_email_binding. No email value is accepted from the caller.
+-- Replays require all of this too.
 --
 -- Locks and time (R6): session FOR UPDATE, then invitation FOR SHARE, then
--- research set FOR UPDATE — always in that order. Every expiry and idle check
--- uses one clock_timestamp() taken after all three locks are held (never the
+-- snapshot request FOR SHARE, then research set FOR UPDATE — always in that
+-- order. Every expiry and idle check uses one clock_timestamp() taken after
+-- all four locks are held (never the
 -- transaction start), and that same instant is the approval's approved_at and
 -- the session's new last_seen_at. A revocation committed before the locks is
 -- seen (READ COMMITTED) or fails the call with 40001 (REPEATABLE READ,
@@ -1475,6 +1548,11 @@ $$;
 -- the locks waits for it. lock_timeout (5 s) fails a long wait with 55P03.
 -- Future revocation or reissue paths that touch both rows must lock the
 -- session before the invitation, or PostgreSQL may abort one side with 40P01.
+-- A change to the request's address (none exists today) either committed
+-- before the request lock and is seen, raises 40001 under REPEATABLE READ /
+-- SERIALIZABLE, or waits for this approval. Under REPEATABLE READ any update
+-- of the request row after the snapshot (a worker status change, say) also
+-- raises 40001: a closed failure the caller retries.
 --
 -- Idempotency (D-021 form; no exception absorption), only after authorisation:
 --   the request fingerprint is a canonical jsonb of the research set, the
@@ -1515,9 +1593,7 @@ create or replace function public.approve_buyer_question_set(
   p_items jsonb,
   p_idempotency_key text,
   p_consent_text_version text,
-  p_consent_text_sha256 text,
-  p_current_email_hmac text,
-  p_current_email_hmac_key_id text
+  p_consent_text_sha256 text
 ) returns table (status text, approval_record_id uuid, version_ids uuid[])
 language plpgsql
 security definer
@@ -1556,6 +1632,7 @@ declare
   v_rationale text;
   v_refuse constant text := 'question_set_refused';
   v_check_at timestamptz;
+  v_request_email text;
 begin
   -- Authorisation: the session token, hashed with its purpose label.
   if p_session_token is null or length(p_session_token) < 32 then
@@ -1573,10 +1650,18 @@ begin
   -- row) either committed before this lock — and is seen, or, under
   -- REPEATABLE READ / SERIALIZABLE with an older snapshot, raises 40001 — or
   -- waits until this approval has committed. Lock order is always session,
-  -- then invitation, then research set; nothing here locks them in another
-  -- order.
+  -- then invitation, then snapshot request, then research set; nothing here
+  -- locks them in another order.
   select i.* into v_invitation from public.question_review_invitations i
    where i.id = v_session.invitation_id
+   for share;
+
+  -- The persisted request email, locked FOR SHARE (a change to it either
+  -- committed before this lock and is seen, raises 40001 under REPEATABLE
+  -- READ / SERIALIZABLE, or waits for this approval). Lock order: session,
+  -- invitation, snapshot request, research set.
+  select r.normalized_email into v_request_email from public.snapshot_requests r
+   where r.id = v_session.snapshot_request_id
    for share;
 
   -- Serialise approvals of this research set (locked before the decision, so
@@ -1586,7 +1671,7 @@ begin
    for update;
 
   -- The authorisation decision point: one wall-clock instant, taken after all
-  -- three locks are held, used for every expiry and idle check, for the
+  -- four locks are held, used for every expiry and idle check, for the
   -- session's last_seen_at, and as the approval timestamp.
   v_check_at := clock_timestamp();
 
@@ -1601,9 +1686,12 @@ begin
      or v_invitation.email_verified_at is null
      -- Scope is the session's, never the caller's.
      or p_research_set_id is distinct from v_session.research_set_id
-     -- The request's current address must still be the invited one.
-     or p_current_email_hmac is distinct from v_invitation.email_hmac
-     or p_current_email_hmac_key_id is distinct from v_invitation.email_hmac_key_id then
+     -- The request's persisted address must still be the one the invitation
+     -- was issued against (derived in the database, never caller-supplied).
+     or v_request_email is null
+     or v_invitation.request_email_binding is null
+     or public._q2p_request_email_binding(v_invitation.id, v_request_email)
+          is distinct from v_invitation.request_email_binding then
     raise exception using errcode = '42501', message = v_refuse;
   end if;
 
@@ -1818,6 +1906,8 @@ revoke all on function public._q2p_research_set_scope_check() from public, anon,
 revoke all on function public._q2p_candidate_source_check() from public, anon, authenticated, service_role;
 revoke all on function public._q2p_candidate_evidence_check() from public, anon, authenticated, service_role;
 revoke all on function public._q2p_invitation_guard() from public, anon, authenticated, service_role;
+revoke all on function public._q2p_request_email_binding(uuid, text) from public, anon, authenticated, service_role;
+revoke all on function public._q2p_invitation_bind_request_email() from public, anon, authenticated, service_role;
 revoke all on function public._q2p_session_within_invitation() from public, anon, authenticated, service_role;
 revoke all on function public._q2p_session_guard() from public, anon, authenticated, service_role;
 revoke all on function public._q2p_require_founder_or_system(text, uuid, text, text) from public, anon, authenticated, service_role;
@@ -1832,9 +1922,9 @@ revoke all on function public.create_workspace_with_owner(uuid, text, text, text
 revoke all on function public.assign_project_to_workspace(uuid, uuid, text, uuid, text, text) from public, anon, authenticated;
 revoke all on function public.add_workspace_member(uuid, uuid, text, uuid, text, text) from public, anon, authenticated;
 revoke all on function public.remove_workspace_member(uuid, uuid, text, uuid, text, text) from public, anon, authenticated;
-revoke all on function public.approve_buyer_question_set(text, uuid, jsonb, text, text, text, text, text) from public, anon, authenticated;
+revoke all on function public.approve_buyer_question_set(text, uuid, jsonb, text, text, text) from public, anon, authenticated;
 grant execute on function public.create_workspace_with_owner(uuid, text, text, text, uuid, text, text) to service_role;
 grant execute on function public.assign_project_to_workspace(uuid, uuid, text, uuid, text, text) to service_role;
 grant execute on function public.add_workspace_member(uuid, uuid, text, uuid, text, text) to service_role;
 grant execute on function public.remove_workspace_member(uuid, uuid, text, uuid, text, text) to service_role;
-grant execute on function public.approve_buyer_question_set(text, uuid, jsonb, text, text, text, text, text) to service_role;
+grant execute on function public.approve_buyer_question_set(text, uuid, jsonb, text, text, text) to service_role;

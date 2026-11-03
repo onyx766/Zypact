@@ -3,7 +3,8 @@
  * Static contract for Q2′-1 — the account-first data foundation
  * (supabase/migrations/<14 digits>_q2p1_account_workspace_foundation.sql).
  *
- * Cases QS-01..QS-20 of the Q2′ scope and test plan, as reconciled for Q2′-1
+ * Cases QS-01..QS-20 of the Q2′ scope and test plan, as reconciled for Q2′-1,
+ * plus QS-21..QS-26 from the remediation rounds (R1–R4, R6, email binding)
  * (F3, F5 and enrolment moved to Q2′-1b; no adapter). Every detector is then
  * proved to refuse a deliberate mutation of the SQL.
  *
@@ -253,7 +254,7 @@ function detectors(sql: string): Array<[string, string, boolean, string]> {
   const iCheck = f4.indexOf("or v_session.absolute_expires_at <= v_check_at");
   add("QS-25", "F4 locks the invitation FOR SHARE", iInv > 0);
   add("QS-25", "lock order is session, then invitation, then research set", iSes > 0 && iSes < iInv && iInv < iSet, `${iSes} ${iInv} ${iSet}`);
-  add("QS-25", "one clock_timestamp() is taken after all three locks and before every check",
+  add("QS-25", "one clock_timestamp() is taken after all four locks and before every check",
     iClock > iSet && iCheck > iClock && (f4.match(/clock_timestamp\(\)/g) ?? []).length === 1);
   add("QS-25", "F4 never uses now() (transaction start) for any decision or timestamp", !/\bnow\(\)/.test(f4));
   add("QS-25", "absolute, idle and invitation expiry all use the decision instant",
@@ -262,6 +263,36 @@ function detectors(sql: string): Array<[string, string, boolean, string]> {
   add("QS-25", "approved_at and last_seen_at are the decision instant",
     /v_version_ids, v_hashes, v_check_at, 'review_invitation'/.test(f4)
       && (f4.match(/set last_seen_at = greatest\(last_seen_at, v_check_at\)/g) ?? []).length === 3);
+
+  // ── Email binding: the request's persisted address, derived and checked in the database ──
+  const iReq = f4.search(/from public\.snapshot_requests r\s+where r\.id = v_session\.snapshot_request_id\s+for share;/);
+  const bindFn = functionBody(sql, "_q2p_request_email_binding");
+  const bindTrig = functionBody(sql, "_q2p_invitation_bind_request_email");
+  const guard = functionBody(sql, "_q2p_invitation_guard");
+  add("QS-26", "F4 takes no email argument", !/email/i.test(f4.split("returns table")[0] ?? ""));
+  add("QS-26", "F4 locks the snapshot request FOR SHARE", iReq > 0);
+  add("QS-26", "lock order is session, invitation, snapshot request, research set; the clock follows all four",
+    iSes > 0 && iSes < iInv && iInv < iReq && iReq < iSet && iClock > iSet, `${iSes} ${iInv} ${iReq} ${iSet} ${iClock}`);
+  add("QS-26", "F4 authorises the address only through the binding, never a caller value",
+    /or v_request_email is null\s+or v_invitation\.request_email_binding is null\s+or public\._q2p_request_email_binding\(v_invitation\.id, v_request_email\)\s+is distinct from v_invitation\.request_email_binding then/.test(f4)
+      && !/p_current_email|is distinct from v_invitation\.email_hmac/.test(f4));
+  add("QS-26", "the binding is a NOT NULL 64-hex invitation column",
+    /\n\s*request_email_binding text not null check \(request_email_binding ~ '\^\[0-9a-f\]\{64\}\$'\)/.test(inv));
+  add("QS-26", "the binding is not a single-transition column (immutable once inserted)",
+    /v_mutable constant text\[\] := array\['exchanged_at', 'email_verified_at', 'revoked_at', 'superseded_by'\];/.test(guard)
+      && !/request_email_binding/.test(guard));
+  add("QS-26", "the insert trigger refuses a caller value and derives the binding from the locked request",
+    /if new\.request_email_binding is not null then\s+raise exception using errcode = '22023', message = 'request_email_binding_is_derived';/.test(bindTrig)
+      && /from public\.snapshot_requests r\s+where r\.id = new\.snapshot_request_id\s+for share;/.test(bindTrig)
+      && /new\.request_email_binding := public\._q2p_request_email_binding\(new\.id, v_email\);/.test(bindTrig)
+      && /create trigger question_review_invitations_bind_request_email\s+before insert on public\.question_review_invitations\s+for each row execute function public\._q2p_invitation_bind_request_email\(\);/.test(sql));
+  add("QS-26", "the binding is domain-separated and per invitation",
+    /immutable\s+strict/.test(bindFn)
+      && /public\._q2p_sha256_hex\('zypact\.q2p\.invitation_request_email\.v1' \|\| chr\(31\)\s+\|\| p_invitation_id::text \|\| chr\(31\) \|\| p_normalized_email\)/.test(bindFn));
+  add("QS-26", "no API role may execute the binding or trigger function",
+    /revoke all on function public\._q2p_request_email_binding\(uuid, text\) from public, anon, authenticated, service_role;/.test(sql)
+      && /revoke all on function public\._q2p_invitation_bind_request_email\(\) from public, anon, authenticated, service_role;/.test(sql)
+      && !/grant [^;]*_q2p_(request_email_binding|invitation_bind_request_email)/i.test(sql));
 
   return out;
 }
@@ -369,7 +400,7 @@ function detectors(sql: string): Array<[string, string, boolean, string]> {
     ["writing to protocols", "insert into public.buyer_questions (project_id)", "insert into public.protocols (project_id) values (null);\n    insert into public.buyer_questions (project_id)", "no write to any paid-path"],
     ["redefining the 0069 launch function", "-- ════════════════════════════════════════════════════════════════════════\n-- 12. Function privileges", "create or replace function public.approve_and_launch_snapshot_baseline(a uuid) returns void language sql as $$ select 1 $$;\n-- 12. Function privileges", "redefines no function that exists"],
     ["granting F6 to service_role", "-- Founder/system and invitation paths: service_role only.", "grant execute on function public.assert_current_account_member(uuid) to service_role;", "F6 is executable by no role"],
-    ["granting an RPC to authenticated", "grant execute on function public.approve_buyer_question_set(text, uuid, jsonb, text, text, text, text, text) to service_role;", "grant execute on function public.approve_buyer_question_set(text, uuid, jsonb, text, text, text, text, text) to authenticated;", "executable by service_role only"],
+    ["granting an RPC to authenticated", "grant execute on function public.approve_buyer_question_set(text, uuid, jsonb, text, text, text) to service_role;", "grant execute on function public.approve_buyer_question_set(text, uuid, jsonb, text, text, text) to authenticated;", "executable by service_role only"],
     ["reading auth.uid()", "current_setting('request.jwt.claims', true)", "auth.uid()::text", "does not reference the auth schema"],
     ["dropping FOR SHARE from F6", "and m.removed_at is null\n   for share;", "and m.removed_at is null;", "F6 holds FOR SHARE"],
     ["reading memberships before the version row in F8", "  update public.workspace_membership_versions\n     set version = version + 1, updated_at = now()\n   where workspace_membership_versions.workspace_id = p_workspace_id;\n  if not found then\n    raise exception using errcode = '22023', message = 'q2p_workspace_not_found';\n  end if;\n\n  select m.* into v_target", "  perform 1 from public.workspace_members;\n  update public.workspace_membership_versions\n     set version = version + 1, updated_at = now()\n   where workspace_membership_versions.workspace_id = p_workspace_id;\n  if not found then\n    raise exception using errcode = '22023', message = 'q2p_workspace_not_found';\n  end if;\n\n  select m.* into v_target", "remove_workspace_member writes the version row before"],
@@ -387,9 +418,20 @@ function detectors(sql: string): Array<[string, string, boolean, string]> {
     ["dropping F1's advisory lock", "  perform pg_advisory_xact_lock(hashtextextended('zypact.q2p.create_workspace:' || p_idempotency_key, 0));\n", "", "advisory lock before its key lookup"],
     ["dropping the invitation lock", "where i.id = v_session.invitation_id\n   for share;", "where i.id = v_session.invitation_id;", "F4 locks the invitation FOR SHARE"],
     ["locking the research set before the invitation", "  select i.* into v_invitation from public.question_review_invitations i\n   where i.id = v_session.invitation_id\n   for share;\n", "", "lock order is session, then invitation"],
-    ["judging expiry by transaction start", "  v_check_at := clock_timestamp();", "  v_check_at := now();", "one clock_timestamp() is taken after all three locks"],
+    ["judging expiry by transaction start", "  v_check_at := clock_timestamp();", "  v_check_at := now();", "one clock_timestamp() is taken after all four locks"],
     ["one expiry check reverting to now()", "or v_invitation.expires_at <= v_check_at", "or v_invitation.expires_at <= now()", "never uses now()"],
     ["approved_at defaulting to transaction start", "v_version_ids, v_hashes, v_check_at, 'review_invitation'", "v_version_ids, v_hashes, now(), 'review_invitation'", "approved_at and last_seen_at are the decision instant"],
+    ["accepting a caller email argument in F4", "  p_consent_text_sha256 text\n) returns table", "  p_consent_text_sha256 text,\n  p_current_email_hmac text\n) returns table", "F4 takes no email argument"],
+    ["reading the request without a lock in F4", "   where r.id = v_session.snapshot_request_id\n   for share;", "   where r.id = v_session.snapshot_request_id;", "F4 locks the snapshot request FOR SHARE"],
+    ["locking the request after the research set", "  select r.normalized_email into v_request_email from public.snapshot_requests r\n   where r.id = v_session.snapshot_request_id\n   for share;\n\n  -- Serialise approvals of this research set (locked before the decision, so\n  -- expiry is judged after every wait).\n  select rs.* into v_set from public.question_research_sets rs\n   where rs.id = v_session.research_set_id and rs.project_id = v_session.project_id\n   for update;\n", "  select rs.* into v_set from public.question_research_sets rs\n   where rs.id = v_session.research_set_id and rs.project_id = v_session.project_id\n   for update;\n  select r.normalized_email into v_request_email from public.snapshot_requests r\n   where r.id = v_session.snapshot_request_id\n   for share;\n", "lock order is session, invitation, snapshot request"],
+    ["dropping F4's binding comparison", "\n     or public._q2p_request_email_binding(v_invitation.id, v_request_email)\n          is distinct from v_invitation.request_email_binding then", " then", "F4 authorises the address only through the binding"],
+    ["comparing a caller HMAC again", "     or v_request_email is null\n", "     or v_request_email is null\n     or p_current_email_hmac is distinct from v_invitation.email_hmac\n", "F4 authorises the address only through the binding"],
+    ["a nullable binding", "request_email_binding text not null check", "request_email_binding text check", "NOT NULL 64-hex invitation column"],
+    ["making the binding mutable", "array['exchanged_at', 'email_verified_at', 'revoked_at', 'superseded_by'];", "array['exchanged_at', 'email_verified_at', 'revoked_at', 'superseded_by', 'request_email_binding'];", "not a single-transition column"],
+    ["accepting a caller-supplied binding", "  if new.request_email_binding is not null then\n    raise exception using errcode = '22023', message = 'request_email_binding_is_derived';\n  end if;\n", "", "insert trigger refuses a caller value"],
+    ["deriving the binding from an unlocked request read", "   where r.id = new.snapshot_request_id\n   for share;", "   where r.id = new.snapshot_request_id;", "insert trigger refuses a caller value"],
+    ["an undomained, unsalted binding", "'zypact.q2p.invitation_request_email.v1' || chr(31)\n         || p_invitation_id::text || chr(31) || p_normalized_email", "p_normalized_email", "domain-separated and per invitation"],
+    ["granting the binding function to service_role", "revoke all on function public._q2p_request_email_binding(uuid, text) from public, anon, authenticated, service_role;", "grant execute on function public._q2p_request_email_binding(uuid, text) to service_role;", "no API role may execute the binding"],
     ["adding an enrolment table (Q2′-1b)", "create table public.question_sources (", "create table public.bqi_enrollments (\n  id uuid\n);\n\ncreate table public.question_sources (", "no PG-9, 0082 or Q2′-1b object"],
   ];
   for (const [label, needle, replacement, detectorFragment] of mutations) {

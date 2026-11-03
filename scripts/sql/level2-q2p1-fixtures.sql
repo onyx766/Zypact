@@ -114,7 +114,7 @@ declare
   v text;
   anchor constant text := E'and rs.project_id = v_session.project_id\n   for update;';
 begin
-  v := pg_get_functiondef('public.approve_buyer_question_set(text,uuid,jsonb,text,text,text,text,text)'::regprocedure);
+  v := pg_get_functiondef('public.approve_buyer_question_set(text,uuid,jsonb,text,text,text)'::regprocedure);
   if strpos(v, anchor) = 0 then raise exception 'weak F4: anchor missing'; end if;
   v := replace(v, anchor, E'and rs.project_id = v_session.project_id;');
   v := replace(v, 'FUNCTION public.approve_buyer_question_set(', 'FUNCTION level2_fixture.approve_set_no_set_lock(');
@@ -126,7 +126,9 @@ $w$;
 -- three candidates (observed, adapted, hypothesis), an exchanged invitation
 -- and a live session. Tokens are synthetic and derived from the label.
 -- The email "HMAC" is a fixed stand-in hex value; the database only stores
--- and compares it (D-039: the application computes it).
+-- it (D-039: the application computes it). Authorisation does not use it: the
+-- insert trigger binds each invitation to the request's persisted address
+-- (request_email_binding), and F4 checks that binding.
 create function level2_fixture.make_review(p_ws uuid, p_project uuid, p_request uuid, p_label text)
 returns jsonb
 language plpgsql
@@ -256,12 +258,12 @@ declare
   procedure_name text;
   cases constant text[][] := array[
     -- [source function, anchor, replacement, fixture name]
-    array['public.approve_buyer_question_set(text,uuid,jsonb,text,text,text,text,text)',
+    array['public.approve_buyer_question_set(text,uuid,jsonb,text,text,text)',
           E'\n     or v_invitation.email_verified_at is null', '', 'approve_set_no_email_check'],
-    array['public.approve_buyer_question_set(text,uuid,jsonb,text,text,text,text,text)',
+    array['public.approve_buyer_question_set(text,uuid,jsonb,text,text,text)',
           'and public._q2p_observed_span_ok(v_cand.id, v_cand.primary_source_id, v_texts[v_i], v_cand.verification) then',
           'then', 'approve_set_no_span_check'],
-    array['public.approve_buyer_question_set(text,uuid,jsonb,text,text,text,text,text)',
+    array['public.approve_buyer_question_set(text,uuid,jsonb,text,text,text)',
           E'\n                     order by u.prompt_hash)', ')', 'approve_set_ordered_fingerprint'],
     array['public.create_workspace_with_owner(uuid,text,text,text,uuid,text,text)',
           E'\n  perform pg_advisory_xact_lock(hashtextextended(''zypact.q2p.create_workspace:'' || p_idempotency_key, 0));', '',
@@ -345,7 +347,7 @@ begin
           'candidate_id', case when v ->> 'origin' = 'customer_written' then null else cand end,
           'text', v ->> 'approvedText',
           'prompt_hash', public._q2p_sha256_hex(v ->> 'approvedText'))),
-        'vec-' || (v ->> 'id'), 'consent-v1', repeat('c', 64), repeat('a', 64), 'k1') a;
+        'vec-' || (v ->> 'id'), 'consent-v1', repeat('c', 64)) a;
     return query
       select v ->> 'id',
              coalesce((select c.classification || '/' || coalesce(c.rule, '') || '/' || coalesce(c.verification, '')
@@ -431,11 +433,11 @@ begin
   values (inv, p_ws, p_project, p_request, rs, public._q2p_token_hash('zypact.question_review_session.v1', tok),
     now() + interval '30 minutes', now(), 'system', 'invitation_exchange', 'v1');
 
-  execute format('select status, approval_record_id from %s($1, $2, $3, $4, $5, $6, $7, $8)', p_fn)
+  execute format('select status, approval_record_id from %s($1, $2, $3, $4, $5, $6)', p_fn)
     into st, rec
     using tok, rs, jsonb_build_array(jsonb_build_object('origin', 'recommended_unchanged', 'candidate_id', cand,
             'text', txt, 'prompt_hash', public._q2p_sha256_hex(txt))),
-          'r2-' || p_label, 'consent-v1', repeat('c', 64), repeat('a', 64), 'k1';
+          'r2-' || p_label, 'consent-v1', repeat('c', 64);
   select c.classification || '/' || coalesce(c.rule, '') || '/' || coalesce(c.verification, '') || '|' || v.winnability
     into out
     from public.approved_wording_classifications c
@@ -500,13 +502,13 @@ $$;
 do $w$
 declare v text;
 begin
-  v := pg_get_functiondef('public.approve_buyer_question_set(text,uuid,jsonb,text,text,text,text,text)'::regprocedure);
+  v := pg_get_functiondef('public.approve_buyer_question_set(text,uuid,jsonb,text,text,text)'::regprocedure);
   if strpos(v, E'where i.id = v_session.invitation_id\n   for share;') = 0 then raise exception 'weak R6a: anchor missing'; end if;
   v := replace(v, E'where i.id = v_session.invitation_id\n   for share;', 'where i.id = v_session.invitation_id;');
   v := replace(v, 'FUNCTION public.approve_buyer_question_set(', 'FUNCTION level2_fixture.approve_set_no_invitation_lock(');
   execute v;
 
-  v := pg_get_functiondef('public.approve_buyer_question_set(text,uuid,jsonb,text,text,text,text,text)'::regprocedure);
+  v := pg_get_functiondef('public.approve_buyer_question_set(text,uuid,jsonb,text,text,text)'::regprocedure);
   if strpos(v, 'v_check_at := clock_timestamp();') = 0 then raise exception 'weak R6b: anchor missing'; end if;
   v := replace(v, 'v_check_at := clock_timestamp();', 'v_check_at := now();');
   v := replace(v, 'FUNCTION public.approve_buyer_question_set(', 'FUNCTION level2_fixture.approve_set_transaction_clock(');
@@ -575,5 +577,51 @@ begin
      where i.token_hash = public._q2p_token_hash('zypact.question_review_invitation.v1', 'expinv-' || p_label);
   end if;
   return r || jsonb_build_object('exp_token', tok);
+end;
+$$;
+
+-- ── Email binding (QR-41 to QR-43) ─────────────────────────────────────
+
+-- Weakened copies of F4, one textual change each.
+do $w$
+declare v text;
+  anchor_lock constant text := E'where r.id = v_session.snapshot_request_id\n   for share;';
+  anchor_check constant text := E'\n     or public._q2p_request_email_binding(v_invitation.id, v_request_email)\n          is distinct from v_invitation.request_email_binding then';
+begin
+  -- The request's address read without a lock.
+  v := pg_get_functiondef('public.approve_buyer_question_set(text,uuid,jsonb,text,text,text)'::regprocedure);
+  if strpos(v, anchor_lock) = 0 then raise exception 'weak EB-a: anchor missing'; end if;
+  v := replace(v, anchor_lock, 'where r.id = v_session.snapshot_request_id;');
+  v := replace(v, 'FUNCTION public.approve_buyer_question_set(', 'FUNCTION level2_fixture.approve_set_no_request_lock(');
+  execute v;
+
+  -- The binding comparison removed (as at f7ce558, F4 never compares the
+  -- persisted address).
+  v := pg_get_functiondef('public.approve_buyer_question_set(text,uuid,jsonb,text,text,text)'::regprocedure);
+  if strpos(v, anchor_check) = 0 then raise exception 'weak EB-b: anchor missing'; end if;
+  v := replace(v, anchor_check, ' then');
+  v := replace(v, 'FUNCTION public.approve_buyer_question_set(', 'FUNCTION level2_fixture.approve_set_no_binding_check(');
+  execute v;
+end;
+$w$;
+
+-- A reviewable research set on its own snapshot request (address
+-- buyer@<label>.test), so a case can change that request's address without
+-- touching any other case's request.
+create function level2_fixture.make_request_review(p_ws uuid, p_project uuid, p_label text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  req uuid;
+begin
+  insert into public.snapshot_requests (work_email, normalized_email, company_name, website_url, normalized_domain,
+    buyer_category, project_id, status)
+  values ('Buyer@' || p_label || '.test', 'buyer@' || p_label || '.test', 'EB', 'https://eb.test', 'eb.test',
+    'crm', p_project, 'pending_approval')
+  returning id into req;
+  return level2_fixture.make_review(p_ws, p_project, req, p_label) || jsonb_build_object('req', req);
 end;
 $$;

@@ -568,3 +568,78 @@ Each entry records:
   - continuous monitoring;
   - a new provider or source kind;
   - raising an evaluation threshold after a breach.
+
+## D-041 — Migration naming and release order after the 0081 ledger alias (QD-6)
+
+- **Date:** 2026-11-02
+- **Status:** Approved by the Founder (QD-6). The migration-name rules are implemented locally at `0d3f3f6` (B1 revision 3) and are not yet reviewed or pushed. **This decision authorises no production SQL.** Applying 0083 or any later migration to production needs its own authorisation, after the read-only preflight.
+- **Context:**
+  - The production database is the Supabase project named "zypact-staging". There is no separate staging database.
+  - Its migration ledger holds 0001–0080, plus `20260924023646`. That row is 0081, applied under a timestamp version. It was verified functionally equivalent to `0081_*.sql`; the texts differ only in comments.
+  - 0082 to 0085 are not applied to production.
+  - A new four-digit migration would sort below `20260924023646` in the CLI's ordering, so the CLI would treat it as out of order.
+- **Decision:**
+  - **New migrations use 14-digit UTC versions** (`YYYYMMDDHHMMSS_name.sql`, lowercase name). Each is a real instant above `20260924023646`, so numeric order is apply order.
+  - **The four-digit sequence is closed.** A four-digit file is recognised only by its exact filename:
+    - the 82 historical files on `main` at `13ccdc1`;
+    - the reserved names of 0082, 0084 and 0085, which are held or frozen.
+
+    A number alone is never enough. Every `.sql` file is parsed, and a name that fits no rule is an error, never skipped. The rules live in one module, `scripts/lib/migration-names.ts`, which every migration-reading test uses.
+  - **Release order (strategy B):** 0083 goes to production before Q2′-1 and Q2′-2, by the reserved-version procedure. That procedure was validated locally: 56/56 checks in two runs, and the cost-basis test passed 27/27. Accepting the order is not authorisation to apply 0083.
+  - **Apply method:** each migration is applied by its named file under `psql --single-transaction`, and its ledger row is written in the same transaction. Never use `supabase db push` or `supabase migration repair` against production.
+  - **The `20260924023646` ledger row is never edited, renumbered or deleted.**
+- **Consequences:**
+  - 21 test scripts that selected or guarded migrations by four-digit numbers were changed to use the shared rules:
+    - **10 selectors** had thrown on timestamped names.
+    - **9 guards** (`m5-0059-schema`, `m5-0060-schema` and `m7-0070` to `m7-0076-schema`) contain an on-disk "no later migration" check that had silently skipped timestamped names, which fails open.
+    - **2 runtime selectors** (`m5-0059-runtime`, `m5-0060-runtime`) only select migrations 1 to 59 and 1 to 60. They contain no redefinition guard; the guard for those functions lives in the matching schema contract.
+  - `pg9-harness-offline` fails closed when any timestamped migration is present. PG-9 evidence stays pinned to commits at or before `13ccdc1`, and is never evidence for later migrations.
+  - CI's Level 2 job applies every migration file, so a pull request that adds one applies it to a disposable database. The Founder is notified in advance.
+- **Before 0083 goes to production:** the read-only preflight (`PROD_PREFLIGHT_SPEC.md`) must run, comparing the expected ledger and the function hash before the change. It has not run.
+
+## D-042 — Q2′-1: the account-first data foundation is closed, tenant-pinned and serialised
+
+- **Date:** 2026-11-02
+- **Status:** Implemented locally only, at `20e5755`, `6a258f6`, `f7ce558` and the email-binding commit on `feat/q2p1-account-foundation`. The independent review of the first three requested changes. The email-binding commit answers that review and **awaits its own review.** Not pushed, not applied to any Supabase project, and not wired into any route. Production application is a separate gate (CURRENT_STATUS section 20.6).
+- **Builds on:** D-039 (graded, frozen buyer-question approval) and D-040 (self-service accounts; identity is not a grant; separate session types).
+- **Scope:**
+  - One migration, `20261102132000_q2p1_account_workspace_foundation.sql`: 15 closed tables and the functions F1, F2, F4, F6, F7 and F8.
+  - **D-1:** F3, F5 and `bqi_enrollments` moved to Q2′-1b.
+  - **D-2:** no TypeScript adapter in Q2′-1.
+  - Issuing, exchanging, revoking and reissuing invitations belongs to Q4′.
+- **Invariants:**
+  - **Closed tables.** RLS is enabled with no policies, and API roles hold no table privileges. Rows are reached only through `SECURITY DEFINER` functions owned by the migration role, with a fixed `search_path` and a 5-second `lock_timeout`. Only `service_role` may execute them, except F6, which no role may execute directly.
+  - **Tenant pinning.** The nine project-scoped tables carry `(project_id, workspace_id)`, enforced by composite foreign keys to `workspace_projects`: `question_research_sets`, `question_sources`, `question_candidates`, `question_candidate_sources`, `question_review_invitations`, `question_review_sessions`, `approval_records`, `buyer_question_version_origins` and `approved_wording_classifications`. The other six are not project-pinned:
+    - `workspaces` is the root.
+    - `workspace_projects` is the pin itself.
+    - `workspace_members` and `workspace_membership_versions` carry `workspace_id` only.
+    - `exception_items` has a nullable `workspace_id` and no project.
+    - `exception_events` has a nullable `workspace_id`, so its composite foreign key to the item is not enforced when that column is null. This is the known `exception_events` workspace gap.
+
+    Actors are typed, and are bound to memberships and sessions by composite foreign keys.
+  - **Membership serialisation.** Every membership change increments the workspace's version row before anything else.
+  - **R1 — verified email.** No session without an exchanged, verified invitation. A session never outlives its invitation. No approval without `email_verified_at`.
+  - **R2 — source-backed grades.** `observed` needs a byte-exact, buyer-authored, word-bounded span of the primary source, with the same verification and an intact hash. `adapted` needs a valid basis. Otherwise the grade is `pending_review`, and nothing is upgraded. This is stricter than Q1.
+  - **R3 — canonical idempotency.** The fingerprint binds the action, research set, consent text version and hash, and the items. The items are sorted by prompt hash, so the fingerprint does not depend on their order. Keys are unique within a research set. Conflict statuses are returned only after full authorisation, and a replay needs a valid session.
+  - **R4 — no swallowed errors.** No `unique_violation` handlers. Serialization failures, unique violations, deadlocks and lock timeouts propagate, and write nothing.
+  - **R6 — decision-instant authorisation.**
+    - F4 locks in a fixed order: the session `FOR UPDATE`, then the invitation `FOR SHARE`, then the snapshot request `FOR SHARE`, then the research set `FOR UPDATE`.
+    - After the locks, F4 takes one `clock_timestamp()`. It decides every expiry with it, and stamps `last_seen_at` and `approval_records.approved_at` with it.
+    - A revocation committed before the decision refuses the approval at every isolation level. A revocation that starts after the decision waits for the approval to commit.
+    - Any future code that locks more than one of these rows must lock them in that order.
+  - **Email binding — the request's persisted address authorises, never a caller value.**
+    - The independent review found that F4 compared a caller-supplied email HMAC with the invitation's own value and never read the request, so an approval succeeded after the request's address changed.
+    - Each invitation now carries `request_email_binding`: `SHA-256('zypact.q2p.invitation_request_email.v1' ‖ US ‖ invitation id ‖ US ‖ normalized_email)`. It is `NOT NULL`. A `BEFORE INSERT` trigger derives it from the request row, read `FOR SHARE`, and refuses any value a caller supplies. It is immutable.
+    - F4 takes no email argument. It reads the request's address `FOR SHARE` and refuses unless the recomputed binding matches. This happens before any idempotency status, so a replay is refused too.
+    - **No secret, and not an HMAC.** The database compares its own rows. Anyone who obtains an invitation row (an export, dump, replica, log or backup copy of the table without the requests table, or a binding kept after the address is erased) can confirm guessed addresses offline. This does not depend on plaintext access. It is accepted for Q2′-1 only under the current access model: no API role reads the table, nothing exports it or logs the binding, and nothing erases addresses. It must be revisited before any of those changes. A keyed binding would remove it, at the cost of a new secret.
+    - **Continuity, not recipient identity.** The binding proves that the request's address is unchanged since issue. It does not prove who received or verified the invitation. Q4′ must enforce recipient matching: the issue RPC takes no recipient address and sends only to the request's locked `normalized_email`, and the exchange RPC (the only writer of `exchanged_at` and `email_verified_at`) requires proof of possession of that address and re-checks the binding and the keyed HMAC. This is a gate before any customer use.
+    - **Restore.** If the address is changed back to the exact original, an otherwise valid invitation authorises again. A future path that changes an address must revoke the request's invitations in the same transaction if the change is to be final.
+    - **Where it belongs.** It belongs in F4, not in a trusted server-side gate: only F4 holds the locks at the decision instant, and `service_role` is not yet a trust boundary that can be relied on (A4). The server still chooses the address an invitation is sent to, computes the keyed HMAC, and proves possession at exchange (Q4′).
+  - **Approval never authorises execution** (D-039, D-040). F4 creates no protocol, job, reservation or paid effect.
+- **Evidence:** every invariant has a positive test and, where it guards concurrency or a refusal, a weakened copy of the function that demonstrates the defect. Results are in CURRENT_STATUS section 20.3. The production-order run applied Q2′-1 before 0083, under D-041.
+- **Known limitations:** CURRENT_STATUS section 20.4. These include the `revoked_at` timestamp of a waiting revocation, which Q4′ must stamp after locking, and the `service_role` trust boundary while A4 is on HOLD.
+- **Unchanged:**
+  - D-037 and the spend gate;
+  - the HOLD on PG-9 and PR-B;
+  - D-039's grade definitions;
+  - every existing migration and function, including 0047's `approve_buyer_question_version`.

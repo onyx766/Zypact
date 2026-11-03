@@ -133,7 +133,8 @@
     "test:bqi-selection": "tsx scripts/test-bqi-selection.ts",
     "test:bqi-wording": "tsx scripts/test-bqi-wording.ts",
     "test:q2p-schema": "tsx scripts/test-q2p-schema-contract.ts",
-    "test:q2p1-scope": "tsx scripts/test-q2p1-scope.ts"
+    "test:q2p1-scope": "tsx scripts/test-q2p1-scope.ts",
+    "test:q2p-sv1": "tsx scripts/test-q2p-supabase-stack-sv1.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.3.3",

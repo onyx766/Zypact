@@ -600,7 +600,10 @@ Each entry records:
 ## D-042 — Q2′-1: the account-first data foundation is closed, tenant-pinned and serialised
 
 - **Date:** 2026-11-02
-- **Status:** Implemented locally only, at `20e5755`, `6a258f6`, `f7ce558` and the email-binding commit on `feat/q2p1-account-foundation`. The independent review of the first three requested changes. The email-binding commit answers that review and **awaits its own review.** Not pushed, not applied to any Supabase project, and not wired into any route. Production application is a separate gate (CURRENT_STATUS section 20.6).
+- **Status:** Implemented at `20e5755`, `6a258f6`, `f7ce558` and `b5eb27a` (the email-binding commit) on `feat/q2p1-account-foundation`.
+  - **Review:** the independent review of the first three requested changes. `b5eb27a` answers that review, and its own independent review **passed for the PR and CI phase**. The later CI and documentation commits `32bd5e8`, `b22b5a3` and `5dd27a0` were independently reviewed and **passed for the final merge-readiness stage**.
+  - **PR:** pushed as draft PR #100. It targets `main` after B1 merged as #99, and has passed its four CI workflows (the Q2′-1 schema contract, the Q2′-1 change scope, PostgreSQL Level 2 and M0).
+  - **Not merged, not applied to any Supabase project, and not wired into any route.** Production application is a separate gate (CURRENT_STATUS section 20.6).
 - **Builds on:** D-039 (graded, frozen buyer-question approval) and D-040 (self-service accounts; identity is not a grant; separate session types).
 - **Scope:**
   - One migration, `20261102132000_q2p1_account_workspace_foundation.sql`: 15 closed tables and the functions F1, F2, F4, F6, F7 and F8.

@@ -1013,8 +1013,10 @@ match is not independent verification of that source.
     own value and never read the persisted request address, so an approval
     succeeded after that address changed (reproduced locally). `b5eb27a`
     corrects that (20.2, "Email binding"), and the review of `b5eb27a` passed
-    for the PR and CI phase only. `32bd5e8`, `b22b5a3` and this refresh have
-    not been independently reviewed.
+    for the PR and CI phase only. `32bd5e8`, `b22b5a3` and `5dd27a0` (the
+    documentation refresh) were then independently reviewed and passed for
+    the final merge-readiness stage, with no new material CI or scope-contract
+    blocker. The later documentation correction records these reviews.
   - **This is not production deployment.** Merging #100 needs separate
     authorisation, and every production step stays gated (20.6).
 - **Scope:** one migration,
@@ -1256,18 +1258,20 @@ holds 83 files: the 82 historical files plus `20261102132000`. On `main` at
   run against any Supabase project.
 - **No Supabase stack.** CI runs the same plain-PostgreSQL harness, not the
   Supabase stack or PostgREST.
-- **Not fully reviewed.** The commits after `b5eb27a` are not independently
-  reviewed.
+- **Review scope.** The independent reviews passed `b5eb27a` for the PR and
+  CI phase, and `32bd5e8`, `b22b5a3` and `5dd27a0` for merge readiness. They
+  are not reviews of production application, which stays gated (20.6).
 
 ### 20.6 Remaining gates before production
 
 Each gate needs its own authorisation, in this order:
 
-1. **Done.** Independent review: `0d3f3f6..f7ce558` requested changes, and
-   `b5eb27a` passed for the PR and CI phase. **Open:** an independent review
-   of `32bd5e8`, `b22b5a3` and the documentation refresh.
+1. **Done.** Independent review: `0d3f3f6..f7ce558` requested changes,
+   `b5eb27a` passed for the PR and CI phase, and `32bd5e8`, `b22b5a3` and
+   `5dd27a0` passed for the final merge-readiness stage.
 2. **Done:** B1 merged as #99 (`a2629dc`). #100 is open as a draft against
-   `main`. Its CI against `main` must pass before it merges. Branch
+   `main`. Its four CI workflows passed against `main` at `5dd27a0`, and must
+   pass again on any later head before it merges. Branch
    protection is unavailable on this plan, so that is a merge rule. Merging
    #100 needs separate authorisation, and is not production application.
 3. The read-only production preflight from `PROD_PREFLIGHT_SPEC.md` (P3),

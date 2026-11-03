@@ -987,27 +987,36 @@ never evidence of buyer authorship. `public_verifiable` records that the
 curator gave a public URL and retrieval date; Q1 fetches nothing, and its text
 match is not independent verification of that source.
 
-## 20. Q2′-1 account-first data foundation — local commits only, not pushed, not applied anywhere
+## 20. Q2′-1 account-first data foundation — draft PR #100, not merged, not applied anywhere
 
-- **As of:** 2026-11-02
-- **Base:** `main` at `13ccdc1` (merge of #97, the D-040 documents)
-- **Status:** **local only, awaiting independent review of the email-binding
-  correction.** Five local commits form a straight line on
-  `feat/q2p1-account-foundation`: `13ccdc1` → `0d3f3f6` (B1 revision 3,
-  migration-name rules) → `20e5755` (Q2′-1) → `6a258f6` (remediation R1–R4) →
-  `f7ce558` (remediation R6) → the email-binding commit that adds this
-  paragraph. The independent source review of the first four commits requested
-  changes: F4 compared a caller-supplied email HMAC with the invitation's own
-  value and never read the persisted request address, so an approval succeeded
-  after that address changed (reproduced locally). The fifth commit corrects
-  that (20.2, "Email binding") and the two documentation errors the review
-  found (D-041's guard count, D-042's tenant-pinning claim). Nothing
-  has been pushed. No pull request, cloud CI run or Vercel Preview exists, and
-  no SQL from this branch has run against any Supabase project. The migration
-  has run only in disposable local PostgreSQL containers with
-  `--network none`. **No result here is independently reviewed, and the
-  author does not self-certify it.** The next decision is independent review,
-  not production deployment.
+- **As of:** 2026-11-03
+- **Base:** `main` at `a2629dc`, the merge of #99 (B1 revision 3)
+- **Status:** **draft pull request #100, not merged.** No SQL from this branch
+  has run against any Supabase project. The migration has run only in
+  disposable PostgreSQL databases: local containers with `--network none`, and
+  GitHub Actions service containers.
+  - **B1 is merged.** #99 (`0d3f3f6`, the migration-name rules) merged into
+    `main` with a merge commit, `a2629dca03b7b3441eda2445e87158dd1de6b79e`, on
+    2026-11-03. No deployment or migration followed (20.3).
+  - **#100** (`feat/q2p1-account-foundation`) was opened stacked on B1, then
+    retargeted to `main` after #99 merged. It holds only Q2′-1's 12 files.
+  - **Its commits:**
+    - `20e5755` (Q2′-1);
+    - `6a258f6` (remediation R1–R4);
+    - `f7ce558` (remediation R6);
+    - `b5eb27a` (email binding);
+    - `32bd5e8` and `b22b5a3` (CI readiness, and the scope check split from
+      the persistent contract);
+    - the documentation refresh that adds this paragraph.
+  - **Independent review:** the review of `0d3f3f6..f7ce558` requested
+    changes. F4 compared a caller-supplied email HMAC with the invitation's
+    own value and never read the persisted request address, so an approval
+    succeeded after that address changed (reproduced locally). `b5eb27a`
+    corrects that (20.2, "Email binding"), and the review of `b5eb27a` passed
+    for the PR and CI phase only. `32bd5e8`, `b22b5a3` and this refresh have
+    not been independently reviewed.
+  - **This is not production deployment.** Merging #100 needs separate
+    authorisation, and every production step stays gated (20.6).
 - **Scope:** one migration,
   `supabase/migrations/20261102132000_q2p1_account_workspace_foundation.sql`,
   the first with a 14-digit version (D-041), plus its tests. It implements the
@@ -1075,7 +1084,8 @@ production-order runs.
 
 | Command or run | Venue | Result |
 |---|---|---|
-| `npm run test:q2p-schema` (QS-01 to QS-26, Q1 compatibility, 46 mutation self-tests) | offline | 209/209 |
+| `npm run test:q2p-schema` (QS-01 to QS-26 except QS-15, Q1 compatibility, 46 mutation self-tests) | offline | 207/207 at `b22b5a3` (209/209 at `b5eb27a`, when it still held QS-15) |
+| `Q2P_SCOPE_BASE=<base> npm run test:q2p1-scope` (QS-15) | offline | 6/6 at `b22b5a3`, base B1 |
 | `scripts/test-snapshot-worker-postgres-level2.sh` | PostgreSQL 16-alpine `sha256:0cefaabd…31ab`, `--network none` | 634 passed, 0 failed (386 Q2′-1, including 30 for QR-41 to QR-43; 25 R6; 220 existing; 3 role preconditions) |
 | Production-order run: Q2′-1 applied through the named-file procedure before 0083, the full Q2′-1 suite, QR-35, then 0083 by the reserved-version procedure; schema compared with CI order | PostgreSQL 17.6 `sha256:00bc8661…2929`, `--network none` | 426 passed, 0 failed, in two identical runs (388 QR + 25 R6 + 10 P + 3 roles); schema dump equals CI order |
 | The 21 B1 test suites | offline | logs byte-identical to the `f7ce558` run |
@@ -1098,7 +1108,7 @@ production-order runs.
   a pinned commit. For example:
   `Q2P_SCOPE_BASE=test/b1-timestamp-migration-names npm run test:q2p1-scope`.
 
-**CI readiness (local commits, not pushed):**
+**CI configuration (in #100):**
 - `q2p-schema-contract.yml` runs `test:q2p-schema` on pull requests into any
   base branch that touch migrations or its inputs.
 - `q2p1-scope.yml` runs `test:q2p1-scope` with the pull request's base SHA,
@@ -1127,11 +1137,32 @@ unchanged.
 
 The local runs used plain PostgreSQL images, not the Supabase stack, and
 macOS shims for `timeout` and millisecond `date`. CI pulls its image by tag,
-not digest. **No CI run has executed any of this.**
+not digest.
 
-`package.json` now registers 104 `test:*` and 4 `verify:*` commands. 192 files
-match `scripts/test-*.ts`, and `supabase/migrations/` holds 83 files: the 82
-historical files plus `20261102132000`. These figures supersede section 19.1's.
+**GitHub Actions runs at `b22b5a3`** (2026-11-03; logs read, not only the status):
+
+| Run | Base | Result |
+|---|---|---|
+| M0 on #99 (B1), `41635225993` | `main` at `0f094c1` (PR merge ref) | success; every suite passed |
+| Q2′-1 schema contract, `41635257694` | B1 | success; 207 checks |
+| Q2′-1 change scope (QS-15), `41635257648` | B1 (`Q2P_SCOPE_BASE` = `0d3f3f6`) | success; 12 paths |
+| Level 2, manual run on the branch, `41635269204` | — | success: 83 migrations, 634 passed, 0 failed (30 QR-41 to QR-43, 25 R6); 13 min 37 s |
+| M0, manual run on the branch, `41635275317` | — | success; every suite passed |
+| Q2′-1 change scope (QS-15) after retargeting to `main`, `41642157104` | `main` at `a2629dc` (merge base `0d3f3f6`) | success; 12 paths |
+
+The runs against `main` for the commit that adds this text are recorded on
+#100, not here, because a commit cannot record its own CI.
+
+Previews: Vercel built Preview deployments of both branches, READY and
+Preview-only. They were built after `RESEND_API_KEY`, `TURNSTILE_SECRET_KEY`
+and `SNAPSHOT_IP_HASH_SECRET` were made Production-only. Production and its
+domains were unchanged throughout.
+
+On this branch, `package.json` registers 105 `test:*` and 4 `verify:*`
+commands, 193 files match `scripts/test-*.ts`, and `supabase/migrations/`
+holds 83 files: the 82 historical files plus `20261102132000`. On `main` at
+`a2629dc` the figures are 103, 4, 191 and 82. These figures supersede section
+19.1's.
 
 ### 20.4 Known limitations
 
@@ -1223,17 +1254,22 @@ historical files plus `20261102132000`. These figures supersede section 19.1's.
 - **No end-to-end path.** No route, session token, email verification or
   customer flow exists to exercise the functions. S1 (JWT binding) has not
   run against any Supabase project.
-- **Not run by CI,** and not independently reviewed.
+- **No Supabase stack.** CI runs the same plain-PostgreSQL harness, not the
+  Supabase stack or PostgREST.
+- **Not fully reviewed.** The commits after `b5eb27a` are not independently
+  reviewed.
 
 ### 20.6 Remaining gates before production
 
 Each gate needs its own authorisation, in this order:
 
-1. Independent review of the email-binding commit. `0d3f3f6`, `20e5755`,
-   `6a258f6` and `f7ce558` were reviewed, with REQUEST CHANGES.
-2. Push and pull request, with advance notice that CI's Level 2 job will apply
-   every migration, including 0083 and Q2′-1, to a disposable database, that
-   the M0 workflows will run, and that a Vercel Preview will be built.
+1. **Done.** Independent review: `0d3f3f6..f7ce558` requested changes, and
+   `b5eb27a` passed for the PR and CI phase. **Open:** an independent review
+   of `32bd5e8`, `b22b5a3` and the documentation refresh.
+2. **Done:** B1 merged as #99 (`a2629dc`). #100 is open as a draft against
+   `main`. Its CI against `main` must pass before it merges. Branch
+   protection is unavailable on this plan, so that is a merge rule. Merging
+   #100 needs separate authorisation, and is not production application.
 3. The read-only production preflight from `PROD_PREFLIGHT_SPEC.md` (P3),
    including production grants and access to `pg_control_system()`. It has
    not run.

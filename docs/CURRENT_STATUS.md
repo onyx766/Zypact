@@ -1083,19 +1083,34 @@ production-order runs.
 | `npm run typecheck`, `npm run build:verify` | local | pass, pass |
 | `git diff --check f7ce558..HEAD` | local | clean |
 
-`test:q2p-schema` needs `Q2P_SCOPE_BASE`, the commit the change is reviewed
-against. QS-15 measures the paths changed since that commit's merge base with
-`HEAD`. A missing or unresolvable base fails QS-15. It is never skipped, and it
-never falls back to a pinned commit. For example:
-`Q2P_SCOPE_BASE=test/b1-timestamp-migration-names npm run test:q2p-schema`.
+**Two commands, so that later migrations cannot be failed by a Q2′-1-only rule:**
+- **`test:q2p-schema`** is the persistent schema and security regression
+  contract: QS-01 to QS-26 except QS-15, the Q1 vectors and the mutations. It
+  needs no base. Every check stays true when later migrations are added:
+  - QS-01 now requires Q2′-1 to apply after every four-digit migration, and
+    to be the first timestamped migration, instead of the last one.
+  - QS-12b compares only with migrations applied before Q2′-1.
+- **`test:q2p1-scope`** is QS-15, the Q2′-1 change-scope check. Its strictness
+  is unchanged. It needs `Q2P_SCOPE_BASE`, the commit the change is reviewed
+  against, and checks every path changed since that commit's merge base with
+  `HEAD`, plus untracked files. A missing or unresolvable base, or a base
+  with no shared history, fails. It is never skipped and never falls back to
+  a pinned commit. For example:
+  `Q2P_SCOPE_BASE=test/b1-timestamp-migration-names npm run test:q2p1-scope`.
 
-CI readiness (local commit, not pushed):
-- `.github/workflows/q2p-schema-contract.yml` runs the contract on pull
-  requests to `main`. It passes the pull request's base SHA, and
-  `workflow_dispatch` requires the base as input.
-- Level 2's timeout rises from 15 to 25 minutes.
-- Both keep `contents: read`, use no secrets and start no external resource.
-- GitHub cannot mark the check as required on this plan.
+**CI readiness (local commits, not pushed):**
+- `q2p-schema-contract.yml` runs `test:q2p-schema` on pull requests into any
+  base branch that touch migrations or its inputs.
+- `q2p1-scope.yml` runs `test:q2p1-scope` with the pull request's base SHA,
+  only when the Q2′-1 migration file or the check itself is in the diff. It
+  runs again when the base changes.
+- Both run on the stacked pull request without manual dispatch, which GitHub
+  allows only for workflows already on the default branch.
+- Level 2's timeout rises from 15 to 25 minutes. Its triggers are unchanged,
+  as are M0's.
+- All four workflows keep `contents: read`, use no secrets and start no
+  external resource.
+- GitHub cannot mark a check as required on this plan.
 
 At `f7ce558` the same runs gave 178/178, 605/0 and 397/0 (×2). The Level 2
 difference is QR-20's caller-HMAC case, removed because the parameter no

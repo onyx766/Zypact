@@ -1,10 +1,14 @@
 name: Q2′-1 schema contract
 
-# Static, offline contract for the Q2′-1 migration
-# (scripts/test-q2p-schema-contract.ts): QS-01 to QS-26, the Q1 compatibility
-# vectors, and a mutation self-test for every detector. QS-15 checks the
-# change's paths against the pull request's base (or, for a manual run, the
-# base given as input).
+# Persistent, offline schema and security regression contract for the Q2′-1
+# migration (scripts/test-q2p-schema-contract.ts): QS-01 to QS-26 (except
+# QS-15), the Q1 compatibility vectors, and a mutation self-test for every
+# detector. Every check stays true when later migrations are added, so it may
+# run on any change that touches migrations or its inputs. The Q2′-1
+# change-scope check (QS-15) is the separate q2p1-scope workflow.
+#
+# Runs for pull requests into any base branch, so a stacked pull request is
+# covered without manual dispatch.
 #
 # No repository secret is used. No Production, Preview, Supabase, Vercel,
 # Resend, AI, or payment credential is referenced. No database, container or
@@ -12,24 +16,16 @@ name: Q2′-1 schema contract
 
 on:
   pull_request:
-    branches:
-      - main
     paths:
       - "supabase/migrations/**"
       - ".github/workflows/q2p-schema-contract.yml"
       - "scripts/test-q2p-schema-contract.ts"
       - "scripts/lib/migration-names.ts"
       - "scripts/fixtures/q2p1-wording-vectors.json"
-      - "scripts/sql/level2-q2p1-fixtures.sql"
       - "lib/buyer-questions/**"
       - "package.json"
       - "package-lock.json"
   workflow_dispatch:
-    inputs:
-      scope_base:
-        description: "Commit QS-15 compares against: a SHA or origin/<branch> (for the stacked Q2′-1 branch, origin/test/b1-timestamp-migration-names)"
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -52,11 +48,6 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v6
         with:
-          # The head commit itself, not the merge preview: QS-15 measures the
-          # change from its merge base with the base commit.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          # QS-15 needs both commits and their merge base.
-          fetch-depth: 0
           # No step pushes; keep the token out of .git/config so no npm
           # lifecycle script can read it.
           persist-credentials: false
@@ -71,8 +62,4 @@ jobs:
         run: npm ci
 
       - name: Run the Q2′-1 static schema contract
-        env:
-          # Passed through the environment, never interpolated into the
-          # script, so an input cannot inject shell.
-          Q2P_SCOPE_BASE: ${{ github.event.pull_request.base.sha || inputs.scope_base }}
         run: npm run test:q2p-schema

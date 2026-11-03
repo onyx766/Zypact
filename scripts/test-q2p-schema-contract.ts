@@ -8,15 +8,12 @@
  * (F3, F5 and enrolment moved to Q2′-1b; no adapter). Every detector is then
  * proved to refuse a deliberate mutation of the SQL.
  *
- * Text-only, plus `git` for the changed-path scope (QS-15). No database, no
- * network. The runtime cases (QR-*) are in the Level 2 harness.
- *
- * QS-15 compares against an explicit base, never a pinned commit:
- * Q2P_SCOPE_BASE must name the commit the change is reviewed against (in CI,
- * the pull request's base SHA; for a manual or local run, the stacked base,
- * e.g. the B1 branch). The scope is every path changed between the merge base
- * of Q2P_SCOPE_BASE and HEAD and the working tree, plus untracked files. A
- * missing or unresolvable base fails QS-15; it is never skipped.
+ * Text-only, plus `git ls-files` for QS-19. No database, no network. The
+ * runtime cases (QR-*) are in the Level 2 harness. Every check here stays
+ * true when later migrations are added, so this contract can run on any
+ * change. The Q2′-1 change-scope check (QS-15) is the separate
+ * scripts/test-q2p1-scope.ts, which needs the base the change is reviewed
+ * against.
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
@@ -43,8 +40,6 @@ globalThis.fetch = ((..._a: unknown[]) => {
 
 const ROOT = process.cwd();
 const MIGRATIONS = path.join(ROOT, "supabase", "migrations");
-/** QS-15: the commit the change is reviewed against (see the header). */
-const SCOPE_BASE = (process.env.Q2P_SCOPE_BASE ?? "").trim();
 
 const q2pFiles = readdirSync(MIGRATIONS).filter((f) => /_q2p1_/.test(f));
 const FILE = q2pFiles[0] ?? "";
@@ -166,8 +161,12 @@ function detectors(sql: string): Array<[string, string, boolean, string]> {
     !/perform\s+public\.(approve_protocol|enqueue_protocol_execution_job|approve_and_launch_snapshot_baseline)/i.test(sql)
       && !/from public\.(approve_protocol|enqueue_protocol_execution_job|approve_and_launch_snapshot_baseline)\(/i.test(sql));
 
+  // Only migrations applied BEFORE Q2′-1: a later migration may legitimately
+  // redefine a Q2′-1 function without making Q2′-1 itself a redefinition.
+  const ledger = migrationLedger(MIGRATIONS);
+  const fileIndex = ledger.findIndex((m) => m.f === FILE);
   const earlier = new Set(
-    migrationLedger(MIGRATIONS).filter((m) => m.f !== FILE).flatMap((m) => definedFunctions(strip(m.sql)))
+    ledger.slice(0, fileIndex < 0 ? ledger.length : fileIndex).flatMap((m) => definedFunctions(strip(m.sql)))
   );
   const redefined = definedFunctions(sql).filter((f) => earlier.has(f));
   add("QS-12b", "redefines no function that exists before Q2′-1 (0069 and PG-9 untouched)", redefined.length === 0, redefined.join(","));
@@ -313,7 +312,12 @@ function detectors(sql: string): Array<[string, string, boolean, string]> {
   assert("QS-01 its version is above production's 0081 row",
     parsed.ok && parsed.version > LAST_PRE_TIMESTAMP_LEDGER_VERSION);
   const order = migrationLedger(MIGRATIONS).map((m) => m.f);
-  assert("QS-01 it is last in apply order", order[order.length - 1] === FILE, order.slice(-2).join(" -> "));
+  const at = order.indexOf(FILE);
+  const kinds = order.map((f) => { const r = parseMigrationName(f); return r.ok ? r.kind : "invalid"; });
+  assert("QS-01 it applies after every four-digit migration", at >= 0 && kinds.lastIndexOf("four_digit") < at,
+    order.slice(Math.max(0, at - 1), at + 2).join(" -> "));
+  assert("QS-01 it is the first timestamped migration (nothing is back-dated before it)",
+    at >= 0 && kinds.indexOf("timestamp") === at, order.filter((_, i) => kinds[i] === "timestamp").slice(0, 2).join(","));
   assert("QS-01 its header states it is new-objects-only and forward-recoverable",
     /Every object here is NEW/.test(RAW) && /Recovery: forward-only/.test(RAW));
 }
@@ -324,39 +328,10 @@ function detectors(sql: string): Array<[string, string, boolean, string]> {
   for (const [id, label, ok, detail] of detectors(SQL)) assert(`${id} ${label}`, ok, detail);
 }
 
-/* ═══════════════ 3. QS-15 changed-path scope, QS-19 application code ═══════════════ */
+/* ═══════════════ 3. QS-19 application code (QS-15 is scripts/test-q2p1-scope.ts) ═══════════════ */
 {
-  console.log(`\n[3] QS-15 — changed paths since the merge base with ${SCOPE_BASE || "(no base supplied)"}; QS-19 — application code`);
+  console.log("\n[3] QS-19 — application code");
   const git = (args: string[]) => execFileSync("git", args, { cwd: ROOT, encoding: "utf8" });
-  const tryGit = (args: string[]): string | null => {
-    try {
-      return git(args).trim();
-    } catch {
-      return null;
-    }
-  };
-  const baseSha = SCOPE_BASE ? tryGit(["rev-parse", "--verify", "--quiet", `${SCOPE_BASE}^{commit}`]) : null;
-  const mergeBase = baseSha ? tryGit(["merge-base", baseSha, "HEAD"]) : null;
-  assert("QS-15 a scope base is supplied (Q2P_SCOPE_BASE) and resolves to a commit", !!baseSha,
-    SCOPE_BASE ? `cannot resolve ${SCOPE_BASE}` : "Q2P_SCOPE_BASE is not set");
-  assert("QS-15 the scope base shares history with HEAD (a merge base exists)", !!mergeBase);
-  const changed = new Set(mergeBase ? [
-    ...git(["diff", "--name-only", mergeBase]).split("\n"),
-    ...git(["ls-files", "--others", "--exclude-standard"]).split("\n"),
-  ].filter(Boolean) : []);
-  console.log(`  merge base ${mergeBase ? mergeBase.slice(0, 12) : "none"}; ${changed.size} changed path(s)`);
-  const allowed = (p: string) =>
-    /^supabase\/migrations\/\d{14}_q2p1_[a-z0-9_]+\.sql$/.test(p)
-    || ["scripts/test-q2p-schema-contract.ts", "scripts/test-snapshot-worker-postgres-level2.sh",
-        "scripts/sql/level2-q2p1-fixtures.sql", "scripts/fixtures/q2p1-wording-vectors.json",
-        "package.json", "docs/CURRENT_STATUS.md", "docs/DECISIONS.md",
-        ".github/workflows/q2p-schema-contract.yml", ".github/workflows/snapshot-worker-postgres-level2.yml"].includes(p);
-  const outside = [...changed].filter((p) => !allowed(p));
-  assert("QS-15 every changed path is in the Q2′-1 allowed set", !!mergeBase && outside.length === 0,
-    mergeBase ? outside.join(",") : "no scope computed");
-  assert("QS-15 no PG-9 file changed", ![...changed].some((p) => /pg9/i.test(p)));
-  assert("QS-15 no existing migration changed",
-    ![...changed].some((p) => p.startsWith("supabase/migrations/") && !/_q2p1_/.test(p)));
   const appFiles = git(["ls-files", "lib", "app"]).split("\n").filter((p) => /\.(ts|tsx)$/.test(p));
   const leaks = appFiles.filter((p) => readFileSync(path.join(ROOT, p), "utf8").includes("level2_fixture"));
   assert("QS-19 no application file mentions level2_fixture", leaks.length === 0, leaks.join(","));

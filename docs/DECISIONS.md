@@ -646,3 +646,35 @@ Each entry records:
   - the HOLD on PG-9 and PR-B;
   - D-039's grade definitions;
   - every existing migration and function, including 0047's `approve_buyer_question_version`.
+
+## D-043 — Q2′-2: workspace domains and site diagnostics are closed, serialised per domain, and decided on current state
+
+- **Date:** 2026-11-03
+- **Status:** Implemented locally on `feat/q2p2-domains-diagnostics` (one local commit on `main` at `62cf0c4`). **Not pushed, not reviewed, not applied to any Supabase project, and not wired into any route.** It runs only in disposable local databases. Q2′-2 production application stays on HOLD.
+- **Builds on:** D-040 (self-service, workspace-scoped data), D-041 (14-digit versions; release order), D-042 (closed tables, tenant pinning, lock-and-decide-at-one-instant).
+- **Scope:** one migration, `20261103173000_q2p2_domains_and_site_diagnostics.sql`. It adds 8 closed tables (`workspace_domains`, `workspace_domain_state`, `workspace_domain_challenges`, `workspace_domain_verification_events`, `site_diagnostic_runs`, `site_diagnostic_pages`, `site_diagnostic_findings`, `diagnostic_rate_limit_events`) and 11 internal functions. No writer RPC, no crawler, no W1 or V1d code, no AI call, no billing. No existing table, function or grant changes.
+- **Founder decisions (scope revision 2):**
+  - **Q2-D1:** the diagnostic cache is workspace-isolated; a run may reuse results only from its own workspace.
+  - **Q2-D2 (revised):** domain verification is an append-only event log, serialised per domain on a state row, with an exact transition matrix.
+  - **Q2-D3:** no page bodies and no sensitive URL parts are stored. A URL is stored only in sanitised form (scheme, lowercase host, optional port and path; no query, fragment or userinfo).
+  - **Q2-D4 (revised):** rate-limit data is a separate, keyed, short-lived table, with no link to diagnostic history.
+  - **Q2-D5:** a fail-closed change-scope CI contract (`test:q2p2-scope`).
+  - **Q2-D6:** SV1 extended to the new tables.
+  - **Q2-R1:** a successful verification is due for re-check after **30 days** (`recheck_due_at = checked_at + 30 days`).
+  - **Q2-R2:** the rate-limit key may reuse the existing IP hash secret **only** with cryptographic purpose separation (the label `zypact.diag.rate_limit.v1`, enforced by a check), environment isolation, and no Production credential in local tests or CI. The schema stores only `key_id` and the 64-hex keyed value; no test uses any real secret. **A legal and security review of the reuse remains a dependency** before customer use (with D5).
+  - **Q2-R3:** a verification challenge expires at most **48 hours** after issue (check constraint).
+  - **Q2-R4:** rate-limit records expire at most **48 hours** after they occur (check constraint), and the cleanup `_q2p2_purge_rate_limit_events()` is defined and tested now. **Scheduling the cleanup is a gate before customer use** (W1/G1).
+- **Invariants:**
+  - **Current state decides.** Every verification-sensitive decision reads the domain's current serialised state, never the event history alone:
+    - an event's trigger locks `workspace_domain_state` `FOR UPDATE`, requires `seq = state.seq + 1` (else `40001`), applies the exact transition matrix against the locked status, and writes the state in the same transaction;
+    - `_q2p2_domain_verified(domain)` reads the state `FOR SHARE` and is true only if the status is `verified` and the re-check is not past due (fail closed);
+    - a diagnostic run that cites verification evidence must cite the domain's **current** `verified_event_id`, on a state that is verified and not past due, read `FOR SHARE`. A historical verified event is refused.
+  - **The state row is written only by the triggers** (trigger depth), and is never deleted or truncated.
+  - **Challenges:** only a SHA-256 hash is stored (unique); issued once; consumed once, by the success event only; a success must cite the domain's current challenge.
+  - **Stale observations are refused:** a superseded or consumed challenge; `checked_at` outside the challenge window, older than 10 minutes, or in the future; a success after expiry.
+  - **Workspace isolation:** the same domain may be claimed by different workspaces independently; every child row is pinned to its parent's workspace (and project) by composite foreign keys; a run's cache scope equals its workspace.
+  - **Immutable history:** domains and events are append-only; completed runs are frozen, with their pages and findings.
+  - **IP-derived data is separate:** no diagnostic table has an IP, IP hash or requester agent column; `diagnostic_rate_limit_events` has no foreign key to any run, account or workspace; update is refused, and delete is allowed only for expired rows.
+  - **Closed:** RLS on with no policies on all 8 tables; no API role (`service_role` included) holds any table, sequence or function privilege. Only the purge is `SECURITY DEFINER`.
+- **Evidence:** CURRENT_STATUS section 21.
+- **Unchanged:** D-037 and the spend gate; D-041's release order (Q2′-2 follows Q2′-1 by the named-file procedure, `expected_prev` `20261102132000`); D-042; every HOLD (0083 production, Q2′-1b, Q2′-2 production, PG-9, PR-B, A3, A4, G4-C, every production apply, and any AI marketing analysis).

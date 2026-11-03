@@ -1286,3 +1286,149 @@ Each gate needs its own authorisation, in this order:
    before any customer use of invitations.
 
 Q2′-1b, Q2′-2, PG-9, PR-B, A3, A4 and G4-C remain on HOLD.
+
+## 21. Q2′-2 workspace domains and site diagnostics — local implementation only
+
+- **As of:** 2026-11-03
+- **Base:** `main` at `62cf0c4` (#101, the SV1 harness, merged after #100).
+  Section 20's header predates two merges: #100 merged at `c5250b9` and
+  #101 at `62cf0c4`. Q2′-1 is merged but **not applied to any Supabase
+  project**.
+- **Status:** one local commit on `feat/q2p2-domains-diagnostics`. **Not
+  pushed, no pull request, not independently reviewed.** No SQL from this
+  branch has run against any Supabase project; it has run only in disposable
+  local databases (plain PostgreSQL containers with `--network none`, and the
+  disposable local Supabase stack of SV1).
+- **Authorisation:** Founder code authorisation for the Q2′-2 local
+  implementation only, with decisions Q2-R1 to Q2-R4 (D-043). It authorises no
+  push, pull request, merge, deployment, production SQL, W1 or V1d code, AI
+  call or billing.
+- **Scope:** one migration,
+  `supabase/migrations/20261103173000_q2p2_domains_and_site_diagnostics.sql`
+  (8 closed tables, 11 internal functions; D-043), and its tests. The 11
+  allowlisted paths are exactly: the migration;
+  `scripts/test-q2p2-schema-contract.ts`; `scripts/test-q2p2-scope.ts`;
+  `.github/workflows/q2p2-scope.yml`; `.github/workflows/q2p-schema-contract.yml`;
+  `scripts/sql/level2-q2p2-fixtures.sql`;
+  `scripts/test-snapshot-worker-postgres-level2.sh`;
+  `scripts/test-q2p-supabase-stack-sv1.ts`; `package.json`; this file; and
+  `docs/DECISIONS.md`. Nothing is wired into a route, page, worker or
+  workflow other than the test workflows.
+
+### 21.1 What the migration adds
+
+- **Domain verification:** `workspace_domains` (append-only; one row per
+  workspace and domain; the same domain may be claimed by several workspaces),
+  `workspace_domain_state` (the per-domain serialisation row, written only by
+  the triggers), `workspace_domain_challenges` (hash only, 48-hour maximum
+  lifetime, issued once, consumed once) and
+  `workspace_domain_verification_events` (append-only, gap-free `seq` per
+  domain, exact transition matrix, stale-observation refusals).
+- **Read helper:** `_q2p2_domain_verified(domain)` locks the state `FOR SHARE`
+  and is true only while verified and before `recheck_due_at` (30 days after
+  the observation; fail closed).
+- **Site diagnostics:** `site_diagnostic_runs` (a run may cite only the
+  domain's current verification; workspace-isolated cache; completed runs
+  frozen; re-runs supersede within one workspace and project),
+  `site_diagnostic_pages` (sanitised URLs only, no bodies, at most 10 pages)
+  and `site_diagnostic_findings` (`unknown_reason` exactly when the state is
+  unknown; excerpts only as a complete bundle with hash, offsets and a
+  personal-data screen version; bounded detail).
+- **Rate limits:** `diagnostic_rate_limit_events` (keyed 64-hex buckets under
+  the purpose label `zypact.diag.rate_limit.v1`, at most 48 hours, no foreign
+  key, no update, delete only once expired) and the cleanup
+  `_q2p2_purge_rate_limit_events()`, the only `SECURITY DEFINER` function.
+- **Closed:** RLS on with no policies; no table, sequence or function
+  privilege for `anon`, `authenticated` or `service_role`.
+
+### 21.2 Commands and local results
+
+All on the uncommitted tree that became the local commit, macOS with Colima.
+
+| Command | Result |
+|---|---|
+| `npm run test:q2p2-schema` (new; static, with mutation self-tests) | 147/147 |
+| `npm run test:q2p-schema` (Q2′-1, unchanged) | 207/207 |
+| `Q2P2_SCOPE_BASE=62cf0c4 npm run test:q2p2-scope` (new) | PASS; negative matrix T2–T8 each fail closed (missing base, bad base, an app file, a doc outside the allowlist, a second Q2′-2 migration, an edited existing migration, a PG-9 path); an mtime-only touch is not a change |
+| Level 2, PostgreSQL 16 (pinned digest, `--network none`) | 754 passed, 0 failed (the previous 634 plus 120 QR2 assertions); about 11 minutes, inside CI's 25-minute limit |
+| Production-order variant, PostgreSQL 17.6, run 1 / run 2 | 554/0 and 554/0; schemas identical across runs |
+| SV1, disposable local Supabase stack (CLI 2.111.0), run 1 / run 2 | 172 PASS, 0 FAIL, 0 NOT ESTABLISHED, 12 INFO in each; the manifest (SV1-90) 183/183 entries; A and B schemas and assertion sets identical (SV1-66, SV1-67); no non-local fetch |
+| `npm run build:verify` / `npm run typecheck` | pass / pass |
+| Offline regressions (9 M0, 16 QX-03, 21 B1 suites) | no change from `main` at `62cf0c4` (below) |
+
+- **Production order (D-041), generated variant, not committed:** 0001–0080;
+  0081's content recorded as `20260924023646`; **0083 first** by the
+  reserved-version procedure (`expected_tail` `20260924023646`; the tail stays
+  the alias); Q2′-1 by the named-file procedure (`expected_prev`
+  `20260924023646`); then Q2′-2 by the named-file procedure (`expected_prev`
+  `20261102132000`). Q2′-2 with the wrong predecessor is refused and records
+  nothing; a second apply is refused; the ledger statements equal the file
+  bytes; 84 rows. QR2-35 proves every function, column, constraint, trigger
+  and table grant that existed before Q2′-2, Q2′-1's included, is unchanged.
+  The full schema equals CI's lexical order. (Section 20's Q2′-1 evidence used
+  the older fallback order, 0083 after Q2′-1.)
+- **Pre-existing failures, identical on clean `main` at `62cf0c4`:**
+  `snapshot-send-idempotency` (6/24), `pg9-harness-offline` (200/221; fails
+  closed on timestamped migrations by design, D-041), `m7-0071-schema` (2) and
+  `m7-0073-schema` (1) ("no later migration" guards that see 0077). Two runtime
+  contracts SKIP without their opt-in. **Branch-dependent:** `bqi-wording`
+  P-04 passes on `main` but fails on any non-BQI branch (it allows only Q1's
+  paths against `origin/main`; not in CI), as it did on the Q2′-1 branch.
+- **SV1 extension:** Phase A applies Q2′-2 by the named-file procedure after
+  Q2′-1 (SV1-68, a second apply refused SV1-69). New checks, in both phases
+  and both key models where they use the API: the Q2′-2 catalog (SV1-70 to
+  SV1-75), REST reads and writes (SV1-76, SV1-77), direct GraphQL with the
+  existing positive control (SV1-78), RPC (SV1-79), OpenAPI for all three
+  roles (SV1-80) and the rate-limit purge on the real stack (SV1-81). Every
+  existing assertion is kept. **SV1-90** is a fail-closed manifest: a
+  mandatory assertion that is missing, an unlisted or duplicated one, or a
+  mandatory one recorded as INFO fails the run. SV1-90a proves the check
+  rejects each of those mutations before any stack starts. This closes H2.
+- **One development failure, fixed in the harness:** the first SV1 run failed
+  SV1-77 for `diagnostic_rate_limit_events` (POST and PATCH answered
+  `428C9`). The write probe used the table's first column, an identity
+  column, which PostgreSQL refuses before checking privileges, so the probe
+  never reached the privilege check. The probe now uses the first column
+  that is neither identity nor generated; for every Q2′-1 table that is the
+  same column as before. Nothing was written, and all reads, GraphQL and RPC
+  were refused in that run. The two runs above are after the fix.
+- `test:q2p1-scope` fails on this diff, as designed; its workflow runs only
+  when the Q2′-1 migration is in the diff, so CI does not run it here.
+
+### 21.3 Known limitations
+
+1. **No writer path.** No RPC issues challenges, records observations, starts
+   runs or writes rate-limit rows. W1 and V1d must add them, and must call
+   `_q2p2_domain_verified` (or lock the state `FOR SHARE`) at their decision
+   instant.
+2. **No observation.** Nothing fetches DNS, files or pages. The schema
+   constrains what may be stored, not whether an observation is true.
+3. **Purge not scheduled.** The cleanup exists and is tested; scheduling it is
+   a gate before customer use (Q2-R4).
+4. **Key reuse needs review.** Q2-R2 reuse of the IP hash secret needs a legal
+   and security review (with D5), and environment isolation is a deployment
+   duty the schema cannot enforce. `snapshot_requests.request_ip_hash` (0018)
+   remains a permanent keyed IP hash, out of Q2′-2 scope.
+5. **Clock trust.** Freshness and expiry use the database clock; an observer
+   that reports `checked_at` is trusted within the 10-minute window.
+6. **A re-check needs a new challenge.** The standing-proof re-check that
+   Revision 2 allowed is not implemented: every `verification_succeeded`
+   must cite the domain's current, unconsumed challenge. This is stricter,
+   not weaker.
+7. **SV1 limits remain:** H1 (the network guard covers only Node `fetch`).
+   H2 (an assertion removed from both phases) is closed by the SV1-90
+   manifest. The manifest requires both key models; a stack without the new
+   key model fails SV1-90 rather than passing with fewer checks.
+8. **Not run in CI:** SV1 is local and opt-in. The production-order variant
+   is generated from the harness and not committed.
+
+### 21.4 Remaining gates before production
+
+Each needs its own authorisation: independent review of this commit; push and
+a pull request (CI will apply the migration to disposable PostgreSQL in the
+Level 2 job, so the Founder is notified in advance); merge; the read-only
+production preflight; 0083, then Q2′-1, then Q2′-2 applied to production by
+the D-041 procedures; S1 and G1 before any customer-facing W1 or V1d.
+
+Q2′-1b, Q2′-2 production, PG-9, PR-B, A3, A4, G4-C, 0083 production, every
+production apply and any AI marketing analysis remain on HOLD.

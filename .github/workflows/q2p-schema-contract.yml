@@ -1,7 +1,8 @@
 name: Q2′-1 schema contract
 
-# Persistent, offline schema and security regression contract for the Q2′-1
-# migration (scripts/test-q2p-schema-contract.ts): QS-01 to QS-26 (except
+# Persistent, offline schema and security regression contracts for the Q2′-1
+# migration (scripts/test-q2p-schema-contract.ts) and the Q2′-2 migration
+# (scripts/test-q2p2-schema-contract.ts): QS-01 to QS-26 (except
 # QS-15), the Q1 compatibility vectors, and a mutation self-test for every
 # detector. Every check stays true when later migrations are added, so it may
 # run on any change that touches migrations or its inputs. The Q2′-1
@@ -20,6 +21,7 @@ on:
       - "supabase/migrations/**"
       - ".github/workflows/q2p-schema-contract.yml"
       - "scripts/test-q2p-schema-contract.ts"
+      - "scripts/test-q2p2-schema-contract.ts"
       - "scripts/lib/migration-names.ts"
       - "scripts/fixtures/q2p1-wording-vectors.json"
       - "lib/buyer-questions/**"
@@ -63,3 +65,6 @@ jobs:
 
       - name: Run the Q2′-1 static schema contract
         run: npm run test:q2p-schema
+
+      - name: Run the Q2′-2 static schema contract
+        run: npm run test:q2p2-schema

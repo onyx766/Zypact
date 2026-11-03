@@ -1294,8 +1294,11 @@ Q2′-1b, Q2′-2, PG-9, PR-B, A3, A4 and G4-C remain on HOLD.
   Section 20's header predates two merges: #100 merged at `c5250b9` and
   #101 at `62cf0c4`. Q2′-1 is merged but **not applied to any Supabase
   project**.
-- **Status:** one local commit on `feat/q2p2-domains-diagnostics`. **Not
-  pushed, no pull request, not independently reviewed.** No SQL from this
+- **Status:** two local commits on `feat/q2p2-domains-diagnostics`:
+  `e28cf3b` (the implementation) and the remediation commit that answers its
+  independent review (21.5). **Not pushed, no pull request.** The review of
+  `e28cf3b` requested changes; the remediation awaits its own independent
+  review. No SQL from this
   branch has run against any Supabase project; it has run only in disposable
   local databases (plain PostgreSQL containers with `--network none`, and the
   disposable local Supabase stack of SV1).
@@ -1305,7 +1308,7 @@ Q2′-1b, Q2′-2, PG-9, PR-B, A3, A4 and G4-C remain on HOLD.
   call or billing.
 - **Scope:** one migration,
   `supabase/migrations/20261103173000_q2p2_domains_and_site_diagnostics.sql`
-  (8 closed tables, 11 internal functions; D-043), and its tests. The 11
+  (8 closed tables, 14 internal functions; D-043), and its tests. The 11
   allowlisted paths are exactly: the migration;
   `scripts/test-q2p2-schema-contract.ts`; `scripts/test-q2p2-scope.ts`;
   `.github/workflows/q2p2-scope.yml`; `.github/workflows/q2p-schema-contract.yml`;
@@ -1319,9 +1322,12 @@ Q2′-1b, Q2′-2, PG-9, PR-B, A3, A4 and G4-C remain on HOLD.
 
 - **Domain verification:** `workspace_domains` (append-only; one row per
   workspace and domain; the same domain may be claimed by several workspaces),
-  `workspace_domain_state` (the per-domain serialisation row, written only by
-  the triggers), `workspace_domain_challenges` (hash only, 48-hour maximum
-  lifetime, issued once, consumed once) and
+  `workspace_domain_state` (the per-domain serialisation row; a function of
+  the event log: an update may only advance `seq` to an existing event, and
+  the guard derives every other column from that event and the shared
+  transition function `_q2p2_next_status`), `workspace_domain_challenges`
+  (hash only, 48-hour maximum lifetime, issued once, consumed once and only
+  for the success event the state has applied) and
   `workspace_domain_verification_events` (append-only, gap-free `seq` per
   domain, exact transition matrix, stale-observation refusals).
 - **Read helper:** `_q2p2_domain_verified(domain)` locks the state `FOR SHARE`
@@ -1333,7 +1339,13 @@ Q2′-1b, Q2′-2, PG-9, PR-B, A3, A4 and G4-C remain on HOLD.
   `site_diagnostic_pages` (sanitised URLs only, no bodies, at most 10 pages)
   and `site_diagnostic_findings` (`unknown_reason` exactly when the state is
   unknown; excerpts only as a complete bundle with hash, offsets and a
-  personal-data screen version; bounded detail).
+  personal-data screen version; `detail` limited to an explicit safe schema
+  of identifier keys, booleans, bounded numbers and identifier tokens, plus
+  the 4 KB cap).
+- **Stored domain form:** lowercase LDH labels of 1 to 63 characters, 4 to
+  253 in all; no `--` in positions 3 and 4 except the `xn--` A-label prefix;
+  the last label alphabetic or an A-label (IDNA TLDs accepted). The A-label's
+  shape is checked, not its Punycode (V1d converts and validates).
 - **Rate limits:** `diagnostic_rate_limit_events` (keyed 64-hex buckets under
   the purpose label `zypact.diag.rate_limit.v1`, at most 48 hours, no foreign
   key, no update, delete only once expired) and the cleanup
@@ -1343,18 +1355,19 @@ Q2′-1b, Q2′-2, PG-9, PR-B, A3, A4 and G4-C remain on HOLD.
 
 ### 21.2 Commands and local results
 
-All on the uncommitted tree that became the local commit, macOS with Colima.
+On the uncommitted remediation tree that became the remediation commit, macOS
+with Colima. The results at `e28cf3b` are in 21.5.
 
 | Command | Result |
 |---|---|
-| `npm run test:q2p2-schema` (new; static, with mutation self-tests) | 147/147 |
+| `npm run test:q2p2-schema` (static, with mutation self-tests) | 187/187 (55 mutations, each refused by its detector) |
 | `npm run test:q2p-schema` (Q2′-1, unchanged) | 207/207 |
-| `Q2P2_SCOPE_BASE=62cf0c4 npm run test:q2p2-scope` (new) | PASS; negative matrix T2–T8 each fail closed (missing base, bad base, an app file, a doc outside the allowlist, a second Q2′-2 migration, an edited existing migration, a PG-9 path); an mtime-only touch is not a change |
-| Level 2, PostgreSQL 16 (pinned digest, `--network none`) | 754 passed, 0 failed (the previous 634 plus 120 QR2 assertions); about 11 minutes, inside CI's 25-minute limit |
-| Production-order variant, PostgreSQL 17.6, run 1 / run 2 | 554/0 and 554/0; schemas identical across runs |
-| SV1, disposable local Supabase stack (CLI 2.111.0), run 1 / run 2 | 172 PASS, 0 FAIL, 0 NOT ESTABLISHED, 12 INFO in each; the manifest (SV1-90) 183/183 entries; A and B schemas and assertion sets identical (SV1-66, SV1-67); no non-local fetch |
+| `Q2P2_SCOPE_BASE=62cf0c4 npm run test:q2p2-scope` | PASS, 11 paths; the negative matrix T2–T8 at `e28cf3b` each failed closed (missing base, bad base, an app file, a doc outside the allowlist, a second Q2′-2 migration, an edited existing migration, a PG-9 path); an mtime-only touch is not a change |
+| Level 2, PostgreSQL 16 (pinned digest, `--network none`) | 805 passed, 0 failed (the previous 634 plus 171 QR2 assertions) |
+| Production-order variant, PostgreSQL 17.6, run 1 / run 2 | 605/0 and 605/0 (554 plus the same 51 new QR2 assertions); P0–P5, QR-35 and QR2-35 pass; schema equals CI order (P4) and is identical across runs |
+| SV1, disposable local Supabase stack (CLI 2.111.0), run 1 / run 2 | 172 PASS, 0 FAIL, 0 NOT ESTABLISHED, 12 INFO in each; 14 Q2′-2 functions closed to every API role (SV1-72, SV1-79); the manifest (SV1-90) 183/183; SV1-66 and SV1-67 pass; no non-local fetch |
 | `npm run build:verify` / `npm run typecheck` | pass / pass |
-| Offline regressions (9 M0, 16 QX-03, 21 B1 suites) | no change from `main` at `62cf0c4` (below) |
+| Offline regressions (9 M0, 16 QX-03, 21 B1 suites) | exit codes identical to the `e28cf3b` run, and no change from `main` at `62cf0c4` (below) |
 
 - **Production order (D-041), generated variant, not committed:** 0001–0080;
   0081's content recorded as `20260924023646`; **0083 first** by the
@@ -1432,3 +1445,67 @@ the D-041 procedures; S1 and G1 before any customer-facing W1 or V1d.
 
 Q2′-1b, Q2′-2 production, PG-9, PR-B, A3, A4, G4-C, 0083 production, every
 production apply and any AI marketing analysis remain on HOLD.
+
+### 21.5 Independent review of `e28cf3b` and its remediation
+
+- **Verdict at `e28cf3b`: REQUEST CHANGES.** The checksums, the 11-path scope,
+  the test logs and the pre-existing regression baseline were confirmed.
+  Findings:
+  1. The state and challenge guards relied on `pg_trigger_depth() >= 2`.
+     That proves only that some trigger is running, not that the
+     verification-event trigger made the write.
+  2. `site_diagnostic_findings.detail` accepted arbitrary JSON up to 4 KB,
+     which did not enforce the no-page-body, no-sensitive-data boundary.
+  3. The stated domain form ("IDNA A-labels allowed") did not match the
+     regex, which refused A-label TLDs such as `xn--p1ai`.
+- **Corrections** (same 11 paths; D-043):
+  1. The state is a function of the event log. An update may change only
+     `seq`, to `old.seq + 1`, and only when that event exists for the domain
+     and workspace; the guard derives every other column from the event and
+     the shared transition function. The event trigger validates BEFORE
+     INSERT under the state lock and advances the state AFTER INSERT, writing
+     only `seq`. Consumption is allowed only for the success event the state
+     has applied. Three new functions: `_q2p2_next_status`,
+     `_q2p2_advance_domain_state` and `_q2p2_finding_detail_is_safe` (14 in
+     all).
+  2. `detail` must pass `_q2p2_finding_detail_is_safe` as well as the size
+     cap.
+  3. The regex and the stated form now agree, and both are in the migration.
+- **New evidence:**
+  - **QR2-18**, an unrelated trigger on a fixture table whose writes reach
+    the guards at depth 2. It cannot advance the state without an event,
+    forge a verified state, consume the current challenge, create a state
+    row for a missing domain, or delete the state. With the guards exactly
+    as reviewed at `e28cf3b`, the same trigger forges a verified state and
+    consumes the challenge. The real guards are restored and the domain
+    still verifies through its own event.
+  - **QR2-19**: 21 `detail` cases (one accepted, 20 refused: free text,
+    email, URL, phone numbers as text and as a number, HTML, case, length,
+    nesting, null, key form, decimals, top-level shape, empty, key and array
+    counts). A schema-valid detail over 4 KB is refused by the size cap.
+  - **QR2-20**: 15 domain forms, and an IDNA-TLD domain stored.
+  - **QR2-21**: every stored state equals the replay of its own event log.
+  - The static contract gained 40 checks, including 13 new mutation
+    self-tests.
+- **Changed expectation:** in QR2-05's weakened case (the state read without
+  `FOR UPDATE`), the stale writer is now stopped by the unique
+  `(domain_id, seq)` index (23505) rather than by the old state guard
+  (55000). The point of that case is unchanged: without the lock the refusal
+  is not a retryable 40001.
+- **Two defects in my own tests, found and fixed during the remediation:**
+  - **The static contract's comment stripper** removed `--` to end of line
+    even inside string literals, which truncated the `xn--` regex. It now
+    keeps `--` inside single-quoted strings.
+  - **The first remediation Level 2 run** reported 772/0. Its new case tables
+    were driven by `while read … <<heredoc`, and the `docker exec -i` inside
+    each assertion consumed the rest of the heredoc, so only the first case
+    of QR2-19 and of QR2-20 ran. The tables are now arrays, and each has an
+    assertion that all of its cases ran. The 805/0 run is after that fix.
+    The one older `while read` loop (QR-40) calls no `docker exec` in its
+    body, and all 9 of its vectors appear in the log.
+- **Residuals:**
+  - An identifier token in `detail` is still one lowercase word. W1 must
+    restrict tokens to each check's enumerated vocabulary.
+  - Owner-level trigger bypass (disabling triggers, `session_replication_role
+    = replica`) remains outside what any table guard can stop; no API role
+    can do it.

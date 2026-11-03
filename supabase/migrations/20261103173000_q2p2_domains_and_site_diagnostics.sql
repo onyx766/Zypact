@@ -22,13 +22,16 @@
 --     another workspace had claimed the domain.
 --   * workspace_domain_state — the per-domain serialisation point. Every
 --     verification event locks it FOR UPDATE, must carry seq = state.seq + 1,
---     and is checked against the CURRENT state; the event trigger alone
---     writes it. Verification-sensitive decisions (a verified diagnostic run,
---     and later W1/V1d/paid gates) read this state under lock, never a
---     historical verified event alone.
+--     and is checked against the CURRENT state. The state is a function of
+--     the event log: it may only advance seq to an event that already exists
+--     at that number, and its guard derives every other column from that
+--     event, so no caller (a nested trigger included) can write a state the
+--     log does not imply. Verification-sensitive decisions (a verified
+--     diagnostic run, and later W1/V1d/paid gates) read this state under
+--     lock, never a historical verified event alone.
 --   * workspace_domain_challenges — only a SHA-256 of each challenge is
 --     stored; a challenge expires within 48 hours (Q2-R3) and is consumed
---     once.
+--     once, only by the success event the state has applied.
 --   * workspace_domain_verification_events — append-only, gap-free per domain,
 --     with an exact transition matrix and stale-observation refusals.
 --   * A successful verification is due for re-check after 30 days (Q2-R1);
@@ -38,7 +41,9 @@
 -- No page bodies, headers or cookies; URLs without query, fragment or
 -- userinfo; per-page body hashes; the D-040 §6.3 unknown reasons; excerpts of
 -- at most 300 characters only with offsets, the page hash and a recorded
--- personal-data screen. The result cache is workspace-isolated. A completed
+-- personal-data screen. A finding's detail is a flat object of identifier
+-- keys, booleans, bounded numbers and identifier tokens: no free text.
+-- The result cache is workspace-isolated. A completed
 -- run is frozen; re-runs are new rows.
 --
 -- Rate limits (Q2-D4, Q2-R4): a separate table with no link to runs or
@@ -56,8 +61,17 @@
 -- 1. Helpers
 -- ════════════════════════════════════════════════════════════════════════
 
--- A domain as stored: lowercase LDH labels (IDNA A-labels allowed), no scheme,
--- port, path, userinfo or trailing dot.
+-- A domain as stored, exactly what this check enforces:
+--   * two or more dot-separated labels, 4 to 253 characters in all; no
+--     scheme, port, path, userinfo, whitespace or trailing dot;
+--   * every label lowercase LDH, 1 to 63 characters, no leading or trailing
+--     hyphen, and no '--' in positions 3 and 4 unless it is the IDNA A-label
+--     prefix 'xn--' (the reserved R-LDH form is refused);
+--   * the last label is alphabetic (2 to 63 letters) or an A-label
+--     ('xn--' followed by 1 to 59 LDH characters), so IDNA TLDs are accepted.
+-- Internationalised names are stored only as A-labels. The database checks
+-- the A-label's shape, not its Punycode: converting a U-label and validating
+-- it under IDNA2008 is the writer's duty (V1d), before the insert.
 create or replace function public._q2p2_domain_is_normalised(p_domain text)
 returns boolean
 language sql
@@ -66,7 +80,85 @@ set search_path = pg_catalog, pg_temp
 as $$
   select p_domain is not null
      and length(p_domain) between 4 and 253
-     and p_domain ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$';
+     and p_domain ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+([a-z]{2,63}|xn--[a-z0-9]([a-z0-9-]{0,57}[a-z0-9])?)$'
+     and p_domain !~ '(^|\.)(?!xn--)[a-z0-9]{2}--';
+$$;
+
+-- The exact transition matrix (Revision 2 §1.1): the status a domain moves
+-- to when an event is applied to its current status, or null if refused.
+-- The event trigger refuses on null; the state guard derives the new status
+-- from it, so both use one definition.
+create or replace function public._q2p2_next_status(p_status text, p_event text)
+returns text
+language sql
+immutable
+set search_path = pg_catalog, pg_temp
+as $$
+  select case
+    when p_event = 'challenge_issued' and p_status in ('none', 'pending', 'unverified', 'revoked') then 'pending'
+    when p_event = 'challenge_issued' and p_status = 'verified' then 'verified'
+    when p_event = 'verification_succeeded' and p_status in ('pending', 'verified') then 'verified'
+    when p_event = 'verification_failed' and p_status in ('pending', 'verified') then p_status
+    when p_event = 'challenge_expired' and p_status = 'pending' then 'unverified'
+    when p_event = 'challenge_expired' and p_status = 'verified' then 'verified'
+    when p_event = 'verification_lost' and p_status = 'verified' then 'unverified'
+    when p_event = 'revoked' and p_status in ('pending', 'verified', 'unverified') then 'revoked'
+  end;
+$$;
+
+-- A finding's detail (Q2-D3: no page body, no sensitive data), exactly:
+--   * null, or a JSON object of 1 to 16 keys, each a lowercase identifier
+--     (a letter, then letters, digits or '_'; at most 32 characters);
+--   * each value a boolean; a number below 1e9 in magnitude with at most 4
+--     decimals; an identifier token (same form as a key); or an array of at
+--     most 16 such numbers or tokens;
+--   * nothing else: no free text, whitespace, punctuation, URL, address,
+--     JSON null, nested object or nested array.
+-- Text from a page belongs only in the screened, hashed excerpt columns.
+create or replace function public._q2p2_finding_detail_is_safe(p_detail jsonb)
+returns boolean
+language plpgsql
+immutable
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  k text;
+  v jsonb;
+  e jsonb;
+begin
+  if p_detail is null then
+    return true;
+  end if;
+  if jsonb_typeof(p_detail) <> 'object' or (select count(*) from jsonb_object_keys(p_detail)) not between 1 and 16 then
+    return false;
+  end if;
+  for k, v in select d.key, d.value from jsonb_each(p_detail) d loop
+    if k !~ '^[a-z][a-z0-9_]{0,31}$' then
+      return false;
+    end if;
+    if jsonb_typeof(v) = 'array' and jsonb_array_length(v) > 16 then
+      return false;
+    end if;
+    for e in select x.value from jsonb_array_elements(
+               case when jsonb_typeof(v) = 'array' then v else jsonb_build_array(v) end) x loop
+      case jsonb_typeof(e)
+        when 'boolean' then
+          null;
+        when 'number' then
+          if abs((e #>> '{}')::numeric) >= 1000000000 or scale((e #>> '{}')::numeric) > 4 then
+            return false;
+          end if;
+        when 'string' then
+          if (e #>> '{}') !~ '^[a-z][a-z0-9_]{0,31}$' then
+            return false;
+          end if;
+        else
+          return false;
+      end case;
+    end loop;
+  end loop;
+  return true;
+end;
 $$;
 
 -- A URL as stored: http(s), lowercase host, optional port and path; no query,
@@ -203,8 +295,7 @@ create table public.workspace_domain_verification_events (
 create unique index workspace_domain_verification_events_issued_once
   on public.workspace_domain_verification_events (challenge_id) where event = 'challenge_issued';
 
--- The state's pointers. Deferred: the event trigger sets them before the
--- event row itself is inserted.
+-- The state's pointers, checked at commit.
 alter table public.workspace_domain_state
   add constraint workspace_domain_state_challenge_fk foreign key (current_challenge_id, domain_id)
     references public.workspace_domain_challenges(id, domain_id) deferrable initially deferred,
@@ -225,14 +316,25 @@ $$;
 create trigger workspace_domains_create_state after insert on public.workspace_domains
   for each row execute function public._q2p2_domain_create_state();
 
--- The state is written only from inside the domain and event triggers
--- (trigger depth >= 2): a direct insert, update or delete is refused, and an
--- update must advance seq by exactly one.
+-- The state is a function of the event log. Trigger depth alone proves only
+-- that some trigger is running, so it is not the authority here:
+--   * insert: only the initial row, only for a domain that exists (the
+--     domain trigger creates it);
+--   * update: only seq may change, only to old.seq + 1, and only to the
+--     number of an event that already exists for this domain and workspace.
+--     Every other column is then derived HERE from that event and the shared
+--     transition matrix; the writer cannot choose them;
+--   * delete is refused, and nothing is written at depth 1 (directly).
+-- So an unrelated nested trigger can at most apply an existing event early,
+-- which leaves the same state and makes the event's own advance fail.
 create or replace function public._q2p2_state_guard()
 returns trigger
 language plpgsql
 set search_path = pg_catalog, pg_temp
 as $$
+declare
+  ev     public.workspace_domain_verification_events%rowtype;
+  v_next text;
 begin
   if tg_op = 'DELETE' then
     raise exception using errcode = '55000', message = 'q2p2_append_only: workspace_domain_state';
@@ -242,13 +344,41 @@ begin
   end if;
   if tg_op = 'INSERT' then
     if new.seq <> 0 or new.status <> 'none' or new.current_challenge_id is not null
-       or new.verified_event_id is not null or new.recheck_due_at is not null then
+       or new.verified_event_id is not null or new.recheck_due_at is not null
+       or not exists (select 1 from public.workspace_domains d
+                       where d.id = new.domain_id and d.workspace_id = new.workspace_id) then
       raise exception using errcode = '55000', message = 'q2p2_state_invalid_initial_row';
     end if;
-  elsif new.domain_id is distinct from old.domain_id or new.workspace_id is distinct from old.workspace_id
-        or new.seq is distinct from old.seq + 1 then
+    return new;
+  end if;
+  if new.domain_id is distinct from old.domain_id or new.workspace_id is distinct from old.workspace_id
+     or new.seq is distinct from old.seq + 1
+     or new.status is distinct from old.status
+     or new.current_challenge_id is distinct from old.current_challenge_id
+     or new.verified_event_id is distinct from old.verified_event_id
+     or new.recheck_due_at is distinct from old.recheck_due_at then
     raise exception using errcode = '55000', message = 'q2p2_state_invalid_update';
   end if;
+  select e.* into ev from public.workspace_domain_verification_events e
+   where e.domain_id = new.domain_id and e.seq = new.seq;
+  if not found or ev.workspace_id is distinct from new.workspace_id then
+    raise exception using errcode = '55000', message = 'q2p2_state_not_derived_from_event';
+  end if;
+  v_next := public._q2p2_next_status(old.status, ev.event);
+  if v_next is null then
+    raise exception using errcode = '55000', message = 'q2p2_state_not_derived_from_event';
+  end if;
+  new.status := v_next;
+  new.current_challenge_id := case
+    when ev.event = 'challenge_issued' then ev.challenge_id
+    when ev.event = 'verification_failed' then old.current_challenge_id end;
+  new.verified_event_id := case
+    when ev.event = 'verification_succeeded' then ev.id
+    when v_next = 'verified' then old.verified_event_id end;
+  new.recheck_due_at := case
+    when ev.event = 'verification_succeeded' then ev.checked_at + interval '30 days'
+    when v_next = 'verified' then old.recheck_due_at end;
+  new.updated_at := ev.recorded_at;
   return new;
 end;
 $$;
@@ -256,12 +386,16 @@ create trigger workspace_domain_state_guard before insert or update or delete on
   for each row execute function public._q2p2_state_guard();
 
 -- Challenges: issued_at is the database clock; only consumed_at may change,
--- once, and only from inside the event trigger.
+-- once, from inside a trigger, and only for the success event that cites
+-- this challenge and that the domain's state has already applied (its
+-- verified event, at its seq). consumed_at is that event's recorded_at.
 create or replace function public._q2p2_challenge_guard()
 returns trigger
 language plpgsql
 set search_path = pg_catalog, pg_temp
 as $$
+declare
+  ev public.workspace_domain_verification_events%rowtype;
 begin
   if tg_op = 'DELETE' then
     raise exception using errcode = '55000', message = 'q2p2_append_only: workspace_domain_challenges';
@@ -276,15 +410,24 @@ begin
      or (to_jsonb(new) - 'consumed_at') is distinct from (to_jsonb(old) - 'consumed_at') then
     raise exception using errcode = '55000', message = 'q2p2_challenge_single_consumption_only';
   end if;
+  select e.* into ev from public.workspace_domain_verification_events e
+    join public.workspace_domain_state s
+      on s.domain_id = e.domain_id and s.verified_event_id = e.id and s.seq = e.seq
+   where e.challenge_id = old.id and e.domain_id = old.domain_id and e.event = 'verification_succeeded';
+  if not found then
+    raise exception using errcode = '55000', message = 'q2p2_challenge_consumption_not_derived_from_event';
+  end if;
+  new.consumed_at := ev.recorded_at;
   return new;
 end;
 $$;
 create trigger workspace_domain_challenges_guard before insert or update or delete on public.workspace_domain_challenges
   for each row execute function public._q2p2_challenge_guard();
 
--- The serialised transition. Lock the domain's state, require the next
--- sequence number, apply the exact transition matrix against the CURRENT
--- state, refuse stale observations, then advance the state.
+-- The serialised transition, before the event row is written. Lock the
+-- domain's state, require the next sequence number, check the exact
+-- transition matrix against the CURRENT state and refuse stale observations.
+-- The state is advanced after the insert (_q2p2_advance_domain_state).
 create or replace function public._q2p2_apply_verification_event()
 returns trigger
 language plpgsql
@@ -306,16 +449,7 @@ begin
   v_now := clock_timestamp();
   new.recorded_at := v_now;
 
-  v_next := case
-    when new.event = 'challenge_issued' and st.status in ('none', 'pending', 'unverified', 'revoked') then 'pending'
-    when new.event = 'challenge_issued' and st.status = 'verified' then 'verified'
-    when new.event = 'verification_succeeded' and st.status in ('pending', 'verified') then 'verified'
-    when new.event = 'verification_failed' and st.status in ('pending', 'verified') then st.status
-    when new.event = 'challenge_expired' and st.status = 'pending' then 'unverified'
-    when new.event = 'challenge_expired' and st.status = 'verified' then 'verified'
-    when new.event = 'verification_lost' and st.status = 'verified' then 'unverified'
-    when new.event = 'revoked' and st.status in ('pending', 'verified', 'unverified') then 'revoked'
-  end;
+  v_next := public._q2p2_next_status(st.status, new.event);
   if v_next is null then
     raise exception using errcode = '22023', message = 'q2p2_invalid_transition';
   end if;
@@ -357,32 +491,34 @@ begin
     end if;
   end if;
 
-  update public.workspace_domain_state set
-    seq = new.seq,
-    status = v_next,
-    current_challenge_id = case
-      when new.event = 'challenge_issued' then new.challenge_id
-      when new.event in ('verification_succeeded', 'challenge_expired', 'verification_lost', 'revoked') then null
-      else current_challenge_id end,
-    verified_event_id = case
-      when new.event = 'verification_succeeded' then new.id
-      when v_next = 'verified' then verified_event_id
-      else null end,
-    recheck_due_at = case
-      when new.event = 'verification_succeeded' then new.checked_at + interval '30 days'
-      when v_next = 'verified' then recheck_due_at
-      else null end,
-    updated_at = v_now
-   where domain_id = new.domain_id;
-
-  if new.event = 'verification_succeeded' then
-    update public.workspace_domain_challenges set consumed_at = v_now where id = new.challenge_id;
-  end if;
   return new;
 end;
 $$;
 create trigger workspace_domain_verification_events_apply before insert on public.workspace_domain_verification_events
   for each row execute function public._q2p2_apply_verification_event();
+
+-- After the event row exists: advance the domain's state to it (only seq is
+-- written; the state guard derives the rest from this event), then consume
+-- a success's challenge (the challenge guard checks it against the applied
+-- event). The state row is still locked by the event's own transaction.
+create or replace function public._q2p2_advance_domain_state()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, pg_temp
+as $$
+begin
+  update public.workspace_domain_state set seq = new.seq where domain_id = new.domain_id;
+  if not found then
+    raise exception using errcode = '23503', message = 'q2p2_domain_state_missing';
+  end if;
+  if new.event = 'verification_succeeded' then
+    update public.workspace_domain_challenges set consumed_at = new.recorded_at where id = new.challenge_id;
+  end if;
+  return null;
+end;
+$$;
+create trigger workspace_domain_verification_events_advance after insert on public.workspace_domain_verification_events
+  for each row execute function public._q2p2_advance_domain_state();
 
 -- The only verification decision helper: the CURRENT state under FOR SHARE,
 -- judged at one database instant. Past recheck_due_at is not verified.
@@ -540,7 +676,8 @@ create table public.site_diagnostic_findings (
   excerpt_end          integer,
   excerpt_body_sha256  text check (excerpt_body_sha256 is null or excerpt_body_sha256 ~ '^[0-9a-f]{64}$'),
   pii_screen_version   text check (pii_screen_version is null or btrim(pii_screen_version) <> ''),
-  detail               jsonb check (detail is null or pg_column_size(detail) <= 4096),
+  detail               jsonb check (public._q2p2_finding_detail_is_safe(detail)
+                                    and (detail is null or pg_column_size(detail) <= 4096)),
   rule_version         text not null check (btrim(rule_version) <> ''),
   recorded_at          timestamptz not null default clock_timestamp(),
   constraint site_diagnostic_findings_run_fk foreign key (run_id, workspace_id, project_id)
@@ -701,10 +838,13 @@ revoke all on sequence public.diagnostic_rate_limit_events_id_seq from public, a
 -- No API role may execute any Q2′-2 function.
 revoke all on function public._q2p2_domain_is_normalised(text) from public, anon, authenticated, service_role;
 revoke all on function public._q2p2_url_is_sanitised(text) from public, anon, authenticated, service_role;
+revoke all on function public._q2p2_next_status(text, text) from public, anon, authenticated, service_role;
+revoke all on function public._q2p2_finding_detail_is_safe(jsonb) from public, anon, authenticated, service_role;
 revoke all on function public._q2p2_domain_create_state() from public, anon, authenticated, service_role;
 revoke all on function public._q2p2_state_guard() from public, anon, authenticated, service_role;
 revoke all on function public._q2p2_challenge_guard() from public, anon, authenticated, service_role;
 revoke all on function public._q2p2_apply_verification_event() from public, anon, authenticated, service_role;
+revoke all on function public._q2p2_advance_domain_state() from public, anon, authenticated, service_role;
 revoke all on function public._q2p2_domain_verified(uuid) from public, anon, authenticated, service_role;
 revoke all on function public._q2p2_run_guard() from public, anon, authenticated, service_role;
 revoke all on function public._q2p2_run_child_guard() from public, anon, authenticated, service_role;

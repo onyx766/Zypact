@@ -491,7 +491,7 @@ async function g3Functions(c: Ctx, userToken: (m: Model) => Promise<string>): Pr
       const r = await http("POST", `/rest/v1/rpc/${f.name}`, who, rpcArgs(f));
       if (!refused(r, ["42501", "PGRST202"])) q2Bad.push(`${who.name}:${f.name}:${short(r)}`);
     }
-    rec(c, "SV1-79", q2Bad.length === 0 && c.fns2.length === 11 ? "PASS" : "FAIL", `[${m}] ${c.fns2.length} Q2′-2 functions (the purge included) callable by no API role over RPC; deviations: ${q2Bad.slice(0, 5).join(" ") || "none"}`);
+    rec(c, "SV1-79", q2Bad.length === 0 && c.fns2.length === 14 ? "PASS" : "FAIL", `[${m}] ${c.fns2.length} Q2′-2 functions (the purge included) callable by no API role over RPC; deviations: ${q2Bad.slice(0, 5).join(" ") || "none"}`);
   }
 }
 
@@ -617,7 +617,7 @@ function g6Catalog(c: Ctx): void {
       from pg_class c where c.oid = any(array[${tl}]::regclass[]);`);
   rec(c, "SV1-71", rls === "0/0" ? "PASS" : "FAIL", `Q2′-2 tables without RLS / policies: ${rls}`);
   const fBad = fns.filter((f) => q(s, `select (has_function_privilege('service_role','${f.sig}','execute') or has_function_privilege('anon','${f.sig}','execute') or has_function_privilege('authenticated','${f.sig}','execute'))::text;`) !== "false");
-  rec(c, "SV1-72", fns.length === 11 && fBad.length === 0 ? "PASS" : "FAIL", `${fns.length} Q2′-2 functions executable by no API role; deviations: ${fBad.map((f) => f.name).join(",") || "none"}`);
+  rec(c, "SV1-72", fns.length === 14 && fBad.length === 0 ? "PASS" : "FAIL", `${fns.length} Q2′-2 functions executable by no API role; deviations: ${fBad.map((f) => f.name).join(",") || "none"}`);
   const seq = q(s, `select count(*) from unnest(array['anon','authenticated','service_role']) r, unnest(array['USAGE','SELECT','UPDATE']) p
       where has_sequence_privilege(r, 'public.diagnostic_rate_limit_events_id_seq', p);`);
   rec(c, "SV1-73", seq === "0" ? "PASS" : "FAIL", `rate-limit identity sequence privileges held by API roles: ${seq}`);

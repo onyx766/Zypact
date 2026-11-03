@@ -2756,8 +2756,8 @@ assert "QR2-05. READ COMMITTED: the second writer waits on the state lock, then 
 assert "QR2-05. REPEATABLE READ: waits, then 40001" "$(qr2_race 'repeatable read')" "waited|ERROR:  40001|1|pending/1"
 assert "QR2-05. SERIALIZABLE: waits, then 40001" "$(qr2_race 'serializable')" "waited|ERROR:  40001|1|pending/1"
 q2p2 "level2_q2p2.use_apply('level2_q2p2.weak_apply_no_lock')" >/dev/null
-assert "QR2-05 (weakened, state read without FOR UPDATE). READ COMMITTED: the stale writer passes the transition checks and is stopped only by the state guard's seq+1 backstop (55000), not as a retryable 40001" \
-  "$(qr2_race 'read committed' | cut -d'|' -f2,3)" "ERROR:  55000|1"
+assert "QR2-05 (weakened, state read without FOR UPDATE). READ COMMITTED: the stale writer passes the transition checks and is stopped only by the unique (domain_id, seq) backstop (23505), not as a retryable 40001" \
+  "$(qr2_race 'read committed' | cut -d'|' -f2,3)" "ERROR:  23505|1"
 q2p2 "level2_q2p2.use_apply('public._q2p2_apply_verification_event')" >/dev/null
 
 # QR2-06 — stale-verification protection
@@ -2878,7 +2878,43 @@ assert "QR2-13. a complete excerpt bundle is accepted" "$(qf "state, page_id, ex
 RUN_OTHER="$(q2p2 "level2_q2p2.run('${WS1}', '${PROJ1}', 'site.example.com')")"
 assert "QR2-13. a finding cannot cite a page of another run" \
   "$(q2p2_code "insert into public.site_diagnostic_findings (run_id, workspace_id, project_id, page_id, check_id, state, rule_version) values ('${RUN_OTHER}', '${WS1}', '${PROJ1}', '${PG1}', 'html.title', 'pass', 'r1')")" "23503"
-assert "QR2-13. detail larger than 4096 bytes is refused" "$(qf "state, detail" "'info', (select jsonb_agg(md5(random()::text)) from generate_series(1, 400))")" "23514"
+QR2_BIG="(select jsonb_object_agg('k' || i, (select jsonb_agg('t' || repeat('a', 31)) from generate_series(1, 16))) from generate_series(1, 16) i)"
+assert "QR2-13. a detail that fits the safe schema but is larger than 4096 bytes is refused" \
+  "$(q2p2 "public._q2p2_finding_detail_is_safe(${QR2_BIG})")|$(qf "state, detail" "'info', ${QR2_BIG}")" "t|23514"
+
+# QR2-19 — a finding's detail has an explicit safe schema (Q2-D3: no page body, no sensitive data)
+assert "QR2-19. a flat detail of identifier keys, booleans, bounded numbers and identifier tokens is accepted" \
+  "$(qf "state, detail" "'issue', '{\"missing_count\": 3, \"has_canonical\": false, \"ratio\": 0.75, \"severity\": \"high\", \"tags\": [\"og_title\", \"og_image\"]}'")" "OK"
+QR219_CASES=(
+  'page text with spaces|{"title": "Welcome to Acme Corp"}'
+  'an email address|{"contact": "jane@example.com"}'
+  'a URL|{"link": "https://example.com/a"}'
+  'a phone number as text|{"phone": "5551234567"}'
+  'a phone number as a number (10 digits)|{"phone": 5551234567}'
+  'HTML|{"snippet": "<p>"}'
+  'an uppercase or mixed-case token|{"t": "Severity"}'
+  'a token longer than 32 characters|{"t": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  'a nested object|{"n": {"x": 1}}'
+  'an array of objects|{"a": [{"x": 1}]}'
+  'a nested array|{"a": [[1]]}'
+  'a JSON null value|{"a": null}'
+  'an uppercase key|{"Title": 1}'
+  'a key with punctuation|{"og:title": 1}'
+  'a number with more than 4 decimals|{"r": 0.12345}'
+  'a top-level array|["a", "b"]'
+  'a top-level string|"Welcome"'
+  'an empty object|{}'
+)
+QR219_RAN=0
+for c in "${QR219_CASES[@]}"; do
+  assert "QR2-19. detail refused: ${c%%|*}" "$(qf "state, detail" "'info', '${c#*|}'" </dev/null)" "23514"
+  QR219_RAN=$((QR219_RAN + 1))
+done
+assert "QR2-19. all 18 refused-detail cases ran" "${QR219_RAN}" "18"
+assert "QR2-19. detail refused: more than 16 keys" \
+  "$(qf "state, detail" "'info', (select jsonb_object_agg('k' || i, i) from generate_series(1, 17) i)")" "23514"
+assert "QR2-19. detail refused: an array of more than 16 items" \
+  "$(qf "state, detail" "'info', jsonb_build_object('a', (select jsonb_agg(i) from generate_series(1, 17) i))")" "23514"
 
 # QR2-14 — runs: completion, immutability, re-runs, and verification evidence
 assert "QR2-14. a run completes once" "$(q2p_sql "update public.site_diagnostic_runs set outcome = 'completed' where id = '${RUN1}' returning outcome;")" "completed"
@@ -2933,6 +2969,63 @@ assert "QR2-16. an event claiming another workspace than its domain is refused" 
   "$(q2p2_code "insert into public.workspace_domain_verification_events (domain_id, workspace_id, seq, event, actor_type, actor_operator_id) values ('${DA}', '${WS2}', 2, 'revoked', 'founder', '${Q2P_OP}')")" "23503"
 assert "QR2-16. an invitation holder cannot act on a domain" \
   "$(q2p2_code "insert into public.workspace_domains (workspace_id, normalized_domain, actor_type, actor_invitation_id, actor_session_id) values ('${WS1}', 'inv.example.com', 'invitation_holder', gen_random_uuid(), gen_random_uuid())")" "23514"
+
+# QR2-18 — an unrelated nested trigger cannot write the state or consume a challenge
+# The review's case: pg_trigger_depth() >= 2 shows only that SOME trigger is
+# running. level2_q2p2.rogue() runs SQL from a trigger on a fixture table, so
+# its writes reach the guards at depth 2, like the event trigger's own.
+DN="$(q2p2 "level2_q2p2.domain('${WS1}', 'nested.example.com')")"
+CN="$(q2p2 "level2_q2p2.challenge('${DN}')")"
+q2p2 "level2_q2p2.ev('${DN}', 'challenge_issued', '${CN}')" >/dev/null
+EN1="$(q2p_sql "select id from public.workspace_domain_verification_events where domain_id = '${DN}' and seq = 1;")"
+QR218_FORGE="update public.workspace_domain_state set seq = seq + 1, status = 'verified', current_challenge_id = null, verified_event_id = '${EN1}', recheck_due_at = clock_timestamp() + interval '30 days' where domain_id = '${DN}'"
+QR218_CONSUME="update public.workspace_domain_challenges set consumed_at = clock_timestamp() where id = '${CN}'"
+qr218() { q2p2 "level2_q2p2.rogue(\$r\$$1\$r\$)"; }
+assert "QR2-18. the rogue trigger body runs at trigger depth 1, so its writes reach the guards at depth 2" \
+  "$(qr218 "do \$d\$ begin raise exception 'depth=%', pg_trigger_depth(); end \$d\$")" "P0001:depth=1"
+assert "QR2-18. a nested trigger cannot advance the state without an event at that number" \
+  "$(qr218 "update public.workspace_domain_state set seq = seq + 1 where domain_id = '${DN}'")" "55000:q2p2_state_not_derived_from_event"
+assert "QR2-18. a nested trigger cannot forge a verified state" "$(qr218 "${QR218_FORGE}")" "55000:q2p2_state_invalid_update"
+assert "QR2-18. a nested trigger cannot consume the domain's current challenge" \
+  "$(qr218 "${QR218_CONSUME}")" "55000:q2p2_challenge_consumption_not_derived_from_event"
+assert "QR2-18. a nested trigger cannot create a state row for a domain that does not exist" \
+  "$(qr218 "insert into public.workspace_domain_state (domain_id, workspace_id) values (gen_random_uuid(), '${WS1}')")" "55000:q2p2_state_invalid_initial_row"
+assert "QR2-18. a nested trigger cannot delete the state" \
+  "$(qr218 "delete from public.workspace_domain_state where domain_id = '${DN}'")" "55000:q2p2_append_only: workspace_domain_state"
+q2p2 "level2_q2p2.use_state_guard('level2_q2p2.weak_state_guard_e28cf3b')" >/dev/null
+assert "QR2-18 (the state guard as reviewed at e28cf3b, trigger depth only). the same nested trigger forges a verified state" \
+  "$(qr218 "${QR218_FORGE}")" "OK"
+q2p2 "level2_q2p2.use_state_guard('public._q2p2_state_guard')" >/dev/null
+q2p2 "level2_q2p2.use_challenge_guard('level2_q2p2.weak_challenge_guard_e28cf3b')" >/dev/null
+assert "QR2-18 (the challenge guard as reviewed at e28cf3b, trigger depth only). the same nested trigger consumes the current challenge" \
+  "$(qr218 "${QR218_CONSUME}")" "OK"
+q2p2 "level2_q2p2.use_challenge_guard('public._q2p2_challenge_guard')" >/dev/null
+assert "QR2-18. the real guards are restored on both tables" \
+  "$(q2p_sql "select string_agg(p.proname, ',' order by p.proname) from pg_trigger t join pg_proc p on p.oid = t.tgfoid where t.tgname in ('workspace_domain_state_guard', 'workspace_domain_challenges_guard');")" "_q2p2_challenge_guard,_q2p2_state_guard"
+assert "QR2-18. the domain is untouched by every attempt, and still verifies through its own event" \
+  "$(q2p2 "level2_q2p2.status('${DN}')") $(q2p2 "level2_q2p2.ev('${DN}', 'verification_succeeded', '${CN}') || ' ' || level2_q2p2.status('${DN}')")" "pending/1 OK verified/2"
+
+# QR2-20 — the stored domain form, exactly as stated (IDNA A-labels, R-LDH)
+QR220_CASES=(
+  example.com:t a.io:t xn--bcher-kva.example:t example.xn--p1ai:t shop.xn--80asehdb:t
+  ab--c.example.com:f example.ab--cd:f xn--.example.com:f example.xn--:f -a.example.com:f
+  a-.example.com:f example.123:f Example.com:f example.com.:f a.b:f
+)
+QR220_RAN=0
+for c in "${QR220_CASES[@]}"; do
+  dom="${c%:*}"; want="${c##*:}"
+  assert "QR2-20. ${dom} is $( [ "${want}" = t ] && echo accepted || echo refused )" "$(q2p2 "public._q2p2_domain_is_normalised('${dom}')" </dev/null)" "${want}"
+  QR220_RAN=$((QR220_RAN + 1))
+done
+assert "QR2-20. all 15 domain-form cases ran" "${QR220_RAN}" "15"
+assert "QR2-20. a domain under an IDNA TLD is stored" \
+  "$(q2p2_code "select level2_q2p2.domain('${WS1}', 'shop.xn--p1ai')")" "OK"
+
+# QR2-21 — every domain's state is exactly its event log, replayed
+assert "QR2-21. every stored state equals the replay of its own event log through the matrix" \
+  "$(q2p_sql "select level2_q2p2.state_fold_mismatches();")" ""
+assert "QR2-21. the replay covered the domains of every QR2 case" \
+  "$(q2p_sql "select (count(*) >= 20)::text from public.workspace_domain_state;")" "true"
 
 # QR2-17 — nothing outside Q2′-2 was written by any QR2 case
 r217="$(q2p_sql "select level2_q2p2.verify_baseline();")"

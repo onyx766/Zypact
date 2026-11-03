@@ -3,8 +3,8 @@
  * Static contract for Q2′-2 — workspace domains and site-diagnostic records
  * (supabase/migrations/<14 digits>_q2p2_domains_and_site_diagnostics.sql).
  *
- * QS2-01..QS2-20 encode the constraints of the accepted Revision 2 scope
- * (D-043). Every detector is then proved to refuse a deliberate mutation of
+ * QS2-01..QS2-22 encode the constraints of the accepted Revision 2 scope
+ * (D-043), as corrected after the first independent review. Every detector is then proved to refuse a deliberate mutation of
  * the SQL. Text-only: no database, no network. The runtime cases (QR2-*) are
  * in the Level 2 harness. Every check here stays true when later migrations
  * are added; the change-scope check is scripts/test-q2p2-scope.ts.
@@ -34,7 +34,26 @@ const q2p2Files = readdirSync(MIGRATIONS).filter((f) => /_q2p2_/.test(f));
 const FILE = q2p2Files[0] ?? "";
 const Q2P1_FILE = readdirSync(MIGRATIONS).find((f) => /^\d{14}_q2p1_/.test(f)) ?? "";
 const RAW = FILE ? readFileSync(path.join(MIGRATIONS, FILE), "utf8") : "";
-const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/--.*$/gm, "");
+/** Comments removed; a `--` inside a single-quoted string (e.g. 'xn--') is kept. */
+function strip(s: string): string {
+  let out = "";
+  let inString = false;
+  for (let i = 0; i < s.length; i += 1) {
+    if (!inString && s.startsWith("--", i)) {
+      while (i < s.length && s[i] !== "\n") i += 1;
+      out += "\n";
+      continue;
+    }
+    if (!inString && s.startsWith("/*", i)) {
+      const end = s.indexOf("*/", i + 2);
+      i = end < 0 ? s.length : end + 1;
+      continue;
+    }
+    if (s[i] === "'") inString = !inString;
+    out += s[i];
+  }
+  return out;
+}
 const SQL = strip(RAW);
 
 const TABLES = [
@@ -56,16 +75,16 @@ const FORBIDDEN_WRITES = [
   "question_review_invitations", "question_review_sessions", "approval_records",
   "buyer_question_version_origins", "approved_wording_classifications", "exception_items", "exception_events",
 ];
-/** The exact transition matrix (Revision 2 §1.1), as written in the CASE. */
+/** The exact transition matrix (Revision 2 §1.1), as written in _q2p2_next_status. */
 const TRANSITIONS = [
-  "when new.event = 'challenge_issued' and st.status in ('none', 'pending', 'unverified', 'revoked') then 'pending'",
-  "when new.event = 'challenge_issued' and st.status = 'verified' then 'verified'",
-  "when new.event = 'verification_succeeded' and st.status in ('pending', 'verified') then 'verified'",
-  "when new.event = 'verification_failed' and st.status in ('pending', 'verified') then st.status",
-  "when new.event = 'challenge_expired' and st.status = 'pending' then 'unverified'",
-  "when new.event = 'challenge_expired' and st.status = 'verified' then 'verified'",
-  "when new.event = 'verification_lost' and st.status = 'verified' then 'unverified'",
-  "when new.event = 'revoked' and st.status in ('pending', 'verified', 'unverified') then 'revoked'",
+  "when p_event = 'challenge_issued' and p_status in ('none', 'pending', 'unverified', 'revoked') then 'pending'",
+  "when p_event = 'challenge_issued' and p_status = 'verified' then 'verified'",
+  "when p_event = 'verification_succeeded' and p_status in ('pending', 'verified') then 'verified'",
+  "when p_event = 'verification_failed' and p_status in ('pending', 'verified') then p_status",
+  "when p_event = 'challenge_expired' and p_status = 'pending' then 'unverified'",
+  "when p_event = 'challenge_expired' and p_status = 'verified' then 'verified'",
+  "when p_event = 'verification_lost' and p_status = 'verified' then 'unverified'",
+  "when p_event = 'revoked' and p_status in ('pending', 'verified', 'unverified') then 'revoked'",
 ];
 
 function tables(sql: string): Map<string, string> {
@@ -126,18 +145,22 @@ function detectors(sql: string): Array<[string, string, boolean, string]> {
   add("QS2-05", "events have a per-domain unique sequence", /unique \(domain_id, seq\)/.test(t.get("workspace_domain_verification_events") ?? ""));
   add("QS2-05", "the event trigger locks the domain state FOR UPDATE before deciding",
     /from public\.workspace_domain_state s where s\.domain_id = new\.domain_id for update;/.test(apply)
-      && apply.indexOf("for update") < apply.indexOf("v_next := case"));
+      && apply.indexOf("for update") >= 0 && apply.indexOf("for update") < apply.indexOf("v_next := public._q2p2_next_status"));
   add("QS2-05", "an event must carry seq = state.seq + 1, refused as 40001 otherwise",
     /if new\.seq is distinct from st\.seq \+ 1 then\s+raise exception using errcode = '40001', message = 'q2p2_stale_event_sequence';/.test(apply));
   add("QS2-05", "the event trigger runs BEFORE INSERT on the events table",
     /create trigger workspace_domain_verification_events_apply before insert on public\.workspace_domain_verification_events\s+for each row execute function public\._q2p2_apply_verification_event\(\);/.test(sql));
 
   // QS2-06 exact transition matrix
-  const caseBlock = ws(apply.match(/v_next := case([\s\S]*?)\n\s*end;/)?.[1] ?? "");
+  const caseBlock = ws(functionBody(sql, "_q2p2_next_status").match(/select case([\s\S]*?)\n\s*end;/)?.[1] ?? "");
   const whens = caseBlock.split(/(?=when )/).map((s) => s.trim()).filter(Boolean);
   add("QS2-06", "the transition matrix is exactly the accepted eight rows",
     whens.length === TRANSITIONS.length && TRANSITIONS.every((x, i) => whens[i] === x), `${whens.length} rows`);
   add("QS2-06", "any other transition is refused", /if v_next is null then\s+raise exception using errcode = '22023', message = 'q2p2_invalid_transition';/.test(apply));
+  add("QS2-06", "the event trigger and the state guard use the shared matrix (no private copy)",
+    /v_next := public\._q2p2_next_status\(st\.status, new\.event\);/.test(apply)
+      && /v_next := public\._q2p2_next_status\(old\.status, ev\.event\);/.test(functionBody(sql, "_q2p2_state_guard"))
+      && !/when new\.event = /.test(apply));
 
   // QS2-07 stale-observation refusals
   add("QS2-07", "success, failure and expiry require the CURRENT challenge", /if st\.current_challenge_id is distinct from new\.challenge_id then\s+raise exception using errcode = '22023', message = 'q2p2_challenge_not_current';/.test(apply));
@@ -155,6 +178,10 @@ function detectors(sql: string): Array<[string, string, boolean, string]> {
   add("QS2-08", "a challenge expires within 48 hours (Q2-R3)", /expires_at > issued_at and expires_at <= issued_at \+ interval '48 hours'/.test(ch));
   add("QS2-08", "a challenge is consumed once, only inside the event trigger",
     /pg_trigger_depth\(\) < 2 or old\.consumed_at is not null or new\.consumed_at is null/.test(functionBody(sql, "_q2p2_challenge_guard")));
+  const chg = functionBody(sql, "_q2p2_challenge_guard");
+  add("QS2-08", "a challenge is consumed only for the applied success event that cites it (not by trigger depth alone)",
+    /join public\.workspace_domain_state s\s+on s\.domain_id = e\.domain_id and s\.verified_event_id = e\.id and s\.seq = e\.seq\s+where e\.challenge_id = old\.id and e\.domain_id = old\.domain_id and e\.event = 'verification_succeeded';\s+if not found then\s+raise exception using errcode = '55000', message = 'q2p2_challenge_consumption_not_derived_from_event';/.test(chg)
+      && /new\.consumed_at := ev\.recorded_at;/.test(chg));
   add("QS2-08", "a challenge is issued at most once",
     /create unique index workspace_domain_verification_events_issued_once\s+on public\.workspace_domain_verification_events \(challenge_id\) where event = 'challenge_issued';/.test(sql));
 
@@ -163,11 +190,25 @@ function detectors(sql: string): Array<[string, string, boolean, string]> {
   add("QS2-09", "the state is written only from inside its triggers, advancing seq by one",
     /if pg_trigger_depth\(\) < 2 then/.test(sg) && /new\.seq is distinct from old\.seq \+ 1/.test(sg)
       && /create trigger workspace_domain_state_guard before insert or update or delete on public\.workspace_domain_state/.test(sql));
+  add("QS2-09", "a state update may change only seq (status, challenge, verified event and re-check are refused)",
+    ["status", "current_challenge_id", "verified_event_id", "recheck_due_at"].every((c) => sg.includes(`or new.${c} is distinct from old.${c}`)));
+  add("QS2-09", "the new seq must name an event of this domain and workspace (derived from an existing event, not trigger depth alone)",
+    /select e\.\* into ev from public\.workspace_domain_verification_events e\s+where e\.domain_id = new\.domain_id and e\.seq = new\.seq;\s+if not found or ev\.workspace_id is distinct from new\.workspace_id then\s+raise exception using errcode = '55000', message = 'q2p2_state_not_derived_from_event';/.test(sg));
+  add("QS2-09", "the state guard derives every column from the event and the shared matrix",
+    /new\.status := v_next;/.test(sg) && /new\.current_challenge_id := case\s+when ev\.event = 'challenge_issued' then ev\.challenge_id\s+when ev\.event = 'verification_failed' then old\.current_challenge_id end;/.test(sg)
+      && /new\.verified_event_id := case\s+when ev\.event = 'verification_succeeded' then ev\.id\s+when v_next = 'verified' then old\.verified_event_id end;/.test(sg)
+      && /new\.updated_at := ev\.recorded_at;/.test(sg));
+  add("QS2-09", "the initial state row requires its domain",
+    /or not exists \(select 1 from public\.workspace_domains d\s+where d\.id = new\.domain_id and d\.workspace_id = new\.workspace_id\)/.test(sg));
+  add("QS2-09", "the event trigger advances the state AFTER INSERT, writing only seq",
+    /create trigger workspace_domain_verification_events_advance after insert on public\.workspace_domain_verification_events\s+for each row execute function public\._q2p2_advance_domain_state\(\);/.test(sql)
+      && /update public\.workspace_domain_state set seq = new\.seq where domain_id = new\.domain_id;/.test(functionBody(sql, "_q2p2_advance_domain_state"))
+      && !/update public\.workspace_domain_state/.test(apply));
 
   // QS2-10 verified only while current
   const st = t.get("workspace_domain_state") ?? "";
   add("QS2-10", "a successful verification is due for re-check after 30 days (Q2-R1)",
-    /when new\.event = 'verification_succeeded' then new\.checked_at \+ interval '30 days'/.test(apply));
+    /when ev\.event = 'verification_succeeded' then ev\.checked_at \+ interval '30 days'/.test(sg));
   add("QS2-10", "recheck_due_at and verified_event_id exist iff verified",
     /check \(\(status = 'verified'\) = \(recheck_due_at is not null\)\)/.test(st) && /check \(\(status = 'verified'\) = \(verified_event_id is not null\)\)/.test(st));
   const helper = functionBody(sql, "_q2p2_domain_verified");
@@ -255,6 +296,30 @@ function detectors(sql: string): Array<[string, string, boolean, string]> {
   add("QS2-20", "no PG-9, 0082 or execution object is mentioned",
     !/spend_controls|protocol_external_calls|_spend_|approve_and_launch|enqueue_protocol/i.test(sql));
   add("QS2-20", "flat SQL contains no transaction control (the named-file procedure governs)", !/\b(begin;|commit;|rollback;)/i.test(flat));
+
+  // QS2-21 a finding's detail has an explicit safe schema (Q2-D3)
+  const dt = functionBody(sql, "_q2p2_finding_detail_is_safe");
+  add("QS2-21", "a finding's detail must pass the safe schema and the size cap",
+    /detail\s+jsonb check \(public\._q2p2_finding_detail_is_safe\(detail\)\s+and \(detail is null or pg_column_size\(detail\) <= 4096\)\)/.test(t.get("site_diagnostic_findings") ?? ""));
+  add("QS2-21", "detail keys and string values are identifier tokens only (no free text, whitespace or punctuation)",
+    /if k !~ '\^\[a-z\]\[a-z0-9_\]\{0,31\}\$' then\s+return false;/.test(dt)
+      && /if \(e #>> '\{\}'\) !~ '\^\[a-z\]\[a-z0-9_\]\{0,31\}\$' then\s+return false;/.test(dt));
+  add("QS2-21", "detail is a flat object of 1 to 16 keys, arrays of at most 16: no nested object, nested array or null",
+    /if jsonb_typeof\(p_detail\) <> 'object' or \(select count\(\*\) from jsonb_object_keys\(p_detail\)\) not between 1 and 16 then\s+return false;/.test(dt)
+      && /if jsonb_typeof\(v\) = 'array' and jsonb_array_length\(v\) > 16 then\s+return false;/.test(dt)
+      && /when 'boolean' then\s+null;/.test(dt) && /else\s+return false;\s+end case;/.test(dt)
+      && (dt.match(/\bwhen '(\w+)' then/g) ?? []).length === 3);
+  add("QS2-21", "detail numbers are bounded numbers (below 1e9, at most 4 decimals)",
+    /if abs\(\(e #>> '\{\}'\)::numeric\) >= 1000000000 or scale\(\(e #>> '\{\}'\)::numeric\) > 4 then\s+return false;/.test(dt));
+
+  // QS2-22 the stored domain form, exactly as stated
+  const dn = functionBody(sql, "_q2p2_domain_is_normalised");
+  add("QS2-22", "labels are lowercase LDH of 1 to 63 characters, 4 to 253 in all",
+    /length\(p_domain\) between 4 and 253/.test(dn) && dn.includes("p_domain ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+"));
+  add("QS2-22", "an IDNA A-label TLD is accepted (alphabetic or xn-- form)",
+    dn.includes("([a-z]{2,63}|xn--[a-z0-9]([a-z0-9-]{0,57}[a-z0-9])?)$'"));
+  add("QS2-22", "a reserved '--' label other than the xn-- prefix is refused",
+    dn.includes("and p_domain !~ '(^|\\.)(?!xn--)[a-z0-9]{2}--'"));
   return out;
 }
 
@@ -299,15 +364,28 @@ function detectors(sql: string): Array<[string, string, boolean, string]> {
     ["removing the per-domain sequence uniqueness", "  constraint workspace_domain_verification_events_seq_key unique (domain_id, seq),\n", "", "per-domain unique sequence"],
     ["reading the state without FOR UPDATE", "from public.workspace_domain_state s where s.domain_id = new.domain_id for update;", "from public.workspace_domain_state s where s.domain_id = new.domain_id;", "locks the domain state FOR UPDATE"],
     ["accepting any sequence number", "  if new.seq is distinct from st.seq + 1 then\n    raise exception using errcode = '40001', message = 'q2p2_stale_event_sequence';\n  end if;\n", "", "seq = state.seq + 1"],
-    ["allowing verified to be revoked into pending", "    when new.event = 'revoked' and st.status in ('pending', 'verified', 'unverified') then 'revoked'", "    when new.event = 'revoked' and st.status in ('pending', 'verified', 'unverified') then 'pending'", "exactly the accepted eight rows"],
-    ["allowing success from unverified", "    when new.event = 'verification_succeeded' and st.status in ('pending', 'verified') then 'verified'", "    when new.event = 'verification_succeeded' and st.status in ('pending', 'verified', 'unverified') then 'verified'", "exactly the accepted eight rows"],
+    ["allowing verified to be revoked into pending", "    when p_event = 'revoked' and p_status in ('pending', 'verified', 'unverified') then 'revoked'", "    when p_event = 'revoked' and p_status in ('pending', 'verified', 'unverified') then 'pending'", "exactly the accepted eight rows"],
+    ["allowing success from unverified", "    when p_event = 'verification_succeeded' and p_status in ('pending', 'verified') then 'verified'", "    when p_event = 'verification_succeeded' and p_status in ('pending', 'verified', 'unverified') then 'verified'", "exactly the accepted eight rows"],
+    ["a private transition matrix in the event trigger", "  v_next := public._q2p2_next_status(st.status, new.event);", "  v_next := case when new.event = 'revoked' then 'revoked' end;", "shared matrix"],
     ["accepting a superseded challenge", "    if st.current_challenge_id is distinct from new.challenge_id then\n      raise exception using errcode = '22023', message = 'q2p2_challenge_not_current';\n    end if;\n", "", "require the CURRENT challenge"],
     ["accepting a stale observation", "      if new.checked_at > v_now or new.checked_at < v_now - interval '10 minutes' then\n        raise exception using errcode = '22023', message = 'q2p2_stale_observation';\n      end if;\n    end if;", "    end if;", "older than 10 minutes"],
     ["storing the raw challenge", "  challenge_sha256     text not null unique", "  challenge            text,\n  challenge_sha256     text not null unique", "only a 64-hex challenge hash"],
     ["a 7-day challenge", "expires_at <= issued_at + interval '48 hours'", "expires_at <= issued_at + interval '7 days'", "expires within 48 hours"],
     ["re-issuing a challenge", "create unique index workspace_domain_verification_events_issued_once", "create index workspace_domain_verification_events_issued_once", "issued at most once"],
     ["letting the state be written directly", "  if pg_trigger_depth() < 2 then\n    raise exception using errcode = '55000', message = 'q2p2_state_written_only_by_its_triggers';", "  if false then\n    raise exception using errcode = '55000', message = 'q2p2_state_written_only_by_its_triggers';", "written only from inside its triggers"],
-    ["a 90-day re-check", "new.checked_at + interval '30 days'", "new.checked_at + interval '90 days'", "re-check after 30 days"],
+    ["a 90-day re-check", "ev.checked_at + interval '30 days'", "ev.checked_at + interval '90 days'", "re-check after 30 days"],
+    ["a state guard that trusts trigger depth alone", "  select e.* into ev from public.workspace_domain_verification_events e\n   where e.domain_id = new.domain_id and e.seq = new.seq;\n  if not found or ev.workspace_id is distinct from new.workspace_id then\n    raise exception using errcode = '55000', message = 'q2p2_state_not_derived_from_event';\n  end if;\n", "", "derived from an existing event"],
+    ["a state update that may set the status", "     or new.status is distinct from old.status\n", "", "only seq"],
+    ["a state guard that keeps the writer's status", "  new.status := v_next;\n", "", "derives every column"],
+    ["an initial state row without its domain", "\n       or not exists (select 1 from public.workspace_domains d\n                       where d.id = new.domain_id and d.workspace_id = new.workspace_id)", "", "requires its domain"],
+    ["advancing the state before the event row exists", "create trigger workspace_domain_verification_events_advance after insert", "create trigger workspace_domain_verification_events_advance before insert", "advances the state AFTER INSERT"],
+    ["consuming a challenge without its applied event", "  if not found then\n    raise exception using errcode = '55000', message = 'q2p2_challenge_consumption_not_derived_from_event';\n  end if;\n", "", "applied success event"],
+    ["detail without the safe-schema check", "  detail               jsonb check (public._q2p2_finding_detail_is_safe(detail)\n                                    and (detail is null or pg_column_size(detail) <= 4096)),", "  detail               jsonb check (detail is null or pg_column_size(detail) <= 4096),", "safe schema"],
+    ["free text in a finding's detail", "          if (e #>> '{}') !~ '^[a-z][a-z0-9_]{0,31}$' then", "          if (e #>> '{}') !~ '^[a-zA-Z0-9_ .@:/-]{0,300}$' then", "identifier tokens"],
+    ["nested objects in a finding's detail", "        else\n          return false;\n      end case;", "        else\n          null;\n      end case;", "no nested"],
+    ["unbounded numbers in a finding's detail", "abs((e #>> '{}')::numeric) >= 1000000000", "abs((e #>> '{}')::numeric) >= 1e18", "bounded numbers"],
+    ["an alphabetic-only TLD", "([a-z]{2,63}|xn--[a-z0-9]([a-z0-9-]{0,57}[a-z0-9])?)$'", "[a-z]{2,63}$'", "A-label TLD"],
+    ["reserved '--' labels allowed", "\n     and p_domain !~ '(^|\\.)(?!xn--)[a-z0-9]{2}--';", ";", "reserved '--' label"],
     ["a helper that ignores re-check due", "v_status = 'verified' and v_due is not null and clock_timestamp() < v_due", "v_status = 'verified'", "fails closed past due"],
     ["a run citing a historical verification", "st.verified_event_id is distinct from new.domain_verification_event_id", "false", "current verified event"],
     ["a shared cache scope", "  constraint site_diagnostic_runs_cache_is_workspace check (cache_scope_workspace_id = workspace_id),\n", "", "workspace-isolated"],

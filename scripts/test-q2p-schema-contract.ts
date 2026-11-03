@@ -10,6 +10,13 @@
  *
  * Text-only, plus `git` for the changed-path scope (QS-15). No database, no
  * network. The runtime cases (QR-*) are in the Level 2 harness.
+ *
+ * QS-15 compares against an explicit base, never a pinned commit:
+ * Q2P_SCOPE_BASE must name the commit the change is reviewed against (in CI,
+ * the pull request's base SHA; for a manual or local run, the stacked base,
+ * e.g. the B1 branch). The scope is every path changed between the merge base
+ * of Q2P_SCOPE_BASE and HEAD and the working tree, plus untracked files. A
+ * missing or unresolvable base fails QS-15; it is never skipped.
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
@@ -36,8 +43,8 @@ globalThis.fetch = ((..._a: unknown[]) => {
 
 const ROOT = process.cwd();
 const MIGRATIONS = path.join(ROOT, "supabase", "migrations");
-/** B1 rev 3, the commit Q2′-1 is built on (QS-15). */
-const B1_BASE = "0d3f3f617158f3551ce78cc500d7b83452cbd299";
+/** QS-15: the commit the change is reviewed against (see the header). */
+const SCOPE_BASE = (process.env.Q2P_SCOPE_BASE ?? "").trim();
 
 const q2pFiles = readdirSync(MIGRATIONS).filter((f) => /_q2p1_/.test(f));
 const FILE = q2pFiles[0] ?? "";
@@ -319,19 +326,34 @@ function detectors(sql: string): Array<[string, string, boolean, string]> {
 
 /* ═══════════════ 3. QS-15 changed-path scope, QS-19 application code ═══════════════ */
 {
-  console.log("\n[3] QS-15 — changed paths since B1 rev 3; QS-19 — application code");
+  console.log(`\n[3] QS-15 — changed paths since the merge base with ${SCOPE_BASE || "(no base supplied)"}; QS-19 — application code`);
   const git = (args: string[]) => execFileSync("git", args, { cwd: ROOT, encoding: "utf8" });
-  const changed = new Set([
-    ...git(["diff", "--name-only", B1_BASE]).split("\n"),
+  const tryGit = (args: string[]): string | null => {
+    try {
+      return git(args).trim();
+    } catch {
+      return null;
+    }
+  };
+  const baseSha = SCOPE_BASE ? tryGit(["rev-parse", "--verify", "--quiet", `${SCOPE_BASE}^{commit}`]) : null;
+  const mergeBase = baseSha ? tryGit(["merge-base", baseSha, "HEAD"]) : null;
+  assert("QS-15 a scope base is supplied (Q2P_SCOPE_BASE) and resolves to a commit", !!baseSha,
+    SCOPE_BASE ? `cannot resolve ${SCOPE_BASE}` : "Q2P_SCOPE_BASE is not set");
+  assert("QS-15 the scope base shares history with HEAD (a merge base exists)", !!mergeBase);
+  const changed = new Set(mergeBase ? [
+    ...git(["diff", "--name-only", mergeBase]).split("\n"),
     ...git(["ls-files", "--others", "--exclude-standard"]).split("\n"),
-  ].filter(Boolean));
+  ].filter(Boolean) : []);
+  console.log(`  merge base ${mergeBase ? mergeBase.slice(0, 12) : "none"}; ${changed.size} changed path(s)`);
   const allowed = (p: string) =>
     /^supabase\/migrations\/\d{14}_q2p1_[a-z0-9_]+\.sql$/.test(p)
     || ["scripts/test-q2p-schema-contract.ts", "scripts/test-snapshot-worker-postgres-level2.sh",
         "scripts/sql/level2-q2p1-fixtures.sql", "scripts/fixtures/q2p1-wording-vectors.json",
-        "package.json", "docs/CURRENT_STATUS.md", "docs/DECISIONS.md"].includes(p);
+        "package.json", "docs/CURRENT_STATUS.md", "docs/DECISIONS.md",
+        ".github/workflows/q2p-schema-contract.yml", ".github/workflows/snapshot-worker-postgres-level2.yml"].includes(p);
   const outside = [...changed].filter((p) => !allowed(p));
-  assert("QS-15 every changed path is in the Q2′-1 allowed set", outside.length === 0, outside.join(","));
+  assert("QS-15 every changed path is in the Q2′-1 allowed set", !!mergeBase && outside.length === 0,
+    mergeBase ? outside.join(",") : "no scope computed");
   assert("QS-15 no PG-9 file changed", ![...changed].some((p) => /pg9/i.test(p)));
   assert("QS-15 no existing migration changed",
     ![...changed].some((p) => p.startsWith("supabase/migrations/") && !/_q2p1_/.test(p)));

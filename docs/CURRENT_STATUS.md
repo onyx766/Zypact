@@ -1083,6 +1083,20 @@ production-order runs.
 | `npm run typecheck`, `npm run build:verify` | local | pass, pass |
 | `git diff --check f7ce558..HEAD` | local | clean |
 
+`test:q2p-schema` needs `Q2P_SCOPE_BASE`, the commit the change is reviewed
+against. QS-15 measures the paths changed since that commit's merge base with
+`HEAD`. A missing or unresolvable base fails QS-15. It is never skipped, and it
+never falls back to a pinned commit. For example:
+`Q2P_SCOPE_BASE=test/b1-timestamp-migration-names npm run test:q2p-schema`.
+
+CI readiness (local commit, not pushed):
+- `.github/workflows/q2p-schema-contract.yml` runs the contract on pull
+  requests to `main`. It passes the pull request's base SHA, and
+  `workflow_dispatch` requires the base as input.
+- Level 2's timeout rises from 15 to 25 minutes.
+- Both keep `contents: read`, use no secrets and start no external resource.
+- GitHub cannot mark the check as required on this plan.
+
 At `f7ce558` the same runs gave 178/178, 605/0 and 397/0 (×2). The Level 2
 difference is QR-20's caller-HMAC case, removed because the parameter no
 longer exists, and the 30 new assertions. Every other assertion line is

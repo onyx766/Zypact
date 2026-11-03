@@ -297,20 +297,35 @@ function detectors(sql: string): Array<[string, string, boolean, string]> {
     !/spend_controls|protocol_external_calls|_spend_|approve_and_launch|enqueue_protocol/i.test(sql));
   add("QS2-20", "flat SQL contains no transaction control (the named-file procedure governs)", !/\b(begin;|commit;|rollback;)/i.test(flat));
 
-  // QS2-21 a finding's detail has an explicit safe schema (Q2-D3)
-  const dt = functionBody(sql, "_q2p2_finding_detail_is_safe");
-  add("QS2-21", "a finding's detail must pass the safe schema and the size cap",
-    /detail\s+jsonb check \(public\._q2p2_finding_detail_is_safe\(detail\)\s+and \(detail is null or pg_column_size\(detail\) <= 4096\)\)/.test(t.get("site_diagnostic_findings") ?? ""));
-  add("QS2-21", "detail keys and string values are identifier tokens only (no free text, whitespace or punctuation)",
-    /if k !~ '\^\[a-z\]\[a-z0-9_\]\{0,31\}\$' then\s+return false;/.test(dt)
-      && /if \(e #>> '\{\}'\) !~ '\^\[a-z\]\[a-z0-9_\]\{0,31\}\$' then\s+return false;/.test(dt));
-  add("QS2-21", "detail is a flat object of 1 to 16 keys, arrays of at most 16: no nested object, nested array or null",
-    /if jsonb_typeof\(p_detail\) <> 'object' or \(select count\(\*\) from jsonb_object_keys\(p_detail\)\) not between 1 and 16 then\s+return false;/.test(dt)
-      && /if jsonb_typeof\(v\) = 'array' and jsonb_array_length\(v\) > 16 then\s+return false;/.test(dt)
-      && /when 'boolean' then\s+null;/.test(dt) && /else\s+return false;\s+end case;/.test(dt)
-      && (dt.match(/\bwhen '(\w+)' then/g) ?? []).length === 3);
-  add("QS2-21", "detail numbers are bounded numbers (below 1e9, at most 4 decimals)",
-    /if abs\(\(e #>> '\{\}'\)::numeric\) >= 1000000000 or scale\(\(e #>> '\{\}'\)::numeric\) > 4 then\s+return false;/.test(dt));
+  // QS2-21 a finding's detail must match the approved spec of its own check (Q2-D3)
+  const fdt = t.get("site_diagnostic_findings") ?? "";
+  const ms = functionBody(sql, "_q2p2_detail_matches_spec");
+  const reg = functionBody(sql, "_q2p2_finding_detail_spec");
+  const iv = functionBody(sql, "_q2p2_finding_detail_is_valid");
+  add("QS2-21", "a finding's detail is checked per (check_id, rule_version), with the size cap",
+    /constraint site_diagnostic_findings_detail_per_check check \(\s+public\._q2p2_finding_detail_is_valid\(check_id, rule_version, detail\)\s+and \(detail is null or pg_column_size\(detail\) <= 4096\)\)/.test(fdt)
+      && /\n\s*detail\s+jsonb,/.test(fdt));
+  add("QS2-21", "the per-check registry is empty: no check vocabulary is invented (fail closed)",
+    /\bas \$\$\s+begin\s+return null;\s+end;\s+\$\$;?$/.test(reg.trim()) && (reg.match(/\breturn\b/g) ?? []).length === 1, ws(reg).slice(-80));
+  add("QS2-21", "a detail without an approved spec is refused; only null is always allowed",
+    /if p_detail is null then\s+return true;\s+end if;\s+return coalesce\(public\._q2p2_detail_matches_spec\(public\._q2p2_finding_detail_spec\(p_check_id, p_rule_version\), p_detail\), false\);/.test(iv)
+      && /if p_spec is null or jsonb_typeof\(p_spec\) <> 'object' or jsonb_typeof\(p_spec -> 'keys'\) is distinct from 'object'/.test(ms));
+  add("QS2-21", "every detail key must be a field of the spec (no arbitrary keys)",
+    /f := p_spec -> 'keys' -> k;\s+if k !~ '\^\[a-z\]\[a-z0-9_\]\{0,31\}\$' or f is null or jsonb_typeof\(f\) <> 'object' then\s+return false;/.test(ms));
+  add("QS2-21", "field types are a closed set (boolean, count, ratio, enum, enum_list); anything else is refused",
+    (ms.match(/\bwhen '[a-z_]+'(?:, '[a-z_]+')? then/g) ?? []).join("|") === "when 'boolean' then|when 'count' then|when 'ratio' then|when 'enum', 'enum_list' then"
+      && /else\s+return false;\s+end case;/.test(ms));
+  add("QS2-21", "counts are integers 0..max with max at most 10000 (no numeric identifiers)",
+    /if v_max <> trunc\(v_max\) or v_max < 1 or v_max > 10000 or n <> trunc\(n\) or n < 0 or n > v_max then\s+return false;/.test(ms));
+  add("QS2-21", "ratios are 0..1 with at most 4 decimals",
+    /if n < 0 or n > 1 or scale\(n\) > 4 then\s+return false;/.test(ms));
+  add("QS2-21", "string values are tokens from the field's own approved list (no arbitrary identifiers)",
+    /if jsonb_typeof\(v\) <> 'string' or not \(\(f -> 'values'\) @> jsonb_build_array\(v\)\) then\s+return false;/.test(ms)
+      && /where jsonb_typeof\(x\.value\) <> 'string' or not \(\(f -> 'values'\) @> jsonb_build_array\(x\.value\)\)\) then/.test(ms)
+      && /where jsonb_typeof\(x\.value\) <> 'string' or \(x\.value #>> '\{\}'\) !~ '\^\[a-z\]\[a-z0-9_\]\{0,31\}\$'\) then/.test(ms));
+  add("QS2-21", "lists are bounded: 1 to 64 approved tokens, at most 16 items per value",
+    /jsonb_array_length\(f -> 'values'\) not between 1 and 64/.test(ms)
+      && /if v_max <> trunc\(v_max\) or v_max < 1 or v_max > 16 or jsonb_array_length\(v\) > v_max/.test(ms));
 
   // QS2-22 the stored domain form, exactly as stated
   const dn = functionBody(sql, "_q2p2_domain_is_normalised");
@@ -380,10 +395,17 @@ function detectors(sql: string): Array<[string, string, boolean, string]> {
     ["an initial state row without its domain", "\n       or not exists (select 1 from public.workspace_domains d\n                       where d.id = new.domain_id and d.workspace_id = new.workspace_id)", "", "requires its domain"],
     ["advancing the state before the event row exists", "create trigger workspace_domain_verification_events_advance after insert", "create trigger workspace_domain_verification_events_advance before insert", "advances the state AFTER INSERT"],
     ["consuming a challenge without its applied event", "  if not found then\n    raise exception using errcode = '55000', message = 'q2p2_challenge_consumption_not_derived_from_event';\n  end if;\n", "", "applied success event"],
-    ["detail without the safe-schema check", "  detail               jsonb check (public._q2p2_finding_detail_is_safe(detail)\n                                    and (detail is null or pg_column_size(detail) <= 4096)),", "  detail               jsonb check (detail is null or pg_column_size(detail) <= 4096),", "safe schema"],
-    ["free text in a finding's detail", "          if (e #>> '{}') !~ '^[a-z][a-z0-9_]{0,31}$' then", "          if (e #>> '{}') !~ '^[a-zA-Z0-9_ .@:/-]{0,300}$' then", "identifier tokens"],
-    ["nested objects in a finding's detail", "        else\n          return false;\n      end case;", "        else\n          null;\n      end case;", "no nested"],
-    ["unbounded numbers in a finding's detail", "abs((e #>> '{}')::numeric) >= 1000000000", "abs((e #>> '{}')::numeric) >= 1e18", "bounded numbers"],
+    ["detail without the per-check check", "    public._q2p2_finding_detail_is_valid(check_id, rule_version, detail)\n    and (detail is null", "    true\n    and (detail is null", "checked per (check_id, rule_version)"],
+    ["an invented check vocabulary", "begin\n  return null;\nend;\n$$;\n\n-- A finding's detail is null", "begin\n  return '{\"keys\":{\"title\":{\"type\":\"boolean\"}}}'::jsonb;\nend;\n$$;\n\n-- A finding's detail is null", "registry is empty"],
+    ["a detail accepted when no spec exists", "p_detail), false);", "p_detail), true);", "without an approved spec is refused"],
+    ["arbitrary detail keys", "    if k !~ '^[a-z][a-z0-9_]{0,31}$' or f is null or jsonb_typeof(f) <> 'object' then", "    if k !~ '^[a-z][a-z0-9_]{0,31}$' then", "field of the spec"],
+    ["a free-text field type", "      when 'ratio' then", "      when 'text' then\n        null;\n      when 'ratio' then", "closed set"],
+    ["an unknown field type accepted", "      else\n        return false;\n    end case;", "      else\n        null;\n    end case;", "closed set"],
+    ["counts large enough for a phone number", "v_max < 1 or v_max > 10000 or n <> trunc(n)", "v_max < 1 or v_max > 10000000000 or n <> trunc(n)", "counts are integers"],
+    ["non-integer counts", " or n <> trunc(n) or n < 0 or n > v_max then", " or n < 0 or n > v_max then", "counts are integers"],
+    ["unbounded ratios", "if n < 0 or n > 1 or scale(n) > 4 then", "if n < 0 or scale(n) > 4 then", "ratios are 0..1"],
+    ["any token accepted as an enum value", "          if jsonb_typeof(v) <> 'string' or not ((f -> 'values') @> jsonb_build_array(v)) then", "          if jsonb_typeof(v) <> 'string' then", "approved list"],
+    ["unbounded list items", "v_max < 1 or v_max > 16 or jsonb_array_length(v) > v_max", "v_max < 1 or v_max > 16", "lists are bounded"],
     ["an alphabetic-only TLD", "([a-z]{2,63}|xn--[a-z0-9]([a-z0-9-]{0,57}[a-z0-9])?)$'", "[a-z]{2,63}$'", "A-label TLD"],
     ["reserved '--' labels allowed", "\n     and p_domain !~ '(^|\\.)(?!xn--)[a-z0-9]{2}--';", ";", "reserved '--' label"],
     ["a helper that ignores re-check due", "v_status = 'verified' and v_due is not null and clock_timestamp() < v_due", "v_status = 'verified'", "fails closed past due"],

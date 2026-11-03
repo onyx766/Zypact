@@ -2878,43 +2878,73 @@ assert "QR2-13. a complete excerpt bundle is accepted" "$(qf "state, page_id, ex
 RUN_OTHER="$(q2p2 "level2_q2p2.run('${WS1}', '${PROJ1}', 'site.example.com')")"
 assert "QR2-13. a finding cannot cite a page of another run" \
   "$(q2p2_code "insert into public.site_diagnostic_findings (run_id, workspace_id, project_id, page_id, check_id, state, rule_version) values ('${RUN_OTHER}', '${WS1}', '${PROJ1}', '${PG1}', 'html.title', 'pass', 'r1')")" "23503"
-QR2_BIG="(select jsonb_object_agg('k' || i, (select jsonb_agg('t' || repeat('a', 31)) from generate_series(1, 16))) from generate_series(1, 16) i)"
-assert "QR2-13. a detail that fits the safe schema but is larger than 4096 bytes is refused" \
-  "$(q2p2 "public._q2p2_finding_detail_is_safe(${QR2_BIG})")|$(qf "state, detail" "'info', ${QR2_BIG}")" "t|23514"
+# A fixture spec for check html.title at rule version r1, used only through
+# level2_q2p2.with_spec (rolled back; the shipped registry is empty).
+QR2_SPEC="'{\"keys\": {\"has_canonical\": {\"type\": \"boolean\"}, \"missing_alt_count\": {\"type\": \"count\", \"max\": 500}, \"text_ratio\": {\"type\": \"ratio\"}, \"severity\": {\"type\": \"enum\", \"values\": [\"low\", \"medium\", \"high\"]}, \"tags\": {\"type\": \"enum_list\", \"values\": [\"og_title\", \"og_image\"], \"max_items\": 2}}}'::jsonb"
+qfs() { # <spec expr> <detail expr> [check_id] [rule_version] → OK or SQLSTATE, with the fixture registry, rolled back
+  q2p2 "level2_q2p2.with_spec($1, \$s\$insert into public.site_diagnostic_findings (run_id, workspace_id, project_id, check_id, rule_version, state, detail) values ('${RUN1}', '${WS1}', '${PROJ1}', '${3:-html.title}', '${4:-r1}', 'info', $2)\$s\$)" </dev/null | cut -d: -f1
+}
+QR2_BIG_SPEC="(select jsonb_build_object('keys', jsonb_object_agg('k' || i, jsonb_build_object('type', 'enum_list', 'values', (select jsonb_agg('t' || j || repeat('a', 28)) from generate_series(1, 16) j), 'max_items', 16))) from generate_series(1, 16) i)"
+QR2_BIG="(select jsonb_object_agg('k' || i, (select jsonb_agg('t' || j || repeat('a', 28)) from generate_series(1, 16) j)) from generate_series(1, 16) i)"
+assert "QR2-13. a detail that matches its check's spec but is larger than 4096 bytes is refused by the size cap" \
+  "$(q2p2 "public._q2p2_detail_matches_spec(${QR2_BIG_SPEC}, ${QR2_BIG})")|$(qfs "${QR2_BIG_SPEC}" "${QR2_BIG}")|$(qfs "${QR2_BIG_SPEC}" "'{\"k1\": [\"t1aaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]}'")" "t|23514|OK"
 
-# QR2-19 — a finding's detail has an explicit safe schema (Q2-D3: no page body, no sensitive data)
-assert "QR2-19. a flat detail of identifier keys, booleans, bounded numbers and identifier tokens is accepted" \
-  "$(qf "state, detail" "'issue', '{\"missing_count\": 3, \"has_canonical\": false, \"ratio\": 0.75, \"severity\": \"high\", \"tags\": [\"og_title\", \"og_image\"]}'")" "OK"
+# QR2-19 — a finding's detail must match the approved spec of its own check
+# (Q2-D3). No check vocabulary is approved yet, so the registry ships empty
+# and only a null detail can be stored (fail closed).
+assert "QR2-19. the shipped registry is empty for every check and rule version" \
+  "$(q2p_sql "select bool_and(public._q2p2_finding_detail_spec(c, v) is null)::text from unnest(array['html.title','html.meta','robots.txt','x']) c, unnest(array['r1','r2','v1']) v;")" "true"
+assert "QR2-19. with the empty registry a null detail is stored" "$(qf "state" "'info'")" "OK"
+assert "QR2-19. with the empty registry even a well-formed detail is refused" "$(qf "state, detail" "'info', '{\"has_canonical\": true}'")" "23514"
+assert "QR2-19. with a fixture spec, a detail matching every field is accepted" \
+  "$(qfs "${QR2_SPEC}" "'{\"has_canonical\": true, \"missing_alt_count\": 3, \"text_ratio\": 0.75, \"severity\": \"high\", \"tags\": [\"og_title\", \"og_image\"]}'")" "OK"
+assert "QR2-19. with a fixture spec, a detail using a subset of its fields is accepted" "$(qfs "${QR2_SPEC}" "'{\"has_canonical\": false}'")" "OK"
+assert "QR2-19. the spec binds the rule version: the same detail under r2 is refused" "$(qfs "${QR2_SPEC}" "'{\"has_canonical\": false}'" html.title r2)" "23514"
+assert "QR2-19. the spec binds the check: the same detail under another check is refused" "$(qfs "${QR2_SPEC}" "'{\"has_canonical\": false}'" html.meta r1)" "23514"
 QR219_CASES=(
-  'page text with spaces|{"title": "Welcome to Acme Corp"}'
-  'an email address|{"contact": "jane@example.com"}'
-  'a URL|{"link": "https://example.com/a"}'
-  'a phone number as text|{"phone": "5551234567"}'
-  'a phone number as a number (10 digits)|{"phone": 5551234567}'
-  'HTML|{"snippet": "<p>"}'
-  'an uppercase or mixed-case token|{"t": "Severity"}'
-  'a token longer than 32 characters|{"t": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
-  'a nested object|{"n": {"x": 1}}'
-  'an array of objects|{"a": [{"x": 1}]}'
-  'a nested array|{"a": [[1]]}'
-  'a JSON null value|{"a": null}'
-  'an uppercase key|{"Title": 1}'
-  'a key with punctuation|{"og:title": 1}'
-  'a number with more than 4 decimals|{"r": 0.12345}'
-  'a top-level array|["a", "b"]'
-  'a top-level string|"Welcome"'
+  'a key the spec does not define|{"page_title": 1}'
+  'an enum value outside the field list|{"severity": "critical"}'
+  'an arbitrary identifier in an enum field|{"severity": "jane_doe"}'
+  'a count above the field maximum|{"missing_alt_count": 501}'
+  'a negative count|{"missing_alt_count": -1}'
+  'a fractional count|{"missing_alt_count": 2.5}'
+  'a 10-digit number (a phone number) as a count|{"missing_alt_count": 5551234567}'
+  'a 9-digit number (a national identifier) as a count|{"missing_alt_count": 123456789}'
+  'a ratio above 1|{"text_ratio": 1.5}'
+  'a ratio with more than 4 decimals|{"text_ratio": 0.12345}'
+  'a boolean given as text|{"has_canonical": "true"}'
+  'a list item outside the field list|{"tags": ["og_title", "jane"]}'
+  'a list longer than max_items|{"tags": ["og_title", "og_image", "og_title"]}'
+  'a nested object|{"severity": {"x": 1}}'
+  'a JSON null value|{"severity": null}'
+  'free text|{"severity": "Welcome to Acme"}'
+  'an email address|{"severity": "jane@example.com"}'
+  'a URL|{"severity": "https://example.com/a"}'
   'an empty object|{}'
+  'a top-level array|["high"]'
 )
 QR219_RAN=0
 for c in "${QR219_CASES[@]}"; do
-  assert "QR2-19. detail refused: ${c%%|*}" "$(qf "state, detail" "'info', '${c#*|}'" </dev/null)" "23514"
+  assert "QR2-19. with a fixture spec, refused: ${c%%|*}" "$(qfs "${QR2_SPEC}" "'${c#*|}'")" "23514"
   QR219_RAN=$((QR219_RAN + 1))
 done
-assert "QR2-19. all 18 refused-detail cases ran" "${QR219_RAN}" "18"
-assert "QR2-19. detail refused: more than 16 keys" \
-  "$(qf "state, detail" "'info', (select jsonb_object_agg('k' || i, i) from generate_series(1, 17) i)")" "23514"
-assert "QR2-19. detail refused: an array of more than 16 items" \
-  "$(qf "state, detail" "'info', jsonb_build_object('a', (select jsonb_agg(i) from generate_series(1, 17) i))")" "23514"
+assert "QR2-19. all 20 refused-detail cases ran" "${QR219_RAN}" "20"
+QR219_SPECS=(
+  'a count maximum above 10000|{"keys": {"c": {"type": "count", "max": 1000000}}}|{"c": 5}'
+  'a non-identifier enum value|{"keys": {"e": {"type": "enum", "values": ["Jane Doe"]}}}|{"e": "Jane Doe"}'
+  'an unknown field type|{"keys": {"t": {"type": "text"}}}|{"t": "hello"}'
+  'a list allowing more than 16 items|{"keys": {"l": {"type": "enum_list", "values": ["a"], "max_items": 17}}}|{"l": ["a"]}'
+  'a spec without a keys object|{"fields": {"b": {"type": "boolean"}}}|{"b": true}'
+)
+QR219_SRAN=0
+for c in "${QR219_SPECS[@]}"; do
+  rest="${c#*|}"
+  assert "QR2-19. a malformed spec matches nothing: ${c%%|*}" "$(q2p2 "public._q2p2_detail_matches_spec('${rest%%|*}'::jsonb, '${rest#*|}'::jsonb)" </dev/null)" "f"
+  QR219_SRAN=$((QR219_SRAN + 1))
+done
+assert "QR2-19. all 5 malformed-spec cases ran" "${QR219_SRAN}" "5"
+assert "QR2-19. after every fixture spec, the shipped empty registry is back" \
+  "$(q2p_sql "select (public._q2p2_finding_detail_spec('html.title', 'r1') is null)::text;")" "true"
 
 # QR2-14 — runs: completion, immutability, re-runs, and verification evidence
 assert "QR2-14. a run completes once" "$(q2p_sql "update public.site_diagnostic_runs set outcome = 'completed' where id = '${RUN1}' returning outcome;")" "completed"

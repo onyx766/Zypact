@@ -650,13 +650,14 @@ Each entry records:
 ## D-043 — Q2′-2: workspace domains and site diagnostics are closed, serialised per domain, and decided on current state
 
 - **Date:** 2026-11-03
-- **Status:** Implemented locally on `feat/q2p2-domains-diagnostics`, based on `main` at `62cf0c4`: `e28cf3b`, then the review remediation commit on top of it (no history rewrite). **Not pushed, not applied to any Supabase project, and not wired into any route.** It runs only in disposable local databases. Q2′-2 production application stays on HOLD.
+- **Status:** Implemented on `feat/q2p2-domains-diagnostics`, based on `main` at `62cf0c4`: `e28cf3b`, then the remediation `84f26ff` (pushed as draft PR #102 after its review), then a local per-check `detail` correction on top (no history rewrite). **Not merged, not applied to any Supabase project, and not wired into any route.** It runs only in disposable databases. Q2′-2 production application stays on HOLD.
+  - **Merge blocker (Founder, at the draft PR stage):** `detail` must enforce an approved per-check schema that prevents sensitive values from being persisted. The per-check correction answers it locally and awaits its own independent review before merge.
   - **Independent review of `e28cf3b`: REQUEST CHANGES.** Three findings, all corrected in the remediation commit, which awaits its own independent review:
     1. the state and challenge guards relied on `pg_trigger_depth() >= 2`, which proves only that some trigger is running, not that the verification-event trigger made the write;
     2. `site_diagnostic_findings.detail` accepted arbitrary JSON up to 4 KB, which did not enforce the no-page-body, no-sensitive-data boundary (Q2-D3);
     3. the stated domain form ("IDNA A-labels allowed") did not match the regex, which refused A-label TLDs.
 - **Builds on:** D-040 (self-service, workspace-scoped data), D-041 (14-digit versions; release order), D-042 (closed tables, tenant pinning, lock-and-decide-at-one-instant).
-- **Scope:** one migration, `20261103173000_q2p2_domains_and_site_diagnostics.sql`. It adds 8 closed tables (`workspace_domains`, `workspace_domain_state`, `workspace_domain_challenges`, `workspace_domain_verification_events`, `site_diagnostic_runs`, `site_diagnostic_pages`, `site_diagnostic_findings`, `diagnostic_rate_limit_events`) and 14 internal functions. No writer RPC, no crawler, no W1 or V1d code, no AI call, no billing. No existing table, function or grant changes.
+- **Scope:** one migration, `20261103173000_q2p2_domains_and_site_diagnostics.sql`. It adds 8 closed tables (`workspace_domains`, `workspace_domain_state`, `workspace_domain_challenges`, `workspace_domain_verification_events`, `site_diagnostic_runs`, `site_diagnostic_pages`, `site_diagnostic_findings`, `diagnostic_rate_limit_events`) and 16 internal functions. No writer RPC, no crawler, no W1 or V1d code, no AI call, no billing. No existing table, function or grant changes.
 - **Founder decisions (scope revision 2):**
   - **Q2-D1:** the diagnostic cache is workspace-isolated; a run may reuse results only from its own workspace.
   - **Q2-D2 (revised):** domain verification is an append-only event log, serialised per domain on a state row, with an exact transition matrix.
@@ -681,12 +682,17 @@ Each entry records:
 
     An unrelated nested trigger can therefore at most apply an existing event early. That leaves the same state and makes the event's own advance fail. It can never write a state the event log does not imply. The remaining bypass is owner-level: disabling triggers or `session_replication_role = replica`, which no API role can do.
   - **Challenges:** only a SHA-256 hash is stored (unique); issued once; consumed once. Consumption is accepted only for the `verification_succeeded` event that cites this challenge and that the domain's state has already applied (its verified event, at its `seq`); `consumed_at` is that event's `recorded_at`. A success must cite the domain's current challenge.
-  - **A finding's `detail` has an explicit safe schema** (`_q2p2_finding_detail_is_safe`, a CHECK alongside the 4 KB cap):
-    - null, or a JSON object of 1 to 16 keys, each a lowercase identifier (a letter, then letters, digits or `_`, at most 32 characters);
-    - each value a boolean; a number below 10⁹ in magnitude with at most 4 decimals; an identifier token of the same form; or an array of at most 16 such numbers or tokens;
-    - nothing else: no free text, whitespace, punctuation, URL, email address, JSON null, nested object or nested array.
-
-    Page text belongs only in the screened, hashed excerpt. **Residual:** an identifier token is still a single lowercase word, so it could carry a name-like value. W1's writer must restrict tokens to each check's own enumerated vocabulary. The schema guarantees that no sentence, address, URL or long number can be stored.
+  - **A finding's `detail` must match the approved spec of its own check and rule version** (the CHECK `site_diagnostic_findings_detail_per_check`, alongside the 4 KB cap):
+    - `_q2p2_finding_detail_spec(check_id, rule_version)` is the registry. **It ships empty:** no diagnostic check vocabulary has been approved, so no field is invented, and only a null `detail` can be stored. A check's spec is added only by a later, independently reviewed migration that replaces the registry. A new rule version needs its own spec.
+    - `_q2p2_detail_matches_spec(spec, detail)` accepts only an object of 1 to 16 keys where every key is a field of the spec and every value has that field's type. The types are a closed set:
+      - `boolean`;
+      - `count`: an integer from 0 to the field's `max`, where `max` is at most 10 000;
+      - `ratio`: 0 to 1, at most 4 decimals;
+      - `enum`: one token from the field's own list;
+      - `enum_list`: at most `max_items` (1 to 16) tokens from that list.
+    - Tokens and keys are lowercase identifiers of at most 32 characters, and a list holds 1 to 64 tokens. A malformed spec matches nothing.
+    - So no free text, free number, arbitrary identifier, URL, address, null or nested value can be stored. Numbers are only bounded counts (at most 5 digits) and ratios. A 9- or 10-digit identifier cannot be stored as a count, and a word outside a field's approved list cannot be stored as a token.
+    - **Schema decision needed:** the per-check vocabulary itself (the checks, their rule versions, fields and token lists) belongs to W1's check catalogue. Approving it, and the `max` of each count, is a Founder and review decision. Until then the fail-closed default holds. Page text belongs only in the screened, hashed excerpt.
   - **The stored domain form, exactly as checked:**
     - two or more labels, 4 to 253 characters, no trailing dot;
     - each label lowercase LDH, 1 to 63 characters, with no leading or trailing hyphen;

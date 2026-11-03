@@ -41,8 +41,9 @@
 -- No page bodies, headers or cookies; URLs without query, fragment or
 -- userinfo; per-page body hashes; the D-040 §6.3 unknown reasons; excerpts of
 -- at most 300 characters only with offsets, the page hash and a recorded
--- personal-data screen. A finding's detail is a flat object of identifier
--- keys, booleans, bounded numbers and identifier tokens: no free text.
+-- personal-data screen. A finding's detail must match the approved spec of
+-- its own (check_id, rule_version); no spec is approved yet, so only a null
+-- detail can be stored (fail closed).
 -- The result cache is workspace-isolated. A completed
 -- run is frozen; re-runs are new rows.
 --
@@ -106,16 +107,24 @@ as $$
   end;
 $$;
 
--- A finding's detail (Q2-D3: no page body, no sensitive data), exactly:
---   * null, or a JSON object of 1 to 16 keys, each a lowercase identifier
---     (a letter, then letters, digits or '_'; at most 32 characters);
---   * each value a boolean; a number below 1e9 in magnitude with at most 4
---     decimals; an identifier token (same form as a key); or an array of at
---     most 16 such numbers or tokens;
---   * nothing else: no free text, whitespace, punctuation, URL, address,
---     JSON null, nested object or nested array.
--- Text from a page belongs only in the screened, hashed excerpt columns.
-create or replace function public._q2p2_finding_detail_is_safe(p_detail jsonb)
+-- A finding's detail (Q2-D3: no page body, no sensitive data) is checked
+-- against the approved spec of its own check and rule version. A spec is
+-- {"keys": {<key>: <field>, ...}} and each field is exactly one of:
+--   {"type": "boolean"}
+--   {"type": "count", "max": M}      an integer 0..M, M an integer 1..10000
+--   {"type": "ratio"}                a number 0..1, at most 4 decimals
+--   {"type": "enum", "values": [..]} one token from the field's own list
+--   {"type": "enum_list", "values": [..], "max_items": N}
+--                                    at most N (1..16) tokens from that list
+-- Tokens and keys are lowercase identifiers (a letter, then letters, digits or
+-- '_'; at most 32 characters); a list holds 1 to 64 tokens.
+-- A detail matches only if it is an object of 1 to 16 keys, every key is a
+-- field of the spec, and every value has that field's type and bounds. So no
+-- free text, free number, arbitrary identifier, URL, address, null, nested
+-- object or value outside the spec can be stored; numbers are only bounded
+-- counts (at most 5 digits) and ratios, never identifiers. A malformed spec,
+-- or no spec, matches nothing.
+create or replace function public._q2p2_detail_matches_spec(p_spec jsonb, p_detail jsonb)
 returns boolean
 language plpgsql
 immutable
@@ -124,40 +133,99 @@ as $$
 declare
   k text;
   v jsonb;
-  e jsonb;
+  f jsonb;
+  n numeric;
+  v_max numeric;
+begin
+  if p_spec is null or jsonb_typeof(p_spec) <> 'object' or jsonb_typeof(p_spec -> 'keys') is distinct from 'object'
+     or p_detail is null or jsonb_typeof(p_detail) <> 'object'
+     or (select count(*) from jsonb_object_keys(p_detail)) not between 1 and 16 then
+    return false;
+  end if;
+  for k, v in select d.key, d.value from jsonb_each(p_detail) d loop
+    f := p_spec -> 'keys' -> k;
+    if k !~ '^[a-z][a-z0-9_]{0,31}$' or f is null or jsonb_typeof(f) <> 'object' then
+      return false;
+    end if;
+    case f ->> 'type'
+      when 'boolean' then
+        if jsonb_typeof(v) <> 'boolean' then
+          return false;
+        end if;
+      when 'count' then
+        if jsonb_typeof(f -> 'max') is distinct from 'number' or jsonb_typeof(v) <> 'number' then
+          return false;
+        end if;
+        v_max := (f ->> 'max')::numeric;
+        n := (v #>> '{}')::numeric;
+        if v_max <> trunc(v_max) or v_max < 1 or v_max > 10000 or n <> trunc(n) or n < 0 or n > v_max then
+          return false;
+        end if;
+      when 'ratio' then
+        if jsonb_typeof(v) <> 'number' then
+          return false;
+        end if;
+        n := (v #>> '{}')::numeric;
+        if n < 0 or n > 1 or scale(n) > 4 then
+          return false;
+        end if;
+      when 'enum', 'enum_list' then
+        if jsonb_typeof(f -> 'values') is distinct from 'array' or jsonb_array_length(f -> 'values') not between 1 and 64
+           or exists (select 1 from jsonb_array_elements(f -> 'values') x
+                       where jsonb_typeof(x.value) <> 'string' or (x.value #>> '{}') !~ '^[a-z][a-z0-9_]{0,31}$') then
+          return false;
+        end if;
+        if f ->> 'type' = 'enum' then
+          if jsonb_typeof(v) <> 'string' or not ((f -> 'values') @> jsonb_build_array(v)) then
+            return false;
+          end if;
+        else
+          if jsonb_typeof(f -> 'max_items') is distinct from 'number' or jsonb_typeof(v) <> 'array' then
+            return false;
+          end if;
+          v_max := (f ->> 'max_items')::numeric;
+          if v_max <> trunc(v_max) or v_max < 1 or v_max > 16 or jsonb_array_length(v) > v_max
+             or exists (select 1 from jsonb_array_elements(v) x
+                         where jsonb_typeof(x.value) <> 'string' or not ((f -> 'values') @> jsonb_build_array(x.value))) then
+            return false;
+          end if;
+        end if;
+      else
+        return false;
+    end case;
+  end loop;
+  return true;
+end;
+$$;
+
+-- The per-check detail registry: the approved spec of (check_id,
+-- rule_version), or null. It is EMPTY here. No diagnostic check vocabulary
+-- has been approved, so no field is invented: every non-null detail is
+-- refused until a later, independently reviewed migration replaces this
+-- function with the approved specs (a new rule version needs its own spec).
+create or replace function public._q2p2_finding_detail_spec(p_check_id text, p_rule_version text)
+returns jsonb
+language plpgsql
+immutable
+set search_path = pg_catalog, pg_temp
+as $$
+begin
+  return null;
+end;
+$$;
+
+-- A finding's detail is null, or matches its own check's approved spec.
+create or replace function public._q2p2_finding_detail_is_valid(p_check_id text, p_rule_version text, p_detail jsonb)
+returns boolean
+language plpgsql
+immutable
+set search_path = pg_catalog, pg_temp
+as $$
 begin
   if p_detail is null then
     return true;
   end if;
-  if jsonb_typeof(p_detail) <> 'object' or (select count(*) from jsonb_object_keys(p_detail)) not between 1 and 16 then
-    return false;
-  end if;
-  for k, v in select d.key, d.value from jsonb_each(p_detail) d loop
-    if k !~ '^[a-z][a-z0-9_]{0,31}$' then
-      return false;
-    end if;
-    if jsonb_typeof(v) = 'array' and jsonb_array_length(v) > 16 then
-      return false;
-    end if;
-    for e in select x.value from jsonb_array_elements(
-               case when jsonb_typeof(v) = 'array' then v else jsonb_build_array(v) end) x loop
-      case jsonb_typeof(e)
-        when 'boolean' then
-          null;
-        when 'number' then
-          if abs((e #>> '{}')::numeric) >= 1000000000 or scale((e #>> '{}')::numeric) > 4 then
-            return false;
-          end if;
-        when 'string' then
-          if (e #>> '{}') !~ '^[a-z][a-z0-9_]{0,31}$' then
-            return false;
-          end if;
-        else
-          return false;
-      end case;
-    end loop;
-  end loop;
-  return true;
+  return coalesce(public._q2p2_detail_matches_spec(public._q2p2_finding_detail_spec(p_check_id, p_rule_version), p_detail), false);
 end;
 $$;
 
@@ -676,14 +744,16 @@ create table public.site_diagnostic_findings (
   excerpt_end          integer,
   excerpt_body_sha256  text check (excerpt_body_sha256 is null or excerpt_body_sha256 ~ '^[0-9a-f]{64}$'),
   pii_screen_version   text check (pii_screen_version is null or btrim(pii_screen_version) <> ''),
-  detail               jsonb check (public._q2p2_finding_detail_is_safe(detail)
-                                    and (detail is null or pg_column_size(detail) <= 4096)),
+  detail               jsonb,
   rule_version         text not null check (btrim(rule_version) <> ''),
   recorded_at          timestamptz not null default clock_timestamp(),
   constraint site_diagnostic_findings_run_fk foreign key (run_id, workspace_id, project_id)
     references public.site_diagnostic_runs(id, workspace_id, project_id),
   constraint site_diagnostic_findings_page_fk foreign key (page_id, run_id)
     references public.site_diagnostic_pages(id, run_id),
+  constraint site_diagnostic_findings_detail_per_check check (
+    public._q2p2_finding_detail_is_valid(check_id, rule_version, detail)
+    and (detail is null or pg_column_size(detail) <= 4096)),
   constraint site_diagnostic_findings_unknown_reason_iff check ((state = 'unknown') = (unknown_reason is not null)),
   constraint site_diagnostic_findings_excerpt_bundle check (
     (excerpt is null) = (excerpt_start is null) and (excerpt is null) = (excerpt_end is null)
@@ -839,7 +909,9 @@ revoke all on sequence public.diagnostic_rate_limit_events_id_seq from public, a
 revoke all on function public._q2p2_domain_is_normalised(text) from public, anon, authenticated, service_role;
 revoke all on function public._q2p2_url_is_sanitised(text) from public, anon, authenticated, service_role;
 revoke all on function public._q2p2_next_status(text, text) from public, anon, authenticated, service_role;
-revoke all on function public._q2p2_finding_detail_is_safe(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public._q2p2_detail_matches_spec(jsonb, jsonb) from public, anon, authenticated, service_role;
+revoke all on function public._q2p2_finding_detail_spec(text, text) from public, anon, authenticated, service_role;
+revoke all on function public._q2p2_finding_detail_is_valid(text, text, jsonb) from public, anon, authenticated, service_role;
 revoke all on function public._q2p2_domain_create_state() from public, anon, authenticated, service_role;
 revoke all on function public._q2p2_state_guard() from public, anon, authenticated, service_role;
 revoke all on function public._q2p2_challenge_guard() from public, anon, authenticated, service_role;

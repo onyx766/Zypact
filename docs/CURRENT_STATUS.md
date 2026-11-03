@@ -1308,7 +1308,7 @@ Q2′-1b, Q2′-2, PG-9, PR-B, A3, A4 and G4-C remain on HOLD.
   call or billing.
 - **Scope:** one migration,
   `supabase/migrations/20261103173000_q2p2_domains_and_site_diagnostics.sql`
-  (8 closed tables, 14 internal functions; D-043), and its tests. The 11
+  (8 closed tables, 16 internal functions; D-043), and its tests. The 11
   allowlisted paths are exactly: the migration;
   `scripts/test-q2p2-schema-contract.ts`; `scripts/test-q2p2-scope.ts`;
   `.github/workflows/q2p2-scope.yml`; `.github/workflows/q2p-schema-contract.yml`;
@@ -1339,9 +1339,9 @@ Q2′-1b, Q2′-2, PG-9, PR-B, A3, A4 and G4-C remain on HOLD.
   `site_diagnostic_pages` (sanitised URLs only, no bodies, at most 10 pages)
   and `site_diagnostic_findings` (`unknown_reason` exactly when the state is
   unknown; excerpts only as a complete bundle with hash, offsets and a
-  personal-data screen version; `detail` limited to an explicit safe schema
-  of identifier keys, booleans, bounded numbers and identifier tokens, plus
-  the 4 KB cap).
+  personal-data screen version; `detail` must match the approved spec of its
+  own check and rule version, and the registry ships empty, so only a null
+  `detail` can be stored until a check's vocabulary is approved (21.6)).
 - **Stored domain form:** lowercase LDH labels of 1 to 63 characters, 4 to
   253 in all; no `--` in positions 3 and 4 except the `xn--` A-label prefix;
   the last label alphabetic or an A-label (IDNA TLDs accepted). The A-label's
@@ -1504,8 +1504,70 @@ production apply and any AI marketing analysis remain on HOLD.
     The one older `while read` loop (QR-40) calls no `docker exec` in its
     body, and all 9 of its vectors appear in the log.
 - **Residuals:**
-  - An identifier token in `detail` is still one lowercase word. W1 must
-    restrict tokens to each check's enumerated vocabulary.
+  - The generic `detail` shape left one lowercase word as a possible value.
+    This became the merge blocker and is answered by 21.6.
   - Owner-level trigger bypass (disabling triggers, `session_replication_role
     = replica`) remains outside what any table guard can stop; no API role
     can do it.
+
+### 21.6 Merge blocker: per-check `detail` validation (local correction)
+
+- **Blocker (Founder, draft PR #102 stage):** diagnostic `detail` fields must
+  enforce an approved per-check schema that prevents sensitive values from
+  being persisted. That needs a separate correction and an independent review
+  before merge.
+- **Base:** `84f26ff`, the head of draft PR #102. The correction is one local
+  commit on top. It is not pushed.
+- **Correction** (same 11 paths; D-043):
+  - `_q2p2_finding_detail_is_safe` (a generic shape) is replaced by three
+    functions, 16 in all:
+    - `_q2p2_finding_detail_spec(check_id, rule_version)`, the registry;
+    - `_q2p2_detail_matches_spec(spec, detail)`;
+    - `_q2p2_finding_detail_is_valid(check_id, rule_version, detail)`.
+  - The table constraint `site_diagnostic_findings_detail_per_check` applies
+    them with the 4 KB cap.
+- **Fail-closed default:** the registry returns no spec for any check, so
+  every non-null `detail` is refused. No field was invented. The check
+  vocabulary is not yet defined; it belongs to W1's check catalogue.
+- **Schema decision needed:** approve, per check and rule version, its fields,
+  types, token lists and each count's `max` (at most 10 000). Each approval is
+  a later migration that replaces the registry, and it goes through
+  independent review.
+- **What a spec can allow:** booleans, bounded integer counts, ratios 0 to 1,
+  and tokens from a field's own list. It cannot allow free text, free
+  numbers, arbitrary identifiers, URLs, addresses, nulls or nesting. A
+  malformed spec matches nothing.
+- **Development defect, fixed:** the first Level 2 run aborted before any
+  QR2 case. In the new fixture `level2_q2p2.with_spec`, the inner text
+  `$b$$f$` contained `$$`, which closed the fixture's own `$$` body. The
+  fixture body now uses `$ws$`. The aborted log is kept in the evidence.
+- **Tests:**
+  - **QR2-19:** the registry is empty for every probed check and version; a
+    null `detail` is stored, and a well-formed one is refused.
+  - With a fixture spec (installed for one rolled-back statement):
+    - a matching detail and a subset are accepted;
+    - the same detail under another rule version or another check is
+      refused;
+    - 20 refused cases, among them a 10-digit and a 9-digit number as
+      counts, an arbitrary identifier, and email, URL and free text;
+    - 5 malformed specs match nothing;
+    - the empty registry is back afterwards.
+  - **QR2-13:** a spec-valid detail over 4 KB is refused by the size cap.
+  - **Static contract:** QS2-21 is rewritten as 9 detectors with 11
+    mutation self-tests.
+  - **SV1:** expects 16 closed functions.
+- **Residual:**
+  - A count is still a number up to its field's `max`. An approved spec must
+    not declare a count where a 1- to 5-digit value could identify a
+    person; that is part of each spec's review.
+  - Owner-level trigger bypass remains outside any table guard.
+
+| Command | Result |
+|---|---|
+| `npm run test:q2p2-schema` / `npm run test:q2p-schema` | 206/206 (62 mutation self-tests) / 207/207 |
+| `Q2P2_SCOPE_BASE=62cf0c4 npm run test:q2p2-scope` | PASS, 11 paths |
+| Level 2, PostgreSQL 16 | 818 passed, 0 failed (QR2-19 now 35 assertions, replacing 22) |
+| Production-order variant, PostgreSQL 17.6, run 1 / run 2 | 618/0 and 618/0; P0–P5, QR-35, QR2-35 and P4 pass; schemas identical across runs |
+| SV1, disposable local Supabase stack, run 1 / run 2 | 172 PASS, 0 FAIL, 0 NOT ESTABLISHED, 12 INFO in each; 16 functions closed; manifest 183/183 |
+| `npm run build:verify` / `npm run typecheck` | pass / pass |
+| Offline regressions (9 M0, 16 QX-03, 21 B1 suites) | exit codes identical to the `84f26ff` run (only the pre-existing failures) |

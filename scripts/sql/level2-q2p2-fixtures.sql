@@ -17,6 +17,8 @@
 --   level2_q2p2.rogue(sql)           runs sql from inside an UNRELATED trigger
 --                                    (QR2-18); always rolled back
 --   level2_q2p2.state_fold_mismatches()   QR2-21
+--   level2_q2p2.with_spec(spec, sql) runs sql with a fixture detail registry;
+--                                    always rolled back (QR2-13, QR2-19)
 --   level2_q2p2.capture_baseline / verify_baseline   QR2-17
 
 create schema level2_q2p2;
@@ -377,6 +379,29 @@ begin
   return array_to_string(bad, ',');
 end;
 $$;
+
+-- QR2-13/QR2-19: run one statement with the per-check detail registry
+-- replaced by a fixture spec for check 'html.title' at rule version 'r1'
+-- only. Always rolled back, so the real (empty) registry is restored.
+create function level2_q2p2.with_spec(p_spec jsonb, p_sql text)
+returns text
+language plpgsql
+as $ws$
+begin
+  begin
+    execute format($f$create or replace function public._q2p2_finding_detail_spec(p_check_id text, p_rule_version text)
+      returns jsonb language plpgsql immutable set search_path = pg_catalog, pg_temp
+      as $b$ begin return case when p_check_id = 'html.title' and p_rule_version = 'r1' then %L::jsonb end; end; $b$$f$, p_spec);
+    execute p_sql;
+    raise exception using errcode = 'P0001', message = 'l2q2_rollback';
+  exception when others then
+    if sqlerrm = 'l2q2_rollback' then
+      return 'OK';
+    end if;
+    return sqlstate || ':' || sqlerrm;
+  end;
+end;
+$ws$;
 
 -- QR2-08: pause an event after its trigger has locked the state (the pause
 -- trigger fires before the state is advanced; the lock is already held).

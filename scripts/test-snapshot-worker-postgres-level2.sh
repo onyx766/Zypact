@@ -1499,6 +1499,1168 @@ assert "22. temporary grant revoked" \
   "$(psql_q "select has_table_privilege('level2_rls_role','public.projects','UPDATE')::text;")" \
   "false"
 
+# ── Q2′-1 — account-first data foundation (QR cases) ─────────────────────
+#
+# Runs after every migration, including the timestamped Q2′-1 file. Uses the
+# Level 2 fixtures in scripts/sql/level2-q2p1-fixtures.sql (never shipped).
+# Two-session cases run in separate psql processes fed through FIFOs; every
+# ordering is enforced by a barrier on pg_stat_activity (idle in transaction,
+# or waiting on a Lock), never by a sleep. Each concurrency, isolation and
+# binding case is first run against a deliberately weakened copy of the
+# function, which must show the failure the real function prevents.
+
+echo
+echo "── Q2′-1 — account-first foundation ─────────────────────"
+
+psql_stdin < scripts/sql/level2-q2p1-fixtures.sql
+# QR-39 baseline: every row of every pre-existing table, before any Q2′-1 case.
+Q2P_BASELINE_TABLES="$(psql_q "select level2_fixture.capture_baseline();" | tail -n1)"
+
+Q2P_DIR="${TMPDIR_LEVEL2}/q2p"
+mkdir -p "${Q2P_DIR}"
+Q2P_OP="00000000-0000-4000-8000-0000000000f0"   # founder operator id (synthetic)
+
+q2p_sql() { psql_q "$1" | tail -n1; }
+# SQLSTATE of a statement run as the owner (superuser) inside a rolled-back transaction.
+q2p_state() { sqlstate_as_role "${PG_USER}" "$1"; }
+q2p_uuid() { q2p_sql "select gen_random_uuid();"; }
+
+# Two-session helpers. A session is a psql process reading statements from a
+# FIFO on a fixed descriptor (7 or 8), so they work on bash 3.2 and 5. Each
+# background psql closes both descriptors, so it never holds the other
+# session's FIFO open and closing a descriptor always delivers EOF.
+q2p_open() { # q2p_open <name> <fd>
+  local name=$1 fd=$2
+  rm -f "${Q2P_DIR}/${name}.in" "${Q2P_DIR}/${name}.out"
+  mkfifo "${Q2P_DIR}/${name}.in"
+  timeout 120 docker exec -i "${POSTGRES_CONTAINER_ID}" \
+    psql -U "${PG_USER}" -d "${PG_DB}" -X -q -tA -v ON_ERROR_STOP=0 \
+    < "${Q2P_DIR}/${name}.in" > "${Q2P_DIR}/${name}.out" 2>&1 7>&- 8>&- &
+  eval "Q2P_PID_${name}=\$!"
+  eval "exec ${fd}>\"${Q2P_DIR}/${name}.in\""
+  printf '%s\n' "\\set VERBOSITY sqlstate" "set application_name = 'q2p_${name}';" >&"${fd}"
+}
+q2p_send() { printf '%s\n' "$2" >&"$1"; }   # q2p_send <fd> <sql>
+q2p_close() { # q2p_close <name> <fd>
+  eval "exec ${2}>&-"
+  eval "wait \"\${Q2P_PID_${1}}\"" || true
+}
+q2p_out() { cat "${Q2P_DIR}/$1.out"; }
+q2p_wait() { # q2p_wait <sql returning t> — barrier on catalog state
+  local _
+  for _ in $(seq 1 200); do
+    [[ "$(q2p_sql "$1")" == "t" ]] && return 0
+    sleep 0.05
+  done
+  return 1
+}
+q2p_idle_in_tx() { q2p_wait "select exists(select 1 from pg_stat_activity where application_name='q2p_$1' and state='idle in transaction');"; }
+q2p_lock_wait() { q2p_wait "select exists(select 1 from pg_stat_activity where application_name='q2p_$1' and wait_event_type='Lock');"; }
+q2p_settled() { q2p_wait "select exists(select 1 from pg_stat_activity where application_name='q2p_$1' and state in ('idle','idle in transaction'));"; }
+q2p_claims() { printf "set local role authenticated; set local request.jwt.claims = '{\"sub\":\"%s\",\"role\":\"authenticated\"}';" "$1"; }
+
+# Workspace with the given owners (account ids). Prints "ws m1 m2 ...".
+q2p_workspace() { # q2p_workspace <key> <acct> [<acct>...]
+  local key=$1; shift
+  local first=$1; shift
+  local row ws mids
+  row="$(q2p_sql "set role service_role; select workspace_id || ' ' || membership_id from public.create_workspace_with_owner('${first}', 'Workspace ${key}', 'l2-${key}', 'founder', '${Q2P_OP}');")"
+  ws="${row%% *}"; mids="${row#* }"
+  local a
+  for a in "$@"; do
+    mids="${mids} $(q2p_sql "set role service_role; select membership_id from public.add_workspace_member('${ws}', '${a}', 'founder', '${Q2P_OP}');")"
+  done
+  echo "${ws} ${mids}"
+}
+q2p_active() { q2p_sql "select count(*) from public.workspace_members where workspace_id='$1' and removed_at is null;"; }
+q2p_probe_as() { # SQLSTATE of probe_member(ws) as account <acct>
+  sqlstate_as_role authenticated "perform set_config('request.jwt.claims', '{\"sub\":\"$1\",\"role\":\"authenticated\"}', true); perform level2_fixture.${3:-probe_member}('$2');"
+}
+
+ACCT_A="$(q2p_uuid)"; ACCT_B="$(q2p_uuid)"; ACCT_C="$(q2p_uuid)"; ACCT_X="$(q2p_uuid)"
+
+# ── QR-01 / QR-02 / QR-28 — applied, closed tables, grants ───────────────
+Q2P_TABLES="workspaces workspace_members workspace_membership_versions workspace_projects question_research_sets question_sources question_candidates question_candidate_sources question_review_invitations question_review_sessions approval_records buyer_question_version_origins approved_wording_classifications exception_items exception_events"
+assert "QR-01. the Q2′-1 migration is applied (15 tables)" \
+  "$(q2p_sql "select count(*) from pg_tables where schemaname='public' and tablename = any(string_to_array('${Q2P_TABLES}', ' '));")" "15"
+for t in ${Q2P_TABLES}; do
+  for r in anon authenticated level2_rls_role service_role; do
+    assert "QR-02. ${r} cannot select ${t}" "$(sqlstate_as_role "${r}" "perform 1 from public.${t} limit 1;")" "42501"
+  done
+  assert "QR-02. anon cannot insert into ${t}" "$(sqlstate_as_role anon "insert into public.${t} default values;")" "42501"
+  assert "QR-02. authenticated cannot insert into ${t}" "$(sqlstate_as_role authenticated "insert into public.${t} default values;")" "42501"
+  assert "QR-02. ${t} has RLS on and no policy" \
+    "$(q2p_sql "select (c.relrowsecurity and not exists(select 1 from pg_policy p where p.polrelid=c.oid))::text from pg_class c where c.oid='public.${t}'::regclass;")" "true"
+done
+for f in "create_workspace_with_owner(uuid,text,text,text,uuid,text,text)" "assign_project_to_workspace(uuid,uuid,text,uuid,text,text)" \
+         "add_workspace_member(uuid,uuid,text,uuid,text,text)" "remove_workspace_member(uuid,uuid,text,uuid,text,text)" \
+         "approve_buyer_question_set(text,uuid,jsonb,text,text,text)"; do
+  assert "QR-28. anon cannot execute ${f%%(*}" "$(q2p_sql "select has_function_privilege('anon', 'public.${f}', 'execute')::text;")" "false"
+  assert "QR-28. authenticated cannot execute ${f%%(*}" "$(q2p_sql "select has_function_privilege('authenticated', 'public.${f}', 'execute')::text;")" "false"
+  assert "QR-28. service_role can execute ${f%%(*}" "$(q2p_sql "select has_function_privilege('service_role', 'public.${f}', 'execute')::text;")" "true"
+done
+for r in anon authenticated service_role level2_plain; do
+  assert "QR-28. ${r} cannot execute F6 directly" \
+    "$(sqlstate_as_role "${r}" "perform public.assert_current_account_member(gen_random_uuid());")" "42501"
+done
+# Detector bites: if F6 were granted to service_role, the check above would see it.
+assert "QR-28 (weakened). a grant of F6 to service_role is detected (rolled back)" \
+  "$(q2p_state "grant execute on function public.assert_current_account_member(uuid) to service_role; if has_function_privilege('service_role', 'public.assert_current_account_member(uuid)', 'execute') then raise exception using errcode = 'P0001'; end if;")" "P0001"
+
+# ── QR-06 / QR-07 — F1 idempotency, F2 single mapping ────────────────────
+read -r WS1 M1A <<<"$(q2p_workspace ws1 "${ACCT_A}")"
+read -r WS2 M2B <<<"$(q2p_workspace ws2 "${ACCT_B}")"
+assert "QR-06. F1 replay with the same key returns the same workspace" \
+  "$(q2p_sql "set role service_role; select status || ':' || workspace_id from public.create_workspace_with_owner('${ACCT_A}', 'Workspace ws1', 'l2-ws1', 'founder', '${Q2P_OP}');")" "ALREADY_CREATED:${WS1}"
+assert "QR-06. F1 with the same key and a different body returns IDEMPOTENCY_KEY_CONFLICT and writes nothing" \
+  "$(q2p_sql "set role service_role; select concat_ws('|', status, workspace_id, membership_id) from public.create_workspace_with_owner('${ACCT_A}', 'Another name', 'l2-ws1', 'founder', '${Q2P_OP}');")|$(q2p_sql "select count(*) from public.workspaces where idempotency_key='l2-ws1';")" "IDEMPOTENCY_KEY_CONFLICT|1"
+assert "QR-06. F1 refuses a customer actor" \
+  "$(sqlstate_as_role service_role "perform public.create_workspace_with_owner('${ACCT_A}', 'X', 'l2-bad-actor', 'customer_account');")" "22023"
+assert "QR-06. F1 created exactly one workspace, one version row (=1) and one owner" \
+  "$(q2p_sql "select (select count(*) from public.workspaces where idempotency_key='l2-ws1') || '/' || (select version from public.workspace_membership_versions where workspace_id='${WS1}') || '/' || $(q2p_active "${WS1}");")" "1/1/1"
+
+PROJ1="$(q2p_sql "insert into public.projects (domain, company_name) values ('q2p-one.test', 'Q2P One') returning id;")"
+PROJ2="$(q2p_sql "insert into public.projects (domain, company_name) values ('q2p-two.test', 'Q2P Two') returning id;")"
+REQ1="$(q2p_sql "insert into public.snapshot_requests (work_email, normalized_email, company_name, website_url, normalized_domain, buyer_category, project_id, status) values ('buyer@q2p-one.test','buyer@q2p-one.test','Q2P One','https://q2p-one.test','q2p-one.test','crm','${PROJ1}','pending_approval') returning id;")"
+REQ2="$(q2p_sql "insert into public.snapshot_requests (work_email, normalized_email, company_name, website_url, normalized_domain, buyer_category, project_id, status) values ('buyer@q2p-two.test','buyer@q2p-two.test','Q2P Two','https://q2p-two.test','q2p-two.test','crm','${PROJ2}','pending_approval') returning id;")"
+assert "QR-07. F2 maps project 1 to workspace 1" \
+  "$(q2p_sql "set role service_role; select status from public.assign_project_to_workspace('${PROJ1}', '${WS1}', 'founder', '${Q2P_OP}');")" "MAPPED"
+q2p_sql "set role service_role; select status from public.assign_project_to_workspace('${PROJ2}', '${WS2}', 'founder', '${Q2P_OP}');" >/dev/null
+assert "QR-07. F2 refuses an already-mapped project" \
+  "$(sqlstate_as_role service_role "perform public.assign_project_to_workspace('${PROJ1}', '${WS2}', 'founder', '${Q2P_OP}');")" "23505"
+assert "QR-07. the original mapping is unchanged" \
+  "$(q2p_sql "select workspace_id from public.workspace_projects where project_id='${PROJ1}';")" "${WS1}"
+
+# ── QR-27 / QR-08 — claims binding and cross-workspace isolation (F6) ────
+assert "QR-27. a member's own claims pass" "$(q2p_probe_as "${ACCT_A}" "${WS1}")" "NO_ERROR"
+assert "QR-08. a member of workspace 1 is refused workspace 2" "$(q2p_probe_as "${ACCT_A}" "${WS2}")" "42501"
+assert "QR-27. no claims are refused" \
+  "$(sqlstate_as_role authenticated "perform level2_fixture.probe_member('${WS1}');")" "42501"
+assert "QR-27. claim role anon is refused" \
+  "$(sqlstate_as_role authenticated "perform set_config('request.jwt.claims', '{\"sub\":\"${ACCT_A}\",\"role\":\"anon\"}', true); perform level2_fixture.probe_member('${WS1}');")" "42501"
+assert "QR-27. a non-UUID subject is refused" \
+  "$(sqlstate_as_role authenticated "perform set_config('request.jwt.claims', '{\"sub\":\"not-a-uuid\",\"role\":\"authenticated\"}', true); perform level2_fixture.probe_member('${WS1}');")" "42501"
+assert "QR-27. malformed claims JSON is refused" \
+  "$(sqlstate_as_role authenticated "perform set_config('request.jwt.claims', '{not json', true); perform level2_fixture.probe_member('${WS1}');")" "42501"
+assert "QR-27. X's claims with Y's workspace are refused" "$(q2p_probe_as "${ACCT_X}" "${WS1}")" "42501"
+# Weakened: a guard that trusts an account parameter lets A act in B's workspace.
+assert "QR-08/27 (weakened). a parameter-trusting guard admits A into workspace 2 when given B's id" \
+  "$(sqlstate_as_role authenticated "perform set_config('request.jwt.claims', '{\"sub\":\"${ACCT_A}\",\"role\":\"authenticated\"}', true); perform level2_fixture.probe_member_trusting_param('${WS2}', '${ACCT_B}');")" "NO_ERROR"
+
+# ── QR-31 / QR-09 / QR-04 — membership lifecycle ─────────────────────────
+read -r WS3 M3A M3C <<<"$(q2p_workspace ws3 "${ACCT_A}" "${ACCT_C}")"
+assert "QR-31. second owner added" "$(q2p_active "${WS3}")" "2"
+assert "QR-31. a second active row for the same account is refused by the index" \
+  "$(q2p_state "insert into public.workspace_members (workspace_id, account_id, role, actor_type, actor_operator_id) values ('${WS3}', '${ACCT_C}', 'owner', 'founder', '${Q2P_OP}');")" "23505"
+assert "QR-31. F7 on an active member is an idempotent return" \
+  "$(q2p_sql "set role service_role; select status || ':' || membership_id from public.add_workspace_member('${WS3}', '${ACCT_C}', 'founder', '${Q2P_OP}');")" "ALREADY_MEMBER:${M3C}"
+assert "QR-31. remove C" \
+  "$(q2p_sql "set role service_role; select status from public.remove_workspace_member('${WS3}', '${M3C}', 'founder', '${Q2P_OP}');")" "REMOVED"
+assert "QR-09. a removed member is refused" "$(q2p_probe_as "${ACCT_C}" "${WS3}")" "42501"
+assert "QR-09 (weakened). a guard that ignores removal admits the removed member" \
+  "$(q2p_probe_as "${ACCT_C}" "${WS3}" probe_member_ignores_removal)" "NO_ERROR"
+assert "QR-31. removing an already-removed membership is idempotent" \
+  "$(q2p_sql "set role service_role; select status from public.remove_workspace_member('${WS3}', '${M3C}', 'founder', '${Q2P_OP}');")" "ALREADY_REMOVED"
+M3C2="$(q2p_sql "set role service_role; select membership_id from public.add_workspace_member('${WS3}', '${ACCT_C}', 'founder', '${Q2P_OP}');")"
+assert "QR-31. re-adding creates a new membership row with a new id" "$([[ -n "${M3C2}" && "${M3C2}" != "${M3C}" ]] && echo new)" "new"
+assert "QR-09. the re-added member is accepted again" "$(q2p_probe_as "${ACCT_C}" "${WS3}")" "NO_ERROR"
+assert "QR-31. the removed period is unchanged" \
+  "$(q2p_sql "select (removed_at is not null)::text from public.workspace_members where id='${M3C}';")" "true"
+q2p_sql "set role service_role; select status from public.remove_workspace_member('${WS3}', '${M3C2}', 'founder', '${Q2P_OP}');" >/dev/null
+assert "QR-31. removing the last active owner is refused (last_active_owner)" \
+  "$(sqlstate_as_role service_role "perform public.remove_workspace_member('${WS3}', '${M3A}', 'founder', '${Q2P_OP}');")" "P0001"
+assert "QR-31. the last owner remains" "$(q2p_active "${WS3}")" "1"
+assert "QR-04. removed_at cannot be set twice" \
+  "$(q2p_state "update public.workspace_members set removed_at = now() where id='${M3C}';")" "55000"
+assert "QR-04. removed_at cannot be reset to null" \
+  "$(q2p_state "update public.workspace_members set removed_at = null, removed_actor_type = null, removed_operator_id = null where id='${M3C}';")" "55000"
+assert "QR-04. an active membership's other columns are immutable" \
+  "$(q2p_state "update public.workspace_members set account_id = gen_random_uuid() where id='${M3A}';")" "55000"
+assert "QR-03. a membership cannot be deleted" "$(q2p_state "delete from public.workspace_members where id='${M3C}';")" "55000"
+assert "QR-03. the version row cannot be deleted" "$(q2p_state "delete from public.workspace_membership_versions where workspace_id='${WS3}';")" "55000"
+assert "QR-03. the version row only moves by +1" \
+  "$(q2p_state "update public.workspace_membership_versions set version = version + 2 where workspace_id='${WS3}';")" "55000"
+assert "QR-03. workspace_members cannot be truncated" "$(q2p_state "truncate public.workspace_members cascade;")" "55000"
+
+# ── QR-32 — removal is serialised with in-flight protected calls ─────────
+qr32_case_a() { # <probe function> → prints "blocked|removed_while_open|after"
+  local probe=$1 ws m_a m_c blocked removed_open after
+  read -r ws m_a m_c <<<"$(q2p_workspace "qr32a-${probe}" "${ACCT_A}" "${ACCT_C}")"
+  q2p_open A 7; q2p_open B 8
+  q2p_send 7 "begin; $(q2p_claims "${ACCT_C}") select level2_fixture.${probe}('${ws}');"
+  q2p_idle_in_tx A || echo "barrier A failed" >&2
+  q2p_send 8 "set role service_role; select status from public.remove_workspace_member('${ws}', '${m_c}', 'founder', '${Q2P_OP}');"
+  if q2p_lock_wait B; then blocked=yes; else blocked=no; fi
+  removed_open="$(q2p_sql "select (removed_at is not null)::text from public.workspace_members where id='${m_c}';")"
+  q2p_send 7 "commit;"
+  q2p_settled B || true
+  q2p_close A 7; q2p_close B 8
+  after="$(q2p_probe_as "${ACCT_C}" "${ws}")"
+  echo "${blocked}|${removed_open}|${after}"
+}
+assert "QR-32a (weakened, no FOR SHARE). removal is NOT blocked and commits mid-operation" \
+  "$(qr32_case_a probe_member_no_share)" "no|true|42501"
+assert "QR-32a. removal waits for the in-flight call; the next call is refused" \
+  "$(qr32_case_a probe_member)" "yes|false|42501"
+
+qr32_removal_first() { # <B ends with commit|rollback> <A isolation> → A's outcome
+  local finish=$1 iso=$2 ws m_a m_c
+  read -r ws m_a m_c <<<"$(q2p_workspace "qr32-${finish}-${iso// /_}" "${ACCT_A}" "${ACCT_C}")"
+  q2p_open B 8; q2p_open A 7
+  q2p_send 8 "begin; set local role service_role; select status from public.remove_workspace_member('${ws}', '${m_c}', 'founder', '${Q2P_OP}');"
+  q2p_idle_in_tx B || echo "barrier B failed" >&2
+  q2p_send 7 "begin isolation level ${iso}; select 1; $(q2p_claims "${ACCT_C}") select level2_fixture.probe_member('${ws}');"
+  q2p_lock_wait A || echo "barrier A failed" >&2
+  q2p_send 8 "${finish};"
+  q2p_settled A || true
+  q2p_send 7 "rollback;"
+  q2p_close B 8; q2p_close A 7
+  q2p_out A | grep -oE '^(t|ERROR:  [0-9A-Z]{5})$' | tail -n1
+}
+assert "QR-32b. a call starting during a pending removal is refused once it commits" \
+  "$(qr32_removal_first commit 'read committed')" "ERROR:  42501"
+assert "QR-32c. if the removal rolls back, the call succeeds" \
+  "$(qr32_removal_first rollback 'read committed')" "t"
+r32d="$(qr32_removal_first commit 'repeatable read')"
+assert "QR-32d. REPEATABLE READ: the call fails (40001 or refusal), never succeeds" \
+  "$([[ "${r32d}" == "ERROR:  40001" || "${r32d}" == "ERROR:  42501" ]] && echo refused || echo "${r32d}")" "refused"
+
+# ── QR-33 — concurrent owner removals never leave zero owners ────────────
+# <fn> <S1 removes> <S2 removes> <S2 isolation> <S2 snapshot first: yes|no> → "S2 outcome|active owners"
+qr33_case() {
+  local fn=$1 first=$2 second=$3 iso=$4 snap=$5 ws m_a m_b target1 target2
+  read -r ws m_a m_b <<<"$(q2p_workspace "qr33-${fn}-${first}-${iso// /_}-${snap}" "${ACCT_A}" "${ACCT_B}")"
+  [[ "${first}" == "A" ]] && { target1=${m_a}; target2=${m_b}; } || { target1=${m_b}; target2=${m_a}; }
+  q2p_open S1 7; q2p_open S2 8
+  if [[ "${snap}" == "yes" ]]; then
+    q2p_send 8 "begin isolation level ${iso}; select 1;"
+    q2p_idle_in_tx S2 || echo "barrier S2 snapshot failed" >&2
+  fi
+  q2p_send 7 "begin; select status from ${fn}('${ws}', '${target1}', 'founder', '${Q2P_OP}');"
+  q2p_idle_in_tx S1 || echo "barrier S1 failed" >&2
+  if [[ "${snap}" == "yes" ]]; then
+    q2p_send 8 "select status from ${fn}('${ws}', '${target2}', 'founder', '${Q2P_OP}');"
+  else
+    q2p_send 8 "begin isolation level ${iso}; select status from ${fn}('${ws}', '${target2}', 'founder', '${Q2P_OP}');"
+  fi
+  q2p_lock_wait S2 || echo "barrier S2 lock failed" >&2
+  q2p_send 7 "commit;"
+  q2p_settled S2 || true
+  q2p_send 8 "commit;"
+  q2p_close S1 7; q2p_close S2 8
+  echo "$(q2p_out S2 | grep -oE '^(REMOVED|ALREADY_REMOVED|ERROR:  [0-9A-Z]{5})$' | tail -n1)|$(q2p_active "${ws}")"
+}
+assert "QR-33b (weakened, row lock only). REPEATABLE READ stale snapshot leaves ZERO owners" \
+  "$(qr33_case level2_fixture.remove_member_lock_only A B 'repeatable read' yes)" "REMOVED|0"
+assert "QR-33a (weakened). READ COMMITTED still refuses (difference is the stale snapshot)" \
+  "$(qr33_case level2_fixture.remove_member_lock_only A B 'read committed' no)" "ERROR:  P0001|1"
+assert "QR-33a. READ COMMITTED: second removal blocked, then refused; one owner remains" \
+  "$(qr33_case public.remove_workspace_member A B 'read committed' no)" "ERROR:  P0001|1"
+assert "QR-33b. REPEATABLE READ, stale snapshot: 40001; one owner remains" \
+  "$(qr33_case public.remove_workspace_member A B 'repeatable read' yes)" "ERROR:  40001|1"
+assert "QR-33c. SERIALIZABLE, stale snapshot: 40001; one owner remains" \
+  "$(qr33_case public.remove_workspace_member A B 'serializable' yes)" "ERROR:  40001|1"
+assert "QR-33d. opposite order, READ COMMITTED: refused; one owner remains" \
+  "$(qr33_case public.remove_workspace_member B A 'read committed' no)" "ERROR:  P0001|1"
+assert "QR-33d. opposite order, REPEATABLE READ: 40001; one owner remains" \
+  "$(qr33_case public.remove_workspace_member B A 'repeatable read' yes)" "ERROR:  40001|1"
+read -r WS33E M33EA M33EB <<<"$(q2p_workspace qr33e "${ACCT_A}" "${ACCT_B}")"
+q2p_sql "set role service_role; select status from public.remove_workspace_member('${WS33E}', '${M33EA}', 'founder', '${Q2P_OP}');" >/dev/null
+assert "QR-33e. a REPEATABLE READ removal starting after the first commits is refused" \
+  "$(q2p_sql "begin isolation level repeatable read; set local role service_role; select coalesce((select 'unexpected' from public.remove_workspace_member('${WS33E}', '${M33EB}', 'founder', '${Q2P_OP}')), 'x'); rollback;" 2>&1 | grep -c 'last_active_owner')" "1"
+
+# QR-33f — concurrent duplicate add of the same account.
+read -r WS33F M33FA <<<"$(q2p_workspace qr33f "${ACCT_A}")"
+q2p_open S1 7; q2p_open S2 8
+q2p_send 7 "begin; set local role service_role; select membership_id from public.add_workspace_member('${WS33F}', '${ACCT_X}', 'founder', '${Q2P_OP}');"
+q2p_idle_in_tx S1 || true
+q2p_send 8 "set role service_role; select status || ':' || membership_id from public.add_workspace_member('${WS33F}', '${ACCT_X}', 'founder', '${Q2P_OP}');"
+q2p_lock_wait S2 || true
+q2p_send 7 "commit;"
+q2p_settled S2 || true
+q2p_close S1 7; q2p_close S2 8
+M33F_S1="$(q2p_out S1 | grep -E '^[0-9a-f-]{36}$' | tail -n1)"
+assert "QR-33f. concurrent duplicate add: one active row; the other returns the same membership" \
+  "$(q2p_out S2 | grep -E '^ALREADY_MEMBER:' | tail -n1)|$(q2p_sql "select count(*) from public.workspace_members where workspace_id='${WS33F}' and account_id='${ACCT_X}' and removed_at is null;")" \
+  "ALREADY_MEMBER:${M33F_S1}|1"
+
+# QR-33g — concurrent double removal of the same member (three owners).
+qr33g() { # <isolation> <snapshot first>
+  local iso=$1 snap=$2 ws ma mb mc first_removed
+  read -r ws ma mb mc <<<"$(q2p_workspace "qr33g-${iso// /_}" "${ACCT_A}" "${ACCT_B}" "${ACCT_C}")"
+  q2p_open S1 7; q2p_open S2 8
+  [[ "${snap}" == "yes" ]] && { q2p_send 8 "begin isolation level ${iso}; select 1;"; q2p_idle_in_tx S2 || true; }
+  q2p_send 7 "begin; set local role service_role; select status from public.remove_workspace_member('${ws}', '${mc}', 'founder', '${Q2P_OP}');"
+  q2p_idle_in_tx S1 || true
+  if [[ "${snap}" == "yes" ]]; then
+    q2p_send 8 "set local role service_role; select status from public.remove_workspace_member('${ws}', '${mc}', 'founder', '${Q2P_OP}');"
+  else
+    q2p_send 8 "begin isolation level ${iso}; set local role service_role; select status from public.remove_workspace_member('${ws}', '${mc}', 'founder', '${Q2P_OP}');"
+  fi
+  q2p_lock_wait S2 || true
+  q2p_send 7 "commit;"
+  first_removed="$(q2p_sql "select removed_at from public.workspace_members where id='${mc}';")"
+  q2p_settled S2 || true
+  q2p_send 8 "commit;"
+  q2p_close S1 7; q2p_close S2 8
+  echo "$(q2p_out S2 | grep -oE '^(REMOVED|ALREADY_REMOVED|ERROR:  [0-9A-Z]{5})$' | tail -n1)|$([[ "$(q2p_sql "select removed_at from public.workspace_members where id='${mc}';")" == "${first_removed}" ]] && echo unchanged)|$(q2p_active "${ws}")"
+}
+assert "QR-33g. double removal, READ COMMITTED: idempotent; removed_at unchanged" \
+  "$(qr33g 'read committed' no)" "ALREADY_REMOVED|unchanged|2"
+assert "QR-33g. double removal, REPEATABLE READ: 40001; removed_at unchanged" \
+  "$(qr33g 'repeatable read' yes)" "ERROR:  40001|unchanged|2"
+
+# ── Q2′-1 Phase 2 — sources, candidates, invitations, approval ──────────
+q2p_json() { q2p_sql "select '$1'::jsonb ->> '$2';"; }
+Q2P_PROTOCOLS_BEFORE="$(q2p_sql "select count(*) from public.protocols;")"
+Q2P_JOBS_BEFORE="$(q2p_sql "select count(*) from public.protocol_execution_jobs;")"
+Q2P_MEMBERS_BEFORE="$(q2p_sql "select count(*) from public.workspace_members;")"
+
+REV1="$(q2p_sql "select level2_fixture.make_review('${WS1}', '${PROJ1}', '${REQ1}', 'one');")"
+RS1="$(q2p_json "${REV1}" rs)"; SPUB1="$(q2p_json "${REV1}" s_pub)"; SSITE1="$(q2p_json "${REV1}" s_site)"
+COBS1="$(q2p_json "${REV1}" c_obs)"; CADP1="$(q2p_json "${REV1}" c_adp)"; CHYP1="$(q2p_json "${REV1}" c_hyp)"
+INV1="$(q2p_json "${REV1}" inv)"; SES1="$(q2p_json "${REV1}" ses)"; TOK1="$(q2p_json "${REV1}" ses_token)"
+ITOK1="$(q2p_json "${REV1}" inv_token)"
+assert "QR-11. the fixture research set, sources and candidates commit (deferred evidence checks pass)" \
+  "$(q2p_sql "select count(*) from public.question_candidates where research_set_id='${RS1}';")" "3"
+
+Q2P_SRC_COLS="workspace_id, project_id, source_kind, url, retrieved_at, customer_reference, customer_attested_at, received_at, excerpt, excerpt_sha256, buyer_authored, verification, personal_data_removed, actor_type, actor_operator_id"
+q2p_src() { # <kind> <url|null> <retrieved|null> <ref|null> <attested|null> <received|null> <excerpt> <buyer> <verification> <pdr> [hash]
+  local h="${11:-public._q2p_sha256_hex('$7')}"
+  q2p_state "insert into public.question_sources (${Q2P_SRC_COLS}) values ('${WS1}', '${PROJ1}', '$1', $2, $3, $4, $5, $6, '$7', ${h}, $8, '$9', ${10}, 'founder', '${Q2P_OP}');"
+}
+assert "QR-11. a valid public source is accepted" "$(q2p_src public_review "'https://r.test/1'" "now()" null null null "Fine tool." true public_verifiable true)" "NO_ERROR"
+assert "QR-11. a public source without a URL is refused" "$(q2p_src public_review null "now()" null null null "Fine tool." true public_verifiable true)" "23514"
+assert "QR-11. a public source without a retrieval date is refused" "$(q2p_src public_review "'https://r.test/1'" null null null null "Fine tool." true public_verifiable true)" "23514"
+assert "QR-11. valid customer material is accepted" "$(q2p_src customer_material null null "'ticket 42'" "now()" "now()" "We need faster invoicing." true customer_provided true)" "NO_ERROR"
+assert "QR-11. customer material without attestation is refused" "$(q2p_src customer_material null null "'ticket 42'" null "now()" "We need faster invoicing." true customer_provided true)" "23514"
+assert "QR-11. customer material without a reference is refused" "$(q2p_src customer_material null null null "now()" "now()" "We need faster invoicing." true customer_provided true)" "23514"
+assert "QR-11. customer material without a date received is refused" "$(q2p_src customer_material null null "'ticket 42'" "now()" null "We need faster invoicing." true customer_provided true)" "23514"
+assert "QR-11. personal data not confirmed removed is refused" "$(q2p_src public_review "'https://r.test/1'" "now()" null null null "Fine tool." true public_verifiable false)" "23514"
+assert "QR-11. site copy marked buyer-authored is refused" "$(q2p_src site_copy "'https://v.test/'" "now()" null null null "Best tool." true public_verifiable true)" "23514"
+assert "QR-11. an excerpt of 301 characters is refused" "$(q2p_src public_review "'https://r.test/1'" "now()" null null null "$(printf 'a%.0s' $(seq 1 301))" true public_verifiable true)" "23514"
+assert "QR-11. an excerpt of 300 characters is accepted" "$(q2p_src public_review "'https://r.test/1'" "now()" null null null "$(printf 'a%.0s' $(seq 1 300))" true public_verifiable true)" "NO_ERROR"
+assert "QR-11. an excerpt hash that does not match is refused" "$(q2p_src public_review "'https://r.test/1'" "now()" null null null "Fine tool." true public_verifiable true "repeat('0', 64)")" "23514"
+assert "QR-11. customer material marked public_verifiable is refused" "$(q2p_src customer_material null null "'ticket 42'" "now()" "now()" "We need faster invoicing." true public_verifiable true)" "23514"
+
+# QR-12 — Q1's [R] C-04 cases, through a real link insert.
+Q2P_TEXT="Which invoicing tool suits a small accounting firm?"
+q2p_span_case() { # <excerpt> <span>
+  q2p_state "
+    with s as (insert into public.question_sources (${Q2P_SRC_COLS}) values ('${WS1}', '${PROJ1}', 'public_community', 'https://f.test/x', now(), null, null, null, '$1', public._q2p_sha256_hex('$1'), true, 'public_verifiable', true, 'founder', '${Q2P_OP}') returning id)
+    insert into public.question_candidate_sources (candidate_id, source_id, relation, quoted_span, workspace_id, project_id, actor_type, actor_operator_id)
+      select '${CHYP1}', s.id, 'verbatim', '$2', '${WS1}', '${PROJ1}', 'founder', '${Q2P_OP}' from s;"
+}
+assert "QR-12. [R] C-04 span starting and ending inside words is refused" \
+  "$(q2p_span_case "XWhich invoicing tool suits a small accounting firmly" "Which invoicing tool suits a small accounting firm")" "23514"
+assert "QR-12. [R] C-04 span ending inside a word is refused" \
+  "$(q2p_span_case "Honestly which invoicing tool suits a small accounting firmware team" "which invoicing tool suits a small accounting firm")" "23514"
+assert "QR-12. [R] C-04 invented span not in the excerpt is refused" \
+  "$(q2p_span_case "Our invoices take forever to reconcile." "${Q2P_TEXT}")" "23514"
+assert "QR-12. [R] C-04 span bounded by spaces and punctuation is accepted" \
+  "$(q2p_span_case "Q: ${Q2P_TEXT} Thanks!" "${Q2P_TEXT}")" "NO_ERROR"
+assert "QR-12. [R] C-04 span equal to the whole excerpt is accepted" \
+  "$(q2p_span_case "${Q2P_TEXT}" "${Q2P_TEXT}")" "NO_ERROR"
+assert "QR-12. an accented letter next to the span counts as inside a word" \
+  "$(q2p_span_case "éWhich invoicing tool" "Which invoicing tool")" "23514"
+assert "QR-12. site copy linked as verbatim is refused" \
+  "$(q2p_state "insert into public.question_candidate_sources (candidate_id, source_id, relation, quoted_span, workspace_id, project_id, actor_type, actor_operator_id) values ('${CHYP1}', '${SSITE1}', 'verbatim', 'Acme', '${WS1}', '${PROJ1}', 'founder', '${Q2P_OP}');")" "23514"
+
+# QR-13 — primary source must be a supporting link; observed/adapted evidence (checked at commit).
+q2p_cand() { # <grade> <verification|null> <primary|null> <note|null> → SQL inserting a candidate returning id
+  printf "insert into public.question_candidates (workspace_id, project_id, research_set_id, candidate_text, normalized_hash, evidence_grade, verification, question_kind, buyer_relevance, buyer_relevance_reason, icp_fit, icp_fit_reason, commercial_intent, commercial_intent_reason, product_relevance, product_relevance_reason, intent, buyer_stage, adaptation_note, curator_rank, primary_source_id, actor_type, actor_operator_id) values ('%s', '%s', '%s', 'Fixture question?', repeat('a', 64), '%s', %s, 'unbranded', 1, 'r', 1, 'r', 1, 'r', 1, 'r', 'shortlist', 'problem', %s, 9, %s, 'founder', '%s')" \
+    "${WS1}" "${PROJ1}" "${RS1}" "$1" "$2" "$4" "$3" "${Q2P_OP}"
+}
+assert "QR-13. a primary source with only a context link is refused at commit" \
+  "$(q2p_state "with c as ($(q2p_cand hypothesis null "'${SSITE1}'" null) returning id) insert into public.question_candidate_sources (candidate_id, source_id, relation, quoted_span, workspace_id, project_id, actor_type, actor_operator_id) select id, '${SSITE1}', 'context', null, '${WS1}', '${PROJ1}', 'founder', '${Q2P_OP}' from c; set constraints all immediate;")" "23514"
+assert "QR-13. a primary source that is a verbatim link is accepted" \
+  "$(q2p_state "with c as ($(q2p_cand observed "'public_verifiable'" "'${SPUB1}'" null) returning id) insert into public.question_candidate_sources (candidate_id, source_id, relation, quoted_span, workspace_id, project_id, actor_type, actor_operator_id) select id, '${SPUB1}', 'verbatim', '${Q2P_TEXT}', '${WS1}', '${PROJ1}', 'founder', '${Q2P_OP}' from c; set constraints all immediate;")" "NO_ERROR"
+assert "QR-13. observed without a verbatim buyer link is refused at commit" \
+  "$(q2p_state "$(q2p_cand observed "'public_verifiable'" null null); set constraints all immediate;")" "23514"
+assert "QR-13. adapted without a paraphrase basis is refused at commit" \
+  "$(q2p_state "$(q2p_cand adapted "'public_verifiable'" null "'note'"); set constraints all immediate;")" "23514"
+assert "QR-13. adapted without a note is refused" \
+  "$(q2p_state "$(q2p_cand adapted "'public_verifiable'" null null);")" "23514"
+
+# QR-14 — founder review can never record observed (Q1 R3).
+q2p_class() { # <classification> <verification|null> <rule|null> <note|null>
+  q2p_state "insert into public.approved_wording_classifications (version_id, workspace_id, project_id, classification, verification, rule, adaptation_note, actor_type, actor_operator_id) select id, '${WS1}', '${PROJ1}', '$1', $2, $3, $4, 'founder', '${Q2P_OP}' from public.buyer_question_versions where project_id = '${PROJ1}' limit 1;"
+}
+q2p_sql "insert into public.buyer_questions (project_id) values ('${PROJ1}') returning id;" >/dev/null
+q2p_sql "insert into public.buyer_question_versions (buyer_question_id, project_id, version_number, prompt_text, prompt_hash, intent_type, commercial_value, winnability, priority, rationale, provenance) select id, project_id, 1, 'Fixture version?', repeat('b',64), 'shortlist', 1, 1, 1, 'fixture', 'founder_supplied' from public.buyer_questions where project_id='${PROJ1}' limit 1;" >/dev/null
+assert "QR-14. founder review recording observed is refused" "$(q2p_class observed "'public_verifiable'" "'founder_review'" null)" "23514"
+assert "QR-14. founder review recording adapted with a note is accepted" "$(q2p_class adapted "'public_verifiable'" "'founder_review'" "'reworded'")" "NO_ERROR"
+assert "QR-14. founder review recording adapted without a note is refused" "$(q2p_class adapted "'public_verifiable'" "'founder_review'" null)" "23514"
+assert "QR-14. observed under inherited_unchanged is accepted" "$(q2p_class observed "'public_verifiable'" "'inherited_unchanged'" null)" "NO_ERROR"
+assert "QR-14. pending_review with a rule is refused" "$(q2p_class pending_review null "'inherited_unchanged'" null)" "23514"
+
+# ── QR-19 — approvals of 1, 2 and 3 questions through F4 ─────────────────
+q2p_items() { # <origin> <candidate|null> <text> ... (triples) → JSON array
+  local out="" sep=""
+  while [[ $# -ge 3 ]]; do
+    local cand="null"; [[ "$2" != "null" ]] && cand="\"$2\""
+    out="${out}${sep}{\"origin\":\"$1\",\"candidate_id\":${cand},\"text\":\"$3\",\"prompt_hash\":\"$(q2p_sql "select public._q2p_sha256_hex('$3');")\"}"
+    sep=","; shift 3
+  done
+  echo "[${out}]"
+}
+q2p_approve() { # <token> <rs> <items> <key> [function] [consent version]
+  # The real RPC runs as service_role; a weakened fixture (schema level2_fixture,
+  # which service_role cannot use) runs as the owner, like every other fixture.
+  # No email value is passed: F4 checks the request's persisted address itself.
+  local as_role="set role service_role;"
+  [[ "${5:-}" == level2_fixture.* ]] && as_role=""
+  q2p_sql "${as_role} select concat_ws('|', status, approval_record_id, cardinality(version_ids)) from ${5:-public.approve_buyer_question_set}('$1', '$2', '$3'::jsonb, '$4', '${6:-consent-v1}', repeat('c', 64));"
+}
+q2p_approve_state() { # SQLSTATE of the same call as service_role
+  sqlstate_as_role service_role "perform public.approve_buyer_question_set('$1', '$2', '$3'::jsonb, '$4', 'consent-v1', repeat('c', 64));"
+}
+CONSENT_OK="$(q2p_sql "select repeat('c', 64);")"
+
+ITEMS1="$(q2p_items recommended_unchanged "${COBS1}" "${Q2P_TEXT}")"
+R1="$(q2p_approve "${TOK1}" "${RS1}" "${ITEMS1}" key-one)"
+REC1="$(cut -d'|' -f2 <<<"${R1}")"
+assert "QR-19. one question approved" "$(cut -d'|' -f1,3 <<<"${R1}")" "APPROVED|1"
+assert "QR-19. every approved version's approved_by is the approval record id" \
+  "$(q2p_sql "select count(*) from public.buyer_question_versions v join public.approval_records a on v.id = any(a.approved_version_ids) where a.id='${REC1}' and v.approved_by = a.id and v.approved_at is not null;")" "1"
+assert "QR-19. unchanged observed candidate: observed / inherited_unchanged / public_verifiable" \
+  "$(q2p_sql "select c.classification || '/' || c.rule || '/' || c.verification from public.approved_wording_classifications c join public.approval_records a on c.version_id = any(a.approved_version_ids) where a.id='${REC1}';")" "observed/inherited_unchanged/public_verifiable"
+assert "QR-19. version fields follow the Q1 v1 mapping (cv 4, win 4, priority 16, founder_supplied)" \
+  "$(q2p_sql "select v.commercial_value || '/' || v.winnability || '/' || v.priority || '/' || v.provenance || '/' || v.intent_type from public.buyer_question_versions v join public.approval_records a on v.id = any(a.approved_version_ids) where a.id='${REC1}';")" "4/4/16/founder_supplied/shortlist"
+assert "QR-19. every row written is invitation_holder with null account and membership" \
+  "$(q2p_sql "select (select count(*) from public.approval_records where id='${REC1}' and actor_type='invitation_holder' and actor_account_id is null and actor_membership_id is null and actor_session_id='${SES1}' and actor_invitation_id='${INV1}') || '/' || (select count(*) from public.buyer_question_version_origins where approval_record_id='${REC1}' and actor_type='invitation_holder' and actor_account_id is null and actor_membership_id is null) || '/' || (select count(*) from public.approved_wording_classifications c join public.approval_records a on c.version_id = any(a.approved_version_ids) where a.id='${REC1}' and c.actor_type='invitation_holder' and c.actor_account_id is null);")" "1/1/1"
+
+REV2="$(q2p_sql "select level2_fixture.make_review('${WS1}', '${PROJ1}', '${REQ1}', 'two');")"
+ITEMS2="$(q2p_items recommended_edited "$(q2p_json "${REV2}" c_adp)" "What invoicing tool suits small accounting firms?" customer_written null "Which billing app do accountants recommend?")"
+R2="$(q2p_approve "$(q2p_json "${REV2}" ses_token)" "$(q2p_json "${REV2}" rs)" "${ITEMS2}" key-two)"
+REC2="$(cut -d'|' -f2 <<<"${R2}")"
+assert "QR-19. two questions approved" "$(cut -d'|' -f1,3 <<<"${R2}")" "APPROVED|2"
+assert "QR-19. edited text with no exact source span stays pending_review; customer-written is pending, customer_supplied, 1/1/1" \
+  "$(q2p_sql "select string_agg(o.origin || ':' || c.classification || ':' || v.provenance || ':' || v.commercial_value || v.winnability || v.priority, ',' order by o.origin) from public.buyer_question_version_origins o join public.approved_wording_classifications c on c.version_id=o.version_id join public.buyer_question_versions v on v.id=o.version_id where o.approval_record_id='${REC2}';")" \
+  "customer_written:pending_review:customer_supplied:111,recommended_edited:pending_review:founder_supplied:224"
+
+REV3="$(q2p_sql "select level2_fixture.make_review('${WS1}', '${PROJ1}', '${REQ1}', 'three');")"
+ITEMS3="$(q2p_items recommended_edited "$(q2p_json "${REV3}" c_adp)" "${Q2P_TEXT}" replaced_with_candidate "$(q2p_json "${REV3}" c_hyp)" "Is there an invoicing tool built for accountants?" customer_written null "Which billing app do accountants recommend?")"
+R3="$(q2p_approve "$(q2p_json "${REV3}" ses_token)" "$(q2p_json "${REV3}" rs)" "${ITEMS3}" key-three)"
+REC3="$(cut -d'|' -f2 <<<"${R3}")"
+assert "QR-19. three questions approved" "$(cut -d'|' -f1,3 <<<"${R3}")" "APPROVED|3"
+assert "QR-19. edited to an exact verbatim span of the primary source: observed / exact_source_match; replaced hypothesis: inherited" \
+  "$(q2p_sql "select string_agg(o.origin || ':' || c.classification || ':' || coalesce(c.rule, '-'), ',' order by o.origin) from public.buyer_question_version_origins o join public.approved_wording_classifications c on c.version_id=o.version_id where o.approval_record_id='${REC3}';")" \
+  "customer_written:pending_review:-,recommended_edited:observed:exact_source_match,replaced_with_candidate:hypothesis:inherited_unchanged"
+assert "QR-19. no workspace_members row was created by any approval" \
+  "$(q2p_sql "select count(*) from public.workspace_members;")" "${Q2P_MEMBERS_BEFORE}"
+
+# ── QR-20 / QR-28 / QR-08 — uniform refusals, no writes ──────────────────
+REVR="$(q2p_sql "select level2_fixture.make_review('${WS1}', '${PROJ1}', '${REQ1}', 'refuse');")"
+RSR="$(q2p_json "${REVR}" rs)"; INVR="$(q2p_json "${REVR}" inv)"
+ITEMSR="$(q2p_items recommended_unchanged "$(q2p_json "${REVR}" c_obs)" "${Q2P_TEXT}")"
+APPROVALS_BEFORE="$(q2p_sql "select count(*) from public.approval_records;")"
+TOK_ABS="$(q2p_sql "select level2_fixture.make_session('${INVR}', 'abs', interval '31 minutes', interval '1 minute');")"
+TOK_IDLE="$(q2p_sql "select level2_fixture.make_session('${INVR}', 'idle', interval '20 minutes', interval '16 minutes');")"
+assert "QR-20. an absolutely expired session is refused" "$(q2p_approve_state "${TOK_ABS}" "${RSR}" "${ITEMSR}" key-r1)" "42501"
+assert "QR-20. an idle session (16 min) is refused" "$(q2p_approve_state "${TOK_IDLE}" "${RSR}" "${ITEMSR}" key-r2)" "42501"
+assert "QR-20. the invitation token presented as a session token (wrong purpose) is refused" \
+  "$(q2p_approve_state "$(q2p_json "${REVR}" inv_token)" "${RSR}" "${ITEMSR}" key-r3)" "42501"
+assert "QR-20 / QR-28. a session for another research set, with that set's ids, is refused" \
+  "$(q2p_approve_state "$(q2p_json "${REVR}" ses_token)" "${RS1}" "$(q2p_items recommended_unchanged "${COBS1}" "${Q2P_TEXT}")" key-r4)" "42501"
+assert "QR-20. a candidate from another research set is refused" \
+  "$(q2p_approve_state "$(q2p_json "${REVR}" ses_token)" "${RSR}" "$(q2p_items recommended_unchanged "${COBS1}" "${Q2P_TEXT}")" key-r6)" "42501"
+REVW2="$(q2p_sql "select level2_fixture.make_review('${WS2}', '${PROJ2}', '${REQ2}', 'ws2');")"
+assert "QR-08. a workspace-1 session presented with workspace 2's research set is refused" \
+  "$(q2p_approve_state "$(q2p_json "${REVR}" ses_token)" "$(q2p_json "${REVW2}" rs)" "$(q2p_items recommended_unchanged "$(q2p_json "${REVW2}" c_obs)" "${Q2P_TEXT}")" key-r7)" "42501"
+q2p_sql "update public.question_review_invitations set revoked_at = now() where id='${INVR}';" >/dev/null
+assert "QR-20. a revoked invitation ends its live session immediately" \
+  "$(q2p_approve_state "$(q2p_json "${REVR}" ses_token)" "${RSR}" "${ITEMSR}" key-r8)" "42501"
+assert "QR-20. no refused call wrote anything" "$(q2p_sql "select count(*) from public.approval_records;")" "${APPROVALS_BEFORE}"
+assert "QR-04. revoked_at cannot be set twice" "$(q2p_state "update public.question_review_invitations set revoked_at = now() where id='${INVR}';")" "55000"
+assert "QR-04. exchanged_at cannot be reset to null" "$(q2p_state "update public.question_review_invitations set exchanged_at = null where id='${INVR}';")" "55000"
+assert "QR-03. an invitation's token hash is immutable" "$(q2p_state "update public.question_review_invitations set token_hash = repeat('e', 64) where id='${INV1}';")" "55000"
+assert "QR-04. a session's revoked_at cannot be set twice" \
+  "$(q2p_state "update public.question_review_sessions set revoked_at = now() where id='${SES1}'; update public.question_review_sessions set revoked_at = now() + interval '1 second' where id='${SES1}';")" "55000"
+assert "QR-03. last_seen_at cannot move backwards" "$(q2p_state "update public.question_review_sessions set last_seen_at = last_seen_at - interval '1 minute' where id='${SES1}';")" "55000"
+assert "QR-03. a session's scope is immutable" "$(q2p_state "update public.question_review_sessions set research_set_id='${RS1}' where id='$(q2p_json "${REV2}" ses)';")" "55000"
+assert "QR-20. a session cannot be created with another invitation's scope" \
+  "$(q2p_state "insert into public.question_review_sessions (invitation_id, workspace_id, project_id, snapshot_request_id, research_set_id, token_hash, absolute_expires_at, last_seen_at, actor_type, rule_id, rule_version) values ('${INV1}', '${WS1}', '${PROJ1}', '${REQ1}', '${RSR}', repeat('f',64), now() + interval '10 minutes', now(), 'system', 'r', 'v1');")" "23503"
+
+# ── QR-21 — all-or-nothing ───────────────────────────────────────────────
+REVF="$(q2p_sql "select level2_fixture.make_review('${WS1}', '${PROJ1}', '${REQ1}', 'fault');")"
+VERSIONS_BEFORE="$(q2p_sql "select count(*) from public.buyer_question_versions;")"
+FAULT_RUN="$(psql_q "set l2.fault = 'on'; set role service_role; select status from public.approve_buyer_question_set('$(q2p_json "${REVF}" ses_token)', '$(q2p_json "${REVF}" rs)', '$(q2p_items recommended_unchanged "$(q2p_json "${REVF}" c_obs)" "${Q2P_TEXT}" customer_written null "Which billing app do accountants recommend?")'::jsonb, 'key-fault', 'consent-v1', repeat('c', 64));" 2>&1 || true)"
+assert "QR-21. a fault injected after the first question's writes aborts the committing call" "$(grep -c 'l2_injected_fault' <<<"${FAULT_RUN}")" "1"
+assert "QR-21. everything rolled back: no approval record, no version" \
+  "$(q2p_sql "select (select count(*) from public.approval_records where research_set_id='$(q2p_json "${REVF}" rs)') || '/' || ((select count(*) from public.buyer_question_versions) - ${VERSIONS_BEFORE});")" "0/0"
+
+# ── QR-22 — idempotency ──────────────────────────────────────────────────
+assert "QR-22. replay with the same key and set returns the original" \
+  "$(q2p_approve "${TOK1}" "${RS1}" "${ITEMS1}" key-one)" "ALREADY_APPROVED|${REC1}|1"
+assert "QR-22. the same key with a different set returns IDEMPOTENCY_KEY_CONFLICT (after authorisation)" \
+  "$(q2p_approve "${TOK1}" "${RS1}" "$(q2p_items recommended_edited "${CADP1}" "Another wording entirely?")" key-one)" "IDEMPOTENCY_KEY_CONFLICT"
+TOK1B="$(q2p_sql "select level2_fixture.make_session('${INV1}', 'one-b', interval '0 minutes', interval '0 minutes');")"
+assert "QR-22. a new session replays only the exact approved set" \
+  "$(q2p_approve "${TOK1B}" "${RS1}" "${ITEMS1}" key-one-b)" "ALREADY_APPROVED|${REC1}|1"
+assert "QR-22e. a new session with a different set and a new key returns SET_ALREADY_APPROVED" \
+  "$(q2p_approve "${TOK1B}" "${RS1}" "$(q2p_items replaced_with_candidate "${CHYP1}" "Is there an invoicing tool built for accountants?")" key-one-c)" "SET_ALREADY_APPROVED"
+REVK="$(q2p_sql "select level2_fixture.make_review('${WS1}', '${PROJ1}', '${REQ1}', 'keyscope');")"
+assert "QR-22. keys are scoped to the research set: key-one on another set creates that set's own approval" \
+  "$(q2p_approve "$(q2p_json "${REVK}" ses_token)" "$(q2p_json "${REVK}" rs)" "$(q2p_items recommended_unchanged "$(q2p_json "${REVK}" c_obs)" "${Q2P_TEXT}")" key-one | cut -d'|' -f1,3)" "APPROVED|1"
+
+# ── QR-23 — two concurrent approvals with the same key ──────────────────
+qr23() { # <function> → "S2 outcome|approval records for the set"
+  local fn=$1 rev rs inv t1 t2 items
+  rev="$(q2p_sql "select level2_fixture.make_review('${WS1}', '${PROJ1}', '${REQ1}', 'race-${fn##*.}');")"
+  rs="$(q2p_json "${rev}" rs)"; inv="$(q2p_json "${rev}" inv)"
+  t1="$(q2p_json "${rev}" ses_token)"
+  t2="$(q2p_sql "select level2_fixture.make_session('${inv}', 'race2-${fn##*.}', interval '0 minutes', interval '0 minutes');")"
+  items="$(q2p_items recommended_unchanged "$(q2p_json "${rev}" c_obs)" "${Q2P_TEXT}")"
+  q2p_open S1 7; q2p_open S2 8
+  q2p_send 7 "begin; select status from ${fn}('${t1}', '${rs}', '${items}'::jsonb, 'key-race-${fn##*.}', 'consent-v1', repeat('c', 64));"
+  q2p_idle_in_tx S1 || echo "barrier S1 failed" >&2
+  q2p_send 8 "select status from ${fn}('${t2}', '${rs}', '${items}'::jsonb, 'key-race-${fn##*.}', 'consent-v1', repeat('c', 64));"
+  q2p_lock_wait S2 || echo "barrier S2 failed" >&2
+  q2p_send 7 "commit;"
+  q2p_settled S2 || true
+  q2p_close S1 7; q2p_close S2 8
+  echo "$(q2p_out S2 | grep -oE '^(APPROVED|ALREADY_APPROVED|ERROR:  [0-9A-Z]{5})$' | tail -n1)|$(q2p_sql "select count(*) from public.approval_records where research_set_id='${rs}';")"
+}
+assert "QR-23 (weakened, no research-set lock). the second caller does NOT replay" \
+  "$(qr23 level2_fixture.approve_set_no_set_lock)" "ERROR:  23505|1"
+assert "QR-23. exactly one durable approval; the other caller replays it" \
+  "$(qr23 public.approve_buyer_question_set)" "ALREADY_APPROVED|1"
+
+# ── QR-24 — exact text and duplicate hashes ──────────────────────────────
+REVD="$(q2p_sql "select level2_fixture.make_review('${WS1}', '${PROJ1}', '${REQ1}', 'dup');")"
+assert "QR-24. a duplicate prompt hash within the set is refused" \
+  "$(q2p_approve_state "$(q2p_json "${REVD}" ses_token)" "$(q2p_json "${REVD}" rs)" "$(q2p_items recommended_unchanged "$(q2p_json "${REVD}" c_obs)" "${Q2P_TEXT}" customer_written null "${Q2P_TEXT}")" key-d1)" "22023"
+assert "QR-24. 'recommended unchanged' text that differs from the candidate is refused" \
+  "$(q2p_approve_state "$(q2p_json "${REVD}" ses_token)" "$(q2p_json "${REVD}" rs)" "$(q2p_items recommended_unchanged "$(q2p_json "${REVD}" c_obs)" "Which invoicing tool suits a small accounting firm ?")" key-d2)" "22023"
+assert "QR-24. a prompt_hash that is not the SHA-256 of the exact text is refused" \
+  "$(q2p_approve_state "$(q2p_json "${REVD}" ses_token)" "$(q2p_json "${REVD}" rs)" "[{\"origin\":\"customer_written\",\"candidate_id\":null,\"text\":\"A question?\",\"prompt_hash\":\"$(q2p_sql "select repeat('0', 64);")\"}]" key-d3)" "22023"
+assert "QR-24. four questions are refused" \
+  "$(q2p_approve_state "$(q2p_json "${REVD}" ses_token)" "$(q2p_json "${REVD}" rs)" "$(q2p_items customer_written null "One?" customer_written null "Two?" customer_written null "Three?" customer_written null "Four?")" key-d4)" "22023"
+
+# ── QR-25 — no paid effect ───────────────────────────────────────────────
+assert "QR-25. no protocol and no execution job was created" \
+  "$(q2p_sql "select (select count(*) from public.protocols) || '/' || (select count(*) from public.protocol_execution_jobs);")" "${Q2P_PROTOCOLS_BEFORE}/${Q2P_JOBS_BEFORE}"
+assert "QR-25. no launch-selection table exists in Q2′-1" "$(q2p_sql "select (to_regclass('public.buyer_question_launch_selections') is null)::text;")" "true"
+assert "QR-25. request statuses are unchanged" \
+  "$(q2p_sql "select string_agg(distinct status, ',') from public.snapshot_requests where id in ('${REQ1}', '${REQ2}');")" "pending_approval"
+
+# ── QR-26 — exception queue ──────────────────────────────────────────────
+EXI="$(q2p_sql "insert into public.exception_items (workspace_id, kind, reason, actor_type, actor_operator_id) values ('${WS1}', 'research', 'needs a second source', 'founder', '${Q2P_OP}') returning id;")"
+q2p_sql "insert into public.exception_events (item_id, workspace_id, event, actor_type, actor_operator_id, created_at) values ('${EXI}', '${WS1}', 'opened', 'founder', '${Q2P_OP}', now() - interval '1 minute'), ('${EXI}', '${WS1}', 'resolved', 'founder', '${Q2P_OP}', now());" >/dev/null
+assert "QR-26. the current state is the latest event" \
+  "$(q2p_sql "select event from public.exception_events where item_id='${EXI}' order by created_at desc limit 1;")" "resolved"
+assert "QR-26. an event cannot be edited" "$(q2p_state "update public.exception_events set event = 'opened' where item_id='${EXI}';")" "55000"
+assert "QR-26. an 'assigned' event needs an assignee" \
+  "$(q2p_state "insert into public.exception_events (item_id, workspace_id, event, actor_type, actor_operator_id) values ('${EXI}', '${WS1}', 'assigned', 'founder', '${Q2P_OP}');")" "23514"
+
+# ── QR-05 / QR-34 — actor shapes and approval-record consistency ────────
+q2p_actor() { # <actor columns> <values> — a question_sources row with the given actor
+  q2p_state "insert into public.question_sources (workspace_id, project_id, source_kind, url, retrieved_at, excerpt, excerpt_sha256, buyer_authored, verification, personal_data_removed, $1) values ('${WS1}', '${PROJ1}', 'public_review', 'https://r.test/a', now(), 'Fine.', public._q2p_sha256_hex('Fine.'), true, 'public_verifiable', true, $2);"
+}
+assert "QR-05. system without rule fields is refused" "$(q2p_actor "actor_type" "'system'")" "23514"
+assert "QR-05. customer_account without a membership is refused" "$(q2p_actor "actor_type, actor_account_id" "'customer_account', '${ACCT_A}'")" "23514"
+assert "QR-05. customer_account with an invitation id is refused" "$(q2p_actor "actor_type, actor_account_id, actor_membership_id, actor_invitation_id" "'customer_account', '${ACCT_A}', '${M1A}', '${INV1}'")" "23514"
+assert "QR-05. invitation_holder without a session is refused" "$(q2p_actor "actor_type, actor_invitation_id" "'invitation_holder', '${INV1}'")" "23514"
+assert "QR-05. invitation_holder with an account id is refused" "$(q2p_actor "actor_type, actor_invitation_id, actor_session_id, actor_account_id" "'invitation_holder', '${INV1}', '${SES1}', '${ACCT_A}'")" "23514"
+assert "QR-05. founder with an account id is refused" "$(q2p_actor "actor_type, actor_operator_id, actor_account_id" "'founder', '${Q2P_OP}', '${ACCT_A}'")" "23514"
+assert "QR-05. a valid customer_account actor (own membership, own workspace) is accepted" "$(q2p_actor "actor_type, actor_account_id, actor_membership_id" "'customer_account', '${ACCT_A}', '${M1A}'")" "NO_ERROR"
+assert "QR-05. a membership belonging to a different account is refused" "$(q2p_actor "actor_type, actor_account_id, actor_membership_id" "'customer_account', '${ACCT_B}', '${M1A}'")" "23503"
+assert "QR-05. a membership of a different workspace is refused" "$(q2p_actor "actor_type, actor_account_id, actor_membership_id" "'customer_account', '${ACCT_B}', '${M2B}'")" "23503"
+assert "QR-05. a valid invitation_holder actor is accepted" "$(q2p_actor "actor_type, actor_invitation_id, actor_session_id" "'invitation_holder', '${INV1}', '${SES1}'")" "NO_ERROR"
+assert "QR-05. a session belonging to a different invitation is refused" "$(q2p_actor "actor_type, actor_invitation_id, actor_session_id" "'invitation_holder', '${INVR}', '${SES1}'")" "23503"
+assert "QR-05. a session of another project is refused" "$(q2p_actor "actor_type, actor_invitation_id, actor_session_id" "'invitation_holder', '$(q2p_json "${REVW2}" inv)', '$(q2p_json "${REVW2}" ses)'")" "23503"
+q2p_ar() { # <session_type> <actor columns> <values> [step_up]
+  q2p_state "insert into public.approval_records (workspace_id, project_id, snapshot_request_id, research_set_id, action_type, approved_version_ids, prompt_hashes, session_type, session_id, step_up_event_id, verified_email_hmac, email_hmac_key_id, consent_text_version, consent_text_sha256, idempotency_key, set_fingerprint, $2) values ('${WS1}', '${PROJ1}', '${REQ1}', '${RSR}', 'approve_buyer_question_set', array[gen_random_uuid()], array[repeat('a',64)], '$1', '${SES1}', ${4:-null}, repeat('a',64), 'k1', 'v1', repeat('a',64), 'k-' || gen_random_uuid(), repeat('a',64), $3);"
+}
+assert "QR-34. review_invitation with a customer_account actor is refused" "$(q2p_ar review_invitation "actor_type, actor_account_id, actor_membership_id" "'customer_account', '${ACCT_A}', '${M1A}'")" "23514"
+assert "QR-34. account with an invitation_holder actor is refused" "$(q2p_ar account "actor_type, actor_invitation_id, actor_session_id" "'invitation_holder', '${INV1}', '${SES1}'" "gen_random_uuid()")" "23514"
+assert "QR-34. review_invitation whose actor session differs from session_id is refused" "$(q2p_ar review_invitation "actor_type, actor_invitation_id, actor_session_id" "'invitation_holder', '$(q2p_json "${REV2}" inv)', '$(q2p_json "${REV2}" ses)'")" "23514"
+assert "QR-34. account without a step-up event is refused" "$(q2p_ar account "actor_type, actor_account_id, actor_membership_id" "'customer_account', '${ACCT_A}', '${M1A}'")" "23514"
+assert "QR-34. a consistent review_invitation record is accepted" "$(q2p_ar review_invitation "actor_type, actor_invitation_id, actor_session_id" "'invitation_holder', '${INV1}', '${SES1}'")" "NO_ERROR"
+assert "QR-34. an action type other than approve_buyer_question_set is refused" \
+  "$(q2p_state "insert into public.approval_records (workspace_id, project_id, snapshot_request_id, research_set_id, action_type, approved_version_ids, prompt_hashes, session_type, session_id, verified_email_hmac, email_hmac_key_id, consent_text_version, consent_text_sha256, idempotency_key, set_fingerprint, actor_type, actor_invitation_id, actor_session_id) values ('${WS1}', '${PROJ1}', '${REQ1}', '${RSR}', 'launch', array[gen_random_uuid()], array[repeat('a',64)], 'review_invitation', '${SES1}', repeat('a',64), 'k1', 'v1', repeat('a',64), 'k-x', repeat('a',64), 'invitation_holder', '${INV1}', '${SES1}');")" "23514"
+
+# ── QR-03 — append-only, every table with rows ───────────────────────────
+for t in workspaces workspace_projects question_research_sets question_sources question_candidates question_candidate_sources approval_records buyer_question_version_origins approved_wording_classifications exception_items exception_events; do
+  assert "QR-03. ${t}: update refused" "$(q2p_state "update public.${t} set actor_type = actor_type where ctid = (select ctid from public.${t} limit 1);" 2>/dev/null)" "55000"
+  assert "QR-03. ${t}: delete refused" "$(q2p_state "delete from public.${t} where ctid = (select ctid from public.${t} limit 1);")" "55000"
+  assert "QR-03. ${t}: truncate refused" "$(q2p_state "truncate public.${t} cascade;")" "55000"
+done
+
+# ── Q2′-1 remediation round (R1–R4) ──────────────────────────────────────
+
+# R1 — verified email before approval.
+REVU="$(q2p_sql "select level2_fixture.make_review('${WS1}', '${PROJ1}', '${REQ1}', 'r1u');")"
+RSU="$(q2p_json "${REVU}" rs)"; HMACU="$(q2p_json "${REVU}" hmac)"
+ITEMSU="$(q2p_items recommended_unchanged "$(q2p_json "${REVU}" c_obs)" "${Q2P_TEXT}")"
+Q2P_INV_COLS="workspace_id, project_id, snapshot_request_id, research_set_id, email_hmac, email_hmac_key_id, email_verified_at, token_hash, expires_at, exchanged_at, created_at, actor_type, actor_operator_id"
+q2p_inv_values() { # <verified expr> <exchanged expr> <token> [created expr] [expires expr]
+  printf "'%s', '%s', '%s', '%s', '%s', 'k1', %s, public._q2p_token_hash('zypact.question_review_invitation.v1', '%s'), %s, %s, %s, 'founder', '%s'" \
+    "${WS1}" "${PROJ1}" "${REQ1}" "${RSU}" "${HMACU}" "$1" "$3" "${5:-now() + interval '7 days'}" "$2" "${4:-now()}" "${Q2P_OP}"
+}
+# Replica mode (used below to force rows past triggers) also skips the insert
+# trigger that derives request_email_binding, so those inserts write the same
+# binding explicitly, with the same function, from REQ1's persisted address.
+Q2P_INV_COLS_BOUND="id, ${Q2P_INV_COLS}, request_email_binding"
+q2p_inv_values_bound() { # <invitation id> <q2p_inv_values arguments...>
+  local id=$1; shift
+  printf "'%s', %s, public._q2p_request_email_binding('%s', (select r.normalized_email from public.snapshot_requests r where r.id = '%s'))" \
+    "${id}" "$(q2p_inv_values "$@")" "${id}" "${REQ1}"
+}
+Q2P_SES_INSERT="insert into public.question_review_sessions (invitation_id, workspace_id, project_id, snapshot_request_id, research_set_id, token_hash, absolute_expires_at, last_seen_at, actor_type, rule_id, rule_version) select i.id, '${WS1}', '${PROJ1}', '${REQ1}', '${RSU}', public._q2p_token_hash('zypact.question_review_session.v1', 'r1-session-token-0123456789abcdef0123456789'), now() + interval '20 minutes', now(), 'system', 'invitation_exchange', 'v1' from i;"
+q2p_r1_call() { printf "perform %s('r1-session-token-0123456789abcdef0123456789', '%s', '%s'::jsonb, 'r1-key', 'consent-v1', repeat('c', 64));" "$1" "${RSU}" "${ITEMSU}"; }
+assert "QR-20e. an exchanged invitation without a verified email is refused by the table" \
+  "$(q2p_state "insert into public.question_review_invitations (${Q2P_INV_COLS}) values ($(q2p_inv_values null "now()" r1-tok-a));")" "23514"
+assert "QR-20e. an invitation can still be created before the email is verified (not yet exchanged)" \
+  "$(q2p_state "insert into public.question_review_invitations (${Q2P_INV_COLS}) values ($(q2p_inv_values null null r1-tok-b));")" "NO_ERROR"
+assert "QR-20k. a session cannot be created for an unexchanged invitation" \
+  "$(q2p_state "with i as (insert into public.question_review_invitations (${Q2P_INV_COLS}) values ($(q2p_inv_values "now()" null r1-tok-c)) returning id) ${Q2P_SES_INSERT}")" "23514"
+assert "QR-20f. F4's own check: with the table rule dropped, an exchanged but unverified invitation is refused" \
+  "$(q2p_state "alter table public.question_review_invitations drop constraint question_review_invitations_exchange_needs_verified_email; set local session_replication_role = replica; with i as (insert into public.question_review_invitations (${Q2P_INV_COLS_BOUND}) values ($(q2p_inv_values_bound "$(q2p_sql "select gen_random_uuid();")" null "now()" r1-tok-d)) returning id) ${Q2P_SES_INSERT} set local session_replication_role = origin; $(q2p_r1_call public.approve_buyer_question_set)")" "42501"
+assert "QR-20f (weakened, no email check). the same unverified invitation is APPROVED" \
+  "$(q2p_state "alter table public.question_review_invitations drop constraint question_review_invitations_exchange_needs_verified_email; set local session_replication_role = replica; with i as (insert into public.question_review_invitations (${Q2P_INV_COLS_BOUND}) values ($(q2p_inv_values_bound "$(q2p_sql "select gen_random_uuid();")" null "now()" r1-tok-e)) returning id) ${Q2P_SES_INSERT} set local session_replication_role = origin; $(q2p_r1_call level2_fixture.approve_set_no_email_check)")" "NO_ERROR"
+assert "QR-20h. an invitation issued 8 days ago (expired) cannot get a session" \
+  "$(q2p_state "with i as (insert into public.question_review_invitations (${Q2P_INV_COLS}) values ($(q2p_inv_values "now()" "now() - interval '7 days'" r1-tok-f "now() - interval '8 days'" "now() - interval '1 day'")) returning id) ${Q2P_SES_INSERT}")" "23514"
+assert "QR-20g. F4's own check: a session forced to outlive its expired invitation is refused" \
+  "$(q2p_state "set local session_replication_role = replica; with i as (insert into public.question_review_invitations (${Q2P_INV_COLS_BOUND}) values ($(q2p_inv_values_bound "$(q2p_sql "select gen_random_uuid();")" "now()" "now() - interval '7 days'" r1-tok-g "now() - interval '8 days'" "now() - interval '1 day'")) returning id) ${Q2P_SES_INSERT} set local session_replication_role = origin; $(q2p_r1_call public.approve_buyer_question_set)")" "42501"
+assert "QR-20k. F4's own check: a session forced onto an unexchanged invitation is refused" \
+  "$(q2p_state "set local session_replication_role = replica; with i as (insert into public.question_review_invitations (${Q2P_INV_COLS_BOUND}) values ($(q2p_inv_values_bound "$(q2p_sql "select gen_random_uuid();")" "now()" null r1-tok-h)) returning id) ${Q2P_SES_INSERT} set local session_replication_role = origin; $(q2p_r1_call public.approve_buyer_question_set)")" "42501"
+REVS="$(q2p_sql "select level2_fixture.make_review('${WS1}', '${PROJ1}', '${REQ1}', 'r1s');")"
+INVS2="$(q2p_sql "insert into public.question_review_invitations (workspace_id, project_id, snapshot_request_id, research_set_id, email_hmac, email_hmac_key_id, token_hash, expires_at, actor_type, actor_operator_id) values ('${WS1}', '${PROJ1}', '${REQ1}', '$(q2p_json "${REVS}" rs)', '$(q2p_json "${REVS}" hmac)', 'k1', public._q2p_token_hash('zypact.question_review_invitation.v1', 'r1-reissue'), now() + interval '7 days', 'founder', '${Q2P_OP}') returning id;")"
+q2p_sql "update public.question_review_invitations set revoked_at = now(), superseded_by = '${INVS2}' where id = '$(q2p_json "${REVS}" inv)';" >/dev/null
+assert "QR-20i. a superseded (reissued) invitation ends its session" \
+  "$(q2p_approve_state "$(q2p_json "${REVS}" ses_token)" "$(q2p_json "${REVS}" rs)" "$(q2p_items recommended_unchanged "$(q2p_json "${REVS}" c_obs)" "${Q2P_TEXT}")" r1-s)" "42501"
+REVJ="$(q2p_sql "select level2_fixture.make_review('${WS1}', '${PROJ1}', '${REQ1}', 'r1j');")"
+q2p_sql "update public.question_review_sessions set revoked_at = now() where id = '$(q2p_json "${REVJ}" ses)';" >/dev/null
+assert "QR-20j. a revoked session is refused although its invitation is valid" \
+  "$(q2p_approve_state "$(q2p_json "${REVJ}" ses_token)" "$(q2p_json "${REVJ}" rs)" "$(q2p_items recommended_unchanged "$(q2p_json "${REVJ}" c_obs)" "${Q2P_TEXT}")" r1-j)" "42501"
+
+# R2 — observed only when the source backs the exact text.
+q2p_r2() { q2p_sql "select level2_fixture.r2_case('${WS1}', '${PROJ1}', '${REQ1}', '$1', '$2'${3:+, '$3'});"; }
+assert "QR-36g. control: an exact verbatim span on a buyer source → observed, with the winnability bonus (1+2+1)" \
+  "$(q2p_r2 ctl control)" "observed/inherited_unchanged/public_verifiable|4"
+assert "QR-36g. control, customer material → observed and stays customer_provided" \
+  "$(q2p_r2 ctlc control_customer)" "observed/inherited_unchanged/customer_provided|4"
+assert "QR-36a. fabricated: the span is no longer in the source excerpt → pending_review, no bonus" \
+  "$(q2p_r2 fab fabricated)" "pending_review//|3"
+assert "QR-36b. mismatched: the candidate text is not its verbatim span → pending_review" \
+  "$(q2p_r2 mis mismatched)" "pending_review//|3"
+assert "QR-36b (weakened, no span check). the mismatched candidate is promoted to observed" \
+  "$(q2p_r2 misw mismatched level2_fixture.approve_set_no_span_check)" "observed/inherited_unchanged/public_verifiable|4"
+assert "QR-36c. unverified: the primary source is not buyer-authored → pending_review" \
+  "$(q2p_r2 nb not_buyer)" "pending_review//|3"
+assert "QR-36d. unverified: the candidate claims customer_provided but the source is public → pending_review" \
+  "$(q2p_r2 vm verification_mismatch)" "pending_review//|3"
+assert "QR-36e. site copy as the primary verbatim source → pending_review" \
+  "$(q2p_r2 sc site_copy)" "pending_review//|3"
+assert "QR-36g. adapted with its paraphrase basis → adapted" \
+  "$(q2p_r2 adc adapted_control)" "adapted/inherited_unchanged/public_verifiable|3"
+assert "QR-36f. adapted whose basis was removed → pending_review" \
+  "$(q2p_r2 adn adapted_no_basis)" "pending_review//|3"
+
+# QR-40 — the shared Q1 compatibility vectors through the real F4.
+Q2P_VECTORS="$(cat scripts/fixtures/q2p1-wording-vectors.json)"
+while IFS='|' read -r vid vgot vexp; do
+  [[ -n "${vid}" ]] && assert "QR-40. vector ${vid}: database ${vexp}" "${vgot}" "${vexp}"
+done <<<"$(psql_q "select id || '|' || got || '|' || expected from level2_fixture.run_vectors('${WS1}', '${PROJ1}', '${REQ1}', '${Q2P_VECTORS}'::jsonb);")"
+
+# R3 — canonical, order-independent fingerprint; set-scoped keys; explicit statuses after authorisation.
+REVF2="$(q2p_sql "select level2_fixture.make_review('${WS1}', '${PROJ1}', '${REQ1}', 'r3');")"
+TOKF="$(q2p_json "${REVF2}" ses_token)"; RSF="$(q2p_json "${REVF2}" rs)"; COF="$(q2p_json "${REVF2}" c_obs)"
+ITEMS_AB="$(q2p_items recommended_unchanged "${COF}" "${Q2P_TEXT}" customer_written null "Which billing app do accountants recommend?")"
+ITEMS_BA="$(q2p_items customer_written null "Which billing app do accountants recommend?" recommended_unchanged "${COF}" "${Q2P_TEXT}")"
+RF="$(q2p_approve "${TOKF}" "${RSF}" "${ITEMS_AB}" r3-key)"
+RECF="$(cut -d'|' -f2 <<<"${RF}")"
+VIDS_F="$(q2p_sql "select approved_version_ids::text from public.approval_records where id='${RECF}';")"
+assert "QR-22. two questions approved" "$(cut -d'|' -f1,3 <<<"${RF}")" "APPROVED|2"
+assert "QR-22a. reordered items, same key → ALREADY_APPROVED with the original record" \
+  "$(q2p_approve "${TOKF}" "${RSF}" "${ITEMS_BA}" r3-key)" "ALREADY_APPROVED|${RECF}|2"
+assert "QR-22a. the stored version ids keep their original order" \
+  "$(q2p_sql "select approved_version_ids::text from public.approval_records where id='${RECF}';")" "${VIDS_F}"
+assert "QR-22b. reordered items, a new key → ALREADY_APPROVED with the original record" \
+  "$(q2p_approve "${TOKF}" "${RSF}" "${ITEMS_BA}" r3-key-2)" "ALREADY_APPROVED|${RECF}|2"
+assert "QR-22c. same key, a different item set → IDEMPOTENCY_KEY_CONFLICT" \
+  "$(q2p_approve "${TOKF}" "${RSF}" "$(q2p_items recommended_unchanged "${COF}" "${Q2P_TEXT}")" r3-key)" "IDEMPOTENCY_KEY_CONFLICT"
+assert "QR-22d. same key and items, a different consent text version → IDEMPOTENCY_KEY_CONFLICT" \
+  "$(q2p_approve "${TOKF}" "${RSF}" "${ITEMS_AB}" r3-key public.approve_buyer_question_set consent-v2)" "IDEMPOTENCY_KEY_CONFLICT"
+assert "QR-22. conflicts wrote nothing (one approval record for the set)" \
+  "$(q2p_sql "select count(*) from public.approval_records where research_set_id='${RSF}';")" "1"
+assert "QR-22g. an invalid token with a conflicting set gets the uniform refusal, not a status" \
+  "$(q2p_approve_state "$(q2p_sql "select repeat('z', 48);")" "${RSF}" "$(q2p_items recommended_unchanged "${COF}" "${Q2P_TEXT}")" r3-key)" "42501"
+q2p_sql "update public.question_review_sessions set revoked_at = now() where id = '$(q2p_json "${REVF2}" ses)';" >/dev/null
+assert "QR-22f. a replay requires a valid session (revoked → uniform refusal)" \
+  "$(q2p_approve_state "${TOKF}" "${RSF}" "${ITEMS_AB}" r3-key)" "42501"
+REVW="$(q2p_sql "select level2_fixture.make_review('${WS1}', '${PROJ1}', '${REQ1}', 'r3w');")"
+ITEMS_W_AB="$(q2p_items recommended_unchanged "$(q2p_json "${REVW}" c_obs)" "${Q2P_TEXT}" customer_written null "Which billing app do accountants recommend?")"
+ITEMS_W_BA="$(q2p_items customer_written null "Which billing app do accountants recommend?" recommended_unchanged "$(q2p_json "${REVW}" c_obs)" "${Q2P_TEXT}")"
+q2p_approve "$(q2p_json "${REVW}" ses_token)" "$(q2p_json "${REVW}" rs)" "${ITEMS_W_AB}" r3w-key level2_fixture.approve_set_ordered_fingerprint >/dev/null
+assert "QR-22w (weakened, order-dependent fingerprint). a reordered replay is a CONFLICT" \
+  "$(q2p_approve "$(q2p_json "${REVW}" ses_token)" "$(q2p_json "${REVW}" rs)" "${ITEMS_W_BA}" r3w-key level2_fixture.approve_set_ordered_fingerprint)" "IDEMPOTENCY_KEY_CONFLICT"
+
+# QR-23r — concurrent approvals with the same key, the second reordered.
+REVC="$(q2p_sql "select level2_fixture.make_review('${WS1}', '${PROJ1}', '${REQ1}', 'r3c');")"
+TC1="$(q2p_json "${REVC}" ses_token)"
+TC2="$(q2p_sql "select level2_fixture.make_session('$(q2p_json "${REVC}" inv)', 'r3c2', interval '0 minutes', interval '0 minutes');")"
+IC_AB="$(q2p_items recommended_unchanged "$(q2p_json "${REVC}" c_obs)" "${Q2P_TEXT}" customer_written null "Which billing app do accountants recommend?")"
+IC_BA="$(q2p_items customer_written null "Which billing app do accountants recommend?" recommended_unchanged "$(q2p_json "${REVC}" c_obs)" "${Q2P_TEXT}")"
+q2p_open S1 7; q2p_open S2 8
+q2p_send 7 "begin; select approval_record_id from public.approve_buyer_question_set('${TC1}', '$(q2p_json "${REVC}" rs)', '${IC_AB}'::jsonb, 'r3c-key', 'consent-v1', repeat('c', 64));"
+q2p_idle_in_tx S1 || echo "barrier S1 failed" >&2
+q2p_send 8 "select status || ':' || approval_record_id from public.approve_buyer_question_set('${TC2}', '$(q2p_json "${REVC}" rs)', '${IC_BA}'::jsonb, 'r3c-key', 'consent-v1', repeat('c', 64));"
+q2p_lock_wait S2 || echo "barrier S2 failed" >&2
+q2p_send 7 "commit;"
+q2p_settled S2 || true
+q2p_close S1 7; q2p_close S2 8
+assert "QR-23r. concurrent same-key approvals, the second reordered: one approval; the other replays it" \
+  "$(q2p_out S2 | grep -E '^ALREADY_APPROVED:' | tail -n1)|$(q2p_sql "select count(*) from public.approval_records where research_set_id='$(q2p_json "${REVC}" rs)';")" \
+  "ALREADY_APPROVED:$(q2p_out S1 | grep -E '^[0-9a-f-]{36}$' | tail -n1)|1"
+
+# R4 — F1 and F7 without exception absorption.
+# <function> <key> <S2 name> <S2 isolation> <S2 snapshot first> → "S1 outcome|S2 outcome|blocked|workspaces with key"
+qr37() {
+  local fn=$1 key=$2 name2=$3 iso=$4 snap=$5 blocked
+  q2p_open S1 7; q2p_open S2 8
+  [[ "${snap}" == "yes" ]] && { q2p_send 8 "begin isolation level ${iso}; select 1;"; q2p_idle_in_tx S2 || true; }
+  q2p_send 7 "begin; select concat_ws('|', status, workspace_id) from ${fn}('${ACCT_A}', 'Race name', '${key}', 'founder', '${Q2P_OP}');"
+  q2p_idle_in_tx S1 || echo "barrier S1 failed" >&2
+  if [[ "${snap}" == "yes" ]]; then
+    q2p_send 8 "select concat_ws('|', status, workspace_id) from ${fn}('${ACCT_A}', '${name2}', '${key}', 'founder', '${Q2P_OP}');"
+  else
+    q2p_send 8 "begin isolation level ${iso}; select concat_ws('|', status, workspace_id) from ${fn}('${ACCT_A}', '${name2}', '${key}', 'founder', '${Q2P_OP}');"
+  fi
+  if q2p_lock_wait S2; then blocked=blocked; else blocked=not_blocked; fi
+  q2p_send 7 "commit;"
+  q2p_settled S2 || true
+  q2p_send 8 "commit;"
+  q2p_close S1 7; q2p_close S2 8
+  echo "$(q2p_out S1 | grep -E '^CREATED\|' | tail -n1)|$(q2p_out S2 | grep -oE '^(CREATED\|[0-9a-f-]{36}|ALREADY_CREATED\|[0-9a-f-]{36}|IDEMPOTENCY_KEY_CONFLICT|ERROR:  [0-9A-Z]{5})$' | tail -n1)|${blocked}|$(q2p_sql "select count(*) from public.workspaces where idempotency_key='${key}';")"
+}
+r="$(qr37 public.create_workspace_with_owner r4-a 'Race name' 'read committed' no)"
+assert "QR-37a. F1, same key and body, READ COMMITTED: S2 waits on the key lock, then replays S1's workspace" \
+  "$(cut -d'|' -f3,4,5,6 <<<"${r}")" "ALREADY_CREATED|$(cut -d'|' -f2 <<<"${r}")|blocked|1"
+r="$(qr37 public.create_workspace_with_owner r4-b 'Another body' 'read committed' no)"
+assert "QR-37b. F1, same key, different body: IDEMPOTENCY_KEY_CONFLICT; one workspace" \
+  "$(cut -d'|' -f3,4,5 <<<"${r}")" "IDEMPOTENCY_KEY_CONFLICT|blocked|1"
+r="$(qr37 public.create_workspace_with_owner r4-c 'Race name' 'repeatable read' yes)"
+assert "QR-37c. F1, REPEATABLE READ stale snapshot: explicit 23505, never a returned row; one workspace" \
+  "$(cut -d'|' -f3,4,5 <<<"${r}")" "ERROR:  23505|blocked|1"
+assert "QR-37c. a retry in a new transaction replays" \
+  "$(q2p_sql "set role service_role; select status from public.create_workspace_with_owner('${ACCT_A}', 'Race name', 'r4-c', 'founder', '${Q2P_OP}');")" "ALREADY_CREATED"
+q2p_open S1 7; q2p_open S2 8
+q2p_send 7 "begin; select status from public.create_workspace_with_owner('${ACCT_A}', 'D one', 'r4-d1', 'founder', '${Q2P_OP}');"
+q2p_idle_in_tx S1 || true
+q2p_send 8 "select status from public.create_workspace_with_owner('${ACCT_A}', 'D two', 'r4-d2', 'founder', '${Q2P_OP}');"
+q2p_settled S2 || true
+r37d_s2="$(q2p_out S2 | grep -E '^CREATED$' | tail -n1)"
+q2p_send 7 "commit;"
+q2p_close S1 7; q2p_close S2 8
+assert "QR-37d. F1, different keys concurrently: the second does not wait; both created" \
+  "${r37d_s2}|$(q2p_sql "select count(*) from public.workspaces where idempotency_key in ('r4-d1','r4-d2');")" "CREATED|2"
+r="$(qr37 level2_fixture.create_workspace_no_key_lock r4-w 'Race name' 'read committed' no)"
+assert "QR-37w (weakened, no key lock). same key and body, READ COMMITTED: 23505 instead of a replay" \
+  "$(cut -d'|' -f3,5 <<<"${r}")" "ERROR:  23505|1"
+
+# F7: <function> <isolation> <snapshot first> <second account> → "S2 outcome|blocked|active rows of the account(s)"
+qr38() {
+  local fn=$1 iso=$2 snap=$3 second=$4 ws m blocked
+  read -r ws m <<<"$(q2p_workspace "qr38-${fn##*.}-${iso// /_}-${snap}-${second:0:8}" "${ACCT_A}")"
+  q2p_open S1 7; q2p_open S2 8
+  [[ "${snap}" == "yes" ]] && { q2p_send 8 "begin isolation level ${iso}; select 1;"; q2p_idle_in_tx S2 || true; }
+  q2p_send 7 "begin; select status from ${fn}('${ws}', '${ACCT_X}', 'founder', '${Q2P_OP}');"
+  q2p_idle_in_tx S1 || echo "barrier S1 failed" >&2
+  if [[ "${snap}" == "yes" ]]; then
+    q2p_send 8 "select status || ':' || membership_id from ${fn}('${ws}', '${second}', 'founder', '${Q2P_OP}');"
+  else
+    q2p_send 8 "begin isolation level ${iso}; select status || ':' || membership_id from ${fn}('${ws}', '${second}', 'founder', '${Q2P_OP}');"
+  fi
+  if q2p_lock_wait S2; then blocked=blocked; else blocked=not_blocked; fi
+  q2p_send 7 "commit;"
+  q2p_settled S2 || true
+  q2p_send 8 "commit;"
+  q2p_close S1 7; q2p_close S2 8
+  echo "$(q2p_out S2 | grep -oE '^((ADDED|ALREADY_MEMBER):[0-9a-f-]{36}|ERROR:  [0-9A-Z]{5})$' | tail -n1 | awk -F: '{ if ($1 == "ERROR") print $0; else print $1 }')|${blocked}|$(q2p_sql "select count(*) from public.workspace_members where workspace_id='${ws}' and removed_at is null and account_id <> '${ACCT_A}';")"
+}
+assert "QR-38a. F7, duplicate add, REPEATABLE READ stale snapshot: 40001; one active row" \
+  "$(qr38 public.add_workspace_member 'repeatable read' yes "${ACCT_X}")" "ERROR:  40001|blocked|1"
+assert "QR-38b. F7, two different accounts concurrently: serialised on the version row; both added" \
+  "$(qr38 public.add_workspace_member 'read committed' no "${ACCT_C}")" "ADDED|blocked|2"
+assert "QR-38w (weakened, no version row). duplicate add, READ COMMITTED: S2 fails on the unique index (23505)" \
+  "$(qr38 level2_fixture.add_member_no_version_row 'read committed' no "${ACCT_X}")" "ERROR:  23505|blocked|1"
+r38c="$(qr38 public.add_workspace_member 'read committed' no "${ACCT_X}")"
+assert "QR-38c. F7, duplicate add, READ COMMITTED: the same (workspace, account) membership is returned" "${r38c}" "ALREADY_MEMBER|blocked|1"
+
+# ── Q2′-1 R6 — invitation lock and decision-point clock ─────────────────
+# Approval SQL for one review's own observed candidate, through <function>.
+r6_call() { # <review json> <function> [token field]
+  printf "select status from %s('%s', '%s', jsonb_build_array(jsonb_build_object('origin','recommended_unchanged','candidate_id','%s','text','%s','prompt_hash',public._q2p_sha256_hex('%s'))), 'r6-%s', 'consent-v1', repeat('c',64));" \
+    "$2" "$(q2p_json "$1" "${3:-ses_token}")" "$(q2p_json "$1" rs)" "$(q2p_json "$1" c_obs)" "${Q2P_TEXT}" "${Q2P_TEXT}" "$(q2p_json "$1" rs)"
+}
+r6_out() { q2p_out "$1" | grep -oE '^(APPROVED|ERROR:  [0-9A-Z]{5})$' | tail -n1; }
+r6_approvals() { q2p_sql "select count(*) from public.approval_records where research_set_id='$(q2p_json "$1" rs)';"; }
+r6_review() { q2p_sql "select level2_fixture.make_review('${WS1}', '${PROJ1}', '${REQ1}', '$1');"; }
+r6_revoke_inv() { echo "update public.question_review_invitations set revoked_at = clock_timestamp() where id = '$(q2p_json "$1" inv)';"; }
+
+# R6-A — revocation committed BEFORE authorisation, stale snapshot (snapshot taken first).
+r6_stale() { # <isolation> <function> → "outcome|approvals"
+  local R; R="$(r6_review "r6a-${1// /_}-${2##*.}")"
+  q2p_open A 7
+  q2p_send 7 "begin isolation level $1; select 1;"
+  q2p_idle_in_tx A || echo "barrier A failed" >&2
+  q2p_sql "$(r6_revoke_inv "${R}")" >/dev/null
+  q2p_send 7 "$(r6_call "${R}" "$2")"
+  q2p_send 7 "commit;"
+  q2p_settled A || true
+  q2p_close A 7
+  echo "$(r6_out A)|$(r6_approvals "${R}")"
+}
+assert "R6-A. READ COMMITTED, revocation committed before the call (transaction opened earlier): refused, nothing written" \
+  "$(r6_stale 'read committed' public.approve_buyer_question_set)" "ERROR:  42501|0"
+assert "R6-A. REPEATABLE READ, stale snapshot: 40001, nothing written" \
+  "$(r6_stale 'repeatable read' public.approve_buyer_question_set)" "ERROR:  40001|0"
+assert "R6-A. SERIALIZABLE, stale snapshot: 40001, nothing written" \
+  "$(r6_stale 'serializable' public.approve_buyer_question_set)" "ERROR:  40001|0"
+assert "R6-A (weakened, no invitation lock). REPEATABLE READ stale snapshot: APPROVED despite the committed revocation" \
+  "$(r6_stale 'repeatable read' level2_fixture.approve_set_no_invitation_lock)" "APPROVED|1"
+R6N="$(r6_review r6a-new)"; q2p_sql "$(r6_revoke_inv "${R6N}")" >/dev/null
+assert "R6-A. a new transaction after the revocation: refused" \
+  "$(sqlstate_as_role service_role "perform public.approve_buyer_question_set('$(q2p_json "${R6N}" ses_token)', '$(q2p_json "${R6N}" rs)', jsonb_build_array(jsonb_build_object('origin','recommended_unchanged','candidate_id','$(q2p_json "${R6N}" c_obs)','text','${Q2P_TEXT}','prompt_hash',public._q2p_sha256_hex('${Q2P_TEXT}'))), 'r6-new', 'consent-v1', repeat('c',64));")" "42501"
+
+# R6-B — a revocation in progress (uncommitted) when the approval starts; it commits while the approval waits.
+r6_concurrent() { # <isolation> <function> → "approval waited|outcome|approvals"
+  local R waited; R="$(r6_review "r6b-${1// /_}-${2##*.}")"
+  q2p_open V 8; q2p_open A 7
+  q2p_send 8 "begin; $(r6_revoke_inv "${R}")"
+  q2p_idle_in_tx V || echo "barrier V failed" >&2
+  q2p_send 7 "begin isolation level $1; $(r6_call "${R}" "$2")"
+  if q2p_lock_wait A; then waited=waited; else waited=not_waited; fi
+  q2p_send 8 "commit;"
+  q2p_settled A || true
+  q2p_send 7 "commit;"
+  q2p_close V 8; q2p_close A 7
+  echo "${waited}|$(r6_out A)|$(r6_approvals "${R}")"
+}
+assert "R6-B. READ COMMITTED: the approval waits on the invitation, then sees the revocation: refused" \
+  "$(r6_concurrent 'read committed' public.approve_buyer_question_set)" "waited|ERROR:  42501|0"
+assert "R6-B. REPEATABLE READ: the approval waits, then 40001" \
+  "$(r6_concurrent 'repeatable read' public.approve_buyer_question_set)" "waited|ERROR:  40001|0"
+assert "R6-B. SERIALIZABLE: the approval waits, then 40001" \
+  "$(r6_concurrent 'serializable' public.approve_buyer_question_set)" "waited|ERROR:  40001|0"
+assert "R6-B (weakened, no invitation lock). READ COMMITTED: the approval does not wait and is APPROVED from the pre-revocation row" \
+  "$(r6_concurrent 'read committed' level2_fixture.approve_set_no_invitation_lock)" "not_waited|APPROVED|1"
+
+# R6-C — a revocation attempted while an AUTHORISED approval is in flight (paused after its decision).
+r6_inflight() { # <invitation|session> <function> → "revoker|outcome|approved before revoked (commit order)"
+  local R rb rev; R="$(r6_review "r6c-$1-${2##*.}")"
+  q2p_open A 7; q2p_open V 8
+  q2p_send 7 "set l2.pause = 'on'; $(r6_call "${R}" "$2")"
+  q2p_wait "select exists(select 1 from pg_stat_activity where application_name='q2p_A' and wait_event='PgSleep');" || echo "barrier A failed" >&2
+  if [[ "$1" == invitation ]]; then
+    q2p_send 8 "$(r6_revoke_inv "${R}")"
+    rev="(select revoked_at from public.question_review_invitations where id='$(q2p_json "${R}" inv)')"
+  else
+    q2p_send 8 "update public.question_review_sessions set revoked_at = clock_timestamp() where id = '$(q2p_json "${R}" ses)';"
+    rev="(select revoked_at from public.question_review_sessions where id='$(q2p_json "${R}" ses)')"
+  fi
+  rb=undetermined
+  for _ in $(seq 1 40); do
+    if [[ "$(q2p_sql "select exists(select 1 from pg_stat_activity where application_name='q2p_V' and wait_event_type='Lock');")" == t ]]; then rb=revoker_waits; break; fi
+    if [[ "$(q2p_sql "select exists(select 1 from pg_stat_activity where application_name='q2p_V' and state='idle');")" == t ]]; then rb=revoker_not_blocked; break; fi
+    sleep 0.05
+  done
+  q2p_settled A || true; q2p_settled V || true
+  q2p_close A 7; q2p_close V 8
+  echo "${rb}|$(r6_out A)|$(q2p_sql "select coalesce((select (a.approved_at < ${rev})::text from public.approval_records a where a.research_set_id='$(q2p_json "${R}" rs)'), 'none');")"
+}
+assert "R6-C. invitation revoked during an authorised approval: the revocation waits; approval first, then revocation" \
+  "$(r6_inflight invitation public.approve_buyer_question_set)" "revoker_waits|APPROVED|true"
+assert "R6-C. session revoked during an authorised approval: the revocation waits (unchanged)" \
+  "$(r6_inflight session public.approve_buyer_question_set)" "revoker_waits|APPROVED|true"
+assert "R6-C (weakened, no invitation lock). the invitation revocation is not blocked and commits during the approval" \
+  "$(r6_inflight invitation level2_fixture.approve_set_no_invitation_lock | cut -d'|' -f1,2)" "revoker_not_blocked|APPROVED"
+
+# R6-D — expiry during a long transaction (the transaction began before expiry).
+r6_long() { # <kind> <function> → "outcome|approvals"
+  local R; R="$(q2p_sql "select level2_fixture.make_expiring_review('${WS1}', '${PROJ1}', '${REQ1}', 'r6d-$1-${2##*.}', '$1', interval '3 seconds');")"
+  q2p_open A 7
+  q2p_send 7 "begin; select 1;"
+  q2p_idle_in_tx A || true
+  q2p_send 7 "select pg_sleep(4);"
+  q2p_send 7 "$(r6_call "${R}" "$2" exp_token)"
+  q2p_send 7 "commit;"
+  q2p_settled A || true
+  q2p_wait "select not exists(select 1 from pg_stat_activity where application_name='q2p_A' and state <> 'idle');" || true
+  q2p_close A 7
+  echo "$(r6_out A)|$(r6_approvals "${R}")"
+}
+assert "R6-D. absolute expiry passes during a long transaction: refused at the decision point" "$(r6_long absolute public.approve_buyer_question_set)" "ERROR:  42501|0"
+assert "R6-D. idle limit passes during a long transaction: refused" "$(r6_long idle public.approve_buyer_question_set)" "ERROR:  42501|0"
+assert "R6-D. invitation (and its session) expire during a long transaction: refused" "$(r6_long invitation public.approve_buyer_question_set)" "ERROR:  42501|0"
+assert "R6-D (weakened, transaction-start clock). absolute expiry during a long transaction: APPROVED" \
+  "$(r6_long absolute level2_fixture.approve_set_transaction_clock)" "APPROVED|1"
+assert "R6-D (weakened, transaction-start clock). idle limit during a long transaction: APPROVED" \
+  "$(r6_long idle level2_fixture.approve_set_transaction_clock)" "APPROVED|1"
+
+# R6-E — expiry while waiting for a lock (the session or the research set is held past expiry).
+r6_lockwait() { # <session|research_set> <function> → "outcome|approvals"
+  local R lockq; R="$(q2p_sql "select level2_fixture.make_expiring_review('${WS1}', '${PROJ1}', '${REQ1}', 'r6e-$1-${2##*.}', 'absolute', interval '2 seconds');")"
+  if [[ "$1" == session ]]; then
+    lockq="select 1 from public.question_review_sessions where token_hash = public._q2p_token_hash('zypact.question_review_session.v1', '$(q2p_json "${R}" exp_token)') for update;"
+  else
+    lockq="select 1 from public.question_research_sets where id = '$(q2p_json "${R}" rs)' for update;"
+  fi
+  q2p_open H 8; q2p_open A 7
+  q2p_send 8 "begin; ${lockq}"
+  q2p_idle_in_tx H || true
+  q2p_send 7 "$(r6_call "${R}" "$2" exp_token)"
+  q2p_lock_wait A || echo "barrier A failed" >&2
+  q2p_send 8 "select pg_sleep(3); commit;"
+  q2p_settled A || true
+  q2p_wait "select not exists(select 1 from pg_stat_activity where application_name in ('q2p_A','q2p_H') and state <> 'idle');" || true
+  q2p_close H 8; q2p_close A 7
+  echo "$(r6_out A)|$(r6_approvals "${R}")"
+}
+assert "R6-E. expiry passes while the approval waits for the session lock: refused after the wait" "$(r6_lockwait session public.approve_buyer_question_set)" "ERROR:  42501|0"
+assert "R6-E. expiry passes while the approval waits for the research-set lock: refused after the wait" "$(r6_lockwait research_set public.approve_buyer_question_set)" "ERROR:  42501|0"
+assert "R6-E (weakened, transaction-start clock). expiry during the session-lock wait: APPROVED" \
+  "$(r6_lockwait session level2_fixture.approve_set_transaction_clock)" "APPROVED|1"
+
+# R6-F — lock order and deadlock: a revoke-all transaction in the WRONG order (invitation, then
+# session) against an approval (session, then invitation) deadlocks; PostgreSQL aborts one side.
+# Fail closed: never both a committed revocation and an approval that saw an unrevoked row.
+R6F="$(r6_review r6f-deadlock)"
+q2p_open V 8; q2p_open A 7
+q2p_send 8 "begin; $(r6_revoke_inv "${R6F}")"
+q2p_idle_in_tx V || true
+q2p_send 7 "$(r6_call "${R6F}" public.approve_buyer_question_set)"
+q2p_lock_wait A || echo "barrier A failed" >&2
+q2p_send 8 "update public.question_review_sessions set revoked_at = clock_timestamp() where id = '$(q2p_json "${R6F}" ses)'; commit;"
+q2p_settled A || true; q2p_settled V || true
+q2p_wait "select not exists(select 1 from pg_stat_activity where application_name in ('q2p_A','q2p_V') and state <> 'idle');" || true
+q2p_close V 8; q2p_close A 7
+R6F_DL="$(cat "${Q2P_DIR}/A.out" "${Q2P_DIR}/V.out" | grep -c 'ERROR:  40P01')"
+R6F_APPR="$(r6_approvals "${R6F}")"
+R6F_REV="$(q2p_sql "select (revoked_at is not null)::text from public.question_review_invitations where id='$(q2p_json "${R6F}" inv)';")"
+assert "R6-F. wrong-order revoke-all vs approval: exactly one side aborted with 40P01" "${R6F_DL}" "1"
+assert "R6-F. fail-closed: either the approval or the revocation took effect, never both" \
+  "$([[ ( "${R6F_APPR}" == 1 && "${R6F_REV}" == false ) || ( "${R6F_APPR}" == 0 && "${R6F_REV}" == true ) ]] && echo consistent || echo "approvals=${R6F_APPR} revoked=${R6F_REV}")" "consistent"
+# The documented order (session, then invitation) never deadlocks: the approval waits, then is refused.
+R6G="$(r6_review r6g-order)"
+q2p_open V 8; q2p_open A 7
+q2p_send 8 "begin; update public.question_review_sessions set revoked_at = clock_timestamp() where id = '$(q2p_json "${R6G}" ses)';"
+q2p_idle_in_tx V || true
+q2p_send 7 "$(r6_call "${R6G}" public.approve_buyer_question_set)"
+q2p_lock_wait A || echo "barrier A failed" >&2
+q2p_send 8 "$(r6_revoke_inv "${R6G}") commit;"
+q2p_settled A || true; q2p_settled V || true
+q2p_close V 8; q2p_close A 7
+assert "R6-G. revoke-all in the documented order (session, then invitation): no deadlock; approval refused" \
+  "$(cat "${Q2P_DIR}/A.out" "${Q2P_DIR}/V.out" | grep -c 'ERROR:  40P01')|$(r6_out A)|$(r6_approvals "${R6G}")" "0|ERROR:  42501|0"
+
+# R6-H — the approval timestamp is the decision instant (not the transaction start).
+R6H="$(r6_review r6h-time)"
+q2p_open A 7
+q2p_send 7 "begin; select 1;"
+q2p_idle_in_tx A || true
+q2p_send 7 "select pg_sleep(2); $(r6_call "${R6H}" public.approve_buyer_question_set) select (approved_at > now() + interval '1 second')::text from public.approval_records where research_set_id = '$(q2p_json "${R6H}" rs)'; commit;"
+q2p_settled A || true
+q2p_wait "select not exists(select 1 from pg_stat_activity where application_name='q2p_A' and state <> 'idle');" || true
+q2p_close A 7
+assert "R6-H. approved_at is the decision instant, after a 2 s delay inside the transaction (not now())" \
+  "$(q2p_out A | grep -E '^(true|false)$' | tail -n1)" "true"
+assert "R6-H. the session's last_seen_at equals the approval's approved_at" \
+  "$(q2p_sql "select (s.last_seen_at = a.approved_at)::text from public.approval_records a join public.question_review_sessions s on s.id = a.session_id where a.research_set_id = '$(q2p_json "${R6H}" rs)';")" "true"
+
+# ── Q2′-1 email binding — QR-41 to QR-43 ────────────────────────────────
+# Each case uses its own snapshot request (level2_fixture.make_request_review,
+# address buyer@<label>.test), so changing its address affects no other case.
+eb_review() { q2p_sql "select level2_fixture.make_request_review('${WS1}', '${PROJ1}', '$1');"; }
+eb_mail() { # <review json> <normalized_email> [work_email]
+  q2p_sql "update public.snapshot_requests set normalized_email = '$2', work_email = '${3:-$2}' where id = '$(q2p_json "$1" req)' returning 1;" >/dev/null
+}
+eb_once() { # <review json> <function> → "outcome|approvals" (one call, its own session)
+  q2p_open A 7
+  q2p_send 7 "$(r6_call "$1" "$2")"
+  q2p_settled A || true
+  q2p_close A 7
+  echo "$(r6_out A)|$(r6_approvals "$1")"
+}
+eb_inv_count() { q2p_sql "select count(*) from public.question_review_invitations where snapshot_request_id = '$(q2p_json "$1" req)';"; }
+
+# QR-41 — the request's persisted address, never a caller value, authorises.
+assert "QR-41. F4 takes no email argument (the 8-argument signature is gone)" \
+  "$(q2p_sql "select (to_regprocedure('public.approve_buyer_question_set(text,uuid,jsonb,text,text,text,text,text)') is null and pg_get_function_identity_arguments('public.approve_buyer_question_set(text,uuid,jsonb,text,text,text)'::regprocedure) !~ 'email')::text;")" "true"
+EB1="$(eb_review eb41a)"
+assert "QR-41. the insert trigger derived the binding from the request's address" \
+  "$(q2p_sql "select (request_email_binding = public._q2p_request_email_binding(id, 'buyer@eb41a.test'))::text from public.question_review_invitations where id = '$(q2p_json "${EB1}" inv)';")" "true"
+assert "QR-41. control: the address unchanged → APPROVED" "$(eb_once "${EB1}" public.approve_buyer_question_set)" "APPROVED|1"
+EB2="$(eb_review eb41b)"; eb_mail "${EB2}" "attacker@other.test"
+assert "QR-41. the persisted address changed after issue and verification → refused, nothing written" \
+  "$(eb_once "${EB2}" public.approve_buyer_question_set)" "ERROR:  42501|0"
+assert "QR-41 (weakened, no binding comparison — F4 as at f7ce558). the same changed address → APPROVED" \
+  "$(eb_once "${EB2}" level2_fixture.approve_set_no_binding_check)" "APPROVED|1"
+EB3="$(eb_review eb41c)"; eb_mail "${EB3}" "attacker@other.test"
+assert "QR-41. as service_role, the changed address → refused" \
+  "$(sqlstate_as_role service_role "perform public.approve_buyer_question_set('$(q2p_json "${EB3}" ses_token)', '$(q2p_json "${EB3}" rs)', '$(q2p_items recommended_unchanged "$(q2p_json "${EB3}" c_obs)" "${Q2P_TEXT}")'::jsonb, 'eb41c', 'consent-v1', repeat('c', 64));")" "42501"
+EB4="$(eb_review eb41d)"
+assert "QR-41. a replay with the same key after the address changed → refused, not ALREADY_APPROVED" \
+  "$(eb_once "${EB4}" public.approve_buyer_question_set | cut -d'|' -f1)|$(eb_mail "${EB4}" "attacker@other.test"; eb_once "${EB4}" public.approve_buyer_question_set)" "APPROVED|ERROR:  42501|1"
+EB5="$(eb_review eb41e)"; q2p_sql "update public.snapshot_requests set work_email = 'BUYER@EB41E.TEST' where id = '$(q2p_json "${EB5}" req)' returning 1;" >/dev/null
+assert "QR-41. a display-case change of work_email alone (normalized_email unchanged) → APPROVED" \
+  "$(eb_once "${EB5}" public.approve_buyer_question_set)" "APPROVED|1"
+EB6="$(eb_review eb41f)"; eb_mail "${EB6}" "attacker@other.test"
+R41F_CHANGED="$(eb_once "${EB6}" public.approve_buyer_question_set)"
+eb_mail "${EB6}" "buyer@eb41f.test" "Buyer@eb41f.test"
+assert "QR-41 (documented). changed then restored to the exact original address: refused while changed; the SAME invitation authorises again once restored" \
+  "${R41F_CHANGED}|$(eb_once "${EB6}" public.approve_buyer_question_set)" "ERROR:  42501|0|APPROVED|1"
+
+# QR-42 — the binding is derived, never supplied, and immutable.
+EB7="$(eb_review eb42)"; INV42="$(q2p_json "${EB7}" inv)"
+eb_copy_inv() { # <token label> <binding expr> → SQL inserting a copy of INV42 with a caller-chosen binding
+  echo "insert into public.question_review_invitations (workspace_id, project_id, snapshot_request_id, research_set_id, email_hmac, email_hmac_key_id, email_verified_at, token_hash, expires_at, exchanged_at, actor_type, actor_operator_id, request_email_binding) select workspace_id, project_id, snapshot_request_id, research_set_id, email_hmac, email_hmac_key_id, email_verified_at, public._q2p_token_hash('zypact.question_review_invitation.v1', '$1'), now() + interval '1 day', now(), actor_type, actor_operator_id, $2 from public.question_review_invitations where id = '${INV42}';"
+}
+assert "QR-42. an insert carrying a binding for another address is refused (22023)" \
+  "$(q2p_state "$(eb_copy_inv eb42-forged "public._q2p_request_email_binding(gen_random_uuid(), 'attacker@other.test')")")" "22023"
+assert "QR-42. an insert carrying even a well-formed value is refused: no caller value is accepted" \
+  "$(q2p_state "$(eb_copy_inv eb42-hex "repeat('a', 64)")")" "22023"
+assert "QR-42. the refused inserts wrote nothing" "$(eb_inv_count "${EB7}")" "1"
+assert "QR-42. a forced row without a binding (triggers skipped) violates NOT NULL" \
+  "$(q2p_state "set local session_replication_role = replica; $(eb_copy_inv eb42-null null)")" "23502"
+assert "QR-42. the binding cannot be updated (55000)" \
+  "$(q2p_state "update public.question_review_invitations set request_email_binding = public._q2p_request_email_binding(id, 'attacker@other.test') where id = '${INV42}';")" "55000"
+q2p_sql "select level2_fixture.make_review('${WS1}', '${PROJ1}', '$(q2p_json "${EB7}" req)', 'eb42b');" >/dev/null
+assert "QR-42. two invitations on one request carry different bindings (per-invitation input)" \
+  "$(q2p_sql "select count(distinct request_email_binding) || '/' || count(*) from public.question_review_invitations where snapshot_request_id = '$(q2p_json "${EB7}" req)';")" "2/2"
+assert "QR-42. no API role may execute the binding or trigger function" \
+  "$(q2p_sql "select bool_or(has_function_privilege(r, f, 'execute'))::text from unnest(array['anon','authenticated','service_role']) r, unnest(array['public._q2p_request_email_binding(uuid,text)','public._q2p_invitation_bind_request_email()']) f;")" "false"
+
+# QR-43 — concurrency: the request row is locked FOR SHARE at the decision.
+eb_change_sql() { echo "update public.snapshot_requests set normalized_email = 'attacker@other.test', work_email = 'attacker@other.test' where id = '$(q2p_json "$1" req)';"; }
+eb_inflight() { # <isolation> <function> → "approval waited|outcome|approvals"  (change uncommitted when F4 starts)
+  local R waited; R="$(eb_review "eb43a$(tr -dc a-z <<<"$1")${2##*.}")"
+  q2p_open V 8; q2p_open A 7
+  q2p_send 7 "begin isolation level $1; select 1;"
+  q2p_idle_in_tx A || echo "barrier A failed" >&2
+  q2p_send 8 "begin; $(eb_change_sql "${R}")"
+  q2p_idle_in_tx V || echo "barrier V failed" >&2
+  q2p_send 7 "$(r6_call "${R}" "$2")"
+  if q2p_lock_wait A; then waited=waited; else waited=not_waited; fi
+  q2p_send 8 "commit;"
+  q2p_settled A || true
+  q2p_send 7 "commit;"
+  q2p_close V 8; q2p_close A 7
+  echo "${waited}|$(r6_out A)|$(r6_approvals "${R}")"
+}
+assert "QR-43. change in flight, READ COMMITTED: the approval waits on the request, then sees the change: refused" \
+  "$(eb_inflight 'read committed' public.approve_buyer_question_set)" "waited|ERROR:  42501|0"
+assert "QR-43. change in flight, REPEATABLE READ: waits, then 40001" \
+  "$(eb_inflight 'repeatable read' public.approve_buyer_question_set)" "waited|ERROR:  40001|0"
+assert "QR-43. change in flight, SERIALIZABLE: waits, then 40001" \
+  "$(eb_inflight 'serializable' public.approve_buyer_question_set)" "waited|ERROR:  40001|0"
+assert "QR-43 (weakened, request read without a lock). READ COMMITTED: does not wait; APPROVED from the old address" \
+  "$(eb_inflight 'read committed' level2_fixture.approve_set_no_request_lock)" "not_waited|APPROVED|1"
+eb_stale() { # <isolation> <function> → "outcome|approvals"  (change committed after the snapshot, before the call)
+  local R; R="$(eb_review "eb43s$(tr -dc a-z <<<"$1")${2##*.}")"
+  q2p_open A 7
+  q2p_send 7 "begin isolation level $1; select 1;"
+  q2p_idle_in_tx A || echo "barrier A failed" >&2
+  q2p_sql "$(eb_change_sql "${R}") select 1;" >/dev/null
+  q2p_send 7 "$(r6_call "${R}" "$2")"
+  q2p_send 7 "commit;"
+  q2p_settled A || true
+  q2p_close A 7
+  echo "$(r6_out A)|$(r6_approvals "${R}")"
+}
+assert "QR-43. stale snapshot, READ COMMITTED (transaction opened before the change committed): refused" \
+  "$(eb_stale 'read committed' public.approve_buyer_question_set)" "ERROR:  42501|0"
+assert "QR-43. stale snapshot, REPEATABLE READ: 40001" "$(eb_stale 'repeatable read' public.approve_buyer_question_set)" "ERROR:  40001|0"
+assert "QR-43. stale snapshot, SERIALIZABLE: 40001" "$(eb_stale 'serializable' public.approve_buyer_question_set)" "ERROR:  40001|0"
+assert "QR-43 (weakened, request read without a lock). REPEATABLE READ stale snapshot: APPROVED from the old address" \
+  "$(eb_stale 'repeatable read' level2_fixture.approve_set_no_request_lock)" "APPROVED|1"
+# A change attempted while an AUTHORISED approval holds its locks (paused after its decision).
+EBP="$(eb_review eb43p)"
+q2p_open A 7; q2p_open V 8
+q2p_send 7 "set l2.pause = 'on'; $(r6_call "${EBP}" public.approve_buyer_question_set)"
+q2p_wait "select exists(select 1 from pg_stat_activity where application_name='q2p_A' and wait_event='PgSleep');" || echo "barrier A failed" >&2
+q2p_send 8 "$(eb_change_sql "${EBP}")"
+R43P=undetermined
+for _ in $(seq 1 40); do
+  if [[ "$(q2p_sql "select exists(select 1 from pg_stat_activity where application_name='q2p_V' and wait_event_type='Lock');")" == t ]]; then R43P=changer_waits; break; fi
+  if [[ "$(q2p_sql "select exists(select 1 from pg_stat_activity where application_name='q2p_V' and state='idle');")" == t ]]; then R43P=changer_not_blocked; break; fi
+  sleep 0.05
+done
+q2p_settled A || true; q2p_settled V || true
+q2p_close A 7; q2p_close V 8
+assert "QR-43. a change attempted during an authorised approval waits; the approval commits first, then the change" \
+  "${R43P}|$(r6_out A)|$(r6_approvals "${EBP}")|$(q2p_sql "select normalized_email from public.snapshot_requests where id = '$(q2p_json "${EBP}" req)';")" \
+  "changer_waits|APPROVED|1|attacker@other.test"
+# Lock order: a path that locks the request and then the invitation (wrong order) against F4
+# (session, invitation, request) deadlocks; PostgreSQL aborts one side. Fail closed.
+EBD="$(eb_review eb43d)"
+q2p_open V 8; q2p_open A 7
+q2p_send 8 "begin; $(eb_change_sql "${EBD}")"
+q2p_idle_in_tx V || true
+q2p_send 7 "$(r6_call "${EBD}" public.approve_buyer_question_set)"
+q2p_lock_wait A || echo "barrier A failed" >&2
+q2p_send 8 "$(r6_revoke_inv "${EBD}") commit;"
+q2p_settled A || true; q2p_settled V || true
+q2p_wait "select not exists(select 1 from pg_stat_activity where application_name in ('q2p_A','q2p_V') and state <> 'idle');" || true
+q2p_close V 8; q2p_close A 7
+R43D_DL="$(cat "${Q2P_DIR}/A.out" "${Q2P_DIR}/V.out" | grep -c 'ERROR:  40P01')"
+R43D_APPR="$(r6_approvals "${EBD}")"
+R43D_V="$(q2p_sql "select ((select revoked_at is not null from public.question_review_invitations where id = '$(q2p_json "${EBD}" inv)') and (select normalized_email = 'attacker@other.test' from public.snapshot_requests where id = '$(q2p_json "${EBD}" req)'))::text;")"
+assert "QR-43. wrong order (request, then invitation) against an approval: exactly one side aborted with 40P01" "${R43D_DL}" "1"
+assert "QR-43. fail closed: either the approval or the change-and-revoke took effect, never both" \
+  "$([[ ( "${R43D_APPR}" == 1 && "${R43D_V}" == false ) || ( "${R43D_APPR}" == 0 && "${R43D_V}" == true ) ]] && echo consistent || echo "approvals=${R43D_APPR} changed_and_revoked=${R43D_V}")" "consistent"
+# The documented order (session, invitation, request) never deadlocks: the approval waits, then is refused.
+EBO="$(eb_review eb43o)"
+q2p_open V 8; q2p_open A 7
+q2p_send 8 "begin; update public.question_review_sessions set revoked_at = clock_timestamp() where id = '$(q2p_json "${EBO}" ses)';"
+q2p_idle_in_tx V || true
+q2p_send 7 "$(r6_call "${EBO}" public.approve_buyer_question_set)"
+q2p_lock_wait A || echo "barrier A failed" >&2
+q2p_send 8 "$(r6_revoke_inv "${EBO}") $(eb_change_sql "${EBO}") commit;"
+q2p_settled A || true; q2p_settled V || true
+q2p_close V 8; q2p_close A 7
+assert "QR-43. revoke-and-change in the documented order (session, invitation, request): no deadlock; approval refused" \
+  "$(cat "${Q2P_DIR}/A.out" "${Q2P_DIR}/V.out" | grep -c 'ERROR:  40P01')|$(r6_out A)|$(r6_approvals "${EBO}")" "0|ERROR:  42501|0"
+# Documented cost: under REPEATABLE READ any update of the request row after the snapshot
+# (here an unrelated status change) also fails the approval closed with 40001.
+EBR="$(eb_review eb43r)"
+q2p_open A 7
+q2p_send 7 "begin isolation level repeatable read; select 1;"
+q2p_idle_in_tx A || echo "barrier A failed" >&2
+q2p_sql "update public.snapshot_requests set status = 'approved' where id = '$(q2p_json "${EBR}" req)' returning 1;" >/dev/null
+q2p_send 7 "$(r6_call "${EBR}" public.approve_buyer_question_set)"
+q2p_send 7 "rollback;"
+q2p_settled A || true
+q2p_close A 7
+assert "QR-43 (documented cost). REPEATABLE READ, an unrelated request update after the snapshot: 40001, nothing written" \
+  "$(r6_out A)|$(r6_approvals "${EBR}")" "ERROR:  40001|0"
+# Issue path: an invitation inserted while the request's address is being changed waits for
+# the change and binds the committed address (the insert trigger reads the request FOR SHARE).
+EBI="$(eb_review eb43i)"
+q2p_open V 8; q2p_open A 7
+q2p_send 8 "begin; update public.snapshot_requests set normalized_email = 'changed@eb43i.test' where id = '$(q2p_json "${EBI}" req)';"
+q2p_idle_in_tx V || true
+q2p_send 7 "insert into public.question_review_invitations (workspace_id, project_id, snapshot_request_id, research_set_id, email_hmac, email_hmac_key_id, token_hash, expires_at, actor_type, actor_operator_id) select workspace_id, project_id, snapshot_request_id, research_set_id, email_hmac, email_hmac_key_id, public._q2p_token_hash('zypact.question_review_invitation.v1', 'eb43i-new'), now() + interval '1 day', actor_type, actor_operator_id from public.question_review_invitations where id = '$(q2p_json "${EBI}" inv)' returning 'BOUND=' || (request_email_binding = public._q2p_request_email_binding(id, 'changed@eb43i.test'))::text;"
+if q2p_lock_wait A; then R43I=waited; else R43I=not_waited; fi
+q2p_send 8 "commit;"
+q2p_settled A || true
+q2p_close V 8; q2p_close A 7
+assert "QR-43. an invitation issued during an address change waits, then binds the committed address" \
+  "${R43I}|$(q2p_out A | grep -oE '^BOUND=(true|false)$' | tail -n1)" "waited|BOUND=true"
+
+# QR-39 — no unintended writes to anything that existed before Q2′-1.
+r39="$(q2p_sql "select level2_fixture.verify_baseline();")"
+assert "QR-39. baseline captured over every pre-existing table" "${Q2P_BASELINE_TABLES}" \
+  "$(q2p_sql "select count(*) from pg_class c where c.relnamespace='public'::regnamespace and c.relkind='r' and c.relname <> all (string_to_array('${Q2P_TABLES}', ' '));")"
+assert "QR-39. no pre-existing row in any pre-existing table changed or disappeared" "${r39%%|*}" "0"
+assert "QR-39. new rows appear only where the tests inserted fixtures or F4 created versions" \
+  "${r39#*|}" "buyer_question_versions,buyer_questions,projects,snapshot_requests"
+assert "QR-39. no protocol, paid job, attempt or external call was created" \
+  "$(q2p_sql "select (select count(*) from public.protocols) - ${Q2P_PROTOCOLS_BEFORE} || '/' || (select count(*) from public.protocol_execution_jobs) - ${Q2P_JOBS_BEFORE};")" "0/0"
+
 # ── Summary ──────────────────────────────────────────────────────────────
 
 echo

@@ -24,7 +24,10 @@ jobs:
   level2:
     name: Level 2 concurrency proof
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 25, not 15: the Q2′-1 cases (QR-01 to QR-43, R6) add two-session
+    # concurrency proofs with real lock waits and pauses on top of the
+    # original claim/lease cases.
+    timeout-minutes: 25
 
     services:
       postgres:

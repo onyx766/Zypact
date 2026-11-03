@@ -24,6 +24,9 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import {
+  allowlistDrift, allowlistWith, INVALID_MIGRATION_NAMES, ledgerRefuses, migrationLedger, TIMESTAMP_FIXTURE,
+} from "./lib/migration-names";
 
 /** Mechanical network guard: this contract must never reach anything. */
 let realFetchCalls = 0;
@@ -34,6 +37,11 @@ globalThis.fetch = ((..._a: unknown[]) => {
 
 const ROOT = process.cwd();
 const MIGRATIONS = path.join(ROOT, "supabase/migrations");
+
+// QD-6: every migration file is parsed by the shared rules (exact four-digit
+// allowlist, validated 14-digit timestamps), so each "no later migration"
+// guard below also examines a timestamped migration.
+const ledger = (extra: Record<string, string> = {}) => migrationLedger(MIGRATIONS, extra);
 const MIGRATION = path.join(MIGRATIONS, "0060_m5_phase3d_post_claim_verification.sql");
 
 /**
@@ -487,10 +495,7 @@ const DETECTORS: Detector[] = [
     ).test(sql);
   }
 
-  const files = readdirSync(MIGRATIONS)
-    .filter((f) => /^\d{4}_.*\.sql$/.test(f))
-    .map((f) => ({ f, n: Number(f.slice(0, 4)) }))
-    .sort((a, b) => a.n - b.n);
+  const files = ledger();
 
   assert("0060 is present in the migration ledger",
     files.some((x) => x.f === "0060_m5_phase3d_post_claim_verification.sql"));
@@ -504,10 +509,24 @@ const DETECTORS: Detector[] = [
     const later = files.filter((x) => x.n > p.definedAt);
     assert(`there is at least one migration after ${p.file} to examine`,
       later.length > 0, String(later.length));
-    for (const { f } of later) {
-      const body = stripComments(readFileSync(path.join(MIGRATIONS, f), "utf8"));
-      assert(`${f} leaves ${p.name} alone`, !touches(body, p.name), f);
+    for (const { f, sql } of later) {
+      assert(`${f} leaves ${p.name} alone`, !touches(stripComments(sql), p.name), f);
     }
+  }
+
+  // QD-6: a timestamped migration is examined, never skipped.
+  for (const { label, extra, allow } of INVALID_MIGRATION_NAMES) {
+    assert(`the migration ledger refuses ${label}`, ledgerRefuses(MIGRATIONS, extra, allowlistWith(allow)));
+  }
+  const drift = allowlistDrift(readdirSync(MIGRATIONS));
+  assert("the migrations directory matches the exact four-digit allowlist", drift.length === 0, drift.join("; "));
+  for (const p of PINNED) {
+    const withFixture = ledger({
+      [TIMESTAMP_FIXTURE]: `create or replace function public.${p.name}(p_a uuid)\nreturns void language sql as $x$ select 1 $x$;`,
+    }).filter((x) => x.n > p.definedAt);
+    assert(`a timestamped migration redefining ${p.name} is ordered after ${p.file} and caught`,
+      withFixture[withFixture.length - 1]?.f === TIMESTAMP_FIXTURE &&
+        withFixture.some(({ sql }) => touches(stripComments(sql), p.name)));
   }
 
   // The scanner itself must be shown to bite, on each verb.

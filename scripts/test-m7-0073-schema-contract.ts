@@ -17,6 +17,9 @@
  */
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import {
+  allowlistDrift, allowlistWith, INVALID_MIGRATION_NAMES, ledgerRefuses, migrationLedger, TIMESTAMP_FIXTURE,
+} from "./lib/migration-names";
 
 let failures = 0;
 function assert(label: string, ok: boolean, detail = ""): void {
@@ -34,6 +37,11 @@ globalThis.fetch = ((..._a: unknown[]) => {
 }) as unknown as typeof fetch;
 
 const MIGRATIONS = path.join(process.cwd(), "supabase", "migrations");
+
+// QD-6: every migration file is parsed by the shared rules (exact four-digit
+// allowlist, validated 14-digit timestamps), so each "no later migration"
+// guard below also examines a timestamped migration.
+const ledger = (extra: Record<string, string> = {}) => migrationLedger(MIGRATIONS, extra);
 const FILE = "0073_m7_retest_protocol_creation.sql";
 const RAW = readFileSync(path.join(MIGRATIONS, FILE), "utf8");
 const SQL = RAW.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*--.*$/gm, "");
@@ -209,16 +217,30 @@ const FN =
   // redefinition.
   const definitionRe = (name: string) =>
     new RegExp(`(create|drop|alter)\\s+(or\\s+replace\\s+)?(function|index)[\\s\\S]{0,120}?\\b${name}\\b`, "i");
-  assert("no later migration redefines it or the indexes",
-    readdirSync(MIGRATIONS)
-      .filter((f) => /^\d{4}_.*\.sql$/.test(f) && Number(f.slice(0, 4)) > 73)
-      .every((f) => {
-        const stripped = readFileSync(path.join(MIGRATIONS, f), "utf8")
-          .replace(/\/\*[\s\S]*?\*\//g, "")
-          .replace(/^\s*--.*$/gm, "");
-        return ["create_retest_protocol", "protocols_one_live_baseline_per_version", "protocols_one_live_retest_per_baseline"]
-          .every((name) => !definitionRe(name).test(stripped));
-      }));
+  const laterClean = (list: ReturnType<typeof ledger>) => list
+    .filter((x) => x.n > 73)
+    .every(({ sql }) => {
+      const stripped = sql
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*--.*$/gm, "");
+      return ["create_retest_protocol", "protocols_one_live_baseline_per_version", "protocols_one_live_retest_per_baseline"]
+        .every((name) => !definitionRe(name).test(stripped));
+    });
+  assert("no later migration redefines it or the indexes", laterClean(ledger()));
+
+  // QD-6: a timestamped migration is examined, never skipped.
+  for (const { label, extra, allow } of INVALID_MIGRATION_NAMES) {
+    assert(`the migration ledger refuses ${label}`, ledgerRefuses(MIGRATIONS, extra, allowlistWith(allow)));
+  }
+  const drift = allowlistDrift(readdirSync(MIGRATIONS));
+  assert("the migrations directory matches the exact four-digit allowlist", drift.length === 0, drift.join("; "));
+  for (const sql of [
+    "create or replace function public.create_retest_protocol(p_a uuid)\nreturns void language sql as $x$ select 1 $x$;",
+    "drop index if exists public.protocols_one_live_retest_per_baseline;",
+  ]) {
+    assert(`a timestamped migration is caught: ${sql.split("(")[0].split(";")[0]}`,
+      !laterClean(ledger({ [TIMESTAMP_FIXTURE]: sql })));
+  }
 }
 
 /* ═══════════════ 7. every detector is proved to bite ═══════════════ */

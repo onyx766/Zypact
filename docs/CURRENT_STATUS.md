@@ -1286,3 +1286,288 @@ Each gate needs its own authorisation, in this order:
    before any customer use of invitations.
 
 Q2′-1b, Q2′-2, PG-9, PR-B, A3, A4 and G4-C remain on HOLD.
+
+## 21. Q2′-2 workspace domains and site diagnostics — local implementation only
+
+- **As of:** 2026-11-03
+- **Base:** `main` at `62cf0c4` (#101, the SV1 harness, merged after #100).
+  Section 20's header predates two merges: #100 merged at `c5250b9` and
+  #101 at `62cf0c4`. Q2′-1 is merged but **not applied to any Supabase
+  project**.
+- **Status:** two local commits on `feat/q2p2-domains-diagnostics`:
+  `e28cf3b` (the implementation) and the remediation commit that answers its
+  independent review (21.5). **Not pushed, no pull request.** The review of
+  `e28cf3b` requested changes; the remediation awaits its own independent
+  review. No SQL from this
+  branch has run against any Supabase project; it has run only in disposable
+  local databases (plain PostgreSQL containers with `--network none`, and the
+  disposable local Supabase stack of SV1).
+- **Authorisation:** Founder code authorisation for the Q2′-2 local
+  implementation only, with decisions Q2-R1 to Q2-R4 (D-043). It authorises no
+  push, pull request, merge, deployment, production SQL, W1 or V1d code, AI
+  call or billing.
+- **Scope:** one migration,
+  `supabase/migrations/20261103173000_q2p2_domains_and_site_diagnostics.sql`
+  (8 closed tables, 16 internal functions; D-043), and its tests. The 11
+  allowlisted paths are exactly: the migration;
+  `scripts/test-q2p2-schema-contract.ts`; `scripts/test-q2p2-scope.ts`;
+  `.github/workflows/q2p2-scope.yml`; `.github/workflows/q2p-schema-contract.yml`;
+  `scripts/sql/level2-q2p2-fixtures.sql`;
+  `scripts/test-snapshot-worker-postgres-level2.sh`;
+  `scripts/test-q2p-supabase-stack-sv1.ts`; `package.json`; this file; and
+  `docs/DECISIONS.md`. Nothing is wired into a route, page, worker or
+  workflow other than the test workflows.
+
+### 21.1 What the migration adds
+
+- **Domain verification:** `workspace_domains` (append-only; one row per
+  workspace and domain; the same domain may be claimed by several workspaces),
+  `workspace_domain_state` (the per-domain serialisation row; a function of
+  the event log: an update may only advance `seq` to an existing event, and
+  the guard derives every other column from that event and the shared
+  transition function `_q2p2_next_status`), `workspace_domain_challenges`
+  (hash only, 48-hour maximum lifetime, issued once, consumed once and only
+  for the success event the state has applied) and
+  `workspace_domain_verification_events` (append-only, gap-free `seq` per
+  domain, exact transition matrix, stale-observation refusals).
+- **Read helper:** `_q2p2_domain_verified(domain)` locks the state `FOR SHARE`
+  and is true only while verified and before `recheck_due_at` (30 days after
+  the observation; fail closed).
+- **Site diagnostics:** `site_diagnostic_runs` (a run may cite only the
+  domain's current verification; workspace-isolated cache; completed runs
+  frozen; re-runs supersede within one workspace and project),
+  `site_diagnostic_pages` (sanitised URLs only, no bodies, at most 10 pages)
+  and `site_diagnostic_findings` (`unknown_reason` exactly when the state is
+  unknown; excerpts only as a complete bundle with hash, offsets and a
+  personal-data screen version; `detail` must match the approved spec of its
+  own check and rule version, and the registry ships empty, so only a null
+  `detail` can be stored until a check's vocabulary is approved (21.6)).
+- **Stored domain form:** lowercase LDH labels of 1 to 63 characters, 4 to
+  253 in all; no `--` in positions 3 and 4 except the `xn--` A-label prefix;
+  the last label alphabetic or an A-label (IDNA TLDs accepted). The A-label's
+  shape is checked, not its Punycode (V1d converts and validates).
+- **Rate limits:** `diagnostic_rate_limit_events` (keyed 64-hex buckets under
+  the purpose label `zypact.diag.rate_limit.v1`, at most 48 hours, no foreign
+  key, no update, delete only once expired) and the cleanup
+  `_q2p2_purge_rate_limit_events()`, the only `SECURITY DEFINER` function.
+- **Closed:** RLS on with no policies; no table, sequence or function
+  privilege for `anon`, `authenticated` or `service_role`.
+
+### 21.2 Commands and local results
+
+On the uncommitted remediation tree that became the remediation commit, macOS
+with Colima. The results at `e28cf3b` are in 21.5.
+
+| Command | Result |
+|---|---|
+| `npm run test:q2p2-schema` (static, with mutation self-tests) | 187/187 (55 mutations, each refused by its detector) |
+| `npm run test:q2p-schema` (Q2′-1, unchanged) | 207/207 |
+| `Q2P2_SCOPE_BASE=62cf0c4 npm run test:q2p2-scope` | PASS, 11 paths; the negative matrix T2–T8 at `e28cf3b` each failed closed (missing base, bad base, an app file, a doc outside the allowlist, a second Q2′-2 migration, an edited existing migration, a PG-9 path); an mtime-only touch is not a change |
+| Level 2, PostgreSQL 16 (pinned digest, `--network none`) | 805 passed, 0 failed (the previous 634 plus 171 QR2 assertions) |
+| Production-order variant, PostgreSQL 17.6, run 1 / run 2 | 605/0 and 605/0 (554 plus the same 51 new QR2 assertions); P0–P5, QR-35 and QR2-35 pass; schema equals CI order (P4) and is identical across runs |
+| SV1, disposable local Supabase stack (CLI 2.111.0), run 1 / run 2 | 172 PASS, 0 FAIL, 0 NOT ESTABLISHED, 12 INFO in each; 14 Q2′-2 functions closed to every API role (SV1-72, SV1-79); the manifest (SV1-90) 183/183; SV1-66 and SV1-67 pass; no non-local fetch |
+| `npm run build:verify` / `npm run typecheck` | pass / pass |
+| Offline regressions (9 M0, 16 QX-03, 21 B1 suites) | exit codes identical to the `e28cf3b` run, and no change from `main` at `62cf0c4` (below) |
+
+- **Production order (D-041), generated variant, not committed:** 0001–0080;
+  0081's content recorded as `20260924023646`; **0083 first** by the
+  reserved-version procedure (`expected_tail` `20260924023646`; the tail stays
+  the alias); Q2′-1 by the named-file procedure (`expected_prev`
+  `20260924023646`); then Q2′-2 by the named-file procedure (`expected_prev`
+  `20261102132000`). Q2′-2 with the wrong predecessor is refused and records
+  nothing; a second apply is refused; the ledger statements equal the file
+  bytes; 84 rows. QR2-35 proves every function, column, constraint, trigger
+  and table grant that existed before Q2′-2, Q2′-1's included, is unchanged.
+  The full schema equals CI's lexical order. (Section 20's Q2′-1 evidence used
+  the older fallback order, 0083 after Q2′-1.)
+- **Pre-existing failures, identical on clean `main` at `62cf0c4`:**
+  `snapshot-send-idempotency` (6/24), `pg9-harness-offline` (200/221; fails
+  closed on timestamped migrations by design, D-041), `m7-0071-schema` (2) and
+  `m7-0073-schema` (1) ("no later migration" guards that see 0077). Two runtime
+  contracts SKIP without their opt-in. **Branch-dependent:** `bqi-wording`
+  P-04 passes on `main` but fails on any non-BQI branch (it allows only Q1's
+  paths against `origin/main`; not in CI), as it did on the Q2′-1 branch.
+- **SV1 extension:** Phase A applies Q2′-2 by the named-file procedure after
+  Q2′-1 (SV1-68, a second apply refused SV1-69). New checks, in both phases
+  and both key models where they use the API: the Q2′-2 catalog (SV1-70 to
+  SV1-75), REST reads and writes (SV1-76, SV1-77), direct GraphQL with the
+  existing positive control (SV1-78), RPC (SV1-79), OpenAPI for all three
+  roles (SV1-80) and the rate-limit purge on the real stack (SV1-81). Every
+  existing assertion is kept. **SV1-90** is a fail-closed manifest: a
+  mandatory assertion that is missing, an unlisted or duplicated one, or a
+  mandatory one recorded as INFO fails the run. SV1-90a proves the check
+  rejects each of those mutations before any stack starts. This closes H2.
+- **One development failure, fixed in the harness:** the first SV1 run failed
+  SV1-77 for `diagnostic_rate_limit_events` (POST and PATCH answered
+  `428C9`). The write probe used the table's first column, an identity
+  column, which PostgreSQL refuses before checking privileges, so the probe
+  never reached the privilege check. The probe now uses the first column
+  that is neither identity nor generated; for every Q2′-1 table that is the
+  same column as before. Nothing was written, and all reads, GraphQL and RPC
+  were refused in that run. The two runs above are after the fix.
+- `test:q2p1-scope` fails on this diff, as designed; its workflow runs only
+  when the Q2′-1 migration is in the diff, so CI does not run it here.
+
+### 21.3 Known limitations
+
+1. **No writer path.** No RPC issues challenges, records observations, starts
+   runs or writes rate-limit rows. W1 and V1d must add them, and must call
+   `_q2p2_domain_verified` (or lock the state `FOR SHARE`) at their decision
+   instant.
+2. **No observation.** Nothing fetches DNS, files or pages. The schema
+   constrains what may be stored, not whether an observation is true.
+3. **Purge not scheduled.** The cleanup exists and is tested; scheduling it is
+   a gate before customer use (Q2-R4).
+4. **Key reuse needs review.** Q2-R2 reuse of the IP hash secret needs a legal
+   and security review (with D5), and environment isolation is a deployment
+   duty the schema cannot enforce. `snapshot_requests.request_ip_hash` (0018)
+   remains a permanent keyed IP hash, out of Q2′-2 scope.
+5. **Clock trust.** Freshness and expiry use the database clock; an observer
+   that reports `checked_at` is trusted within the 10-minute window.
+6. **A re-check needs a new challenge.** The standing-proof re-check that
+   Revision 2 allowed is not implemented: every `verification_succeeded`
+   must cite the domain's current, unconsumed challenge. This is stricter,
+   not weaker.
+7. **SV1 limits remain:** H1 (the network guard covers only Node `fetch`).
+   H2 (an assertion removed from both phases) is closed by the SV1-90
+   manifest. The manifest requires both key models; a stack without the new
+   key model fails SV1-90 rather than passing with fewer checks.
+8. **Not run in CI:** SV1 is local and opt-in. The production-order variant
+   is generated from the harness and not committed.
+
+### 21.4 Remaining gates before production
+
+Each needs its own authorisation: independent review of this commit; push and
+a pull request (CI will apply the migration to disposable PostgreSQL in the
+Level 2 job, so the Founder is notified in advance); merge; the read-only
+production preflight; 0083, then Q2′-1, then Q2′-2 applied to production by
+the D-041 procedures; S1 and G1 before any customer-facing W1 or V1d.
+
+Q2′-1b, Q2′-2 production, PG-9, PR-B, A3, A4, G4-C, 0083 production, every
+production apply and any AI marketing analysis remain on HOLD.
+
+### 21.5 Independent review of `e28cf3b` and its remediation
+
+- **Verdict at `e28cf3b`: REQUEST CHANGES.** The checksums, the 11-path scope,
+  the test logs and the pre-existing regression baseline were confirmed.
+  Findings:
+  1. The state and challenge guards relied on `pg_trigger_depth() >= 2`.
+     That proves only that some trigger is running, not that the
+     verification-event trigger made the write.
+  2. `site_diagnostic_findings.detail` accepted arbitrary JSON up to 4 KB,
+     which did not enforce the no-page-body, no-sensitive-data boundary.
+  3. The stated domain form ("IDNA A-labels allowed") did not match the
+     regex, which refused A-label TLDs such as `xn--p1ai`.
+- **Corrections** (same 11 paths; D-043):
+  1. The state is a function of the event log. An update may change only
+     `seq`, to `old.seq + 1`, and only when that event exists for the domain
+     and workspace; the guard derives every other column from the event and
+     the shared transition function. The event trigger validates BEFORE
+     INSERT under the state lock and advances the state AFTER INSERT, writing
+     only `seq`. Consumption is allowed only for the success event the state
+     has applied. Three new functions: `_q2p2_next_status`,
+     `_q2p2_advance_domain_state` and `_q2p2_finding_detail_is_safe` (14 in
+     all).
+  2. `detail` must pass `_q2p2_finding_detail_is_safe` as well as the size
+     cap.
+  3. The regex and the stated form now agree, and both are in the migration.
+- **New evidence:**
+  - **QR2-18**, an unrelated trigger on a fixture table whose writes reach
+    the guards at depth 2. It cannot advance the state without an event,
+    forge a verified state, consume the current challenge, create a state
+    row for a missing domain, or delete the state. With the guards exactly
+    as reviewed at `e28cf3b`, the same trigger forges a verified state and
+    consumes the challenge. The real guards are restored and the domain
+    still verifies through its own event.
+  - **QR2-19**: 21 `detail` cases (one accepted, 20 refused: free text,
+    email, URL, phone numbers as text and as a number, HTML, case, length,
+    nesting, null, key form, decimals, top-level shape, empty, key and array
+    counts). A schema-valid detail over 4 KB is refused by the size cap.
+  - **QR2-20**: 15 domain forms, and an IDNA-TLD domain stored.
+  - **QR2-21**: every stored state equals the replay of its own event log.
+  - The static contract gained 40 checks, including 13 new mutation
+    self-tests.
+- **Changed expectation:** in QR2-05's weakened case (the state read without
+  `FOR UPDATE`), the stale writer is now stopped by the unique
+  `(domain_id, seq)` index (23505) rather than by the old state guard
+  (55000). The point of that case is unchanged: without the lock the refusal
+  is not a retryable 40001.
+- **Two defects in my own tests, found and fixed during the remediation:**
+  - **The static contract's comment stripper** removed `--` to end of line
+    even inside string literals, which truncated the `xn--` regex. It now
+    keeps `--` inside single-quoted strings.
+  - **The first remediation Level 2 run** reported 772/0. Its new case tables
+    were driven by `while read … <<heredoc`, and the `docker exec -i` inside
+    each assertion consumed the rest of the heredoc, so only the first case
+    of QR2-19 and of QR2-20 ran. The tables are now arrays, and each has an
+    assertion that all of its cases ran. The 805/0 run is after that fix.
+    The one older `while read` loop (QR-40) calls no `docker exec` in its
+    body, and all 9 of its vectors appear in the log.
+- **Residuals:**
+  - The generic `detail` shape left one lowercase word as a possible value.
+    This became the merge blocker and is answered by 21.6.
+  - Owner-level trigger bypass (disabling triggers, `session_replication_role
+    = replica`) remains outside what any table guard can stop; no API role
+    can do it.
+
+### 21.6 Merge blocker: per-check `detail` validation (local correction)
+
+- **Blocker (Founder, draft PR #102 stage):** diagnostic `detail` fields must
+  enforce an approved per-check schema that prevents sensitive values from
+  being persisted. That needs a separate correction and an independent review
+  before merge.
+- **Base:** `84f26ff`, the head of draft PR #102. The correction is one local
+  commit on top. It is not pushed.
+- **Correction** (same 11 paths; D-043):
+  - `_q2p2_finding_detail_is_safe` (a generic shape) is replaced by three
+    functions, 16 in all:
+    - `_q2p2_finding_detail_spec(check_id, rule_version)`, the registry;
+    - `_q2p2_detail_matches_spec(spec, detail)`;
+    - `_q2p2_finding_detail_is_valid(check_id, rule_version, detail)`.
+  - The table constraint `site_diagnostic_findings_detail_per_check` applies
+    them with the 4 KB cap.
+- **Fail-closed default:** the registry returns no spec for any check, so
+  every non-null `detail` is refused. No field was invented. The check
+  vocabulary is not yet defined; it belongs to W1's check catalogue.
+- **Schema decision needed:** approve, per check and rule version, its fields,
+  types, token lists and each count's `max` (at most 10 000). Each approval is
+  a later migration that replaces the registry, and it goes through
+  independent review.
+- **What a spec can allow:** booleans, bounded integer counts, ratios 0 to 1,
+  and tokens from a field's own list. It cannot allow free text, free
+  numbers, arbitrary identifiers, URLs, addresses, nulls or nesting. A
+  malformed spec matches nothing.
+- **Development defect, fixed:** the first Level 2 run aborted before any
+  QR2 case. In the new fixture `level2_q2p2.with_spec`, the inner text
+  `$b$$f$` contained `$$`, which closed the fixture's own `$$` body. The
+  fixture body now uses `$ws$`. The aborted log is kept in the evidence.
+- **Tests:**
+  - **QR2-19:** the registry is empty for every probed check and version; a
+    null `detail` is stored, and a well-formed one is refused.
+  - With a fixture spec (installed for one rolled-back statement):
+    - a matching detail and a subset are accepted;
+    - the same detail under another rule version or another check is
+      refused;
+    - 20 refused cases, among them a 10-digit and a 9-digit number as
+      counts, an arbitrary identifier, and email, URL and free text;
+    - 5 malformed specs match nothing;
+    - the empty registry is back afterwards.
+  - **QR2-13:** a spec-valid detail over 4 KB is refused by the size cap.
+  - **Static contract:** QS2-21 is rewritten as 9 detectors with 11
+    mutation self-tests.
+  - **SV1:** expects 16 closed functions.
+- **Residual:**
+  - A count is still a number up to its field's `max`. An approved spec must
+    not declare a count where a 1- to 5-digit value could identify a
+    person; that is part of each spec's review.
+  - Owner-level trigger bypass remains outside any table guard.
+
+| Command | Result |
+|---|---|
+| `npm run test:q2p2-schema` / `npm run test:q2p-schema` | 206/206 (62 mutation self-tests) / 207/207 |
+| `Q2P2_SCOPE_BASE=62cf0c4 npm run test:q2p2-scope` | PASS, 11 paths |
+| Level 2, PostgreSQL 16 | 818 passed, 0 failed (QR2-19 now 35 assertions, replacing 22) |
+| Production-order variant, PostgreSQL 17.6, run 1 / run 2 | 618/0 and 618/0; P0–P5, QR-35, QR2-35 and P4 pass; schemas identical across runs |
+| SV1, disposable local Supabase stack, run 1 / run 2 | 172 PASS, 0 FAIL, 0 NOT ESTABLISHED, 12 INFO in each; 16 functions closed; manifest 183/183 |
+| `npm run build:verify` / `npm run typecheck` | pass / pass |
+| Offline regressions (9 M0, 16 QX-03, 21 B1 suites) | exit codes identical to the `84f26ff` run (only the pre-existing failures) |

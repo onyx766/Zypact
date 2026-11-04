@@ -2661,6 +2661,408 @@ assert "QR-39. new rows appear only where the tests inserted fixtures or F4 crea
 assert "QR-39. no protocol, paid job, attempt or external call was created" \
   "$(q2p_sql "select (select count(*) from public.protocols) - ${Q2P_PROTOCOLS_BEFORE} || '/' || (select count(*) from public.protocol_execution_jobs) - ${Q2P_JOBS_BEFORE};")" "0/0"
 
+# ── Q2′-2 — workspace domains and site diagnostics (QR2 cases) ───────────
+#
+# Runs after QR-39, so the Q2′-1 baseline is unaffected; QR2-17 keeps its own
+# baseline of every table that is not a Q2′-2 table. Fixtures are in
+# scripts/sql/level2-q2p2-fixtures.sql (never shipped). Weakened copies of the
+# Q2′-2 trigger functions are swapped in only to prove what a guard prevents,
+# and the real function is always restored.
+
+echo
+echo "── Q2′-2 — workspace domains and site diagnostics ───────"
+
+psql_stdin < scripts/sql/level2-q2p2-fixtures.sql
+Q2P2_BASELINE="$(q2p_sql "select level2_q2p2.capture_baseline();")"
+Q2P2_TABLES="workspace_domains workspace_domain_state workspace_domain_challenges workspace_domain_verification_events site_diagnostic_runs site_diagnostic_pages site_diagnostic_findings diagnostic_rate_limit_events"
+q2p2() { q2p_sql "select $1;"; }                     # one fixture expression
+q2p2_try() { q2p_sql "select level2_q2p2.attempt(\$l2\$$1\$l2\$);"; }   # rolled back; 'OK' or 'SQLSTATE:message'
+q2p2_code() { q2p2_try "$1" | cut -d: -f1; }
+
+# QR2-01 — closed tables and functions
+assert "QR2-01. no API role holds any privilege on any Q2′-2 table" \
+  "$(q2p_sql "select count(*) from unnest(array['anon','authenticated','service_role']) r, unnest(level2_q2p2.q2p2_tables()) t, unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) p where has_table_privilege(r, 'public.' || t, p);")" "0"
+assert "QR2-01. RLS on every Q2′-2 table, no policy" \
+  "$(q2p_sql "select count(*) filter (where c.relrowsecurity) || '/' || (select count(*) from pg_policy p where p.polrelid = any(select ('public.' || t)::regclass from unnest(level2_q2p2.q2p2_tables()) t)) from pg_class c where c.oid = any(select ('public.' || t)::regclass from unnest(level2_q2p2.q2p2_tables()) t);")" "8/0"
+assert "QR2-01. no API role may execute any Q2′-2 function" \
+  "$(q2p_sql "select count(*) from pg_proc p, unnest(array['anon','authenticated','service_role']) r where p.pronamespace = 'public'::regnamespace and p.proname like '\\_q2p2\\_%' and has_function_privilege(r, p.oid, 'execute');")" "0"
+for t in ${Q2P2_TABLES}; do
+  for r in anon authenticated service_role; do
+    assert "QR2-01. ${r} cannot read ${t}" "$(sqlstate_as_role "${r}" "perform 1 from public.${t} limit 1;")" "42501"
+  done
+done
+
+# QR2-02 — the same domain in two workspaces
+DA="$(q2p2 "level2_q2p2.domain('${WS1}', 'shared.example.com')")"
+DB="$(q2p2 "level2_q2p2.domain('${WS2}', 'shared.example.com')")"
+assert "QR2-02. the same domain is claimed independently by two workspaces" \
+  "$(q2p_sql "select count(*) || '/' || count(distinct workspace_id) from public.workspace_domains where normalized_domain = 'shared.example.com';")" "2/2"
+assert "QR2-02. a second claim within one workspace is refused" \
+  "$(q2p2_code "select level2_q2p2.domain('${WS1}', 'shared.example.com')")" "23505"
+q2p2 "level2_q2p2.ev('${DA}', 'challenge_issued', level2_q2p2.challenge('${DA}'))" >/dev/null
+assert "QR2-02. an event on one workspace's domain leaves the other's state untouched" \
+  "$(q2p2 "level2_q2p2.status('${DA}') || ' ' || level2_q2p2.status('${DB}')")" "pending/1 none/0"
+assert "QR2-02. a domain row is append-only" "$(q2p_state "update public.workspace_domains set normalized_domain = 'x.example.com' where id = '${DA}';")" "55000"
+
+# QR2-03 — the exact transition matrix (each attempt rolled back)
+assert "QR2-03. from none" "$(q2p2 "level2_q2p2.matrix_row('${WS1}', 'm-none', 'none')")" \
+  "challenge_issued=OK verification_succeeded=q2p2_invalid_transition verification_failed=q2p2_invalid_transition challenge_expired=q2p2_invalid_transition verification_lost=q2p2_invalid_transition revoked=q2p2_invalid_transition"
+assert "QR2-03. from pending (expiry allowed by the matrix, refused until the challenge expires)" "$(q2p2 "level2_q2p2.matrix_row('${WS1}', 'm-pend', 'pending')")" \
+  "challenge_issued=OK verification_succeeded=OK verification_failed=OK challenge_expired=q2p2_challenge_not_expired verification_lost=q2p2_invalid_transition revoked=OK"
+assert "QR2-03. from verified (re-check events need a current challenge)" "$(q2p2 "level2_q2p2.matrix_row('${WS1}', 'm-ver', 'verified')")" \
+  "challenge_issued=OK verification_succeeded=q2p2_challenge_not_current verification_failed=q2p2_challenge_not_current challenge_expired=q2p2_challenge_not_current verification_lost=OK revoked=OK"
+assert "QR2-03. from unverified" "$(q2p2 "level2_q2p2.matrix_row('${WS1}', 'm-unv', 'unverified')")" \
+  "challenge_issued=OK verification_succeeded=q2p2_invalid_transition verification_failed=q2p2_invalid_transition challenge_expired=q2p2_invalid_transition verification_lost=q2p2_invalid_transition revoked=OK"
+assert "QR2-03. from revoked" "$(q2p2 "level2_q2p2.matrix_row('${WS1}', 'm-rev', 'revoked')")" \
+  "challenge_issued=OK verification_succeeded=q2p2_invalid_transition verification_failed=q2p2_invalid_transition challenge_expired=q2p2_invalid_transition verification_lost=q2p2_invalid_transition revoked=q2p2_invalid_transition"
+DRV="$(q2p2 "level2_q2p2.reach('${WS1}', 'recheck.example.com', 'verified')")"
+CRV="$(q2p2 "level2_q2p2.challenge('${DRV}')")"
+assert "QR2-03. a verified domain re-checks with a new challenge and stays verified" \
+  "$(q2p2 "level2_q2p2.ev('${DRV}', 'challenge_issued', '${CRV}') || ' ' || level2_q2p2.ev('${DRV}', 'verification_succeeded', '${CRV}') || ' ' || level2_q2p2.status('${DRV}')")" "OK OK verified/4"
+
+# QR2-04 — deterministic, gap-free sequence
+DS="$(q2p2 "level2_q2p2.domain('${WS1}', 'seq.example.com')")"
+CS="$(q2p2 "level2_q2p2.challenge('${DS}')")"
+assert "QR2-04. a gap in the sequence is refused as stale" "$(q2p2 "level2_q2p2.ev('${DS}', 'challenge_issued', '${CS}', null, 2, false)")" "40001:q2p2_stale_event_sequence"
+q2p2 "level2_q2p2.ev('${DS}', 'challenge_issued', '${CS}')" >/dev/null
+assert "QR2-04. a repeated sequence number is refused as stale" "$(q2p2 "level2_q2p2.ev('${DS}', 'revoked', null, null, 1, false)")" "40001:q2p2_stale_event_sequence"
+q2p2 "level2_q2p2.ev('${DS}', 'revoked')" >/dev/null
+assert "QR2-04. events are numbered 1..n with no gap, and the state matches the last" \
+  "$(q2p_sql "select string_agg(seq::text, ',' order by seq) || ' ' || level2_q2p2.status('${DS}') from public.workspace_domain_verification_events where domain_id = '${DS}';")" "1,2 revoked/2"
+assert "QR2-04. an event row is append-only" \
+  "$(q2p_state "update public.workspace_domain_verification_events set event = 'revoked' where domain_id = '${DS}';")" "55000"
+
+# QR2-05 — concurrent writers of the same next event
+qr2_race() { # <isolation> → "second waited|second outcome|events at that seq|final seq"
+  local d c sql waited
+  d="$(q2p2 "level2_q2p2.domain('${WS1}', 'race-$(tr -dc a-z <<<"$1")-$RANDOM.example.com')")"
+  c="$(q2p2 "level2_q2p2.challenge('${d}')")"
+  sql="$(q2p2 "level2_q2p2.ev_sql('${d}', 'challenge_issued', '${c}')")"
+  # The second writer issues another challenge: a valid transition from the
+  # state it read, with the same next sequence number (1).
+  local sql2; sql2="$(q2p2 "level2_q2p2.ev_sql('${d}', 'challenge_issued', level2_q2p2.challenge('${d}'))")"
+  q2p_open S1 7; q2p_open S2 8
+  q2p_send 7 "begin; ${sql};"
+  q2p_idle_in_tx S1 || echo "barrier S1 failed" >&2
+  q2p_send 8 "begin isolation level $1; ${sql2};"
+  if q2p_lock_wait S2; then waited=waited; else waited=not_waited; fi
+  q2p_send 7 "commit;"
+  q2p_settled S2 || true
+  q2p_send 8 "rollback;"
+  q2p_close S1 7; q2p_close S2 8
+  echo "${waited}|$(q2p_out S2 | grep -oE 'ERROR:  [0-9A-Z]{5}' | tail -n1)|$(q2p_sql "select count(*) from public.workspace_domain_verification_events where domain_id = '${d}' and seq = 1;")|$(q2p2 "level2_q2p2.status('${d}')")"
+}
+assert "QR2-05. READ COMMITTED: the second writer waits on the state lock, then is refused as stale (40001)" "$(qr2_race 'read committed')" "waited|ERROR:  40001|1|pending/1"
+assert "QR2-05. REPEATABLE READ: waits, then 40001" "$(qr2_race 'repeatable read')" "waited|ERROR:  40001|1|pending/1"
+assert "QR2-05. SERIALIZABLE: waits, then 40001" "$(qr2_race 'serializable')" "waited|ERROR:  40001|1|pending/1"
+q2p2 "level2_q2p2.use_apply('level2_q2p2.weak_apply_no_lock')" >/dev/null
+assert "QR2-05 (weakened, state read without FOR UPDATE). READ COMMITTED: the stale writer passes the transition checks and is stopped only by the unique (domain_id, seq) backstop (23505), not as a retryable 40001" \
+  "$(qr2_race 'read committed' | cut -d'|' -f2,3)" "ERROR:  23505|1"
+q2p2 "level2_q2p2.use_apply('public._q2p2_apply_verification_event')" >/dev/null
+
+# QR2-06 — stale-verification protection
+DV="$(q2p2 "level2_q2p2.domain('${WS1}', 'stale.example.com')")"
+C1="$(q2p2 "level2_q2p2.challenge('${DV}')")"
+q2p2 "level2_q2p2.ev('${DV}', 'challenge_issued', '${C1}')" >/dev/null
+DO1="$(q2p2 "level2_q2p2.domain('${WS1}', 'stale-old.example.com')")"
+CO1="$(q2p_sql "set session_replication_role = replica; insert into public.workspace_domain_challenges (domain_id, workspace_id, method, challenge_sha256, issued_at, expires_at, actor_type, actor_operator_id) values ('${DO1}', '${WS1}', 'dns_txt', repeat('6', 64), clock_timestamp() - interval '30 minutes', clock_timestamp() + interval '1 hour', 'founder', '${Q2P_OP}') returning id;")"
+q2p2 "level2_q2p2.ev('${DO1}', 'challenge_issued', '${CO1}')" >/dev/null
+assert "QR2-06. an observation inside the challenge window but older than 10 minutes is refused" \
+  "$(q2p2 "level2_q2p2.ev('${DO1}', 'verification_succeeded', '${CO1}', clock_timestamp() - interval '15 minutes', null, false)")" "22023:q2p2_stale_observation"
+assert "QR2-06. a loss observation older than 10 minutes is refused" \
+  "$(q2p2 "level2_q2p2.ev('${DRV}', 'verification_lost', null, clock_timestamp() - interval '15 minutes', null, false)")" "22023:q2p2_stale_observation"
+assert "QR2-06. an observation from before the challenge was issued is refused" \
+  "$(q2p2 "level2_q2p2.ev('${DV}', 'verification_succeeded', '${C1}', clock_timestamp() - interval '5 minutes', null, false)")" "22023:q2p2_observation_outside_challenge_window"
+assert "QR2-06. an observation in the future is refused" \
+  "$(q2p2 "level2_q2p2.ev('${DV}', 'verification_succeeded', '${C1}', clock_timestamp() + interval '1 minute', null, false)")" "22023:q2p2_stale_observation"
+C2="$(q2p2 "level2_q2p2.challenge('${DV}')")"
+q2p2 "level2_q2p2.ev('${DV}', 'challenge_issued', '${C2}')" >/dev/null
+assert "QR2-06. a superseded challenge cannot verify" \
+  "$(q2p2 "level2_q2p2.ev('${DV}', 'verification_succeeded', '${C1}', null, null, false)")" "22023:q2p2_challenge_not_current"
+assert "QR2-06. the current challenge verifies, and is consumed" \
+  "$(q2p2 "level2_q2p2.ev('${DV}', 'verification_succeeded', '${C2}')") $(q2p_sql "select (consumed_at is not null)::text from public.workspace_domain_challenges where id = '${C2}';")" "OK true"
+assert "QR2-06. a consumed challenge cannot be issued again (one-time use)" \
+  "$(q2p2 "level2_q2p2.ev('${DV}', 'challenge_issued', '${C2}', null, null, false)" | cut -d: -f1)" "22023"
+assert "QR2-06. a challenge is consumed only from inside the event trigger" \
+  "$(q2p_state "update public.workspace_domain_challenges set consumed_at = now() where id = '${C1}';")" "55000"
+DW="$(q2p2 "level2_q2p2.domain('${WS1}', 'stale-weak.example.com')")"
+W1="$(q2p2 "level2_q2p2.challenge('${DW}')")"
+q2p2 "level2_q2p2.ev('${DW}', 'challenge_issued', '${W1}')" >/dev/null
+q2p2 "level2_q2p2.use_apply('level2_q2p2.weak_apply_no_stale_check')" >/dev/null
+assert "QR2-06 (weakened, no freshness check). a future-dated observation verifies" \
+  "$(q2p2 "level2_q2p2.ev('${DW}', 'verification_succeeded', '${W1}', clock_timestamp() + interval '1 minute', null, false)")" "OK"
+q2p2 "level2_q2p2.use_apply('level2_q2p2.weak_apply_no_current_check')" >/dev/null
+W2="$(q2p2 "level2_q2p2.challenge('${DW}')")"
+q2p2 "level2_q2p2.ev('${DW}', 'challenge_issued', '${W2}')" >/dev/null
+assert "QR2-06 (weakened, no current-challenge check). a superseded challenge verifies" \
+  "$(q2p2 "level2_q2p2.ev('${DW}', 'verification_succeeded', '${W1}', null, null, false)")" "OK"
+q2p2 "level2_q2p2.use_apply('public._q2p2_apply_verification_event')" >/dev/null
+
+# QR2-07 — challenge expiry (Q2-R3, 48 hours)
+assert "QR2-07. a challenge valid for more than 48 hours is refused" \
+  "$(q2p2_code "select level2_q2p2.challenge('${DV}', interval '49 hours')")" "23514"
+assert "QR2-07. issued_at is the database clock, not the caller's" \
+  "$(q2p_sql "insert into public.workspace_domain_challenges (domain_id, workspace_id, method, challenge_sha256, issued_at, expires_at, actor_type, actor_operator_id) values ('${DV}', '${WS1}', 'dns_txt', repeat('7', 64), now() - interval '3 days', clock_timestamp() + interval '47 hours', 'founder', '${Q2P_OP}') returning (issued_at > now() - interval '1 minute')::text;")" "true"
+DX="$(q2p2 "level2_q2p2.domain('${WS1}', 'expiry.example.com')")"
+CX="$(q2p2 "level2_q2p2.challenge('${DX}', interval '2 seconds')")"
+q2p2 "level2_q2p2.ev('${DX}', 'challenge_issued', '${CX}')" >/dev/null
+assert "QR2-07. expiry cannot be recorded before the challenge expires" \
+  "$(q2p2 "level2_q2p2.ev('${DX}', 'challenge_expired', '${CX}', null, null, false)")" "22023:q2p2_challenge_not_expired"
+sleep 3
+assert "QR2-07. an observation after expiry cannot verify" \
+  "$(q2p2 "level2_q2p2.ev('${DX}', 'verification_succeeded', '${CX}', null, null, false)")" "22023:q2p2_observation_outside_challenge_window"
+assert "QR2-07. after expiry, the expiry is recorded and the domain is unverified" \
+  "$(q2p2 "level2_q2p2.ev('${DX}', 'challenge_expired', '${CX}') || ' ' || level2_q2p2.status('${DX}')")" "OK unverified/2"
+
+# QR2-08 — a revocation attempted while a verification is in flight (paused after the lock)
+DR="$(q2p2 "level2_q2p2.domain('${WS1}', 'inflight.example.com')")"
+CR="$(q2p2 "level2_q2p2.challenge('${DR}')")"
+q2p2 "level2_q2p2.ev('${DR}', 'challenge_issued', '${CR}')" >/dev/null
+SUCC_SQL="$(q2p2 "level2_q2p2.ev_sql('${DR}', 'verification_succeeded', '${CR}')")"
+REV2_SQL="$(q2p2 "level2_q2p2.ev_sql('${DR}', 'revoked')")"
+q2p_open S1 7; q2p_open S2 8
+q2p_send 7 "set l2q2.pause = 'on'; ${SUCC_SQL};"
+q2p_wait "select exists(select 1 from pg_stat_activity where application_name='q2p_S1' and wait_event='PgSleep');" || echo "barrier S1 failed" >&2
+q2p_send 8 "${REV2_SQL};"
+if q2p_lock_wait S2; then QR208_W=waited; else QR208_W=not_waited; fi
+q2p_settled S1 || true; q2p_settled S2 || true
+q2p_close S1 7; q2p_close S2 8
+QR208_B="$(q2p_out S2 | grep -oE 'ERROR:  [0-9A-Z]{5}' | tail -n1)"
+QR208_RETRY="$(q2p2 "level2_q2p2.ev('${DR}', 'revoked')")"
+assert "QR2-08. the revocation waits on the in-flight verification, is refused as stale, and succeeds on retry; the domain ends revoked" \
+  "${QR208_W}|${QR208_B}|${QR208_RETRY}|$(q2p2 "level2_q2p2.status('${DR}')")|$(q2p_sql "select string_agg(event, ',' order by seq) from public.workspace_domain_verification_events where domain_id = '${DR}';")" \
+  "waited|ERROR:  40001|OK|revoked/3|challenge_issued,verification_succeeded,revoked"
+
+# QR2-09 — the decision helper reads the current state
+assert "QR2-09. verified and within the re-check window: verified" "$(q2p2 "public._q2p2_domain_verified('${DRV}')")" "t"
+assert "QR2-09. past recheck_due_at (forced, rolled back): not verified, and a run cannot cite it" \
+  "$(q2p2 "level2_q2p2.overdue_probe('${DRV}', '${WS1}', '${PROJ1}', 'recheck.example.com')")" "false|22023:q2p2_verification_not_current"
+assert "QR2-09. the 30-day re-check is set from the observation (Q2-R1)" \
+  "$(q2p_sql "select (s.recheck_due_at = e.checked_at + interval '30 days')::text from public.workspace_domain_state s join public.workspace_domain_verification_events e on e.id = s.verified_event_id where s.domain_id = '${DRV}';")" "true"
+assert "QR2-09. a revoked or never-verified domain is not verified" \
+  "$(q2p2 "public._q2p2_domain_verified('${DR}')")/$(q2p2 "public._q2p2_domain_verified('${DS}')")" "f/f"
+
+# QR2-10 — the state row is written only by its triggers
+assert "QR2-10. a direct state update is refused" "$(q2p_state "update public.workspace_domain_state set status = 'verified' where domain_id = '${DA}';")" "55000"
+assert "QR2-10. a direct state delete is refused" "$(q2p_state "delete from public.workspace_domain_state where domain_id = '${DA}';")" "55000"
+assert "QR2-10. a direct state insert is refused" "$(q2p_state "insert into public.workspace_domain_state (domain_id, workspace_id) values (gen_random_uuid(), '${WS1}');")" "55000"
+
+# QR2-11 — sanitised URLs (Q2-D3)
+for u in "https://x.example.com/a?b=1" "https://x.example.com/a#frag" "https://user@x.example.com/" "https://x.example.com/u@x" "https://X.example.com/" "ftp://x.example.com/" "https://x.example.com/$(printf 'a%.0s' $(seq 1 2050))"; do
+  assert "QR2-11. a stored URL with a query, fragment, userinfo, '@', uppercase host, other scheme or over 2048 characters is refused (${u:0:40})" \
+    "$(q2p2_code "insert into public.site_diagnostic_runs (workspace_id, project_id, normalized_domain, start_url, rule_set_version, crawler_version, user_agent, page_cap, cache_scope_workspace_id, actor_type, actor_operator_id) values ('${WS1}', '${PROJ1}', 'x.example.com', '${u}', 'w', 'c', 'ua', 1, '${WS1}', 'founder', '${Q2P_OP}')")" "23514"
+done
+
+# QR2-12 — pages
+RUN1="$(q2p2 "level2_q2p2.run('${WS1}', '${PROJ1}', 'site.example.com', null, null, 2)")"
+assert "QR2-12. a page within the cap is accepted" "$(q2p_sql "select level2_q2p2.attempt(level2_q2p2.page_sql('${RUN1}', 0, 'https://site.example.com/'), true);")" "OK"
+assert "QR2-12. a page beyond the run's own cap is refused" "$(q2p_sql "select level2_q2p2.attempt(level2_q2p2.page_sql('${RUN1}', 2, 'https://site.example.com/b'));")" "22023:q2p2_page_cap_exceeded"
+assert "QR2-12. a page index outside 0..9 is refused (the trigger's cap check fires before the CHECK)" "$(q2p_sql "select split_part(level2_q2p2.attempt(level2_q2p2.page_sql('${RUN1}', 10, 'https://site.example.com/c')), ':', 1);")" "22023"
+assert "QR2-12. a fetched body without its hash is refused" "$(q2p_sql "select split_part(level2_q2p2.attempt(level2_q2p2.page_sql('${RUN1}', 1, 'https://site.example.com/d', 10, null)), ':', 1);")" "23514"
+assert "QR2-12. the same URL twice in one run is refused" "$(q2p_sql "select split_part(level2_q2p2.attempt(level2_q2p2.page_sql('${RUN1}', 1, 'https://site.example.com/')), ':', 1);")" "23505"
+PG1="$(q2p_sql "select id from public.site_diagnostic_pages where run_id = '${RUN1}' and page_index = 0;")"
+
+# QR2-13 — findings
+qf() { # <columns> <values> → SQLSTATE or OK, rolled back
+  q2p2_code "insert into public.site_diagnostic_findings (run_id, workspace_id, project_id, check_id, rule_version, $1) values ('${RUN1}', '${WS1}', '${PROJ1}', 'html.title', 'r1', $2)"
+}
+assert "QR2-13. unknown without a reason is refused" "$(qf "state" "'unknown'")" "23514"
+assert "QR2-13. a reason on a non-unknown state is refused" "$(qf "state, unknown_reason" "'pass', 'timeout'")" "23514"
+assert "QR2-13. a reason outside the D-040 list is refused" "$(qf "state, unknown_reason" "'unknown', 'other'")" "23514"
+assert "QR2-13. unknown with a listed reason is accepted" "$(qf "state, unknown_reason" "'unknown', 'robots_unavailable'")" "OK"
+assert "QR2-13. an excerpt without its hash is refused by the hash check" "$(qf "state, page_id, excerpt" "'info', '${PG1}', 'Acme'")" "22023"
+assert "QR2-13. an excerpt with its hash but without offsets or a personal-data screen is refused" "$(qf "state, page_id, excerpt, excerpt_body_sha256" "'info', '${PG1}', 'Acme', repeat('c', 64)")" "23514"
+assert "QR2-13. an excerpt over 300 characters is refused" "$(qf "state, page_id, excerpt, excerpt_start, excerpt_end, excerpt_body_sha256, pii_screen_version" "'info', '${PG1}', repeat('a', 301), 0, 301, repeat('c', 64), 'pii.v1'")" "23514"
+assert "QR2-13. an excerpt whose hash is not its page's is refused" "$(qf "state, page_id, excerpt, excerpt_start, excerpt_end, excerpt_body_sha256, pii_screen_version" "'info', '${PG1}', 'Acme', 0, 4, repeat('d', 64), 'pii.v1'")" "22023"
+assert "QR2-13. a complete excerpt bundle is accepted" "$(qf "state, page_id, excerpt, excerpt_start, excerpt_end, excerpt_body_sha256, pii_screen_version" "'info', '${PG1}', 'Acme', 0, 4, repeat('c', 64), 'pii.v1'")" "OK"
+RUN_OTHER="$(q2p2 "level2_q2p2.run('${WS1}', '${PROJ1}', 'site.example.com')")"
+assert "QR2-13. a finding cannot cite a page of another run" \
+  "$(q2p2_code "insert into public.site_diagnostic_findings (run_id, workspace_id, project_id, page_id, check_id, state, rule_version) values ('${RUN_OTHER}', '${WS1}', '${PROJ1}', '${PG1}', 'html.title', 'pass', 'r1')")" "23503"
+# A fixture spec for check html.title at rule version r1, used only through
+# level2_q2p2.with_spec (rolled back; the shipped registry is empty).
+QR2_SPEC="'{\"keys\": {\"has_canonical\": {\"type\": \"boolean\"}, \"missing_alt_count\": {\"type\": \"count\", \"max\": 500}, \"text_ratio\": {\"type\": \"ratio\"}, \"severity\": {\"type\": \"enum\", \"values\": [\"low\", \"medium\", \"high\"]}, \"tags\": {\"type\": \"enum_list\", \"values\": [\"og_title\", \"og_image\"], \"max_items\": 2}}}'::jsonb"
+qfs() { # <spec expr> <detail expr> [check_id] [rule_version] → OK or SQLSTATE, with the fixture registry, rolled back
+  q2p2 "level2_q2p2.with_spec($1, \$s\$insert into public.site_diagnostic_findings (run_id, workspace_id, project_id, check_id, rule_version, state, detail) values ('${RUN1}', '${WS1}', '${PROJ1}', '${3:-html.title}', '${4:-r1}', 'info', $2)\$s\$)" </dev/null | cut -d: -f1
+}
+QR2_BIG_SPEC="(select jsonb_build_object('keys', jsonb_object_agg('k' || i, jsonb_build_object('type', 'enum_list', 'values', (select jsonb_agg('t' || j || repeat('a', 28)) from generate_series(1, 16) j), 'max_items', 16))) from generate_series(1, 16) i)"
+QR2_BIG="(select jsonb_object_agg('k' || i, (select jsonb_agg('t' || j || repeat('a', 28)) from generate_series(1, 16) j)) from generate_series(1, 16) i)"
+assert "QR2-13. a detail that matches its check's spec but is larger than 4096 bytes is refused by the size cap" \
+  "$(q2p2 "public._q2p2_detail_matches_spec(${QR2_BIG_SPEC}, ${QR2_BIG})")|$(qfs "${QR2_BIG_SPEC}" "${QR2_BIG}")|$(qfs "${QR2_BIG_SPEC}" "'{\"k1\": [\"t1aaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]}'")" "t|23514|OK"
+
+# QR2-19 — a finding's detail must match the approved spec of its own check
+# (Q2-D3). No check vocabulary is approved yet, so the registry ships empty
+# and only a null detail can be stored (fail closed).
+assert "QR2-19. the shipped registry is empty for every check and rule version" \
+  "$(q2p_sql "select bool_and(public._q2p2_finding_detail_spec(c, v) is null)::text from unnest(array['html.title','html.meta','robots.txt','x']) c, unnest(array['r1','r2','v1']) v;")" "true"
+assert "QR2-19. with the empty registry a null detail is stored" "$(qf "state" "'info'")" "OK"
+assert "QR2-19. with the empty registry even a well-formed detail is refused" "$(qf "state, detail" "'info', '{\"has_canonical\": true}'")" "23514"
+assert "QR2-19. with a fixture spec, a detail matching every field is accepted" \
+  "$(qfs "${QR2_SPEC}" "'{\"has_canonical\": true, \"missing_alt_count\": 3, \"text_ratio\": 0.75, \"severity\": \"high\", \"tags\": [\"og_title\", \"og_image\"]}'")" "OK"
+assert "QR2-19. with a fixture spec, a detail using a subset of its fields is accepted" "$(qfs "${QR2_SPEC}" "'{\"has_canonical\": false}'")" "OK"
+assert "QR2-19. the spec binds the rule version: the same detail under r2 is refused" "$(qfs "${QR2_SPEC}" "'{\"has_canonical\": false}'" html.title r2)" "23514"
+assert "QR2-19. the spec binds the check: the same detail under another check is refused" "$(qfs "${QR2_SPEC}" "'{\"has_canonical\": false}'" html.meta r1)" "23514"
+QR219_CASES=(
+  'a key the spec does not define|{"page_title": 1}'
+  'an enum value outside the field list|{"severity": "critical"}'
+  'an arbitrary identifier in an enum field|{"severity": "jane_doe"}'
+  'a count above the field maximum|{"missing_alt_count": 501}'
+  'a negative count|{"missing_alt_count": -1}'
+  'a fractional count|{"missing_alt_count": 2.5}'
+  'a 10-digit number (a phone number) as a count|{"missing_alt_count": 5551234567}'
+  'a 9-digit number (a national identifier) as a count|{"missing_alt_count": 123456789}'
+  'a ratio above 1|{"text_ratio": 1.5}'
+  'a ratio with more than 4 decimals|{"text_ratio": 0.12345}'
+  'a boolean given as text|{"has_canonical": "true"}'
+  'a list item outside the field list|{"tags": ["og_title", "jane"]}'
+  'a list longer than max_items|{"tags": ["og_title", "og_image", "og_title"]}'
+  'a nested object|{"severity": {"x": 1}}'
+  'a JSON null value|{"severity": null}'
+  'free text|{"severity": "Welcome to Acme"}'
+  'an email address|{"severity": "jane@example.com"}'
+  'a URL|{"severity": "https://example.com/a"}'
+  'an empty object|{}'
+  'a top-level array|["high"]'
+)
+QR219_RAN=0
+for c in "${QR219_CASES[@]}"; do
+  assert "QR2-19. with a fixture spec, refused: ${c%%|*}" "$(qfs "${QR2_SPEC}" "'${c#*|}'")" "23514"
+  QR219_RAN=$((QR219_RAN + 1))
+done
+assert "QR2-19. all 20 refused-detail cases ran" "${QR219_RAN}" "20"
+QR219_SPECS=(
+  'a count maximum above 10000|{"keys": {"c": {"type": "count", "max": 1000000}}}|{"c": 5}'
+  'a non-identifier enum value|{"keys": {"e": {"type": "enum", "values": ["Jane Doe"]}}}|{"e": "Jane Doe"}'
+  'an unknown field type|{"keys": {"t": {"type": "text"}}}|{"t": "hello"}'
+  'a list allowing more than 16 items|{"keys": {"l": {"type": "enum_list", "values": ["a"], "max_items": 17}}}|{"l": ["a"]}'
+  'a spec without a keys object|{"fields": {"b": {"type": "boolean"}}}|{"b": true}'
+)
+QR219_SRAN=0
+for c in "${QR219_SPECS[@]}"; do
+  rest="${c#*|}"
+  assert "QR2-19. a malformed spec matches nothing: ${c%%|*}" "$(q2p2 "public._q2p2_detail_matches_spec('${rest%%|*}'::jsonb, '${rest#*|}'::jsonb)" </dev/null)" "f"
+  QR219_SRAN=$((QR219_SRAN + 1))
+done
+assert "QR2-19. all 5 malformed-spec cases ran" "${QR219_SRAN}" "5"
+assert "QR2-19. after every fixture spec, the shipped empty registry is back" \
+  "$(q2p_sql "select (public._q2p2_finding_detail_spec('html.title', 'r1') is null)::text;")" "true"
+
+# QR2-14 — runs: completion, immutability, re-runs, and verification evidence
+assert "QR2-14. a run completes once" "$(q2p_sql "update public.site_diagnostic_runs set outcome = 'completed' where id = '${RUN1}' returning outcome;")" "completed"
+assert "QR2-14. a second completion is refused" "$(q2p_state "update public.site_diagnostic_runs set outcome = 'failed' where id = '${RUN1}';")" "55000"
+assert "QR2-14. any other change to a run is refused" "$(q2p_state "update public.site_diagnostic_runs set page_cap = 3 where id = '${RUN_OTHER}';")" "55000"
+assert "QR2-14. a completed run is frozen: no new page" "$(q2p_sql "select level2_q2p2.attempt(level2_q2p2.page_sql('${RUN1}', 1, 'https://site.example.com/e'));")" "55000:q2p2_run_frozen"
+assert "QR2-14. a completed run is frozen: no new finding" "$(qf "state" "'pass'")" "55000"
+assert "QR2-14. a run cannot be deleted" "$(q2p_state "delete from public.site_diagnostic_runs where id = '${RUN_OTHER}';")" "55000"
+assert "QR2-14. a re-run supersedes a run of the same workspace and project" "$(q2p2_code "select level2_q2p2.run('${WS1}', '${PROJ1}', 'site.example.com', null, null, 10, '${RUN1}')")" "OK"
+assert "QR2-14. a re-run cannot supersede another workspace's run" "$(q2p2_code "select level2_q2p2.run('${WS2}', '${PROJ2}', 'site.example.com', null, null, 10, '${RUN1}')")" "23503"
+EV_NOW="$(q2p_sql "select verified_event_id from public.workspace_domain_state where domain_id = '${DRV}';")"
+EV_OLD="$(q2p_sql "select id from public.workspace_domain_verification_events where domain_id = '${DRV}' and event = 'verification_succeeded' and id <> '${EV_NOW}' order by seq limit 1;")"
+assert "QR2-14. a run may cite the domain's current verification" "$(q2p2_code "select level2_q2p2.run('${WS1}', '${PROJ1}', 'recheck.example.com', '${DRV}', '${EV_NOW}')")" "OK"
+assert "QR2-14. a run citing a historical verification is refused (current state only)" \
+  "$(q2p2_try "select level2_q2p2.run('${WS1}', '${PROJ1}', 'recheck.example.com', '${DRV}', '${EV_OLD}')")" "22023:q2p2_verification_not_current"
+assert "QR2-14. a run whose domain differs from its domain record is refused" \
+  "$(q2p2_try "select level2_q2p2.run('${WS1}', '${PROJ1}', 'other.example.com', '${DRV}', '${EV_NOW}')")" "22023:q2p2_run_domain_mismatch"
+q2p2 "level2_q2p2.use_run_guard('level2_q2p2.weak_run_guard_historical')" >/dev/null
+assert "QR2-14 (weakened, historical event accepted). a run citing a superseded verification is accepted" \
+  "$(q2p2_code "select level2_q2p2.run('${WS1}', '${PROJ1}', 'recheck.example.com', '${DRV}', '${EV_OLD}')")" "OK"
+q2p2 "level2_q2p2.use_run_guard('public._q2p2_run_guard')" >/dev/null
+assert "QR2-14. a run cannot cite a revoked domain's former verification" \
+  "$(q2p2_try "select level2_q2p2.run('${WS1}', '${PROJ1}', 'inflight.example.com', '${DR}', (select id from public.workspace_domain_verification_events where domain_id = '${DR}' and event = 'verification_succeeded'))")" "22023:q2p2_verification_not_current"
+
+# QR2-15 — rate-limit records (Q2-D4, Q2-R4)
+qrl() { q2p2_code "insert into public.diagnostic_rate_limit_events (bucket_kind, bucket_key, key_purpose, key_id, expires_at) values ($1)"; }
+assert "QR2-15. a record kept longer than 48 hours is refused" "$(qrl "'ip', repeat('a', 64), 'zypact.diag.rate_limit.v1', 'k1', clock_timestamp() + interval '49 hours'")" "23514"
+assert "QR2-15. a non-hex or short key is refused" "$(qrl "'ip', '10.0.0.1', 'zypact.diag.rate_limit.v1', 'k1', clock_timestamp() + interval '1 hour'")" "23514"
+assert "QR2-15. a key under another purpose label is refused" "$(qrl "'ip', repeat('a', 64), 'zypact.snapshot.ip.v1', 'k1', clock_timestamp() + interval '1 hour'")" "23514"
+q2p_sql "insert into public.diagnostic_rate_limit_events (bucket_kind, bucket_key, key_purpose, key_id, expires_at) values ('ip', repeat('b', 64), 'zypact.diag.rate_limit.v1', 'k1', clock_timestamp() + interval '2 seconds'), ('domain', repeat('c', 64), 'zypact.diag.rate_limit.v1', 'k1', clock_timestamp() + interval '1 hour') returning 1;" >/dev/null
+assert "QR2-15. a record cannot be updated" "$(q2p_state "update public.diagnostic_rate_limit_events set expires_at = now() where bucket_key = repeat('c', 64);")" "55000"
+assert "QR2-15. an unexpired record cannot be deleted" "$(q2p_state "delete from public.diagnostic_rate_limit_events where bucket_key = repeat('c', 64);")" "55000"
+sleep 3
+assert "QR2-15. the cleanup deletes the expired record only" \
+  "$(q2p2 "public._q2p2_purge_rate_limit_events()")|$(q2p_sql "select string_agg(bucket_kind, ',') from public.diagnostic_rate_limit_events;")" "1|domain"
+assert "QR2-15. no foreign key links rate-limit records to anything" \
+  "$(q2p_sql "select count(*) from pg_constraint where conrelid = 'public.diagnostic_rate_limit_events'::regclass and contype = 'f';")" "0"
+assert "QR2-15. no IP or IP-hash column exists in any diagnostic table" \
+  "$(q2p_sql "select count(*) from information_schema.columns where table_schema = 'public' and table_name like 'site_diagnostic_%' and column_name ~ '(^|_)ip(_|$)';")" "0"
+
+# QR2-16 — tenant pins
+assert "QR2-16. a run whose project belongs to another workspace is refused" \
+  "$(q2p2_code "select level2_q2p2.run('${WS1}', '${PROJ2}', 'site.example.com')")" "23503"
+RUN_OPEN="$(q2p2 "level2_q2p2.run('${WS1}', '${PROJ1}', 'pins.example.com')")"
+assert "QR2-16. a page claiming another workspace than its run is refused" \
+  "$(q2p2_code "insert into public.site_diagnostic_pages (run_id, workspace_id, project_id, page_index, url, query_present, fetched_at, bytes, robots_allowed) values ('${RUN_OPEN}', '${WS2}', '${PROJ1}', 0, 'https://pins.example.com/', false, now(), 0, true)")" "23503"
+assert "QR2-16. a finding claiming another project than its run is refused" \
+  "$(q2p2_code "insert into public.site_diagnostic_findings (run_id, workspace_id, project_id, check_id, state, rule_version) values ('${RUN_OPEN}', '${WS1}', '${PROJ2}', 'html.title', 'pass', 'r1')")" "23503"
+assert "QR2-16. a challenge claiming another workspace than its domain is refused" \
+  "$(q2p2_code "insert into public.workspace_domain_challenges (domain_id, workspace_id, method, challenge_sha256, expires_at, actor_type, actor_operator_id) values ('${DA}', '${WS2}', 'dns_txt', repeat('9', 64), clock_timestamp() + interval '1 hour', 'founder', '${Q2P_OP}')")" "23503"
+assert "QR2-16. an event claiming another workspace than its domain is refused" \
+  "$(q2p2_code "insert into public.workspace_domain_verification_events (domain_id, workspace_id, seq, event, actor_type, actor_operator_id) values ('${DA}', '${WS2}', 2, 'revoked', 'founder', '${Q2P_OP}')")" "23503"
+assert "QR2-16. an invitation holder cannot act on a domain" \
+  "$(q2p2_code "insert into public.workspace_domains (workspace_id, normalized_domain, actor_type, actor_invitation_id, actor_session_id) values ('${WS1}', 'inv.example.com', 'invitation_holder', gen_random_uuid(), gen_random_uuid())")" "23514"
+
+# QR2-18 — an unrelated nested trigger cannot write the state or consume a challenge
+# The review's case: pg_trigger_depth() >= 2 shows only that SOME trigger is
+# running. level2_q2p2.rogue() runs SQL from a trigger on a fixture table, so
+# its writes reach the guards at depth 2, like the event trigger's own.
+DN="$(q2p2 "level2_q2p2.domain('${WS1}', 'nested.example.com')")"
+CN="$(q2p2 "level2_q2p2.challenge('${DN}')")"
+q2p2 "level2_q2p2.ev('${DN}', 'challenge_issued', '${CN}')" >/dev/null
+EN1="$(q2p_sql "select id from public.workspace_domain_verification_events where domain_id = '${DN}' and seq = 1;")"
+QR218_FORGE="update public.workspace_domain_state set seq = seq + 1, status = 'verified', current_challenge_id = null, verified_event_id = '${EN1}', recheck_due_at = clock_timestamp() + interval '30 days' where domain_id = '${DN}'"
+QR218_CONSUME="update public.workspace_domain_challenges set consumed_at = clock_timestamp() where id = '${CN}'"
+qr218() { q2p2 "level2_q2p2.rogue(\$r\$$1\$r\$)"; }
+assert "QR2-18. the rogue trigger body runs at trigger depth 1, so its writes reach the guards at depth 2" \
+  "$(qr218 "do \$d\$ begin raise exception 'depth=%', pg_trigger_depth(); end \$d\$")" "P0001:depth=1"
+assert "QR2-18. a nested trigger cannot advance the state without an event at that number" \
+  "$(qr218 "update public.workspace_domain_state set seq = seq + 1 where domain_id = '${DN}'")" "55000:q2p2_state_not_derived_from_event"
+assert "QR2-18. a nested trigger cannot forge a verified state" "$(qr218 "${QR218_FORGE}")" "55000:q2p2_state_invalid_update"
+assert "QR2-18. a nested trigger cannot consume the domain's current challenge" \
+  "$(qr218 "${QR218_CONSUME}")" "55000:q2p2_challenge_consumption_not_derived_from_event"
+assert "QR2-18. a nested trigger cannot create a state row for a domain that does not exist" \
+  "$(qr218 "insert into public.workspace_domain_state (domain_id, workspace_id) values (gen_random_uuid(), '${WS1}')")" "55000:q2p2_state_invalid_initial_row"
+assert "QR2-18. a nested trigger cannot delete the state" \
+  "$(qr218 "delete from public.workspace_domain_state where domain_id = '${DN}'")" "55000:q2p2_append_only: workspace_domain_state"
+q2p2 "level2_q2p2.use_state_guard('level2_q2p2.weak_state_guard_e28cf3b')" >/dev/null
+assert "QR2-18 (the state guard as reviewed at e28cf3b, trigger depth only). the same nested trigger forges a verified state" \
+  "$(qr218 "${QR218_FORGE}")" "OK"
+q2p2 "level2_q2p2.use_state_guard('public._q2p2_state_guard')" >/dev/null
+q2p2 "level2_q2p2.use_challenge_guard('level2_q2p2.weak_challenge_guard_e28cf3b')" >/dev/null
+assert "QR2-18 (the challenge guard as reviewed at e28cf3b, trigger depth only). the same nested trigger consumes the current challenge" \
+  "$(qr218 "${QR218_CONSUME}")" "OK"
+q2p2 "level2_q2p2.use_challenge_guard('public._q2p2_challenge_guard')" >/dev/null
+assert "QR2-18. the real guards are restored on both tables" \
+  "$(q2p_sql "select string_agg(p.proname, ',' order by p.proname) from pg_trigger t join pg_proc p on p.oid = t.tgfoid where t.tgname in ('workspace_domain_state_guard', 'workspace_domain_challenges_guard');")" "_q2p2_challenge_guard,_q2p2_state_guard"
+assert "QR2-18. the domain is untouched by every attempt, and still verifies through its own event" \
+  "$(q2p2 "level2_q2p2.status('${DN}')") $(q2p2 "level2_q2p2.ev('${DN}', 'verification_succeeded', '${CN}') || ' ' || level2_q2p2.status('${DN}')")" "pending/1 OK verified/2"
+
+# QR2-20 — the stored domain form, exactly as stated (IDNA A-labels, R-LDH)
+QR220_CASES=(
+  example.com:t a.io:t xn--bcher-kva.example:t example.xn--p1ai:t shop.xn--80asehdb:t
+  ab--c.example.com:f example.ab--cd:f xn--.example.com:f example.xn--:f -a.example.com:f
+  a-.example.com:f example.123:f Example.com:f example.com.:f a.b:f
+)
+QR220_RAN=0
+for c in "${QR220_CASES[@]}"; do
+  dom="${c%:*}"; want="${c##*:}"
+  assert "QR2-20. ${dom} is $( [ "${want}" = t ] && echo accepted || echo refused )" "$(q2p2 "public._q2p2_domain_is_normalised('${dom}')" </dev/null)" "${want}"
+  QR220_RAN=$((QR220_RAN + 1))
+done
+assert "QR2-20. all 15 domain-form cases ran" "${QR220_RAN}" "15"
+assert "QR2-20. a domain under an IDNA TLD is stored" \
+  "$(q2p2_code "select level2_q2p2.domain('${WS1}', 'shop.xn--p1ai')")" "OK"
+
+# QR2-21 — every domain's state is exactly its event log, replayed
+assert "QR2-21. every stored state equals the replay of its own event log through the matrix" \
+  "$(q2p_sql "select level2_q2p2.state_fold_mismatches();")" ""
+assert "QR2-21. the replay covered the domains of every QR2 case" \
+  "$(q2p_sql "select (count(*) >= 20)::text from public.workspace_domain_state;")" "true"
+
+# QR2-17 — nothing outside Q2′-2 was written by any QR2 case
+r217="$(q2p_sql "select level2_q2p2.verify_baseline();")"
+assert "QR2-17. baseline captured over every table that is not a Q2′-2 table" "${Q2P2_BASELINE}" \
+  "$(q2p_sql "select count(*) from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind = 'r' and c.relname <> all (level2_q2p2.q2p2_tables());")"
+assert "QR2-17. no row of any non-Q2′-2 table changed, disappeared or was added" "${r217}" "0|"
+
 # ── Summary ──────────────────────────────────────────────────────────────
 
 echo

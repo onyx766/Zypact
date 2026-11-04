@@ -646,3 +646,64 @@ Each entry records:
   - the HOLD on PG-9 and PR-B;
   - D-039's grade definitions;
   - every existing migration and function, including 0047's `approve_buyer_question_version`.
+
+## D-043 — Q2′-2: workspace domains and site diagnostics are closed, serialised per domain, and decided on current state
+
+- **Date:** 2026-11-03
+- **Status:** Implemented on `feat/q2p2-domains-diagnostics`, based on `main` at `62cf0c4`: `e28cf3b`, then the remediation `84f26ff` (pushed as draft PR #102 after its review), then a local per-check `detail` correction on top (no history rewrite). **Not merged, not applied to any Supabase project, and not wired into any route.** It runs only in disposable databases. Q2′-2 production application stays on HOLD.
+  - **Merge blocker (Founder, at the draft PR stage):** `detail` must enforce an approved per-check schema that prevents sensitive values from being persisted. The per-check correction answers it locally and awaits its own independent review before merge.
+  - **Independent review of `e28cf3b`: REQUEST CHANGES.** Three findings, all corrected in the remediation commit, which awaits its own independent review:
+    1. the state and challenge guards relied on `pg_trigger_depth() >= 2`, which proves only that some trigger is running, not that the verification-event trigger made the write;
+    2. `site_diagnostic_findings.detail` accepted arbitrary JSON up to 4 KB, which did not enforce the no-page-body, no-sensitive-data boundary (Q2-D3);
+    3. the stated domain form ("IDNA A-labels allowed") did not match the regex, which refused A-label TLDs.
+- **Builds on:** D-040 (self-service, workspace-scoped data), D-041 (14-digit versions; release order), D-042 (closed tables, tenant pinning, lock-and-decide-at-one-instant).
+- **Scope:** one migration, `20261103173000_q2p2_domains_and_site_diagnostics.sql`. It adds 8 closed tables (`workspace_domains`, `workspace_domain_state`, `workspace_domain_challenges`, `workspace_domain_verification_events`, `site_diagnostic_runs`, `site_diagnostic_pages`, `site_diagnostic_findings`, `diagnostic_rate_limit_events`) and 16 internal functions. No writer RPC, no crawler, no W1 or V1d code, no AI call, no billing. No existing table, function or grant changes.
+- **Founder decisions (scope revision 2):**
+  - **Q2-D1:** the diagnostic cache is workspace-isolated; a run may reuse results only from its own workspace.
+  - **Q2-D2 (revised):** domain verification is an append-only event log, serialised per domain on a state row, with an exact transition matrix.
+  - **Q2-D3:** no page bodies and no sensitive URL parts are stored. A URL is stored only in sanitised form (scheme, lowercase host, optional port and path; no query, fragment or userinfo). A finding's `detail` has an explicit safe schema (below).
+  - **Q2-D4 (revised):** rate-limit data is a separate, keyed, short-lived table, with no link to diagnostic history.
+  - **Q2-D5:** a fail-closed change-scope CI contract (`test:q2p2-scope`).
+  - **Q2-D6:** SV1 extended to the new tables.
+  - **Q2-R1:** a successful verification is due for re-check after **30 days** (`recheck_due_at = checked_at + 30 days`).
+  - **Q2-R2:** the rate-limit key may reuse the existing IP hash secret **only** with cryptographic purpose separation (the label `zypact.diag.rate_limit.v1`, enforced by a check), environment isolation, and no Production credential in local tests or CI. The schema stores only `key_id` and the 64-hex keyed value; no test uses any real secret. **A legal and security review of the reuse remains a dependency** before customer use (with D5).
+  - **Q2-R3:** a verification challenge expires at most **48 hours** after issue (check constraint).
+  - **Q2-R4:** rate-limit records expire at most **48 hours** after they occur (check constraint), and the cleanup `_q2p2_purge_rate_limit_events()` is defined and tested now. **Scheduling the cleanup is a gate before customer use** (W1/G1).
+- **Invariants:**
+  - **Current state decides.** Every verification-sensitive decision reads the domain's current serialised state, never the event history alone:
+    - an event's trigger locks `workspace_domain_state` `FOR UPDATE`, requires `seq = state.seq + 1` (else `40001`), applies the exact transition matrix against the locked status, and writes the state in the same transaction;
+    - `_q2p2_domain_verified(domain)` reads the state `FOR SHARE` and is true only if the status is `verified` and the re-check is not past due (fail closed);
+    - a diagnostic run that cites verification evidence must cite the domain's **current** `verified_event_id`, on a state that is verified and not past due, read `FOR SHARE`. A historical verified event is refused.
+  - **The state is a function of the event log, not of who writes it.** Trigger depth is kept only as a first refusal of direct writes; it is not the authority:
+    - the state row is inserted only as the initial row of a domain that exists;
+    - an update may change only `seq`, only to `old.seq + 1`, and only when an event with that number already exists for the same domain and workspace. The guard then derives status, current challenge, verified event, re-check due and `updated_at` from that event and the shared transition function `_q2p2_next_status`, so a writer cannot choose them;
+    - the event trigger validates BEFORE INSERT (under the state lock) and advances the state AFTER INSERT, when the event row exists, writing only `seq`;
+    - delete and truncate are refused.
+
+    An unrelated nested trigger can therefore at most apply an existing event early. That leaves the same state and makes the event's own advance fail. It can never write a state the event log does not imply. The remaining bypass is owner-level: disabling triggers or `session_replication_role = replica`, which no API role can do.
+  - **Challenges:** only a SHA-256 hash is stored (unique); issued once; consumed once. Consumption is accepted only for the `verification_succeeded` event that cites this challenge and that the domain's state has already applied (its verified event, at its `seq`); `consumed_at` is that event's `recorded_at`. A success must cite the domain's current challenge.
+  - **A finding's `detail` must match the approved spec of its own check and rule version** (the CHECK `site_diagnostic_findings_detail_per_check`, alongside the 4 KB cap):
+    - `_q2p2_finding_detail_spec(check_id, rule_version)` is the registry. **It ships empty:** no diagnostic check vocabulary has been approved, so no field is invented, and only a null `detail` can be stored. A check's spec is added only by a later, independently reviewed migration that replaces the registry. A new rule version needs its own spec.
+    - `_q2p2_detail_matches_spec(spec, detail)` accepts only an object of 1 to 16 keys where every key is a field of the spec and every value has that field's type. The types are a closed set:
+      - `boolean`;
+      - `count`: an integer from 0 to the field's `max`, where `max` is at most 10 000;
+      - `ratio`: 0 to 1, at most 4 decimals;
+      - `enum`: one token from the field's own list;
+      - `enum_list`: at most `max_items` (1 to 16) tokens from that list.
+    - Tokens and keys are lowercase identifiers of at most 32 characters, and a list holds 1 to 64 tokens. A malformed spec matches nothing.
+    - So no free text, free number, arbitrary identifier, URL, address, null or nested value can be stored. Numbers are only bounded counts (at most 5 digits) and ratios. A 9- or 10-digit identifier cannot be stored as a count, and a word outside a field's approved list cannot be stored as a token.
+    - **Schema decision needed:** the per-check vocabulary itself (the checks, their rule versions, fields and token lists) belongs to W1's check catalogue. Approving it, and the `max` of each count, is a Founder and review decision. Until then the fail-closed default holds. Page text belongs only in the screened, hashed excerpt.
+  - **The stored domain form, exactly as checked:**
+    - two or more labels, 4 to 253 characters, no trailing dot;
+    - each label lowercase LDH, 1 to 63 characters, with no leading or trailing hyphen;
+    - no `--` in positions 3 and 4 except the `xn--` A-label prefix (the reserved R-LDH form);
+    - the last label alphabetic (2 to 63) or an A-label.
+
+    IDNA names are stored only as A-labels. The database checks the A-label's shape, not its Punycode; conversion and IDNA2008 validation are the writer's duty (V1d).
+  - **Stale observations are refused:** a superseded or consumed challenge; `checked_at` outside the challenge window, older than 10 minutes, or in the future; a success after expiry.
+  - **Workspace isolation:** the same domain may be claimed by different workspaces independently; every child row is pinned to its parent's workspace (and project) by composite foreign keys; a run's cache scope equals its workspace.
+  - **Immutable history:** domains and events are append-only; completed runs are frozen, with their pages and findings.
+  - **IP-derived data is separate:** no diagnostic table has an IP, IP hash or requester agent column; `diagnostic_rate_limit_events` has no foreign key to any run, account or workspace; update is refused, and delete is allowed only for expired rows.
+  - **Closed:** RLS on with no policies on all 8 tables; no API role (`service_role` included) holds any table, sequence or function privilege. Only the purge is `SECURITY DEFINER`.
+- **Evidence:** CURRENT_STATUS section 21.
+- **Unchanged:** D-037 and the spend gate; D-041's release order (Q2′-2 follows Q2′-1 by the named-file procedure, `expected_prev` `20261102132000`); D-042; every HOLD (0083 production, Q2′-1b, Q2′-2 production, PG-9, PR-B, A3, A4, G4-C, every production apply, and any AI marketing analysis).

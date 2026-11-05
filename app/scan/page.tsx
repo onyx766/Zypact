@@ -1,6 +1,6 @@
+import type { CSSProperties } from "react";
 import type { Metadata } from "next";
 import {
-  ArrowLeft,
   BarChart3,
   Check,
   ClipboardList,
@@ -12,16 +12,11 @@ import {
   ShieldCheck,
 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
-import {
-  CheckItem,
-  IconTile,
-  PanelCard,
-  SectionHeading,
-  StepItem,
-  toneAt,
-} from "@/components/marketing/section-kit";
-import { ZypactWordmark } from "@/components/marketing/zypact-mark";
+import { AtmosphereCanvas } from "@/components/landing/canvas/atmosphere-canvas";
+import { HowItWorks } from "@/components/landing/how-it-works";
+import { LandingMotion } from "@/components/landing/landing-motion";
+import { SiteFooter } from "@/components/landing/site-footer";
+import { SiteHeader } from "@/components/marketing/site-header";
 import { ThemeRoot } from "@/components/theme-root";
 
 import { ScanForm } from "./scan-form";
@@ -48,21 +43,25 @@ const SUMMARY = [
     title: "One buyer question",
     desc: "Focus on one commercially meaningful question.",
     icon: FileSearch,
+    tone: "is-teal",
   },
   {
     title: "Reviewed before any AI call",
     desc: "We review your question and protocol first.",
     icon: ShieldCheck,
+    tone: "is-amber",
   },
   {
     title: "Evidence-backed result",
     desc: "A controlled run with exact evidence and integrity checks.",
     icon: Database,
+    tone: "is-slate",
   },
 ] as const;
 
 /**
- * The three stages between a request and a result.
+ * The three stages between a request and a result, drawn with the landing's
+ * How it works band.
  *
  * The approved design shows a product preview beside this with a cross-platform
  * comparison and a single "overall visibility" percentage. Neither is built:
@@ -72,184 +71,208 @@ const SUMMARY = [
  */
 const STAGES = [
   {
-    number: 1,
     title: "Submit a buyer question",
     icon: ClipboardList,
     copy: "Share one real question a prospective customer might ask when comparing products like yours.",
   },
   {
-    number: 2,
     title: "Run a controlled baseline",
     icon: Search,
     copy: "After the question and protocol are approved, Zypact launches the bounded Perplexity Sonar baseline.",
   },
   {
-    number: 3,
     title: "Review evidence and results",
     icon: BarChart3,
     copy: "Read the prompt-scoped observations with the exact provider evidence behind every one of them.",
   },
 ] as const;
 
+/**
+ * Root-relative, because the landing's own footer links are same-page anchors
+ * that would point nowhere from /scan.
+ */
+const FOOTER = {
+  tagline:
+    "Record, preserve and retest how Perplexity answers one buyer question.",
+  columns: [
+    {
+      heading: "Product",
+      links: [
+        { label: "How it works", href: "/#how-it-works" },
+        { label: "Reports", href: "/#reports" },
+        { label: "About Zypact", href: "/about" },
+      ],
+    },
+    {
+      heading: "Method",
+      links: [
+        { label: "Evidence", href: "/#evidence" },
+        { label: "Outcome statuses", href: "/#outcomes" },
+        { label: "Scope and limits", href: "/#scope" },
+      ],
+    },
+    {
+      heading: "Contact",
+      links: [
+        { label: "Request demo", href: "#request-form" },
+        { label: "Contact us", href: "/#contact" },
+        { label: "FAQ", href: "/#faq" },
+      ],
+    },
+  ],
+  bottomLine:
+    "Perplexity Sonar V1 · Launched by Zypact after approval · No guaranteed outcome",
+  copyright: "© 2026 Zypact",
+} as const;
+
+/** `--i` orders the CSS load choreography (`lx-intro` in base.css). */
+const order = (index: number) => ({ "--i": index }) as CSSProperties;
+
 export default function ScanPage() {
   const enabled = process.env.SNAPSHOT_PUBLIC_FORM_ENABLED === "true";
 
   return (
-    // Light, matching the landing page every CTA arrives from. Dark also left
-    // the two section headings unreadable: app/globals.css paints h2/h3 with a
-    // fixed near-black `--heading` that the scoped preflight does not reset.
-    <ThemeRoot theme="light">
-      <div className="min-h-screen bg-background">
-        <header className="border-b border-border/60">
-          <div className="shell flex h-[64px] items-center justify-between gap-6 sm:h-[68px]">
-            <ZypactWordmark
-              className="text-primary"
-              dotFill="hsl(var(--background))"
-            />
+    // The landing's `.lx` scope, so every CTA arrives on the same design. The
+    // form itself uses only the CSS-only `lx-intro` entrance — never
+    // data-reveal — so it is visible before hydration and without JavaScript.
+    <ThemeRoot theme="light" className="lx">
+      <LandingMotion />
+      <AtmosphereCanvas />
+      <div className="lx-grain" aria-hidden="true" />
 
-            <a
-              href="/"
-              className="inline-flex items-center gap-2 rounded-md text-[13px] font-semibold text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:text-[14px]"
-            >
-              <ArrowLeft className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
-              Back to website
-            </a>
-          </div>
-        </header>
+      <SiteHeader cta={{ label: "Request demo", href: "#request-form" }} />
 
-        <main>
-          {/* ------------------------------------------------------------ Hero */}
-          <section className="relative isolate overflow-hidden">
-            <div
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-x-0 -top-40 -z-10 h-[520px] bg-[radial-gradient(60%_60%_at_50%_0%,hsl(var(--primary)/0.14),transparent_70%)]"
-            />
+      <main className="relative z-[1]">
+        {/* -------------------------------------------------------------- Hero */}
+        <section
+          className="lx-request-hero pb-20 pt-10 sm:pb-24 sm:pt-14 lg:pb-28 lg:pt-16"
+          aria-labelledby="request-title"
+        >
+          <div className="shell grid gap-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,0.94fr)] lg:gap-14">
+            {/* ------------------------------------------------ Left column */}
+            <div className="max-w-xl">
+              <p className="lx-eyebrow lx-eyebrow--rule lx-intro" style={order(0)}>
+                Zypact V1 · Controlled execution
+              </p>
 
-            <div className="shell grid gap-10 py-12 sm:py-16 lg:grid-cols-[minmax(0,1fr)_minmax(0,0.92fr)] lg:gap-14 lg:py-20">
-              {/* -------------------------------------------------- Left column */}
-              <div className="max-w-xl">
-                <Badge>See Zypact in action</Badge>
+              <h1
+                id="request-title"
+                className="lx-display lx-intro mt-5 text-[40px] sm:mt-6 sm:text-[52px] lg:text-[58px]"
+                style={order(1)}
+              >
+                Request a Zypact demo
+              </h1>
 
-                <p className="mt-6 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
-                  Zypact V1 · Controlled execution
-                </p>
+              <p className="lx-lede lx-intro mt-6" style={order(2)}>
+                See how your company appears in an AI buyer answer. Bring one
+                commercially important buyer question. Zypact reviews the
+                question and protocol first. After approval, the controlled
+                Perplexity Sonar baseline is launched by Zypact and preserves the
+                evidence.
+              </p>
 
-                <h1 className="mt-4 text-balance text-[32px] font-extrabold leading-[1.07] tracking-tightest sm:text-[42px] lg:text-[48px]">
-                  Request a Zypact demo
-                </h1>
+              <ul className="lx-request-points lx-intro mt-8" style={order(3)}>
+                {HIGHLIGHTS.map((point) => (
+                  <li key={point} className="lx-request-point">
+                    <span className="lx-request-coin" aria-hidden="true">
+                      <Check strokeWidth={2.5} />
+                    </span>
+                    <span>{point}</span>
+                  </li>
+                ))}
+              </ul>
 
-                <p className="mt-5 text-pretty text-[15px] leading-relaxed text-muted-foreground sm:text-[16px]">
-                  See how your company appears in an AI buyer answer. Bring one
-                  commercially important buyer question. Zypact reviews the
-                  question and protocol first. After approval, the controlled
-                  Perplexity Sonar baseline is launched by Zypact and preserves the
-                  evidence.
-                </p>
+              <p className="lx-request-note lx-intro mt-8" style={order(4)}>
+                <Info strokeWidth={2} aria-hidden="true" />
+                <span>Submitting this form does not start an AI call.</span>
+              </p>
 
-                <ul className="mt-7 grid gap-3.5">
-                  {HIGHLIGHTS.map((point) => (
-                    <CheckItem key={point} icon={Check}>
-                      {point}
-                    </CheckItem>
-                  ))}
-                </ul>
-
-                <p className="mt-7 flex items-start gap-2.5 rounded-xl border border-info/30 bg-info/10 px-4 py-3 text-[13px] font-semibold leading-relaxed text-foreground">
-                  <Info
-                    className="mt-0.5 h-4 w-4 shrink-0 text-info"
-                    strokeWidth={2}
-                    aria-hidden="true"
-                  />
-                  <span>Submitting this form does not start an AI call.</span>
-                </p>
-
-                <ul className="mt-8 grid gap-4 border-t border-border pt-7 sm:grid-cols-3 lg:grid-cols-1 lg:gap-3.5">
-                  {SUMMARY.map((item, index) => (
-                    <li key={item.title} className="flex items-start gap-3">
-                      <IconTile
-                        icon={item.icon}
-                        tone={toneAt(index)}
-                        className="h-9 w-9 rounded-lg"
-                      />
+              <ul className="lx-request-summary lx-intro mt-8" style={order(5)}>
+                {SUMMARY.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <li key={item.title} className="lx-request-summary__item">
+                      <span
+                        className={`lx-request-summary__icon ${item.tone}`}
+                        aria-hidden="true"
+                      >
+                        <Icon strokeWidth={1.9} />
+                      </span>
                       <span className="min-w-0">
-                        <span className="block text-[13.5px] font-bold tracking-tight">
+                        <span className="lx-request-summary__title">
                           {item.title}
                         </span>
-                        <span className="mt-0.5 block text-[12.5px] leading-relaxed text-muted-foreground">
+                        <span className="lx-request-summary__desc">
                           {item.desc}
                         </span>
                       </span>
                     </li>
-                  ))}
-                </ul>
+                  );
+                })}
+              </ul>
 
-                <p className="mt-7 border-t border-border pt-5 font-mono text-[11px] leading-relaxed text-muted-foreground">
-                  V1 surface: Perplexity Sonar only. No market-wide score,
-                  causal promise, or revenue attribution.
-                </p>
-              </div>
+              <p
+                className="lx-intro mt-8 border-t border-border pt-5 text-[11px] font-medium uppercase leading-[1.75] tracking-[0.14em] text-muted-foreground"
+                style={order(6)}
+              >
+                V1 surface: Perplexity Sonar only. No market-wide score,
+                causal promise, or revenue attribution.
+              </p>
+            </div>
 
-              {/* ------------------------------------------------- Right column */}
-              <div className="lg:sticky lg:top-8 lg:self-start">
-                <PanelCard className="p-5 sm:p-7 lg:p-8">
-                  <ScanForm enabled={enabled} />
-                </PanelCard>
+            {/* ----------------------------------------------- Right column */}
+            {/* top-[108px] clears the sticky 64–68px header with room to spare. */}
+            <div className="lg:sticky lg:top-[108px] lg:self-start">
+              <div
+                id="request-form"
+                className="lx-card lx-request-card lx-intro"
+                style={order(2)}
+              >
+                <ScanForm enabled={enabled} />
               </div>
             </div>
-          </section>
-
-          {/* ---------------------------------------------------- How it works */}
-          <section className="border-t border-border bg-surface-subtle py-16 sm:py-20">
-            <div className="shell">
-              <SectionHeading
-                label="How it works"
-                title="From question to insights in three steps"
-                lede="Nothing runs until the question and protocol are approved. After that, Zypact launches the controlled baseline."
-              />
-
-              <div className="mt-12 grid gap-8 sm:grid-cols-3 sm:gap-6">
-                {STAGES.map((stage, index) => (
-                  <PanelCard key={stage.title}>
-                    <StepItem
-                      number={stage.number}
-                      icon={stage.icon}
-                      tone={toneAt(index)}
-                      title={stage.title}
-                      copy={stage.copy}
-                    />
-                  </PanelCard>
-                ))}
-              </div>
-
-              {/*
-                The approved design closes this page with client logos and a
-                named testimonial. Both are left out until there are real ones
-                to show — a pre-pilot product cannot borrow credibility it has
-                not earned. The scope boundary does that work honestly instead.
-              */}
-              <PanelCard className="mt-12 flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-6">
-                <IconTile icon={Repeat} tone="teal" />
-                <p className="text-pretty text-[13.5px] leading-relaxed text-muted-foreground">
-                  Every retest ends in one of four statuses — increase observed,
-                  decrease observed, no clear change, or inconclusive. Zypact
-                  guarantees the agreed process and evidence contract, not a
-                  favorable model response.
-                </p>
-              </PanelCard>
-            </div>
-          </section>
-        </main>
-
-        <footer className="border-t border-border bg-background">
-          <div className="shell flex flex-col gap-2 py-6 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-[12px] text-muted-foreground">
-              Perplexity Sonar V1 · Launched by Zypact after approval · No guaranteed
-              outcome
-            </p>
-            <p className="text-[12px] text-muted-foreground">© 2026 Zypact</p>
           </div>
-        </footer>
-      </div>
+        </section>
+
+        {/* ----------------------------------------------------- How it works */}
+        {/* Not "how-it-works": that id drives the header scrollspy on / only. */}
+        <HowItWorks
+          id="request-steps"
+          eyebrow="How it works"
+          title="From question to insights in three steps"
+          lede="Nothing runs until the question and protocol are approved. After that, Zypact launches the controlled baseline."
+          steps={STAGES}
+          layout="three"
+        />
+
+        {/* -------------------------------------------------- Retest statuses */}
+        {/*
+          The approved design closes this page with client logos and a named
+          testimonial. Both are left out until there are real ones to show — a
+          pre-pilot product cannot borrow credibility it has not earned. The
+          scope boundary does that work honestly instead.
+        */}
+        <section className="py-16 sm:py-20">
+          <div className="shell">
+            <div className="lx-card lx-card--soft lx-request-statuses" data-reveal>
+              <span
+                className="lx-request-summary__icon is-teal"
+                aria-hidden="true"
+              >
+                <Repeat strokeWidth={1.9} />
+              </span>
+              <p className="text-pretty text-[14px] leading-relaxed text-muted-foreground">
+                Every retest ends in one of four statuses — increase observed,
+                decrease observed, no clear change, or inconclusive. Zypact
+                guarantees the agreed process and evidence contract, not a
+                favorable model response.
+              </p>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <SiteFooter {...FOOTER} />
     </ThemeRoot>
   );
 }

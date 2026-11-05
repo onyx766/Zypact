@@ -20,7 +20,17 @@ const navLinks = [
  * links are collapsed behind a toggle rather than hidden outright, so mobile
  * visitors keep a route to every section.
  */
-export function SiteHeader() {
+export interface SiteHeaderProps {
+  /**
+   * The header call to action. Defaults to the demo request on /scan; /scan
+   * itself passes an in-page anchor so the button does not reload the page.
+   */
+  cta?: { label: string; href: string };
+}
+
+const DEFAULT_CTA = { label: "Request demo", href: "/scan" } as const;
+
+export function SiteHeader({ cta = DEFAULT_CTA }: SiteHeaderProps = {}) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -59,8 +69,8 @@ export function SiteHeader() {
         */}
         <div className="flex items-center gap-2 sm:gap-2.5">
           <Button asChild size="sm" className="lx-header__cta rounded-full px-4">
-            <a href="/scan">
-              Request demo
+            <a href={cta.href}>
+              {cta.label}
               <ArrowRight
                 className="ml-1.5 h-3.5 w-3.5"
                 strokeWidth={2}

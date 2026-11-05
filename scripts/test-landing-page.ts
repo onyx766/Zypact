@@ -154,7 +154,8 @@ async function main(): Promise<void> {
   check("FAQ uses native details", pageSource.includes("<details") && pageSource.includes("<summary"));
 
   // Tailwind is loaded globally but every utility is scoped, so the legacy
-  // stylesheets that still style /scan, /report and /projects cannot be reset.
+  // stylesheets that still style /report, /projects and the other legacy
+  // routes cannot be reset. (/scan now renders the landing's `.lx` scope.)
   check("Tailwind stylesheet is imported by the root layout", layoutSource.includes('"./tailwind.css"'));
   check("legacy stylesheets still load for the remaining legacy routes", layoutSource.includes('"./globals.css"') && layoutSource.includes('"./landing-v1.css"'));
   check("utilities stay scoped to the marketing/admin root", tailwindConfigSource.includes('important: ".v2-root"'));

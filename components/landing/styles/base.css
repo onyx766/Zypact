@@ -6,8 +6,8 @@
  * scripts/test-landing-page.ts requires app/page.tsx under tsx, which cannot
  * load a stylesheet, so nothing in the page's module graph may import CSS.
  * Loading globally is safe because every selector below is scoped under `.lx`,
- * the class app/page.tsx passes to ThemeRoot's themed element. No other route
- * renders that class.
+ * the class the public marketing pages (app/page.tsx and app/scan/page.tsx)
+ * pass to ThemeRoot's themed element. No other route renders that class.
  *
  * SPECIFICITY
  * -----------

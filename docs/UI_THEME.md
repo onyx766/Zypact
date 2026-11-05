@@ -21,10 +21,11 @@ deliberate:
 
 | Surface | Styled by | Renders inside `.v2-root`? |
 | --- | --- | --- |
-| `/` (landing) | Tailwind tokens | yes, via `ThemeRoot` |
+| `/` (landing) | Tailwind tokens + `.lx` landing stylesheets | yes, via `ThemeRoot` |
+| `/scan` (demo request) | Tailwind tokens + `.lx` landing stylesheets (`components/landing/styles/request.css` for the form) | yes, via `ThemeRoot` |
 | `/perplexity-content-change-test` | Tailwind tokens | yes, via `ThemeRoot` |
 | `/admin/**` | Tailwind tokens | yes, via `AdminThemeRoot` |
-| `/scan`, `/report`, `/projects/**`, `/outcome-card`, `/login`, `/thank-you`, `/verify-email` | hand-written CSS (`app/globals.css` and friends, ~6,800 lines) | **no** |
+| `/report`, `/projects/**`, `/outcome-card`, `/login`, `/thank-you`, `/verify-email` | hand-written CSS (`app/globals.css` and friends, ~6,800 lines) | **no** |
 
 Three invariants keep those two worlds apart. Breaking any one of them silently
 restyles the legacy pages, including the client-facing report:

@@ -3,7 +3,6 @@
 import { FormEvent, ReactNode, useState } from "react";
 import { ArrowRight, Check, Lock } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -22,6 +21,16 @@ const EMPTY_VALUES: SnapshotRequestFormValues = {
 };
 
 const BUYER_QUESTION_MAX_LENGTH = 300;
+
+/**
+ * Landing-token field styling, merged over the shadcn defaults by `cn`
+ * (tailwind-merge replaces the conflicting height, radius, padding and
+ * background utilities rather than stacking them).
+ */
+const INPUT_CLASS =
+  "lx-request-input h-12 rounded-[12px] border-border bg-card px-4 text-[15px] shadow-[inset_0_1px_2px_hsl(var(--lx-shadow)/0.05)] focus-visible:ring-offset-card";
+
+const RETURN_LINK_CLASS = "lx-btn lx-btn--ghost lx-btn--sm mt-7 w-full sm:w-auto";
 
 interface ScanFormProps {
   enabled: boolean;
@@ -51,7 +60,9 @@ function Field({
 }) {
   return (
     <div className="grid gap-2">
-      <Label htmlFor={htmlFor}>{label}</Label>
+      <Label htmlFor={htmlFor} className="lx-request-label">
+        {label}
+      </Label>
       {children}
       {footer}
       {error ? (
@@ -118,11 +129,11 @@ export function ScanForm({ enabled }: ScanFormProps) {
   if (!enabled) {
     return (
       <div>
-        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+        <p className="lx-eyebrow">
           V1 demo request
         </p>
 
-        <h2 className="mt-4 text-[24px] font-bold leading-tight tracking-tight sm:text-[28px]">
+        <h2 className="lx-request-card__title mt-4 text-[28px] sm:text-[32px]">
           Demo requests are not open yet.
         </h2>
 
@@ -131,9 +142,9 @@ export function ScanForm({ enabled }: ScanFormProps) {
           submitted and no AI call has started.
         </p>
 
-        <Button asChild variant="outline" className="mt-7 w-full sm:w-auto">
-          <a href="/">Return to Zypact</a>
-        </Button>
+        <a href="/" className={RETURN_LINK_CLASS}>
+          Return to Zypact
+        </a>
       </div>
     );
   }
@@ -141,18 +152,15 @@ export function ScanForm({ enabled }: ScanFormProps) {
   if (submitted) {
     return (
       <div aria-live="polite">
-        <span
-          className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-chart-2/15 text-chart-2"
-          aria-hidden="true"
-        >
+        <span className="lx-request-success" aria-hidden="true">
           <Check className="h-5 w-5" strokeWidth={2.5} />
         </span>
 
-        <p className="mt-6 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+        <p className="lx-eyebrow mt-6">
           Request received
         </p>
 
-        <h2 className="mt-3 text-[24px] font-bold leading-tight tracking-tight sm:text-[28px]">
+        <h2 className="lx-request-card__title mt-3 text-[28px] sm:text-[32px]">
           Check your work email.
         </h2>
 
@@ -181,7 +189,7 @@ export function ScanForm({ enabled }: ScanFormProps) {
               "Evidence report",
             ].map((stage, index) => (
               <li key={stage} className="flex items-center gap-2.5">
-                <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-border font-mono text-[10px]">
+                <span className="lx-request-next">
                   {index + 1}
                 </span>
                 {stage}
@@ -190,16 +198,16 @@ export function ScanForm({ enabled }: ScanFormProps) {
           </ol>
         </div>
 
-        <Button asChild variant="outline" className="mt-7 w-full sm:w-auto">
-          <a href="/">Return to Zypact</a>
-        </Button>
+        <a href="/" className={RETURN_LINK_CLASS}>
+          Return to Zypact
+        </a>
       </div>
     );
   }
 
   return (
     <>
-      <h2 className="text-[22px] font-bold tracking-tight sm:text-[25px]">
+      <h2 className="lx-request-card__title text-[28px] sm:text-[32px]">
         Request your demo
       </h2>
 
@@ -233,6 +241,7 @@ export function ScanForm({ enabled }: ScanFormProps) {
                 fieldErrors.contactName ? "contactName-error" : undefined
               }
               placeholder="Jane Smith"
+              className={INPUT_CLASS}
             />
           </Field>
 
@@ -258,6 +267,7 @@ export function ScanForm({ enabled }: ScanFormProps) {
                 fieldErrors.companyName ? "companyName-error" : undefined
               }
               placeholder="Example SaaS"
+              className={INPUT_CLASS}
             />
           </Field>
         </div>
@@ -285,6 +295,7 @@ export function ScanForm({ enabled }: ScanFormProps) {
                 fieldErrors.workEmail ? "workEmail-error" : undefined
               }
               placeholder="you@company.com"
+              className={INPUT_CLASS}
             />
           </Field>
 
@@ -311,12 +322,13 @@ export function ScanForm({ enabled }: ScanFormProps) {
                 fieldErrors.websiteUrl ? "websiteUrl-error" : undefined
               }
               placeholder="company.com"
+              className={INPUT_CLASS}
             />
           </Field>
         </div>
 
         {/* The question is the product input, so it gets its own framed block. */}
-        <div className="rounded-xl border border-border bg-muted/30 p-4">
+        <div className="lx-request-question">
           <Field
             htmlFor="buyerCategory"
             label="One buyer question"
@@ -361,31 +373,31 @@ export function ScanForm({ enabled }: ScanFormProps) {
                   : "buyerCategory-help"
               }
               placeholder="Which AI visibility platforms are best for a B2B SaaS marketing team?"
-              className="min-h-[104px] bg-background"
+              className="lx-request-input min-h-[112px] rounded-[12px] border-border bg-card px-4 py-3 text-[15px] focus-visible:ring-offset-card"
             />
           </Field>
         </div>
 
         {feedback ? (
-          <p
-            className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-[13.5px] leading-relaxed text-foreground"
-            role="alert"
-          >
+          <p className="lx-request-error" role="alert">
             {feedback}
           </p>
         ) : null}
 
-        <Button
+        <button
           type="submit"
-          size="lg"
-          className="w-full"
+          className="lx-btn lx-btn--primary w-full"
           disabled={submitting}
         >
           {submitting ? "Submitting…" : "Request demo"}
           {submitting ? null : (
-            <ArrowRight className="h-4 w-4" strokeWidth={2.25} />
+            <ArrowRight
+              className="lx-btn__arrow"
+              strokeWidth={2.25}
+              aria-hidden="true"
+            />
           )}
-        </Button>
+        </button>
 
         <p className="flex items-start gap-2 text-[12.5px] leading-relaxed text-muted-foreground">
           <Lock

@@ -6,6 +6,11 @@ import { cn } from "@/lib/utils";
 
 export interface HowItWorksProps extends SectionCopy {
   steps: readonly IconCopy[];
+  /**
+   * "default" lays five steps across at lg (the landing). "three" is the
+   * three-step band on /scan, which would otherwise leave two empty columns.
+   */
+  layout?: "default" | "three";
 }
 
 /* ------------------------------------------------------------ Contours */
@@ -81,7 +86,14 @@ const CONTOURS =
 const vars = (values: Record<`--${string}`, string | number>) =>
   values as CSSProperties;
 
-export function HowItWorks({ id, eyebrow, title, lede, steps }: HowItWorksProps) {
+export function HowItWorks({
+  id,
+  eyebrow,
+  title,
+  lede,
+  steps,
+  layout = "default",
+}: HowItWorksProps) {
   const last = steps.length - 1;
 
   return (
@@ -109,7 +121,11 @@ export function HowItWorks({ id, eyebrow, title, lede, steps }: HowItWorksProps)
           titleClassName="xl:text-[44px]"
         />
 
-        <ol role="list" data-stagger="140" className="lx-how-steps">
+        <ol
+          role="list"
+          data-stagger="140"
+          className={cn("lx-how-steps", layout === "three" && "lx-how-steps--three")}
+        >
           {steps.map((step, index) => {
             const Icon = step.icon;
             const isLast = index === last;

@@ -5,7 +5,7 @@ import "./landing-v1.css";
 /**
  * Tailwind for the marketing page and the founder console. Every utility is
  * scoped under `.v2-root` by the `important` strategy in tailwind.config.ts, so
- * loading it here cannot restyle /scan, /report or /projects. It lives in the
+ * loading it here cannot restyle /report, /projects or the other legacy routes. It lives in the
  * root layout rather than app/page.tsx so the page module stays importable by
  * scripts/test-landing-page.ts, which cannot require a stylesheet.
  */
@@ -13,7 +13,9 @@ import "./tailwind.css";
 /**
  * The landing page's own stylesheets. Imported here, not from the page, for
  * the same reason as tailwind.css above; every selector in them is scoped
- * under `.lx`, which only app/page.tsx renders, so no other route is touched.
+ * under `.lx`, which only the public marketing pages render (app/page.tsx and
+ * the demo request page app/scan/page.tsx), so no other route is touched.
+ * request.css holds the form-page additions /scan needs on top of the rest.
  */
 import "@/components/landing/styles/base.css";
 import "@/components/landing/styles/hero.css";
@@ -21,6 +23,7 @@ import "@/components/landing/styles/story.css";
 import "@/components/landing/styles/evidence.css";
 import "@/components/landing/styles/outcomes.css";
 import "@/components/landing/styles/chrome.css";
+import "@/components/landing/styles/request.css";
 
 import { Newsreader } from "next/font/google";
 

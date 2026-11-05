@@ -1,0 +1,316 @@
+/*
+ * Zypact landing — the demo request page (/scan).
+ *
+ * /scan renders the same `.lx` scope as app/page.tsx, so it inherits the
+ * landing tokens, type, buttons, cards, header, footer and motion from the
+ * other stylesheets in this folder. This file adds only what a form page needs
+ * and the landing does not have: the request hero, the form card and its
+ * fields, and a three-column variant of the How it works band.
+ *
+ * Imported from app/layout.tsx with the rest of the landing CSS, never from a
+ * page or component (scripts/test-landing-page.ts loads pages under tsx, which
+ * cannot require a stylesheet). Every selector is `.lx .thing` (0-2-0); see the
+ * SPECIFICITY note in base.css.
+ *
+ * Motion: nothing in the form is hidden by default. The hero copy and the form
+ * card use the CSS-only `lx-intro` entrance from base.css, which plays before
+ * hydration and is gated on prefers-reduced-motion there.
+ */
+
+/* ================================================================= Hero band */
+
+.lx .lx-request-hero {
+  position: relative;
+  isolation: isolate;
+}
+
+/* A soft dawn wash behind the copy, echoing the landing hero's sun. */
+.lx .lx-request-hero::before {
+  content: "";
+  position: absolute;
+  inset: -120px 0 auto;
+  z-index: -1;
+  height: 620px;
+  pointer-events: none;
+  background: radial-gradient(
+      48% 60% at 78% 18%,
+      hsl(var(--lx-amber) / 0.16),
+      transparent 70%
+    ),
+    radial-gradient(
+      52% 58% at 12% 0%,
+      hsl(var(--lx-teal) / 0.1),
+      transparent 72%
+    );
+}
+
+.lx .lx-request-points {
+  display: grid;
+  gap: 14px;
+}
+
+.lx .lx-request-point {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: hsl(var(--foreground));
+}
+
+.lx .lx-request-coin {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-top: 1px;
+  border-radius: 999px;
+  background: hsl(var(--lx-mint));
+  color: hsl(var(--lx-mint-ink));
+}
+
+.lx .lx-request-coin svg {
+  width: 13px;
+  height: 13px;
+}
+
+.lx .lx-request-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border-radius: var(--lx-radius-sm);
+  padding: 13px 16px;
+  background: hsl(var(--lx-slate));
+  box-shadow: inset 0 0 0 1px hsl(var(--lx-slate-ink) / 0.16);
+  color: hsl(var(--lx-slate-ink));
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.55;
+}
+
+.lx .lx-request-note svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* The three commitments under the copy. */
+.lx .lx-request-summary {
+  display: grid;
+  gap: 16px;
+  border-top: 1px solid hsl(var(--border));
+  padding-top: 28px;
+}
+
+@media (min-width: 640px) {
+  .lx .lx-request-summary {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1024px) {
+  .lx .lx-request-summary {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+}
+
+.lx .lx-request-summary__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.lx .lx-request-summary__icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+}
+
+.lx .lx-request-summary__icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.lx .lx-request-summary__icon.is-teal {
+  background: hsl(var(--lx-mint));
+  color: hsl(var(--lx-mint-ink));
+}
+
+.lx .lx-request-summary__icon.is-amber {
+  background: hsl(var(--lx-sand));
+  color: hsl(var(--lx-sand-ink));
+}
+
+.lx .lx-request-summary__icon.is-slate {
+  background: hsl(var(--lx-slate));
+  color: hsl(var(--lx-slate-ink));
+}
+
+.lx .lx-request-summary__title {
+  display: block;
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: hsl(var(--foreground));
+}
+
+.lx .lx-request-summary__desc {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: hsl(var(--muted-foreground));
+}
+
+/* ================================================================= Form card */
+
+.lx .lx-request-card {
+  padding: 24px;
+  border-radius: var(--lx-radius-lg);
+  box-shadow: var(--lx-elev-3), inset 0 0 0 1px hsl(var(--border) / 0.9);
+}
+
+@media (min-width: 640px) {
+  .lx .lx-request-card {
+    padding: 32px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .lx .lx-request-card {
+    padding: 36px;
+  }
+}
+
+/* A thin amber-to-teal rule along the card's top edge. */
+.lx .lx-request-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 28px auto;
+  height: 3px;
+  border-radius: 0 0 3px 3px;
+  background: linear-gradient(
+    90deg,
+    hsl(var(--lx-amber)),
+    hsl(var(--lx-teal))
+  );
+  opacity: 0.85;
+}
+
+.lx .lx-request-card__title {
+  font-family: var(--lx-font-display);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  color: hsl(var(--foreground));
+}
+
+.lx .lx-request-label {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: hsl(var(--foreground));
+}
+
+.lx .lx-request-input {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease,
+    background-color 0.2s ease;
+}
+
+.lx .lx-request-input:hover:not(:focus-visible):not([aria-invalid="true"]) {
+  border-color: hsl(var(--foreground) / 0.32);
+}
+
+/* The buyer question is the product input, so it gets its own framed block. */
+.lx .lx-request-question {
+  border-radius: var(--lx-radius);
+  padding: 16px;
+  background: hsl(var(--lx-sand) / 0.55);
+  box-shadow: inset 0 0 0 1px hsl(var(--lx-sand-ink) / 0.14);
+}
+
+.lx .lx-request-error {
+  border-radius: var(--lx-radius-sm);
+  padding: 12px 16px;
+  background: hsl(var(--lx-rose));
+  box-shadow: inset 0 0 0 1px hsl(var(--lx-rose-ink) / 0.22);
+  color: hsl(var(--foreground));
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.lx .lx-request-success {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  background: hsl(var(--lx-mint));
+  color: hsl(var(--lx-mint-ink));
+}
+
+.lx .lx-request-next {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: hsl(var(--lx-mint));
+  color: hsl(var(--lx-mint-ink));
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* The landing buttons have no disabled state; the submit button needs one. */
+.lx .lx-btn:disabled,
+.lx .lx-btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.68;
+  transform: none;
+  box-shadow: none;
+}
+
+.lx .lx-btn:disabled::before {
+  display: none;
+}
+
+.lx .lx-btn:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 3px;
+}
+
+/* ====================================================== Retest status note */
+
+.lx .lx-request-statuses {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 22px 24px;
+}
+
+@media (min-width: 640px) {
+  .lx .lx-request-statuses {
+    flex-direction: row;
+    align-items: center;
+    gap: 22px;
+  }
+}
+
+/* =========================================== How it works, three-step band */
+
+@media (min-width: 1024px) {
+  .lx .lx-how-steps.lx-how-steps--three {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}

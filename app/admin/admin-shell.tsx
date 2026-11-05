@@ -3,6 +3,7 @@ import {
   ChartColumn,
   FileText,
   FlaskConical,
+  Globe,
   Settings,
   ScrollText,
 } from "lucide-react";
@@ -17,7 +18,7 @@ import "./admin.css";
  * that says plainly it does not exist.
  */
 
-export type AdminNavKey = "requests" | "interventions";
+export type AdminNavKey = "requests" | "interventions" | "diagnostics";
 
 interface NavEntry {
   key: string;
@@ -38,6 +39,12 @@ const NAV: NavEntry[] = [
     label: "Interventions",
     href: "/admin/interventions",
     icon: <FlaskConical size={17} strokeWidth={1.8} />,
+  },
+  {
+    key: "diagnostics",
+    label: "Site diagnostic (preview)",
+    href: "/admin/site-diagnostics",
+    icon: <Globe size={17} strokeWidth={1.8} />,
   },
   {
     key: "analytics",

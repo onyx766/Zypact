@@ -1,0 +1,37 @@
+/* Founder W1 preview. Scoped under .w1-page; uses the console's zpa-* chrome. */
+.w1-page { max-width: 1040px; display: grid; gap: 24px; }
+.w1-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: #9a5b13; }
+.w1-title { margin: 6px 0 0; font-size: 26px; font-weight: 700; }
+.w1-lede { margin: 6px 0 0; color: #5b6470; font-size: 14px; }
+.w1-body { display: grid; gap: 20px; }
+.w1-form { display: grid; gap: 8px; padding: 18px; border: 1px solid rgba(0,0,0,.1); border-radius: 12px; }
+.w1-form-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.w1-label { font-size: 13px; font-weight: 600; }
+.w1-input { flex: 1 1 280px; min-height: 40px; padding: 0 12px; border: 1px solid rgba(0,0,0,.2); border-radius: 8px; font: inherit; }
+.w1-input:focus-visible { outline: 2px solid #1f6f63; outline-offset: 2px; }
+.w1-dim { color: #5b6470; font-size: 12.5px; margin: 2px 0 0; }
+.w1-note { font-size: 13px; color: #6b4a12; margin: 2px 0 0; }
+.w1-error { padding: 12px 14px; border-radius: 10px; background: #fbe9e7; color: #7a1f14; font-size: 14px; }
+.w1-report { display: grid; gap: 14px; }
+.w1-notices { padding: 14px 16px; border-radius: 10px; background: #eef4f8; font-size: 14px; display: grid; gap: 4px; }
+.w1-notices p { margin: 0; }
+.w1-ownership { font-weight: 700; }
+.w1-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; }
+.w1-actions { display: flex; gap: 8px; }
+.w1-h2 { font-size: 17px; font-weight: 700; margin: 12px 0 4px; }
+.w1-fixlist, .w1-findings { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.w1-fixlist li, .w1-finding { padding: 10px 12px; border: 1px solid rgba(0,0,0,.08); border-radius: 10px; font-size: 13.5px; }
+.w1-fixlist p, .w1-finding p { margin: 4px 0 0; }
+.w1-finding-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.w1-finding-title { font-weight: 600; }
+.w1-state { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.w1-state.is-pass { background: #e3f3ea; color: #1d5b38; }
+.w1-state.is-issue { background: #fbe9e7; color: #8a2417; }
+.w1-state.is-info { background: #eef1f5; color: #384452; }
+.w1-state.is-unknown { background: #fdf1dc; color: #7a4b0c; }
+.w1-url { font-size: 12px; color: #384452; word-break: break-all; }
+.w1-excerpt { font-style: italic; }
+.w1-fix { color: #1f3b36; }
+.w1-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.w1-table th, .w1-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid rgba(0,0,0,.08); vertical-align: top; }
+.w1-table code { word-break: break-all; }

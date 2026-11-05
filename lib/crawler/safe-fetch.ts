@@ -56,12 +56,41 @@ export interface SafeFetchOptions {
  * Injectable so tests can drive the redirect and rebinding logic without
  * a network, while production uses the pinned socket implementation.
  */
-export type Transport = (input: {
+export interface TransportInput {
   url: URL;
   addresses: string[];
+  /** Socket inactivity timeout (connect, TLS, headers and body). */
   timeoutMs: number;
   userAgent: string;
-}) => Promise<{ status: number; headers: Record<string, string>; body: string }>;
+  /*
+   * Everything below is optional and additive. With none of it set the
+   * transport behaves exactly as it always has, which is what crawlSite and
+   * the founder snapshot path rely on.
+   */
+  /** Accept header; default "text/html,application/xhtml+xml". */
+  accept?: string;
+  /** "identity" sends Accept-Encoding: identity; default sends none. */
+  acceptEncoding?: "identity";
+  /** Body cap in bytes; default MAX_BODY_BYTES. */
+  maxBodyBytes?: number;
+  /** Over the cap: "reject" (default) throws, "truncate" keeps the prefix. */
+  onOversize?: "reject" | "truncate";
+  /** Wall-clock limit for the whole exchange; default none. */
+  deadlineMs?: number;
+}
+
+export interface TransportResult {
+  status: number;
+  headers: Record<string, string>;
+  /** UTF-8 decoding of the body, kept for existing callers. */
+  body: string;
+  /** The exact bytes received, before any decoding. Optional for stubs. */
+  bodyBytes?: Uint8Array;
+  /** True when onOversize "truncate" cut the body at maxBodyBytes. */
+  truncated?: boolean;
+}
+
+export type Transport = (input: TransportInput) => Promise<TransportResult>;
 
 /** Caps a response body so a hostile server cannot exhaust memory. */
 export const MAX_BODY_BYTES = 5_000_000;
@@ -82,11 +111,28 @@ export class ResponseTooLargeError extends Error {
   }
 }
 
+/**
+ * Raised when a request runs out of time: the socket went idle for
+ * `timeoutMs`, or the wall-clock `deadlineMs` passed. The message is the one
+ * the transport always used, so existing message checks keep working.
+ */
+export class RequestTimeoutError extends Error {
+  constructor() {
+    super("request timed out");
+    this.name = "RequestTimeoutError";
+  }
+}
+
 export const pinnedTransport: Transport = ({
   url,
   addresses,
   timeoutMs,
   userAgent,
+  accept,
+  acceptEncoding,
+  maxBodyBytes,
+  onOversize,
+  deadlineMs,
 }) =>
   new Promise((resolve, reject) => {
     const isHttps = url.protocol === "https:";
@@ -96,12 +142,16 @@ export const pinnedTransport: Transport = ({
     // `end` nor `error`, and a destroyed socket can still emit `close`
     // afterwards, so without a guard the promise could hang or settle
     // twice. Settling exactly once is the invariant.
+    const cap = maxBodyBytes ?? MAX_BODY_BYTES;
+    let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
+
     let settled = false;
     const finish = (
-      outcome: { ok: true; value: Awaited<ReturnType<Transport>> } | { ok: false; error: Error }
+      outcome: { ok: true; value: TransportResult } | { ok: false; error: Error }
     ): void => {
       if (settled) return;
       settled = true;
+      if (deadlineTimer) clearTimeout(deadlineTimer);
       if (outcome.ok) resolve(outcome.value);
       else reject(outcome.error);
     };
@@ -146,7 +196,8 @@ export const pinnedTransport: Transport = ({
         headers: {
           host: url.host,
           "user-agent": userAgent,
-          accept: "text/html,application/xhtml+xml",
+          accept: accept ?? "text/html,application/xhtml+xml",
+          ...(acceptEncoding ? { "accept-encoding": acceptEncoding } : {}),
         },
         servername: isHttps ? url.hostname : undefined,
         lookup: pinnedLookup as never,
@@ -162,37 +213,56 @@ export const pinnedTransport: Transport = ({
         const chunks: Buffer[] = [];
         let total = 0;
 
-        res.on("data", (chunk: Buffer) => {
-          if (settled) return;
-          total += chunk.length;
-          if (total > MAX_BODY_BYTES) {
-            // Stop reading, tear the connection down, and settle now —
-            // rather than waiting for an `end` that will never arrive.
-            chunks.length = 0;
-            res.destroy();
-            req.destroy();
-            finish({ ok: false, error: new ResponseTooLargeError(MAX_BODY_BYTES) });
-            return;
-          }
-          chunks.push(chunk);
-        });
-
-        res.on("end", () => {
+        const collectHeaders = (): Record<string, string> => {
           const headers: Record<string, string> = {};
           for (const [key, value] of Object.entries(res.headers)) {
             headers[key.toLowerCase()] = Array.isArray(value)
               ? value.join(", ")
               : String(value ?? "");
           }
+          return headers;
+        };
+
+        const resolveWith = (truncated: boolean): void => {
+          const bytes = Buffer.concat(chunks);
           finish({
             ok: true,
             value: {
               status: res.statusCode ?? 0,
-              headers,
-              body: Buffer.concat(chunks).toString("utf-8"),
+              headers: collectHeaders(),
+              body: bytes.toString("utf-8"),
+              bodyBytes: new Uint8Array(bytes),
+              truncated,
             },
           });
+        };
+
+        res.on("data", (chunk: Buffer) => {
+          if (settled) return;
+          if (total + chunk.length > cap) {
+            if (onOversize === "truncate") {
+              // Keep exactly the first `cap` bytes, stop reading, settle.
+              const room = cap - total;
+              if (room > 0) chunks.push(chunk.subarray(0, room));
+              total = cap;
+              resolveWith(true);
+              res.destroy();
+              req.destroy();
+              return;
+            }
+            // Stop reading, tear the connection down, and settle now —
+            // rather than waiting for an `end` that will never arrive.
+            chunks.length = 0;
+            res.destroy();
+            req.destroy();
+            finish({ ok: false, error: new ResponseTooLargeError(cap) });
+            return;
+          }
+          total += chunk.length;
+          chunks.push(chunk);
         });
+
+        res.on("end", () => resolveWith(false));
 
         res.on("error", (err) => finish({ ok: false, error: err }));
 
@@ -208,9 +278,17 @@ export const pinnedTransport: Transport = ({
       // `destroy(err)` surfaces through the request's `error` handler,
       // which settles; the explicit finish keeps that guaranteed even if
       // the socket was already gone.
-      req.destroy(new Error("request timed out"));
-      finish({ ok: false, error: new Error("request timed out") });
+      req.destroy(new RequestTimeoutError());
+      finish({ ok: false, error: new RequestTimeoutError() });
     });
+    if (deadlineMs !== undefined) {
+      // A server that trickles bytes inside the idle window would otherwise
+      // hold the request open until the size cap.
+      deadlineTimer = setTimeout(() => {
+        req.destroy(new RequestTimeoutError());
+        finish({ ok: false, error: new RequestTimeoutError() });
+      }, Math.max(0, deadlineMs));
+    }
     req.on("error", (err) => finish({ ok: false, error: err }));
     req.end();
   });
@@ -268,4 +346,52 @@ export async function safeFetch(
   }
 
   throw new Error(`Too many redirects (limit ${maxRedirects})`);
+}
+
+/** One exchange's result from `safeFetchOnce`. */
+export interface SafeFetchOnceResult {
+  /** The URL that was requested, after validation. */
+  url: URL;
+  status: number;
+  /** Lowercased header names; repeated headers joined with ", ". */
+  headers: Record<string, string>;
+  /** Exact bytes received (a UTF-8 encoding of `body` for legacy stubs). */
+  bodyBytes: Uint8Array;
+  truncated: boolean;
+}
+
+export interface SafeFetchOnceOptions
+  extends Omit<TransportInput, "url" | "addresses"> {
+  dnsLookup?: DnsLookup;
+  transport?: Transport;
+}
+
+/**
+ * One request under the full outbound policy, with NO redirect following.
+ *
+ * A 3xx comes back as-is, Location header included, so the caller can apply
+ * its own per-hop policy (same-site, robots.txt, port, budget) before it
+ * decides whether to request the next URL, which re-enters this function and
+ * therefore validation and pinning. That is what the W1 diagnostic crawler
+ * needs and `safeFetch` cannot offer: `safeFetch` decides redirects itself,
+ * and with `maxRedirects: 0` it throws instead of returning the 3xx.
+ */
+export async function safeFetchOnce(
+  rawUrl: string,
+  options: SafeFetchOnceOptions
+): Promise<SafeFetchOnceResult> {
+  const { dnsLookup, transport = pinnedTransport, ...input } = options;
+  const destination = await validateOutboundUrl(rawUrl, dnsLookup);
+  const response = await transport({
+    ...input,
+    url: destination.url,
+    addresses: destination.addresses,
+  });
+  return {
+    url: destination.url,
+    status: response.status,
+    headers: response.headers,
+    bodyBytes: response.bodyBytes ?? new TextEncoder().encode(response.body),
+    truncated: response.truncated ?? false,
+  };
 }

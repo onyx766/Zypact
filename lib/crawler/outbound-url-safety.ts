@@ -98,6 +98,7 @@ const BLOCKED_IPV4: Array<[string, number]> = [
   ["203.0.113.0", 24], // TEST-NET-3 documentation
   ["224.0.0.0", 4], // multicast
   ["240.0.0.0", 4], // reserved, incl. 255.255.255.255 broadcast
+  ["192.88.99.0", 24], // deprecated 6to4 relay anycast
 ];
 
 function isPublicIpv4(address: string): boolean {
@@ -141,8 +142,12 @@ function ipv6Hextets(address: string): number[] | null {
  * smuggle a private IPv4 destination past a naive IPv6 check.
  */
 function embeddedIpv4(address: string): string | null {
-  const dotted = address.match(/(\d{1,3}(?:\.\d{1,3}){3})$/);
-  if (dotted && /^(::ffff:|::|64:ff9b::)/i.test(address)) return dotted[1];
+  // Dotted tails: only the exact mapped and NAT64 prefixes carry a v4 address
+  // to judge. Any other dotted form (`::a.b.c.d`, `::ffff:0:a.b.c.d`) is not
+  // global unicast and is refused by the allow-list in isPublicIpv6.
+  const dotted = address.match(/^(?:::ffff:|64:ff9b::)(\d{1,3}(?:\.\d{1,3}){3})$/i);
+  if (dotted) return dotted[1];
+  if (/\d{1,3}(?:\.\d{1,3}){3}$/.test(address)) return "0.0.0.0";
 
   const hextets = ipv6Hextets(address);
   if (!hextets) return null;
@@ -181,6 +186,13 @@ function isPublicIpv6(address: string): boolean {
     return false; // 100::/64 discard-only
   }
   if (first === 0x2002) return false; // 6to4, deprecated; embeds arbitrary v4
+
+  // Allow-list, not block-list: only 2000::/3 global unicast is public. This
+  // also refuses ::/8 (IPv4-compatible and SIIT), 64:ff9b:1::/48 local-use
+  // NAT64, fec0::/10 site-local, 5f00::/16 and every unassigned range.
+  if ((first & 0xe000) !== 0x2000) return false;
+  if (first === 0x2001 && hextets[1] < 0x0200) return false; // 2001::/23 IETF (Teredo, ORCHID, benchmarking)
+  if (first === 0x3fff && hextets[1] < 0x1000) return false; // 3fff::/20 documentation (RFC 9637)
 
   return true;
 }

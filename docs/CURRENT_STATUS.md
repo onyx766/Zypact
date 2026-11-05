@@ -1571,3 +1571,57 @@ production apply and any AI marketing analysis remain on HOLD.
 | SV1, disposable local Supabase stack, run 1 / run 2 | 172 PASS, 0 FAIL, 0 NOT ESTABLISHED, 12 INFO in each; 16 functions closed; manifest 183/183 |
 | `npm run build:verify` / `npm run typecheck` | pass / pass |
 | Offline regressions (9 M0, 16 QX-03, 21 B1 suites) | exit codes identical to the `84f26ff` run (only the pre-existing failures) |
+
+## 22. W1 Website Buyer-Readiness Diagnostic — offline engine and founder preview, draft PR, not merged, not deployed
+
+Recorded 2026-11-05 on branch `feat/w1-website-diagnostic`, base `main` @ `5851f3d` (PR #102).
+Scope chosen 2026-11-04 under the Technical Co-founder handoff of 2026-11-03 (§7, §13): W1-A
+(check catalogue and rules), W1-B (robots-aware bounded crawler) and W1-C (immutable report,
+exports), plus a founder-only stateless preview behind a default-off kill switch. **Not in
+scope and still gated:** W1-D (writer RPCs, run persistence, customer UI, release controls), S1,
+G1, any migration, any production change. Design and the decisions needed:
+[`W1_WEBSITE_DIAGNOSTIC.md`](W1_WEBSITE_DIAGNOSTIC.md).
+
+### 22.1 Status notes
+
+- PRs #100, #101 and #102 are merged (`c5250b9`, `62cf0c4`, `5851f3d`). The "not merged / not
+  pushed" headings in sections 20 and 21, and D-042 and D-043, are historical. Neither Q2′
+  migration is applied to any hosted database.
+- No migration is added. The Q2′-2 detail registry stays empty, so W1 findings would persist
+  with `detail = NULL`.
+- Shared modules: `lib/crawler/safe-fetch.ts` gains optional, default-preserving options and
+  `safeFetchOnce`; `lib/crawler/outbound-url-safety.ts` is strictly tighter (IPv6 allow-list
+  `2000::/3`, plus `192.88.99.0/24`). `lib/crawler/crawl-site.ts` is unchanged.
+- The preview route makes live outbound requests only when `ZYPACT_W1_PREVIEW_ENABLED=true`.
+
+### 22.2 Commands added
+
+| Command | Result on this branch |
+| --- | --- |
+| `npm run test:w1-contract` | 294/294 |
+| `npm run test:w1-robots` | 46/46 |
+| `npm run test:w1-safe-fetch` | 15/15 (127.0.0.1 only) |
+| `npm run test:w1-crawl` | 59/59 |
+| `npm run test:w1-report` | 71/71 |
+| `npm run test:w1-preview` | 26/26 |
+| `npm run test:outbound-url-safety` (existing suite, now registered) | ALL PASS |
+| `npm run test:crawl-apex-www-fallback` (existing suite, now registered) | ALL PASS |
+| `npm run test:w1` (all eight) | pass |
+| `npm run w1:diagnose -- <url>` | CLI; live run against www.zypact.com completed (4 pages, 7 requests) |
+
+Inventory on this branch: 117 `test:*` and 4 `verify:*` commands, 202 `scripts/test-*.ts` files,
+84 migrations. This supersedes the counts in §20.3 (main at `5851f3d` has 108 / 4 / 196 / 84).
+
+### 22.3 Regression runs (local; none of these runs in CI)
+
+`npm run typecheck` pass; `npm run build:verify` pass; `test:q2p2-schema` and `test:q2p-schema`
+pass; `test:landing-page`, `test:intervention-page`, `test:bqi-candidates`, `test:bqi-selection`
+pass. Pre-existing on `main`, not caused by this change: `test:seo` 61/63 (legacy-route 410
+cases), and `test:paid-execution-guards` 129/132 on Windows. The latter's three failing checks
+compare path lists with `\` separators, and the W1 route appears in none of them.
+
+### 22.4 What these tests do not establish
+
+Behaviour against the open web at scale; hosted Vercel or Supabase behaviour; the deployment
+plan's real function duration limit; that the D11 claim-language review, the D5 privacy review
+or the founder's approval of the catalogue and fetch bounds have happened. They have not.

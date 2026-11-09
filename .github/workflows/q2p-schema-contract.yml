@@ -22,6 +22,7 @@ on:
       - ".github/workflows/q2p-schema-contract.yml"
       - "scripts/test-q2p-schema-contract.ts"
       - "scripts/test-q2p2-schema-contract.ts"
+      - "scripts/test-s1-schema-contract.ts"
       - "scripts/lib/migration-names.ts"
       - "scripts/fixtures/q2p1-wording-vectors.json"
       - "lib/buyer-questions/**"
@@ -68,3 +69,6 @@ jobs:
 
       - name: Run the Q2′-2 static schema contract
         run: npm run test:q2p2-schema
+
+      - name: Run the S1 static schema contract
+        run: npm run test:s1-schema

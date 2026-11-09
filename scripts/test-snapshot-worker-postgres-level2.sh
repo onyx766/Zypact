@@ -3063,6 +3063,218 @@ assert "QR2-17. baseline captured over every table that is not a Q2′-2 table" 
   "$(q2p_sql "select count(*) from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind = 'r' and c.relname <> all (level2_q2p2.q2p2_tables());")"
 assert "QR2-17. no row of any non-Q2′-2 table changed, disappeared or was added" "${r217}" "0|"
 
+# ── S1 — customer account sessions and rate limits (QS1 cases) ───────────
+#
+# Fixtures are in scripts/sql/level2-s1-fixtures.sql (never shipped). Account
+# ids are synthetic: plain PostgreSQL has no auth schema, and S1 never reads
+# it. Tokens are synthetic and never printed in an assertion name.
+
+echo
+echo "── S1 — account sessions and rate limits ────────────────"
+
+psql_stdin < scripts/sql/level2-s1-fixtures.sql
+S1_TABLES="account_sessions account_rate_limit_events"
+S1_OP="00000000-0000-4000-8000-0000000000f1"
+s1() { q2p_sql "set role service_role; select $1;"; }      # one expression, as service_role
+s1_owner() { q2p_sql "select $1;"; }                         # one expression, as the owner
+s1_try() { q2p_sql "select split_part(level2_s1.attempt(\$l2\$$1\$l2\$), ':', 1);"; }   # rolled back; 'OK' or SQLSTATE
+s1_hash() { echo "public._q2p_token_hash('zypact.account_session.v1', '$1')"; }
+
+S1_ACCT_A="00000000-0000-4000-8000-0000000051a1"
+S1_ACCT_B="00000000-0000-4000-8000-0000000051b1"
+S1_ACCT_N="00000000-0000-4000-8000-0000000051c1"
+S1_ACCT_2="00000000-0000-4000-8000-0000000051d1"
+S1_ACCT_X="00000000-0000-4000-8000-0000000051e1"
+S1_TA1="l2s1-token-a1-0123456789abcdef0123456789abcdef"
+S1_TA2="l2s1-token-a2-0123456789abcdef0123456789abcdef"
+S1_TA3="l2s1-token-a3-0123456789abcdef0123456789abcdef"
+S1_TA4="l2s1-token-a4-0123456789abcdef0123456789abcdef"
+S1_TB1="l2s1-token-b1-0123456789abcdef0123456789abcdef"
+S1_TIDLE="l2s1-token-idle-0123456789abcdef0123456789abcd"
+S1_TABS="l2s1-token-abs-0123456789abcdef0123456789abcde"
+
+read -r S1_WSA S1_MA <<<"$(s1_owner "level2_s1.workspace('${S1_ACCT_A}', 'a')")"
+read -r S1_WSB S1_MB <<<"$(s1_owner "level2_s1.workspace('${S1_ACCT_B}', 'b')")"
+s1_owner "level2_s1.workspace('${S1_ACCT_2}', 'two-1')" >/dev/null
+s1_owner "level2_s1.workspace('${S1_ACCT_2}', 'two-2')" >/dev/null
+
+# QS1-01 — closed tables and functions
+assert "QS1-01. no API role holds any privilege on any S1 table" \
+  "$(q2p_sql "select count(*) from unnest(array['anon','authenticated','service_role']) r, unnest(array['account_sessions','account_rate_limit_events']) t, unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) p where has_table_privilege(r, 'public.' || t, p);")" "0"
+assert "QS1-01. RLS on both S1 tables, no policy" \
+  "$(q2p_sql "select count(*) filter (where c.relrowsecurity) || '/' || (select count(*) from pg_policy p where p.polrelid in ('public.account_sessions'::regclass, 'public.account_rate_limit_events'::regclass)) from pg_class c where c.oid in ('public.account_sessions'::regclass, 'public.account_rate_limit_events'::regclass);")" "2/0"
+assert "QS1-01. no API role may execute any _s1_ helper" \
+  "$(q2p_sql "select count(*) from pg_proc p, unnest(array['anon','authenticated','service_role']) r where p.pronamespace = 'public'::regnamespace and p.proname like '\\_s1\\_%' and has_function_privilege(r, p.oid, 'execute');")" "0"
+for f in open_account_session check_account_session record_account_step_up revoke_account_session revoke_account_sessions_for_account take_account_rate_limit; do
+  assert "QS1-01. only service_role may execute ${f}" \
+    "$(q2p_sql "select string_agg(r || '=' || has_function_privilege(r, p.oid, 'execute')::text, ',' order by r) from pg_proc p, unnest(array['anon','authenticated','service_role']) r where p.pronamespace = 'public'::regnamespace and p.proname = '${f}';")" \
+    "anon=false,authenticated=false,service_role=true"
+done
+for t in ${S1_TABLES}; do
+  for r in anon authenticated service_role; do
+    assert "QS1-01. ${r} cannot read ${t}" "$(sqlstate_as_role "${r}" "perform 1 from public.${t} limit 1;")" "42501"
+  done
+done
+assert "QS1-01. authenticated cannot open a session" \
+  "$(sqlstate_as_role authenticated "perform public.open_account_session('${S1_ACCT_A}', '${S1_TA3}', 3600, 900);")" "42501"
+
+# QS1-02 — opening a session
+assert "QS1-02. an account with one membership opens a session in that workspace" \
+  "$(s1 "concat_ws('|', status, workspace_id, membership_id) from public.open_account_session('${S1_ACCT_A}', '${S1_TA1}', 3600, 900)")" \
+  "OPENED|${S1_WSA}|${S1_MA}"
+assert "QS1-02. only the purpose-labelled hash is stored, never the token" \
+  "$(q2p_sql "select (token_hash = $(s1_hash "${S1_TA1}"))::text || '/' || (position('${S1_TA1}' in t::text) = 0)::text from public.account_sessions t where account_id = '${S1_ACCT_A}';")" \
+  "true/true"
+
+# QS1-03 — membership is required, and must be unambiguous
+assert "QS1-03. an account with no membership cannot open a session" \
+  "$(s1 "status from public.open_account_session('${S1_ACCT_N}', '${S1_TA3}', 3600, 900)")" "NO_MEMBERSHIP"
+assert "QS1-03. an account with two memberships is refused, not guessed" \
+  "$(s1 "status from public.open_account_session('${S1_ACCT_2}', '${S1_TA3}', 3600, 900)")" "AMBIGUOUS_MEMBERSHIP"
+assert "QS1-03. neither refusal wrote a session" \
+  "$(q2p_sql "select count(*) from public.account_sessions where account_id in ('${S1_ACCT_N}', '${S1_ACCT_2}');")" "0"
+
+# QS1-04 — an active session
+S1_SEEN1="$(q2p_sql "select last_seen_at from public.account_sessions where token_hash = $(s1_hash "${S1_TA1}");")"
+assert "QS1-04. an active session resolves to its workspace and membership" \
+  "$(s1 "concat_ws('|', status, workspace_id, membership_id, coalesce(step_up_at::text, 'none')) from public.check_account_session('${S1_TA1}', '${S1_ACCT_A}')")" \
+  "ACTIVE|${S1_WSA}|${S1_MA}|none"
+assert "QS1-04. the check records activity" \
+  "$(q2p_sql "select (last_seen_at > '${S1_SEEN1}'::timestamptz)::text from public.account_sessions where token_hash = $(s1_hash "${S1_TA1}");")" "true"
+
+# QS1-05 — identity binding and token purpose
+assert "QS1-05. the token with another account's identity is NOT_FOUND" \
+  "$(s1 "status from public.check_account_session('${S1_TA1}', '${S1_ACCT_B}')")" "NOT_FOUND"
+assert "QS1-05. an unknown token is NOT_FOUND" \
+  "$(s1 "status from public.check_account_session('${S1_TA4}', '${S1_ACCT_A}')")" "NOT_FOUND"
+assert "QS1-05. the review-invitation hash of the same token never matches" \
+  "$(q2p_sql "select count(*) from public.account_sessions where token_hash = public._q2p_token_hash('zypact.question_review_session.v1', '${S1_TA1}');")" "0"
+
+# QS1-06 — idle and absolute expiry
+s1_owner "level2_s1.raw_session('${S1_ACCT_A}', '${S1_WSA}', '${S1_MA}', '${S1_TIDLE}', interval '20 minutes', interval '10 minutes', 3600, 300)" >/dev/null
+assert "QS1-06. a session idle past its idle limit is EXPIRED" \
+  "$(s1 "status from public.check_account_session('${S1_TIDLE}', '${S1_ACCT_A}')")" "EXPIRED"
+s1_owner "level2_s1.raw_session('${S1_ACCT_A}', '${S1_WSA}', '${S1_MA}', '${S1_TABS}', interval '2 hours', interval '1 minute', 3600, 3600)" >/dev/null
+assert "QS1-06. a session past its absolute limit is EXPIRED, however recent its activity" \
+  "$(s1 "status from public.check_account_session('${S1_TABS}', '${S1_ACCT_A}')")" "EXPIRED"
+assert "QS1-06. an expired session's activity is not recorded" \
+  "$(q2p_sql "select (last_seen_at < clock_timestamp() - interval '30 seconds')::text from public.account_sessions where token_hash = $(s1_hash "${S1_TABS}");")" "true"
+
+# QS1-07 — sign-out
+s1 "status from public.open_account_session('${S1_ACCT_A}', '${S1_TA2}', 3600, 900)" >/dev/null
+assert "QS1-07. sign-out revokes the session" \
+  "$(s1 "status from public.revoke_account_session('${S1_TA2}', 'sign_out')")" "REVOKED"
+assert "QS1-07. a revoked session is REVOKED on its next check" \
+  "$(s1 "status from public.check_account_session('${S1_TA2}', '${S1_ACCT_A}')")" "REVOKED"
+assert "QS1-07. a second sign-out is ALREADY_REVOKED" \
+  "$(s1 "status from public.revoke_account_session('${S1_TA2}', 'sign_out')")" "ALREADY_REVOKED"
+assert "QS1-07. an unlisted revocation reason is refused" \
+  "$(sqlstate_as_role service_role "perform public.revoke_account_session('${S1_TA1}', 'because');")" "22023"
+assert "QS1-07. the account's other session is untouched" \
+  "$(s1 "status from public.check_account_session('${S1_TA1}', '${S1_ACCT_A}')")" "ACTIVE"
+
+# QS1-08 — step-up
+assert "QS1-08. step-up is recorded on an active session" \
+  "$(s1 "status || '|' || (step_up_at is not null)::text from public.record_account_step_up('${S1_TA1}', '${S1_ACCT_A}')")" "STEPPED_UP|true"
+assert "QS1-08. the check reports the step-up" \
+  "$(s1 "(step_up_at is not null)::text from public.check_account_session('${S1_TA1}', '${S1_ACCT_A}')")" "true"
+assert "QS1-08. step-up on a revoked session is refused" \
+  "$(s1 "status from public.record_account_step_up('${S1_TA2}', '${S1_ACCT_A}')")" "REVOKED"
+assert "QS1-08. step-up with another account's identity is NOT_FOUND" \
+  "$(s1 "status from public.record_account_step_up('${S1_TA1}', '${S1_ACCT_B}')")" "NOT_FOUND"
+
+# QS1-09 — every session of an account (password change)
+s1 "status from public.open_account_session('${S1_ACCT_B}', '${S1_TB1}', 3600, 900)" >/dev/null
+s1 "status from public.open_account_session('${S1_ACCT_A}', '${S1_TA3}', 3600, 900)" >/dev/null
+S1_A_OPEN="$(q2p_sql "select count(*) from public.account_sessions where account_id = '${S1_ACCT_A}' and revoked_at is null;")"
+assert "QS1-09. a password change revokes every unrevoked session of the account" \
+  "$(s1 "status || '|' || revoked_count from public.revoke_account_sessions_for_account('${S1_ACCT_A}', 'password_change')")" \
+  "REVOKED|${S1_A_OPEN}"
+assert "QS1-09. none of that account's sessions remains usable" \
+  "$(q2p_sql "select count(*) from public.account_sessions where account_id = '${S1_ACCT_A}' and revoked_at is null;")" "0"
+assert "QS1-09. another account's session is untouched" \
+  "$(s1 "status from public.check_account_session('${S1_TB1}', '${S1_ACCT_B}')")" "ACTIVE"
+assert "QS1-09. a sign-out reason is not accepted for a bulk revoke" \
+  "$(sqlstate_as_role service_role "perform public.revoke_account_sessions_for_account('${S1_ACCT_A}', 'sign_out');")" "22023"
+
+# QS1-10 — removal from the workspace
+s1 "status from public.add_workspace_member('${S1_WSB}', '${S1_ACCT_X}', 'founder', '${S1_OP}')" >/dev/null
+s1 "status from public.remove_workspace_member('${S1_WSB}', '${S1_MB}', 'founder', '${S1_OP}')" >/dev/null
+assert "QS1-10. removing the member revokes the session on its next check" \
+  "$(s1 "status from public.check_account_session('${S1_TB1}', '${S1_ACCT_B}')")" "REVOKED"
+assert "QS1-10. the revocation records the removal" \
+  "$(q2p_sql "select revoked_reason from public.account_sessions where token_hash = $(s1_hash "${S1_TB1}");")" "membership_removed"
+assert "QS1-10. a removed member cannot open a new session" \
+  "$(s1 "status from public.open_account_session('${S1_ACCT_B}', '${S1_TA4}', 3600, 900)")" "NO_MEMBERSHIP"
+
+# QS1-11 — the session row guard
+s1 "status from public.open_account_session('${S1_ACCT_A}', '${S1_TA4}', 3600, 900)" >/dev/null
+assert "QS1-11. a session's identity columns are immutable" \
+  "$(s1_try "update public.account_sessions set account_id = gen_random_uuid() where token_hash = $(s1_hash "${S1_TA4}")")" "55000"
+assert "QS1-11. last_seen_at cannot move backwards" \
+  "$(s1_try "update public.account_sessions set last_seen_at = last_seen_at - interval '1 minute' where token_hash = $(s1_hash "${S1_TA4}")")" "55000"
+assert "QS1-11. a session cannot be deleted" \
+  "$(s1_try "delete from public.account_sessions where token_hash = $(s1_hash "${S1_TA4}")")" "55000"
+assert "QS1-11. the session table cannot be truncated" \
+  "$(s1_try "truncate public.account_sessions")" "55000"
+assert "QS1-11. a revoked session cannot be changed" \
+  "$(s1_try "update public.account_sessions set last_seen_at = clock_timestamp() where token_hash = $(s1_hash "${S1_TA2}")")" "55000"
+assert "QS1-11. a revocation needs its reason" \
+  "$(s1_try "update public.account_sessions set revoked_at = clock_timestamp() where token_hash = $(s1_hash "${S1_TA4}")")" "23514"
+
+# QS1-12 — argument validation
+assert "QS1-12. a short token is refused" \
+  "$(sqlstate_as_role service_role "perform public.open_account_session('${S1_ACCT_A}', 'short', 3600, 900);")" "22023"
+assert "QS1-12. an idle limit above the absolute limit is refused" \
+  "$(sqlstate_as_role service_role "perform public.open_account_session('${S1_ACCT_A}', '${S1_TA3}', 600, 900);")" "22023"
+assert "QS1-12. a lifetime above 7 days is refused" \
+  "$(sqlstate_as_role service_role "perform public.open_account_session('${S1_ACCT_A}', '${S1_TA3}', 604801, 900);")" "22023"
+
+# QS1-13 — rate limits
+S1_K1="$(q2p_sql "select repeat('1', 64);")"
+S1_K2="$(q2p_sql "select repeat('2', 64);")"
+S1_K3="$(q2p_sql "select repeat('3', 64);")"
+s1_take() { s1 "allowed::text || '/' || recent from public.take_account_rate_limit('$1', 'ip', '$2', 'l2', 3600, $3)"; }
+S1_SEQ="$(s1_take sign_in "${S1_K1}" 3) $(s1_take sign_in "${S1_K1}" 3) $(s1_take sign_in "${S1_K1}" 3) $(s1_take sign_in "${S1_K1}" 3)"
+assert "QS1-13. a bucket allows its maximum, then refuses" "${S1_SEQ}" "true/1 true/2 true/3 false/3"
+assert "QS1-13. a refusal records nothing" \
+  "$(q2p_sql "select count(*) from public.account_rate_limit_events where bucket_key = '${S1_K1}';")" "3"
+assert "QS1-13. another bucket is unaffected" "$(s1_take sign_in "${S1_K2}" 3)" "true/1"
+assert "QS1-13. another purpose is unaffected" "$(s1_take sign_up "${S1_K1}" 3)" "true/1"
+s1_owner "level2_s1.raw_rate_event('sign_in', '${S1_K3}', interval '2 hours', interval '3 hours')" >/dev/null
+assert "QS1-13. events older than the window are not counted" "$(s1_take sign_in "${S1_K3}" 1)" "true/1"
+assert "QS1-13. invalid limits are refused" \
+  "$(sqlstate_as_role service_role "perform public.take_account_rate_limit('sign_in', 'ip', '${S1_K2}', 'l2', 0, 3);")" "22023"
+
+# QS1-14 — the last unit, taken concurrently
+S1_K4="$(q2p_sql "select repeat('4', 64);")"
+for i in 1 2 3 4 5 6 7 8; do
+  ( q2p_sql "set role service_role; select allowed::text from public.take_account_rate_limit('step_up', 'account', '${S1_K4}', 'l2', 3600, 1);" \
+      > "${TMPDIR_LEVEL2}/s1-race-${i}" 2>/dev/null || echo "error" > "${TMPDIR_LEVEL2}/s1-race-${i}" ) &
+done
+wait
+assert "QS1-14. eight concurrent takes of a one-unit bucket: exactly one is allowed" \
+  "$(cat "${TMPDIR_LEVEL2}"/s1-race-* | grep -c '^true$' || true)" "1"
+assert "QS1-14. the other seven are refused, none errors" \
+  "$(cat "${TMPDIR_LEVEL2}"/s1-race-* | grep -c '^false$' || true)" "7"
+assert "QS1-14. exactly one event was recorded" \
+  "$(q2p_sql "select count(*) from public.account_rate_limit_events where bucket_key = '${S1_K4}';")" "1"
+
+# QS1-15 — rate-limit rows and the purge
+assert "QS1-15. a rate-limit row cannot be updated" \
+  "$(s1_try "update public.account_rate_limit_events set key_id = 'x' where bucket_key = '${S1_K1}'")" "55000"
+assert "QS1-15. an unexpired rate-limit row cannot be deleted" \
+  "$(s1_try "delete from public.account_rate_limit_events where bucket_key = '${S1_K1}'")" "55000"
+S1_K5="$(q2p_sql "select repeat('5', 64);")"
+s1_owner "level2_s1.raw_rate_event('sign_in', '${S1_K5}', interval '3 hours', interval '1 hour')" >/dev/null
+assert "QS1-15. service_role cannot run the purge" \
+  "$(sqlstate_as_role service_role "perform public._s1_purge_account_rate_limit_events();")" "42501"
+S1_EXPIRED="$(q2p_sql "select count(*) from public.account_rate_limit_events where expires_at <= clock_timestamp();")"
+S1_LIVE="$(q2p_sql "select count(*) from public.account_rate_limit_events where expires_at > clock_timestamp() + interval '1 minute';")"
+assert "QS1-15. the purge removes exactly the expired rows" \
+  "$(s1_owner "public._s1_purge_account_rate_limit_events()")|$(q2p_sql "select count(*) from public.account_rate_limit_events;")" \
+  "${S1_EXPIRED}|${S1_LIVE}"
+
 # ── Summary ──────────────────────────────────────────────────────────────
 
 echo

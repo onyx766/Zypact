@@ -1628,7 +1628,7 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 
 ## 23. Source insights — provider sources in the report and Outcome Card, draft PR, not merged, not deployed
 
-**Branch:** `feat/source-insights`, based on `main` at `10630aa`. **Decision:** D-044, proposed, awaiting founder sign-off. Built ahead of written authorisation at the engineer's request so the founder can review working code.
+**Branch:** `feat/source-insights`, based on `main` at `10630aa`. **Decision:** D-044, approved by the Founder on 2026-11-09. Built ahead of written authorisation at the engineer's request so the founder could review working code. Merged as PR #105 (`b6546f2`); **not deployed.**
 
 **What changed:**
 
@@ -1642,6 +1642,6 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 
 **Tests:** `npm run test:source-insights` — 82/82. Unchanged and passing: `test-build-protocol-report`, `test:outcome-card` (40/40), `test:outcome-card-build` (58/58), `test:outcome-card-view` (40/40), `test:outcome-card-delivery` (47/47), `test:outcome-card-integrity`, `test:outcome-card-email`, `test-compare-protocols` (66/66), `test-measurement-compatibility` (89/89), `test-perplexity-agent-adapter` (158/158), `test:report-pass` (38/38). `test-paid-execution-guards` is 129/132 and `test-0080-report-ready-contract` is 35/36, the same failures as on `main`.
 
-**Open before customer delivery:** run the audit against staging evidence (D-044); founder sign-off on D-044 and on the `source-types/1` list.
+**Open before customer delivery:** run the audit against staging evidence (D-044), then deploy the web app and the worker. Founder sign-off on D-044 and the `source-types/1` list: done, 2026-11-09.
 
 **Deferred:** reading third-party pages, competitor websites as a source type, suggested actions, new providers or crawlers, any cross-question source score.

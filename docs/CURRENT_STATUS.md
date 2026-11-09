@@ -1691,3 +1691,20 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 - the Supabase Auth settings and SMTP;
 - the HMAC secret;
 - the scheduled purge.
+
+## 25. Production preflight written — not run against production
+
+[`PROD_PREFLIGHT_SPEC.md`](PROD_PREFLIGHT_SPEC.md) and [`scripts/sql/prod-preflight.sql`](../scripts/sql/prod-preflight.sql) were added on 2026-11-09. D-041 and §20.6 referenced them, but they did not exist in the repository.
+
+- **What it is:** a single read-only transaction, rolled back, that checks:
+  - the cluster identity;
+  - the migration ledger;
+  - 0083's pinned pre-state;
+  - that no Q2′-1, Q2′-2 or S1 object exists yet;
+  - the API roles;
+  - that no protocol job is running.
+- **Local validation:**
+  - **Clean copy:** on a disposable PostgreSQL 16 built to production's recorded state, all 15 must-pass checks pass.
+  - **Changed copy:** after 0083 and Q2′-1 are applied, P2.4, P2.5, P3.1, P4.1 and P4.2 fail.
+- **`npm run test:prod-preflight`: 15/15.** It keeps the script read-only and current with every timestamped migration, and two mutations prove it catches a commit and a write.
+- **It has not been run against production.** Running it needs the founder's authorisation, and every apply after it needs its own.

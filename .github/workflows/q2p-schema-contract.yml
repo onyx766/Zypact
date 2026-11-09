@@ -23,6 +23,8 @@ on:
       - "scripts/test-q2p-schema-contract.ts"
       - "scripts/test-q2p2-schema-contract.ts"
       - "scripts/test-s1-schema-contract.ts"
+      - "scripts/test-prod-preflight-contract.ts"
+      - "scripts/sql/prod-preflight.sql"
       - "scripts/lib/migration-names.ts"
       - "scripts/fixtures/q2p1-wording-vectors.json"
       - "lib/buyer-questions/**"
@@ -72,3 +74,6 @@ jobs:
 
       - name: Run the S1 static schema contract
         run: npm run test:s1-schema
+
+      - name: Run the production preflight contract
+        run: npm run test:prod-preflight

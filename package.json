@@ -138,6 +138,8 @@
     "test:q2p-sv1": "tsx scripts/test-q2p-supabase-stack-sv1.ts",
     "test:q2p2-schema": "tsx scripts/test-q2p2-schema-contract.ts",
     "test:q2p2-scope": "tsx scripts/test-q2p2-scope.ts",
+    "test:s1-schema": "tsx scripts/test-s1-schema-contract.ts",
+    "test:s1-accounts": "tsx scripts/test-s1-accounts.ts",
     "test:outbound-url-safety": "tsx scripts/test-outbound-url-safety.ts",
     "test:crawl-apex-www-fallback": "tsx scripts/test-crawl-apex-www-fallback.ts",
     "test:w1-contract": "tsx scripts/test-w1-contract.ts",

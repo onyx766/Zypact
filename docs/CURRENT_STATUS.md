@@ -1647,3 +1647,47 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 **Open before customer delivery:** deploy the web app and the worker. Founder sign-off on D-044 and the `source-types/1` list: done, 2026-11-09. Staging audit: passed, 2026-11-09.
 
 **Deferred:** reading third-party pages, competitor websites as a source type, suggested actions, new providers or crawlers, any cross-question source score.
+
+## 24. S1 customer accounts — draft PR, not merged, not applied anywhere, not deployed
+
+**Branch:** `feat/s1-accounts`, based on `main` at `34a690e`. **Decision:** D-045, proposed. The founder approved building S1 and opening its pull request on 2026-11-09. That approval does not cover any database apply.
+
+**What it adds:**
+
+- **Migration `20261109120000_s1_account_sessions.sql`:**
+  - two closed tables, `account_sessions` and `account_rate_limit_events`;
+  - six functions only `service_role` may execute: `open_account_session`, `check_account_session`, `record_account_step_up`, `revoke_account_session`, `revoke_account_sessions_for_account`, `take_account_rate_limit`;
+  - five `_s1_` helpers no role may execute, including the purge.
+  - It changes no existing table, function or grant.
+- **`lib/accounts/`:** configuration and policy, rate-limit keys, the service-role store, pure request handlers, and the Next.js adapter.
+- **Routes:**
+  - `/api/account/{sign-up,sign-in,sign-out,resend-verification,forgot-password,reset-password,step-up}` (POST, JSON only);
+  - `/account/auth/callback` (GET, the email link).
+- **Pages:** `/account`, `/account/sign-up`, `/account/sign-in`, `/account/verify`, `/account/forgot-password`, `/account/reset-password`. All are noindex and answer 404 unless `ZYPACT_ACCOUNTS_ENABLED=true`.
+- **`.env.example`:** names the seven S1 variables, without values.
+
+**Nothing changes for the founder:** `/login`, the founder guard, invitation sessions and every existing route are untouched.
+
+**Tests (2026-11-09):**
+
+- `npm run test:s1-schema`: **61/61**. Static, with every detector proven able to fail by a mutated copy of the migration.
+- `npm run test:s1-accounts`: **71/71**. Handlers with fake Auth and store; policy, cookies, enumeration, the reset grant and step-up; static boundary checks.
+- **Level 2 S1 cases (QS1-01 to QS1-15):**
+  - Run locally against a disposable PostgreSQL 16 cluster with every migration applied: **67 QS1 checks pass** (70 including the harness's role checks).
+  - A copy with the removal revocation disabled fails QS1-10 as expected.
+  - The full harness runs in CI (`snapshot-worker-postgres-level2.yml`) when the PR opens.
+- `npm run typecheck`: clean. `npm run build:verify`: passes.
+- The account pages were rendered locally with accounts on. No form was submitted, because `.env.local` points at production Auth.
+- Unchanged and the same as `main`:
+  - `test:q2p-schema` and `test:q2p2-schema` pass;
+  - `test:seo` 63/65 (the 2 trailing-slash and case 410 failures, as on `main`);
+  - `test-paid-execution-guards` 129/132;
+  - `test-m7-0071` / `0073`, `test-pg9-harness-offline` and `test-worker-image-provenance` fail exactly as on `main`.
+- **Not run:** SV1 on a real local Supabase stack with GoTrue (needs Docker). The customer flow against a real Auth server has not been exercised end to end.
+
+**Gates before customer use:** see D-045. They are:
+- the founder authorises the production order (preflight, 0083, Q2′-1, Q2′-2, S1);
+- the security review;
+- the Supabase Auth settings and SMTP;
+- the HMAC secret;
+- the scheduled purge.

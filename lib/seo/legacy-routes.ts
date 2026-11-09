@@ -112,6 +112,7 @@ export const LEGACY_GONE: readonly string[] = [
  * crawling in robots.txt instead — those must not be fetched at all.
  */
 export const NOINDEX_PATH_PREFIXES: readonly string[] = [
+  "/account",
   "/login",
   "/verify-email",
   "/thank-you",

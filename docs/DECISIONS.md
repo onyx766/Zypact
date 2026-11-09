@@ -722,3 +722,56 @@ Each entry records:
   - The Outcome Card shows cited sources per phase, descriptively. No outcome status is assigned to source changes, phases read under different rule versions are not compared, and the non-causality footer is unchanged.
 - **Not decided here (deferred):** reading or verifying third-party pages; competitor websites as a source type (competitor domains are not stored); suggested actions; any new provider, crawler or paid research; a cross-question source score.
 - **Before customer delivery:** run `npm run source-insights:audit` against staging evidence and confirm that Sonar answers carry numbered references that resolve, with unmatched references rare. If they do not, this rule must be revisited before any report with the section is delivered.
+
+## D-045 — S1: customer accounts with email and password, closed account sessions, pilot-gated sign-up
+
+- **Date:** 2026-11-09
+- **Status:** **Proposed, awaiting founder review and the S1 security review.** The founder approved building S1 and opening its pull request on 2026-11-09. That approval does not cover applying anything to a database. Implemented on `feat/s1-accounts` as a draft PR. Not merged, not applied to any Supabase project, not deployed. The account area is off unless `ZYPACT_ACCOUNTS_ENABLED` is exactly `true`.
+- **Builds on:** D-040 (self-service; identity is not a grant; separate session types), D-041 (migration naming and release order), D-042 (closed tables; Q2′-1's F1 and membership model).
+- **Choices made for S1 (engineer, 2026-11-09):** email and password sign-in with email verification; sign-up limited to approved pilot emails by default; database cases run in the Level 2 harness.
+- **Decision:**
+  - **An account is a Supabase Auth user.** Every account decision reads a verified Auth user server-side, never a request body. A session requires a confirmed email.
+  - **Identity is not a grant.** An Auth user gets a workspace only at its first verified sign-in, and only when the sign-up policy allows its email at that moment: `pilot`, meaning on `ZYPACT_PILOT_SIGNUP_ALLOWLIST`; or `open`; anything else is closed. The workspace is created through Q2′-1's F1 as a `system` action (rule `s1.self_signup`, version `1`, idempotency key `s1.self_signup:<account id>`). The allowlist governs creation only: an existing member can still sign in after sign-up closes.
+  - **Account sessions** (the second session type of SELF_SERVICE_PRODUCT §5.2) live in a closed table, `account_sessions`. Each session is:
+    - opened only for an account with exactly one active membership, by the database;
+    - a 32-byte random token held in an httpOnly, SameSite=Lax cookie that is Secure in production. Only `SHA-256('zypact.account_session.v1:' ‖ token)` is stored;
+    - bound to its membership by a composite foreign key;
+    - limited by an absolute lifetime (default 12 hours, at most 7 days) and an idle lifetime (default 60 minutes). Both are decided in the database at one instant after the locks;
+    - re-checked on every request. A removed membership revokes the session on its next check (`membership_removed`).
+    - Revocation reasons: `sign_out`, `password_change`, `email_change`, `admin_revoke`, `membership_removed`. Rows are append-only apart from activity, step-up and the one-time revocation.
+    - Invitation sessions are untouched. The purposes differ, so a token of one type never matches the other.
+  - **Step-up:** before any future approval, revocation, execution authorisation or ceiling change, the password is re-checked on a separate, non-persisting Auth client (its own session ended with scope `local`), and the instant is recorded on the session. `hasFreshStepUp` treats 10 minutes as fresh. S1 adds the mechanism only; no S1 action requires it yet.
+  - **Rate limits:**
+    - sign-up, sign-in, resend, password reset and step-up are limited per address, email or account in a closed table, `account_rate_limit_events`;
+    - buckets are keyed HMACs (`zypact.account.rate_limit.v1`), so no address or email is stored;
+    - an advisory lock serialises each bucket;
+    - rows expire within 48 hours, and an unexpired row cannot be deleted.
+  - **No enumeration:** sign-up, resend and password reset give the same response whether or not the email is approved or registered.
+  - **Password reset:**
+    - a reset link opens only the reset step, never an account session;
+    - the change needs a 15-minute grant bound to that user (an HMAC under `zypact.account.password_reset.v1`, in a cookie scoped to the reset route);
+    - it revokes every account session (`password_change`).
+  - **Requests:**
+    - the kill switch is checked before any body is read;
+    - bodies are JSON only and at most 4 KB, which needs a CORS preflight across sites;
+    - email links use the configured site URL, never the Host header;
+    - logs carry closed fields only.
+- **Not in S1:**
+  - changing the account email (the `email_change` revocation reason exists);
+  - an admin revoke UI (G1);
+  - more than one workspace per account (refused as ambiguous);
+  - roles beyond owner;
+  - CAPTCHA;
+  - the website diagnostic and buyer questions for customers (W1-D, Q3′).
+- **Gates before any customer use:**
+  1. Founder authorisation of the production database order: the read-only preflight, then 0083, then Q2′-1, then Q2′-2, then S1. Each is a named-file apply under D-041.
+  2. The S1 security review (SELF_SERVICE_PRODUCT §10 entry criterion; D4).
+  3. Supabase Auth on the project:
+     - the email provider is on, with **Confirm email** on;
+     - sign-ups are allowed. This lets anyone create an Auth user through the public API, but such a user gets no workspace and no session unless the policy allows its email;
+     - the minimum password length is at least 10;
+     - `https://www.zypact.com/account/auth/callback` is an allowed redirect URL;
+     - a production SMTP sender is configured, because the default Supabase sender's limits are too low.
+  4. `ZYPACT_ACCOUNT_HMAC_SECRET` is set. Without it every rate-limited action refuses with 503.
+  5. `_s1_purge_account_rate_limit_events()` is scheduled.
+- **Known limitation:** a verification link opened in a different browser from the one used to sign up cannot complete the code exchange. The email is still verified, and the person is told to sign in.

@@ -1708,3 +1708,13 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
   - **Changed copy:** after 0083 and Q2′-1 are applied, P2.4, P2.5, P3.1, P4.1 and P4.2 fail.
 - **`npm run test:prod-preflight`: 15/15.** It keeps the script read-only and current with every timestamped migration, and two mutations prove it catches a commit and a write.
 - **It has not been run against production.** Running it needs the founder's authorisation, and every apply after it needs its own.
+
+**Founder decision, 2026-11-09 (written reply "I approve"):**
+
+- **Approved:**
+  - the S1 design (D-045);
+  - a security review before customer use (the reviewer is not yet named);
+  - running this preflight against production;
+  - a real-login test on a non-production Supabase project before customer use.
+- **Not approved by that reply:** any production apply. Each still needs its own authorisation.
+- **Vercel:** the account block reported earlier the same day was resolved.

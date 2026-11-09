@@ -6,6 +6,7 @@ import {
   ClipboardCheck,
   ExternalLink,
   FileText,
+  Globe,
   Hash,
   Info,
   Lock,
@@ -21,6 +22,8 @@ import type { ReactNode } from "react";
 
 import type { OutcomeCardPayload, OutcomeCardPhase } from "@/lib/reports/outcome-card-types";
 import { NON_CAUSALITY_FOOTER } from "@/lib/reports/outcome-card-types";
+import type { OutcomeCardSourceComparison } from "@/lib/source-insights/build-source-insights";
+import { SOURCE_CATEGORY_LABEL } from "@/lib/source-insights/source-types";
 import { Brand, NoteCard, percent } from "./protocol-report-view";
 import { CopyHashButton } from "./copy-hash-button";
 
@@ -114,6 +117,58 @@ function at(value: number): string {
 /** Position on a -1..+1 track, as a CSS percentage. */
 function atSigned(value: number): string {
   return at((value + 1) / 2);
+}
+
+function SourceComparison({
+  comparison,
+}: {
+  comparison: OutcomeCardSourceComparison;
+}) {
+  const b = comparison.baselineRunsWithSourceEvidence;
+  const r = comparison.retestRunsWithSourceEvidence;
+
+  return (
+    <div>
+      <p className="zpr-section-sub">
+        Your site was cited in {comparison.ownedCited.baseline} of {b} baseline
+        run{b === 1 ? "" : "s"} and {comparison.ownedCited.retest} of {r} retest
+        run{r === 1 ? "" : "s"} with a usable source list.
+      </p>
+      {comparison.domains.length > 0 ? (
+        <div className="zpr-table-wrap">
+          <table className="zpr-table">
+            <thead>
+              <tr>
+                <th>Domain</th>
+                <th>Type</th>
+                <th>Baseline: cited in</th>
+                <th>Retest: cited in</th>
+              </tr>
+            </thead>
+            <tbody>
+              {comparison.domains.map((d) => (
+                <tr key={d.domain}>
+                  <td>{d.domain}</td>
+                  <td>{SOURCE_CATEGORY_LABEL[d.category]}</td>
+                  <td>
+                    {d.baselineCitedInRuns} of {b}
+                  </td>
+                  <td>
+                    {d.retestCitedInRuns} of {r}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      <ul className="zpr-list zpr-footnote">
+        {comparison.notes.map((note) => (
+          <li key={note}>{note}</li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 function SectionHead({
@@ -512,9 +567,20 @@ export function OutcomeCardView({ payload }: { payload: OutcomeCardPayload }) {
             </div>
           </section>
 
-          {/* ------------------------------------------------- 5. Context */}
+          {payload.sourceComparison ? (
+            <section className="zoc-section">
+              <SectionHead step={5} icon={Globe} title="Sources cited, before and after" />
+              <SourceComparison comparison={payload.sourceComparison} />
+            </section>
+          ) : null}
+
+          {/* ------------------------------------------------- Context */}
           <section className="zoc-section">
-            <SectionHead step={5} icon={BookOpen} title="How to read this" />
+            <SectionHead
+              step={payload.sourceComparison ? 6 : 5}
+              icon={BookOpen}
+              title="How to read this"
+            />
 
             <div className="zpr-notes">
               <NoteCard

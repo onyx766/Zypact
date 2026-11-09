@@ -356,6 +356,20 @@ Every intervention brief must state:
 
 “The missing page caused the result” is prohibited unless a future approved design establishes that specific causal claim.
 
+### 12.1 Provider sources (proposed, D-044)
+
+Sources shown to a customer are read by fixed, versioned rules from each run's stored provider response, after it re-hashes to its recorded SHA-256. They are not taken from the analysis model's reading of the answer.
+
+- **Cited:** the answer points at the source with a numbered reference.
+- **Retrieved only:** the provider returned the source and the answer does not point at it.
+- A reference that matches no returned source is reported, never turned into a source.
+- A run without a verified source list is shown as unavailable and is never counted as "not cited".
+- Counts are stated as "k of n runs", where n is the readable runs with a verified source list.
+- Source types come only from an exact match against a fixed, versioned domain list. Other domains are unclassified.
+- Zypact does not open cited pages. Nothing is claimed about what a page says, including whether it mentions the customer or a competitor.
+- Whether a source is cited does not show that publishing or changing a page would change the answer.
+- An Outcome Card may compare cited sources between phases descriptively. Source changes receive no outcome status.
+
 ## 13. Registered retest
 
 A retest requires:

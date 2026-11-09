@@ -13,6 +13,8 @@
  * reserved is accounted for in `reconciliation`.
  */
 
+import type { SourceCategory } from "@/lib/source-insights/source-types";
+
 /** Wire format version. Bump only with a reader that handles both. */
 export const PROTOCOL_REPORT_VERSION = 1 as const;
 
@@ -114,6 +116,73 @@ export interface ProtocolReportCompetitor {
   runsMentionedIn: number;
 }
 
+/**
+ * Why a readable run does or does not have a provider source list. Only
+ * `ok` contributes sources; every other status is shown, never read as
+ * "no sources".
+ */
+export type ProviderSourceStatus =
+  | "ok"
+  | "no_raw_response"
+  | "hash_missing"
+  | "hash_mismatch"
+  | "not_provider_json"
+  | "unrecognised_shape";
+
+export interface ProviderSourceRef {
+  url: string;
+  domain: string;
+  title: string | null;
+  /** The answer's numbered references pointing at this source; empty when retrieved only. */
+  markers: number[];
+}
+
+export interface ProtocolReportRunSources {
+  ordinal: number;
+  status: ProviderSourceStatus;
+  responseFormat: "chat_completions" | "agent_response" | null;
+  /** Sources the answer text points to with a numbered reference. */
+  cited: ProviderSourceRef[];
+  /** Sources the provider returned that the answer does not point to. */
+  retrievedOnly: ProviderSourceRef[];
+  /** Numbered references that matched no returned source. Never turned into sources. */
+  unmatchedMarkers: number[];
+  markersFound: boolean;
+}
+
+export interface ProtocolReportSourceDomain {
+  domain: string;
+  /** Owned or a listed type from source-types.ts; never guessed. */
+  category: SourceCategory;
+  citedInRuns: number;
+  citedRunOrdinals: number[];
+  /** Runs where this domain was returned but no URL from it was cited. */
+  retrievedOnlyInRuns: number;
+  retrievedOnlyRunOrdinals: number[];
+  urls: string[];
+}
+
+/**
+ * Sources read deterministically from each readable run's stored provider
+ * response — not from the analysis model's reading of the answer. Optional
+ * because reports saved before it existed do not carry it.
+ */
+export interface ProtocolReportSourceInsights {
+  extractionVersion: string;
+  sourceTypeListVersion: string;
+  /** The same readable runs the rate is computed on. */
+  readableRuns: number;
+  /** Readable runs whose stored response yielded a verified source list. */
+  runsWithSourceEvidence: number;
+  /** Runs with a source list in which a page on the subject's own domain was cited. */
+  runsWithOwnedCitation: number;
+  runs: ProtocolReportRunSources[];
+  domains: ProtocolReportSourceDomain[];
+  /** Domains left out of `domains` by the display cap; counted, never dropped silently. */
+  domainsNotShown: number;
+  notes: string[];
+}
+
 export interface ProtocolReportPayload {
   reportVersion: typeof PROTOCOL_REPORT_VERSION;
   generatedAt: string;
@@ -127,6 +196,7 @@ export interface ProtocolReportPayload {
   observation: ProtocolReportObservation;
   runs: ProtocolReportRun[];
   competitorsObserved: ProtocolReportCompetitor[];
+  sourceInsights?: ProtocolReportSourceInsights;
 
   uncertainty: string[];
   integrityNotes: string[];
@@ -195,6 +265,12 @@ export interface EvidenceResultInput {
   rawResponseSha256: string | null;
   providerModel: string | null;
   providerLatencyMs: number | null;
+  /**
+   * `probe_results.raw_response`: on protocol-worker rows, the exact provider
+   * body whose hash is `rawResponseSha256`. Absent when the reader did not
+   * load it; the source section then reports every run as unavailable.
+   */
+  rawResponse?: string | null;
 }
 
 export interface BuildProtocolReportInput {

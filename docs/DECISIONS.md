@@ -707,3 +707,18 @@ Each entry records:
   - **Closed:** RLS on with no policies on all 8 tables; no API role (`service_role` included) holds any table, sequence or function privilege. Only the purge is `SECURITY DEFINER`.
 - **Evidence:** CURRENT_STATUS section 21.
 - **Unchanged:** D-037 and the spend gate; D-041's release order (Q2′-2 follows Q2′-1 by the named-file procedure, `expected_prev` `20261102132000`); D-042; every HOLD (0083 production, Q2′-1b, Q2′-2 production, PG-9, PR-B, A3, A4, G4-C, every production apply, and any AI marketing analysis).
+
+## D-044 — Source insights: "cited" is read by fixed rules from the stored provider response
+
+- **Date:** 2026-11-09
+- **Status:** **Proposed, awaiting founder sign-off.** Implemented on `feat/source-insights` as a draft PR, built before written authorisation at the engineer's request so the founder can review working code. Not merged, not deployed, no migration, nothing applied anywhere.
+- **Context:** the founder asked (2026-11-09) that V1 show what AI answers reveal about a customer's brand, competitors and cited sources, from existing measurement evidence, without new crawling or paid research. The review found that on the protocol-worker path the analysis model receives only the answer prose (`lib/protocol-worker/worker.ts`), so the stored `probe_results.sources_cited` is the model's reading of that prose, not the provider's citation list. The Sonar adapter also merges cited URLs and retrieved search results into one list.
+- **Decision:**
+  - A source is **cited** when the answer text points at it with a numbered reference: `[n]` into the Sonar `citations` list (or `search_results` when there is no citations list), or `[n]`/`[web:n]` matching an Agent API search-result `id`. A source the provider returned that the answer does not point at is **retrieved only**. A reference that matches nothing is reported and never turned into a source. An answer with no references confirms nothing as cited.
+  - Sources are read from `probe_results.raw_response` only after it re-hashes to `raw_response_sha256`, under the versioned rule `provider-sources/1`. Any other state (no body, missing hash, mismatch, not a provider body, unknown shape) is shown as unavailable and never counted as "not cited".
+  - Source types come only from an exact match against the fixed, versioned list `source-types/1`; every other domain is `unclassified`. "Your site" means the report subject's domain and its subdomains.
+  - The model-extracted `sources_cited` is unchanged in the evidence and in reports saved before this change, but the new report section does not use it.
+  - Every count is "k of n runs", where n is the readable runs that had a verified source list. The section always states that Zypact has not opened the pages and that citation does not show a page change would change the answer.
+  - The Outcome Card shows cited sources per phase, descriptively. No outcome status is assigned to source changes, phases read under different rule versions are not compared, and the non-causality footer is unchanged.
+- **Not decided here (deferred):** reading or verifying third-party pages; competitor websites as a source type (competitor domains are not stored); suggested actions; any new provider, crawler or paid research; a cross-question source score.
+- **Before customer delivery:** run `npm run source-insights:audit` against staging evidence and confirm that Sonar answers carry numbered references that resolve, with unmatched references rare. If they do not, this rule must be revisited before any report with the section is delivered.

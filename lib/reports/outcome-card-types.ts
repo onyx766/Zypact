@@ -22,6 +22,7 @@ import type {
   ProtocolReportSubject,
 } from "@/lib/reports/protocol-report-types";
 import type { OutcomeStatus } from "@/lib/reports/compare-protocols";
+import type { OutcomeCardSourceComparison } from "@/lib/source-insights/build-source-insights";
 
 export const OUTCOME_CARD_VERSION = 1 as const;
 
@@ -105,6 +106,12 @@ export interface OutcomeCardPayload {
    * migration did not backfill. Still null if the retest itself predates it.
    */
   detectableChangeAtPlan: number | null;
+
+  /**
+   * Cited sources in each phase, descriptive only. Absent on cards saved
+   * before it existed; null when either phase had no source section.
+   */
+  sourceComparison?: OutcomeCardSourceComparison | null;
 
   uncertainty: string[];
   limitations: string[];

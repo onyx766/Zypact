@@ -1,7 +1,8 @@
 #!/usr/bin/env tsx
 /**
  * Read-only: how does the source extraction behave on stored protocol-worker
- * evidence? Run against staging before any report with a source section is
+ * evidence? Note that the Supabase project named "zypact-staging" is
+ * the production database (D-041). Run before any report with a source section is
  * delivered.
  *
  *   npm run source-insights:audit            # up to 200 most recent rows

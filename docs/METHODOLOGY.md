@@ -356,7 +356,7 @@ Every intervention brief must state:
 
 “The missing page caused the result” is prohibited unless a future approved design establishes that specific causal claim.
 
-### 12.1 Provider sources (proposed, D-044)
+### 12.1 Provider sources (D-044)
 
 Sources shown to a customer are read by fixed, versioned rules from each run's stored provider response, after it re-hashes to its recorded SHA-256. They are not taken from the analysis model's reading of the answer.
 

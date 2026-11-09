@@ -11,7 +11,9 @@
 
 import type {
   ProtocolReportPayload,
+  ProtocolReportSourceInsights,
 } from "@/lib/reports/protocol-report-types";
+import { SOURCE_CATEGORY_LABEL } from "@/lib/source-insights/source-types";
 
 function percent(value: number): string {
   return `${Math.round(value * 100)}%`;
@@ -24,6 +26,53 @@ function cell(value: string): string {
 function presenceLabel(value: boolean | null): string {
   if (value === null) return "no readable result";
   return value ? "present" : "not present";
+}
+
+function runList(ordinals: number[]): string {
+  return ordinals.length > 0 ? ordinals.join(", ") : "—";
+}
+
+/** Per-run source cell: provider counts when available, else the stored count. */
+function sourcesCell(payload: ProtocolReportPayload, ordinal: number, legacyCount: number): string {
+  if (!payload.sourceInsights) return String(legacyCount);
+  const run = payload.sourceInsights.runs.find((r) => r.ordinal === ordinal);
+  if (!run) return "—";
+  if (run.status !== "ok") return "unavailable";
+  return `${run.cited.length} cited · ${run.retrievedOnly.length} retrieved only`;
+}
+
+function renderSourceSection(insights: ProtocolReportSourceInsights): string[] {
+  const lines: string[] = [];
+  const n = insights.runsWithSourceEvidence;
+
+  lines.push("## 4. Sources the answers cited");
+  lines.push("");
+
+  if (n === 0) {
+    lines.push(
+      `None of the ${insights.readableRuns} readable run(s) had a usable stored source list, so no sources are reported. This is an empty result, not evidence that nothing was cited.`
+    );
+  } else {
+    lines.push(
+      `Your site was cited in ${insights.runsWithOwnedCitation} of ${n} run(s) with a usable source list.`
+    );
+    lines.push("");
+    if (insights.domains.length > 0) {
+      lines.push("| Domain | Type | Cited in | Retrieved only in | Cited in runs |");
+      lines.push("| --- | --- | --- | --- | --- |");
+      for (const d of insights.domains) {
+        lines.push(
+          `| ${cell(d.domain)} | ${SOURCE_CATEGORY_LABEL[d.category]} | ${d.citedInRuns} of ${n} | ${d.retrievedOnlyInRuns} of ${n} | ${runList(d.citedRunOrdinals)} |`
+        );
+      }
+    } else {
+      lines.push("The provider returned no usable source URLs in these runs.");
+    }
+  }
+  lines.push("");
+  for (const note of insights.notes) lines.push(`- ${note}`);
+  lines.push("");
+  return lines;
 }
 
 export function renderProtocolReportMarkdown(
@@ -114,7 +163,7 @@ export function renderProtocolReportMarkdown(
         run.competitors.length > 0
           ? cell(run.competitors.join(", "))
           : "none"
-      } | ${run.citedSourceCount} | ${
+      } | ${sourcesCell(payload, run.ordinal, run.citedSourceCount)} | ${
         run.evidenceHash ? `\`${run.evidenceHash.slice(0, 16)}…\`` : "—"
       } |`
     );
@@ -157,17 +206,21 @@ export function renderProtocolReportMarkdown(
     lines.push("");
   }
 
-  lines.push("## 4. How certain this is");
+  if (payload.sourceInsights) {
+    lines.push(...renderSourceSection(payload.sourceInsights));
+  }
+
+  lines.push("## 5. How certain this is");
   lines.push("");
   for (const note of payload.uncertainty) lines.push(`- ${note}`);
   lines.push("");
 
-  lines.push("## 5. What this does not tell you");
+  lines.push("## 6. What this does not tell you");
   lines.push("");
   for (const note of payload.limitations) lines.push(`- ${note}`);
   lines.push("");
 
-  lines.push("## 6. Integrity notes");
+  lines.push("## 7. Integrity notes");
   lines.push("");
   for (const note of payload.integrityNotes) lines.push(`- ${note}`);
   lines.push("");
@@ -267,6 +320,27 @@ export function renderProtocolShortReportMarkdown(
     lines.push("");
     lines.push(
       "Being named is not evidence that a brand displaced you or won a sale."
+    );
+    lines.push("");
+  }
+
+  const insights = payload.sourceInsights;
+  if (insights && insights.runsWithSourceEvidence > 0) {
+    const n = insights.runsWithSourceEvidence;
+    const external = insights.domains
+      .filter((d) => d.category !== "owned" && d.citedInRuns > 0)
+      .slice(0, SHORT_REPORT_COMPETITOR_LIMIT);
+    lines.push("## Sources cited");
+    lines.push("");
+    lines.push(
+      `- Your site was cited in ${insights.runsWithOwnedCitation} of ${n} run(s) with a usable source list.`
+    );
+    for (const d of external) {
+      lines.push(`- ${d.domain} (${SOURCE_CATEGORY_LABEL[d.category].toLowerCase()}) — cited in ${d.citedInRuns} of ${n}`);
+    }
+    lines.push("");
+    lines.push(
+      "Zypact has not opened these pages, and whether a source is cited does not show that changing a page would change the answer. The full report lists every source."
     );
     lines.push("");
   }

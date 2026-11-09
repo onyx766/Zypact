@@ -144,7 +144,7 @@ async function readProtocolEvidenceCore(
     const { data: resultRows, error: resultError } = await client
       .from("probe_results")
       .select(
-        "probe_run_id,client_mentioned,client_position,competitors_mentioned,sources_cited,answer_summary,raw_response_sha256,provider_model,provider_latency_ms"
+        "probe_run_id,client_mentioned,client_position,competitors_mentioned,sources_cited,answer_summary,raw_response,raw_response_sha256,provider_model,provider_latency_ms"
       )
       .in("probe_run_id", probeRunIds);
 
@@ -158,6 +158,7 @@ async function readProtocolEvidenceCore(
       sourcesCited: asArray(row.sources_cited),
       answerSummary: row.answer_summary,
       rawResponseSha256: row.raw_response_sha256,
+      rawResponse: typeof row.raw_response === "string" ? row.raw_response : null,
       providerModel: row.provider_model,
       providerLatencyMs: row.provider_latency_ms,
     }));

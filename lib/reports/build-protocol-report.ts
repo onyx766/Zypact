@@ -18,6 +18,8 @@
  */
 
 import { DEPENDENCE_LIMITATION, surfaceLimitation } from "@/lib/reports/surface-limitations";
+import { buildSourceInsights } from "@/lib/source-insights/build-source-insights";
+import { extractProviderSources } from "@/lib/source-insights/extract-provider-sources";
 import {
   PROTOCOL_REPORT_VERSION,
   type BuildProtocolReportInput,
@@ -177,13 +179,15 @@ export function buildProtocolReport(
     );
   });
 
+  const resultByRun = new Map<ProtocolReportRun, EvidenceResultInput | undefined>();
+
   const runs: ProtocolReportRun[] = ordered.map(
     (attempt, index) => {
       const result = attempt.probeRunId
         ? resultByProbeRun.get(attempt.probeRunId)
         : undefined;
 
-      return {
+      const run: ProtocolReportRun = {
         ordinal: attempt.baselineOrdinal ?? index + 1,
         status: attempt.status,
         brandPresent: result
@@ -205,6 +209,8 @@ export function buildProtocolReport(
           : null,
         terminationReason: attempt.terminationReason,
       };
+      resultByRun.set(run, result);
+      return run;
     }
   );
 
@@ -289,6 +295,17 @@ export function buildProtocolReport(
           a.name.localeCompare(b.name)
       );
 
+  const sourceInsights = buildSourceInsights(
+    measurable.map((run) => {
+      const result = resultByRun.get(run);
+      return {
+        ordinal: run.ordinal,
+        ...extractProviderSources(result?.rawResponse, result?.rawResponseSha256),
+      };
+    }),
+    input.subject.normalizedDomain
+  );
+
   return {
     reportVersion: PROTOCOL_REPORT_VERSION,
     generatedAt,
@@ -301,6 +318,7 @@ export function buildProtocolReport(
     observation,
     runs,
     competitorsObserved,
+    sourceInsights,
     uncertainty: buildUncertainty(
       observation,
       reconciliation

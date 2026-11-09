@@ -147,7 +147,9 @@
     "test:w1-report": "tsx scripts/test-w1-report.ts",
     "test:w1-preview": "tsx scripts/test-w1-preview.ts",
     "test:w1": "npm run -s test:w1-contract && npm run -s test:w1-robots && npm run -s test:w1-safe-fetch && npm run -s test:w1-crawl && npm run -s test:w1-report && npm run -s test:w1-preview && npm run -s test:outbound-url-safety && npm run -s test:crawl-apex-www-fallback",
-    "w1:diagnose": "tsx scripts/w1-diagnose.ts"
+    "w1:diagnose": "tsx scripts/w1-diagnose.ts",
+    "test:source-insights": "tsx scripts/test-source-insights.ts",
+    "source-insights:audit": "tsx scripts/source-insights-audit.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.3.3",

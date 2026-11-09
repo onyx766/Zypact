@@ -8,6 +8,7 @@ import {
   ExternalLink,
   Eye,
   FileText,
+  Globe,
   Info,
   List,
   Lock,
@@ -21,7 +22,9 @@ import {
 import type {
   ProtocolReportPayload,
   ProtocolReportRun,
+  ProtocolReportSourceInsights,
 } from "@/lib/reports/protocol-report-types";
+import { SOURCE_CATEGORY_LABEL } from "@/lib/source-insights/source-types";
 import { CopyHashButton } from "./copy-hash-button";
 
 import "./protocol-report.css";
@@ -143,7 +146,98 @@ export function NoteCard({
   );
 }
 
-function RunRow({ run }: { run: ProtocolReportRun }) {
+function sourcesLabel(
+  insights: ProtocolReportSourceInsights | undefined,
+  run: ProtocolReportRun
+): string {
+  if (!insights) return String(run.citedSourceCount);
+  const entry = insights.runs.find((r) => r.ordinal === run.ordinal);
+  if (!entry) return "—";
+  if (entry.status !== "ok") return "Unavailable";
+  return `${entry.cited.length} cited · ${entry.retrievedOnly.length} retrieved`;
+}
+
+function SourcesSection({
+  insights,
+}: {
+  insights: ProtocolReportSourceInsights;
+}) {
+  const n = insights.runsWithSourceEvidence;
+
+  return (
+    <section className="zpr-card zpr-section">
+      <div className="zpr-section-head">
+        <Globe size={22} strokeWidth={1.9} />
+        <div>
+          <h2 className="zpr-section-title">Sources the answers cited</h2>
+          <p className="zpr-section-sub">
+            {n === 0
+              ? `None of the ${insights.readableRuns} readable runs had a usable stored source list, so no sources are shown. This is an empty result, not evidence that nothing was cited.`
+              : `Your site was cited in ${insights.runsWithOwnedCitation} of ${n} run${
+                  n === 1 ? "" : "s"
+                } with a usable source list. Read from the provider's stored response for each run.`}
+          </p>
+        </div>
+      </div>
+
+      {n > 0 && insights.domains.length > 0 ? (
+        <div className="zpr-table-wrap">
+          <table className="zpr-table">
+            <thead>
+              <tr>
+                <th>Domain</th>
+                <th>Type</th>
+                <th>Cited in</th>
+                <th>Retrieved only in</th>
+                <th>Cited in runs</th>
+              </tr>
+            </thead>
+            <tbody>
+              {insights.domains.map((d) => (
+                <tr key={d.domain}>
+                  <td>
+                    {d.domain}
+                    {d.urls.length > 0 ? (
+                      <span className="zpr-cell-sub">
+                        {d.urls.length} page{d.urls.length === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
+                  </td>
+                  <td>{SOURCE_CATEGORY_LABEL[d.category]}</td>
+                  <td>
+                    {d.citedInRuns} of {n}
+                  </td>
+                  <td>
+                    {d.retrievedOnlyInRuns} of {n}
+                  </td>
+                  <td>
+                    {d.citedRunOrdinals.length > 0
+                      ? d.citedRunOrdinals.join(", ")
+                      : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+
+      <ul className="zpr-list zpr-footnote">
+        {insights.notes.map((note) => (
+          <li key={note}>{note}</li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function RunRow({
+  run,
+  insights,
+}: {
+  run: ProtocolReportRun;
+  insights: ProtocolReportSourceInsights | undefined;
+}) {
   const brand = presence(run.brandPresent);
 
   return (
@@ -175,7 +269,7 @@ function RunRow({ run }: { run: ProtocolReportRun }) {
       <td>
         {run.competitors.length > 0 ? run.competitors.join(", ") : "None"}
       </td>
-      <td>{run.citedSourceCount}</td>
+      <td>{sourcesLabel(insights, run)}</td>
       <td
         className="zpr-mono"
         style={{ fontSize: 12 }}
@@ -399,7 +493,11 @@ export function ProtocolReportView({
                   </tr>
                 ) : (
                   payload.runs.map((run, index) => (
-                    <RunRow key={`${run.ordinal}-${index}`} run={run} />
+                    <RunRow
+                      key={`${run.ordinal}-${index}`}
+                      run={run}
+                      insights={payload.sourceInsights}
+                    />
                   ))
                 )}
               </tbody>
@@ -471,6 +569,10 @@ export function ProtocolReportView({
               you or won a sale.
             </p>
           </section>
+        ) : null}
+
+        {payload.sourceInsights ? (
+          <SourcesSection insights={payload.sourceInsights} />
         ) : null}
 
         <div className="zpr-notes">

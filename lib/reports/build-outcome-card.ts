@@ -32,6 +32,7 @@ import {
   type OutcomeCardPhase,
 } from "@/lib/reports/outcome-card-types";
 import type { MeasurementCompatibility } from "@/lib/reports/measurement-fingerprint";
+import { compareSourceInsights } from "@/lib/source-insights/build-source-insights";
 
 export interface BuildOutcomeCardInput {
   projectId: string;
@@ -225,6 +226,10 @@ export function buildOutcomeCard(input: BuildOutcomeCardInput): OutcomeCardPaylo
     intervention: input.intervention,
     comparison,
     detectableChangeAtPlan: input.detectableChangeAtPlan ?? null,
+    sourceComparison: compareSourceInsights(
+      input.baseline.sourceInsights,
+      input.retest.sourceInsights
+    ),
     uncertainty: [],
     limitations: [],
     nonCausalityFooter: NON_CAUSALITY_FOOTER,

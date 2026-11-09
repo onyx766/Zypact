@@ -15,6 +15,7 @@
  */
 
 import type { OutcomeCardPayload } from "@/lib/reports/outcome-card-types";
+import { SOURCE_CATEGORY_LABEL } from "@/lib/source-insights/source-types";
 
 const STATUS_LABEL: Record<OutcomeCardPayload["comparison"]["status"], string> = {
   increase_observed: "Increase observed",
@@ -108,12 +109,37 @@ export function renderOutcomeCardMarkdown(payload: OutcomeCardPayload): string {
   }
   lines.push("");
 
-  lines.push("## 5. How certain this is");
+  let section = 5;
+  const sources = payload.sourceComparison;
+  if (sources) {
+    const b = sources.baselineRunsWithSourceEvidence;
+    const r = sources.retestRunsWithSourceEvidence;
+    lines.push(`## ${section++}. Sources cited, before and after`);
+    lines.push("");
+    lines.push(
+      `Your site was cited in ${sources.ownedCited.baseline} of ${b} baseline run(s) and ${sources.ownedCited.retest} of ${r} retest run(s) with a usable source list.`
+    );
+    lines.push("");
+    if (sources.domains.length > 0) {
+      lines.push("| Domain | Type | Baseline: cited in | Retest: cited in |");
+      lines.push("| --- | --- | --- | --- |");
+      for (const d of sources.domains) {
+        lines.push(
+          `| ${d.domain.replace(/\|/g, "\\|")} | ${SOURCE_CATEGORY_LABEL[d.category]} | ${d.baselineCitedInRuns} of ${b} | ${d.retestCitedInRuns} of ${r} |`
+        );
+      }
+      lines.push("");
+    }
+    for (const note of sources.notes) lines.push(`- ${note}`);
+    lines.push("");
+  }
+
+  lines.push(`## ${section++}. How certain this is`);
   lines.push("");
   for (const note of payload.uncertainty) lines.push(`- ${note}`);
   lines.push("");
 
-  lines.push("## 6. What this does not tell you");
+  lines.push(`## ${section++}. What this does not tell you`);
   lines.push("");
   for (const note of payload.limitations) lines.push(`- ${note}`);
   lines.push("");

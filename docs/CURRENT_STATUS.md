@@ -1642,6 +1642,8 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 
 **Tests:** `npm run test:source-insights` — 82/82. Unchanged and passing: `test-build-protocol-report`, `test:outcome-card` (40/40), `test:outcome-card-build` (58/58), `test:outcome-card-view` (40/40), `test:outcome-card-delivery` (47/47), `test:outcome-card-integrity`, `test:outcome-card-email`, `test-compare-protocols` (66/66), `test-measurement-compatibility` (89/89), `test-perplexity-agent-adapter` (158/158), `test:report-pass` (38/38). `test-paid-execution-guards` is 129/132 and `test-0080-report-ready-contract` is 35/36, the same failures as on `main`.
 
-**Open before customer delivery:** run the audit against staging evidence (D-044), then deploy the web app and the worker. Founder sign-off on D-044 and the `source-types/1` list: done, 2026-11-09.
+**Staging audit (2026-11-09), `npm run source-insights:audit` against the staging project:** 45 protocol-worker rows read; 45 `ok` (every body re-hashed to its recorded SHA-256); all 45 `chat_completions`; 43 answers carry numbered references, 2 have sources but no references (disclosed in the section's notes); **0 unmatched references**; 294 cited and 436 retrieved-only sources. The rule behaves as designed on real Sonar responses.
+
+**Open before customer delivery:** deploy the web app and the worker. Founder sign-off on D-044 and the `source-types/1` list: done, 2026-11-09. Staging audit: passed, 2026-11-09.
 
 **Deferred:** reading third-party pages, competitor websites as a source type, suggested actions, new providers or crawlers, any cross-question source score.

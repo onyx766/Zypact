@@ -1751,3 +1751,24 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
   - the five founder/system functions are executable by `service_role` only;
   - no API role may execute the `_q2p_` helpers or `assert_current_account_member`.
 - **Next:** Q2′-2 (`20261103173000`, `expected_prev=20261102132000`), then S1 (`20261109120000`, `expected_prev=20261103173000`). Each needs its own founder authorisation.
+
+**Q2′-2 applied to production, 2026-11-09 evening PST (founder-authorised: "I agree"):**
+
+- **Procedure:** the D-041 named-file procedure (the same verified copy, sha256 `8a430331…`), with `new_version=20261103173000` and `expected_prev=20261102132000`.
+- **Rehearsed first** on a disposable PostgreSQL built to the live state (0001–0081, 0083 and Q2′-1):
+  - a wrong `expected_prev` was refused;
+  - the apply succeeded;
+  - a second apply was refused.
+- **Live read-only pre-check:**
+  - 83 ledger rows, tail `20261102132000`;
+  - Q2′-1 tables present;
+  - no Q2′-2 table yet;
+  - no protocol job claimed or running.
+- **The apply was run by the engineer.**
+- **Read-only verification afterwards:**
+  - `20261103173000` is recorded; the ledger has 84 rows with that version as the tail;
+  - all 8 Q2′-2 tables exist, each with RLS on and no policy;
+  - no API role holds any table privilege or any privilege on `diagnostic_rate_limit_events_id_seq`;
+  - all 16 `_q2p2_` helpers exist, and no API role may execute them.
+- **The Q2′-2 production HOLD is lifted.** Still open as a gate before customer use: scheduling `_q2p2_purge_rate_limit_events()` (Q2-R4).
+- **Next:** S1 (`20261109120000`, `expected_prev=20261103173000`). That needs its own founder authorisation.

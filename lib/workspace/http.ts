@@ -29,14 +29,18 @@ export function workspaceDeps(): WorkspaceDeps {
   };
 }
 
+/** Action bodies carry up to six 1,000-character fields (four bytes each at worst); every other route keeps the 4 KB account cap. */
+export const ACTION_BODY_MAX_BYTES = 32768;
+
 /** A POST route: accounts kill switch, then the body, then the signed-in account. */
 export function workspacePost(
-  run: (deps: WorkspaceDeps, account: AccountContext | null, token: string | null, body: Record<string, unknown>, ctx: { ip: string }) => Promise<WorkspaceResult>
+  run: (deps: WorkspaceDeps, account: AccountContext | null, token: string | null, body: Record<string, unknown>, ctx: { ip: string }) => Promise<WorkspaceResult>,
+  options: { maxBodyBytes?: number } = {}
 ): (request: Request) => Promise<NextResponse> {
   return async (request: Request) => {
     const deps = workspaceDeps();
     if (!deps.config.enabled) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
-    const parsed = await readJsonBody(request);
+    const parsed = await readJsonBody(request, options.maxBodyBytes);
     if (!parsed.ok) return parsed.response;
     const account = await currentAccount(accountDeps());
     const token = await readCookie(SESSION_COOKIE);

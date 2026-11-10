@@ -467,3 +467,116 @@ export function CopyTextButton({ text, label }: { text: string; label: string })
     </button>
   );
 }
+
+/* ------------------------------------------------------------------ */
+/* Question approval (Q4)                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Approves a draft's current wording. If the server asks for a step-up, the
+ * password is confirmed through S1's step-up route and the approval is
+ * retried with the same idempotency key, so a double click or a retry never
+ * creates a second approval.
+ */
+export function ApproveDraftButton({
+  draftId,
+  expectedVersion,
+  label,
+  consentText,
+  consentVersion,
+}: {
+  draftId: string;
+  expectedVersion: number;
+  label: string;
+  consentText: string;
+  consentVersion: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [needPassword, setNeedPassword] = useState(false);
+  const [password, setPassword] = useState("");
+  const [key] = useState(() => crypto.randomUUID());
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<Message>(null);
+
+  async function approve() {
+    setBusy(true);
+    setMessage(null);
+    if (needPassword) {
+      const step = await postJson("/api/account/step-up", { password });
+      setPassword("");
+      if (!step.ok) {
+        setMessage({ tone: "error", text: typeof step.body.message === "string" ? step.body.message : "That password was not accepted." });
+        setBusy(false);
+        return;
+      }
+    }
+    const res = await postJson("/api/account/questions/approve", { draftId, expectedVersion, idempotencyKey: key, consentVersion });
+    if (res.ok) {
+      window.location.reload();
+      return;
+    }
+    if (res.body.error === "step_up_required") {
+      setNeedPassword(true);
+      setMessage({ tone: "error", text: "Confirm your password to approve." });
+    } else {
+      setMessage({ tone: "error", text: typeof res.body.message === "string" ? res.body.message : "Something went wrong. Please try again." });
+    }
+    setBusy(false);
+  }
+
+  if (!open) {
+    return (
+      <button className="zw-button is-small" type="button" onClick={() => setOpen(true)}>
+        {label}
+      </button>
+    );
+  }
+  return (
+    <form
+      className="zw-form zw-editor"
+      noValidate
+      onSubmit={(e) => {
+        e.preventDefault();
+        void approve();
+      }}
+    >
+      <p className="zw-small" style={{ margin: 0 }}>{consentText}</p>
+      {needPassword ? (
+        <label className="zw-label">
+          Password
+          <input className="zw-input" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+        </label>
+      ) : null}
+      <div className="zw-row">
+        <button className="zw-button" type="submit" disabled={busy || (needPassword && password.length === 0)}>
+          {busy ? "Approving…" : "I approve"}
+        </button>
+        <button className="zw-button is-secondary" type="button" onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+      </div>
+      <Alert message={message} />
+    </form>
+  );
+}
+
+export function ArchiveActiveButton({ buyerQuestionId }: { buyerQuestionId: string }) {
+  const { busy, message, submit } = useSubmit();
+  return (
+    <span className="zw-inline">
+      <button
+        className="zw-button is-secondary is-small"
+        type="button"
+        disabled={busy}
+        onClick={() => {
+          if (window.confirm("Archive this question? It stops being measured. Its results are kept, and runs it already used are not given back.")) {
+            void submit("/api/account/questions/archive-active", { buyerQuestionId }, "reload");
+          }
+        }}
+      >
+        {busy ? "Archiving…" : "Archive"}
+      </button>
+      <Alert message={message} />
+    </span>
+  );
+}

@@ -40,7 +40,7 @@ export const SUGGESTION_LABEL = "Suggested wording";
 export const SUGGESTION_DISCLAIMER =
   "Suggestions are wording Zypact built from your Brand Profile with fixed rules. They are not taken from real buyer searches or conversations, and they are not evidence of what real buyers want to know.";
 export const DRAFT_STATUS_NOTE =
-  "Drafts are your working list. They use no question allowance and start no measurement. Approving questions for measurement is a separate step that is not available yet.";
+  "Drafts are your working list. They use no question allowance and start no measurement. Approve a draft to make it an active question; approving starts no measurement either.";
 
 export interface Suggestion {
   rule: string;

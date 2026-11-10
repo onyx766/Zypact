@@ -890,3 +890,33 @@ Each item below departed from a document that governed before this approval: V1_
   - `npm run test:e1-plans`: catalogue/SQL parity, closed shape and copy lint, each detector mutation-tested (52);
   - `scripts/test-e1-plans-db.ts`, run by `npm run test:p2-workspace-db`: periods, switch, reservation, settlement, allowances, failure budget, plans, isolation, append-only and privileges (74).
 - **Recovery:** no existing table references the three new tables. A rollback drops them with their functions and loses plan and usage history only.
+
+## D-049 — Q4: customers approve and activate buyer questions from their account
+
+- **Date:** 2026-11-10
+- **Status:** **Implements D-047 Part B items 6 and 7, approved by the Founder on 2026-11-10.** Rules marked *(engineer)* are **proposed for founder confirmation**. Migration `20261113120000_q4_question_activation.sql` is **not applied to any Supabase project**. Approving a question starts no measurement.
+- **Builds on:** D-039 (frozen approved versions), D-040 (approval records; step-up before any approval; approval never authorises execution), D-045 (account sessions and step-up), P2 (drafts), E1 (plan limits).
+- **Decision:**
+  - **Approval** (`approve_question_draft`) takes the draft's current version (an expected version, `VERSION_CONFLICT` otherwise) and needs a **step-up within the last 10 minutes** on the session, checked in the database at one instant after the locks (`STEP_UP_REQUIRED` otherwise).
+  - **Approving creates**, in one transaction:
+    - a `buyer_questions` row (the first approval of that draft);
+    - a `buyer_question_versions` row in the workspace's own P1 project, whose `prompt_text` is the draft's exact text and whose `prompt_hash` is its SHA-256, approved through M4's own `approve_buyer_question_version` with `approved_by` set to the approval record.
+
+    The version's sort fields are a neutral 1/1/1 with a rationale saying so *(engineer: customer approval has no curator ratings)*. Provenance is `customer_supplied`, and the draft's origin (written, suggested or suggested-and-edited) is kept on the approval record.
+  - **The approval record** is immutable and holds:
+    - account, membership, workspace and project;
+    - session and step-up instant;
+    - draft id, draft version and text hash;
+    - consent text version and hash (`q4.activate.v1`, whose text is fixed on the server);
+    - an idempotency key and the database timestamp.
+
+    A replay of the key returns the first result.
+  - **Plan limit:** activating a question that is not active counts against E1's active-question limit (Free 1, Starter 20; `LIMIT_REACHED` otherwise). Approving changed wording of an active question adds a version (`VERSION_ADDED`) and counts nothing new. The same wording as another active question is refused.
+  - **Material edits never alter a measured version.** Changed wording is a new version (`version_number + 1`), and every earlier version and its evidence stays. One draft maps to one buyer question for life.
+  - **Archive** (`archive_active_question`) ends the active state only. It needs no step-up, because it authorises nothing. It never touches the usage ledger, so runs already consumed are never given back. An archived question can be reactivated within the limit, reusing its latest version when the wording is unchanged.
+  - **Downgrade** *(engineer)*: if a workspace has more active questions than its new plan allows, none is archived automatically. New activations are refused until it is within the limit, and the measurement step will choose which to measure.
+- **Not in Q4:** measuring active questions; any change to the D-039 invitation approval path, which is untouched.
+- **Tests:**
+  - `npm run test:q4-activation` (42, offline);
+  - `scripts/test-q4-activation-db.ts` (52, disposable Supabase Postgres, run by `npm run test:p2-workspace-db`).
+- **Recovery:** a rollback drops the two Q4 tables and functions. Buyer questions and versions created through Q4 stay, as every M4 version does, and remain identifiable by `approved_by`.

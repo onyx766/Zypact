@@ -1798,3 +1798,35 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
   - Supabase Auth settings and SMTP;
   - `ZYPACT_ACCOUNT_HMAC_SECRET`;
   - scheduling `_s1_purge_account_rate_limit_events()` and `_q2p2_purge_rate_limit_events()`.
+
+**S1 real-login check on a non-production Supabase project, 2026-11-10 (founder-approved; CURRENT_STATUS §20.6 gate 6):**
+
+- **The test project:** `zypact-s1-test` is a separate project in its own organisation, on PostgreSQL 17.11. It is not `zypact-staging`; the script refuses to run if any setting names the live project.
+- **The database changes:** all 85 migration files were applied to it in production order.
+- **On real Supabase,** whose default privileges grant API roles automatically, these all count 0:
+  - API-role privileges on the Q2′ and S1 tables;
+  - API-role privileges on both identity sequences, which confirms the #113 fix;
+  - `authenticated` execute rights on the S1 functions.
+- **Result: `ZYPACT_S1_REAL_AUTH=1 npm run s1:real-auth-check` passed 20/20.** It drives the real S1 handlers with the real store and the project's real GoTrue:
+  - **Sign-up and access:**
+    - an unapproved email creates no Auth user;
+    - an unverified sign-in is refused, with no workspace;
+    - the email is verified through a real verification token;
+    - the first verified sign-in creates exactly one workspace and opens a session that resolves through the real JWT;
+    - a second sign-in creates no second workspace;
+    - a wrong password gets one generic 401;
+    - a verified but unapproved user gets no workspace or session.
+  - **Sessions:**
+    - a session token presented with another user's identity resolves to nothing;
+    - step-up refuses a wrong password and records a correct one;
+    - every Q2′ and S1 table and function is refused to anon and to signed-in browser tokens through the real API gateway;
+    - sign-out revokes the session.
+  - **Password reset:** a reset without the grant is refused; with it, the password changes and every session is revoked.
+  - **Rate limits:** the sign-in email bucket refuses the 11th attempt.
+- **Found and fixed:** with Confirm email on, Supabase Auth itself refuses an unverified sign-in (`email_not_confirmed`). S1 had shown "Email or password is incorrect". It now answers "Verify your email first" (unit check H8b).
+- **Not exercised:**
+  - real email delivery: users were created and verified through the admin `generateLink` API, because the default sender only mails team members;
+  - the PKCE `exchangeCode` callback;
+  - the Next.js cookie adapter end to end.
+
+  These depend on production SMTP and a deployed environment, and remain part of the customer-use gates (D-045).

@@ -52,6 +52,7 @@ function supabaseAuthPort(): AuthPort {
     },
     async signInWithPassword(email, password) {
       const { data, error } = await (await client()).auth.signInWithPassword({ email, password });
+      if (error?.code === "email_not_confirmed") return "email_not_confirmed";
       return error ? null : toAuthUser(data.user);
     },
     async getUser() {

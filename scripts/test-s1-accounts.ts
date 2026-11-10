@@ -258,6 +258,15 @@ async function main(): Promise<void> {
       r.status === 403 && w.calls.includes("auth.signOut") && !w.calls.some((c) => c.startsWith("store.open") || c.startsWith("store.provision")));
   }
   {
+    // Real Supabase Auth (Confirm email on) refuses the sign-in itself with
+    // email_not_confirmed; found by scripts/s1-real-auth-check.ts (R2).
+    const w = world({}, { ...verifiedUser(), emailConfirmedAt: null });
+    w.deps.auth.signInWithPassword = async () => "email_not_confirmed";
+    const r = await handleSignIn(w.deps, { email: APPROVED, password: "correct-horse-battery" }, CTX);
+    check("H8b when Auth itself refuses an unverified email, the person is told to verify, not that the password is wrong",
+      r.status === 403 && r.body.error === "email_not_verified" && !w.calls.some((c) => c.startsWith("store.open") || c.startsWith("store.provision")) && !r.setSessionCookie);
+  }
+  {
     const w = world({}, verifiedUser("stranger@else.test"));
     const r = await handleSignIn(w.deps, { email: "stranger@else.test", password: "correct-horse-battery" }, CTX);
     check("H9 identity is not a grant: a verified but unapproved account gets no workspace and no session",

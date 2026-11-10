@@ -3103,6 +3103,8 @@ assert "QS1-01. no API role holds any privilege on any S1 table" \
   "$(q2p_sql "select count(*) from unnest(array['anon','authenticated','service_role']) r, unnest(array['account_sessions','account_rate_limit_events']) t, unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) p where has_table_privilege(r, 'public.' || t, p);")" "0"
 assert "QS1-01. RLS on both S1 tables, no policy" \
   "$(q2p_sql "select count(*) filter (where c.relrowsecurity) || '/' || (select count(*) from pg_policy p where p.polrelid in ('public.account_sessions'::regclass, 'public.account_rate_limit_events'::regclass)) from pg_class c where c.oid in ('public.account_sessions'::regclass, 'public.account_rate_limit_events'::regclass);")" "2/0"
+assert "QS1-01. no API role holds any privilege on the rate-limit identity sequence" \
+  "$(q2p_sql "select count(*) from unnest(array['anon','authenticated','service_role']) r, unnest(array['USAGE','SELECT','UPDATE']) p where has_sequence_privilege(r, 'public.account_rate_limit_events_id_seq', p);")" "0"
 assert "QS1-01. no API role may execute any _s1_ helper" \
   "$(q2p_sql "select count(*) from pg_proc p, unnest(array['anon','authenticated','service_role']) r where p.pronamespace = 'public'::regnamespace and p.proname like '\\_s1\\_%' and has_function_privilege(r, p.oid, 'execute');")" "0"
 for f in open_account_session check_account_session record_account_step_up revoke_account_session revoke_account_sessions_for_account take_account_rate_limit; do

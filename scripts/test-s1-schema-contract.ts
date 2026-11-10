@@ -83,6 +83,11 @@ function detectors(raw: string): Array<[string, string, boolean, string]> {
     flat.includes("revoke all on table public.account_sessions, public.account_rate_limit_events from public, anon, authenticated, service_role;")
   );
   add("S1C-05", "no table privilege is granted to any role", !/grant\s+[a-z, ]+\s+on\s+table/i.test(sql));
+  // Supabase's default privileges grant every new sequence to the API roles,
+  // and an identity column owns one; Q2′-2 closes its own the same way.
+  add("S1C-05b", "the identity sequence is revoked from public, anon, authenticated and service_role",
+    flat.includes("revoke all on sequence public.account_rate_limit_events_id_seq from public, anon, authenticated, service_role;") &&
+      !/grant[^;]*on\s+sequence/i.test(sql));
 
   const defined = definedFunctions(sql);
   const expected = [...Object.keys(PUBLIC_FUNCTIONS), ...Object.keys(HELPERS)].sort();
@@ -154,6 +159,7 @@ for (const [id, label, ok, detail] of detectors(SQL)) assert(`${id} ${label}`, o
 const MUTATIONS: Array<[string, string, string, string]> = [
   ["S1C-02", "RLS dropped", "alter table public.account_sessions enable row level security;", ""],
   ["S1C-03", "a policy added", "-- 6. Function privileges", "create policy p on public.account_sessions for select using (true);\n-- 6. Function privileges"],
+  ["S1C-05b", "sequence left open", "revoke all on sequence public.account_rate_limit_events_id_seq from public, anon, authenticated, service_role;", ""],
   ["S1C-05", "a table grant added", "-- 6. Function privileges", "grant select on table public.account_sessions to service_role;\n-- 6. Function privileges"],
   ["S1C-07 check_account_session", "SECURITY DEFINER removed", "step_up_at timestamptz, absolute_expires_at timestamptz)\nlanguage plpgsql\nsecurity definer", "step_up_at timestamptz, absolute_expires_at timestamptz)\nlanguage plpgsql"],
   ["S1C-11", "granted to authenticated", "grant execute on function public.check_account_session(text, uuid) to service_role;", "grant execute on function public.check_account_session(text, uuid) to service_role;\ngrant execute on function public.check_account_session(text, uuid) to authenticated;"],

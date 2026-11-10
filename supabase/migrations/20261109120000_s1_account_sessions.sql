@@ -156,6 +156,9 @@ alter table public.account_rate_limit_events enable row level security;
 
 revoke all on table public.account_sessions, public.account_rate_limit_events
   from public, anon, authenticated, service_role;
+-- The identity column's sequence is a separate object. Supabase's default
+-- privileges grant it to the API roles; close it as Q2′-2 closes its own.
+revoke all on sequence public.account_rate_limit_events_id_seq from public, anon, authenticated, service_role;
 
 -- ════════════════════════════════════════════════════════════════════════
 -- 4. Session functions (service_role only)

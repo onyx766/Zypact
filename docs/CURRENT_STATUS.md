@@ -1718,3 +1718,16 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
   - a real-login test on a non-production Supabase project before customer use.
 - **Not approved by that reply:** any production apply. Each still needs its own authorisation.
 - **Vercel:** the account block reported earlier the same day was resolved.
+
+**Production preflight run, 2026-11-09 at 17:12 PST (founder-authorised, read-only):**
+
+- **Result: all 15 must-pass checks PASS. 0 FAIL.**
+- Run with `scripts/sql/prod-preflight.sql` at `main` `60720a2`, against `zypact-staging`, which is production.
+- The server is PostgreSQL 17.6.
+- **Ledger:** 81 rows; 0001–0080 plus the alias `20260924023646`, which is the tail. No held or pending version is recorded.
+- **0083 pre-state:** `reconcile_attempt_for_job` has md5 `baaf43cc539611ec78fef9762c168a53`, which matches the reserved procedure's pin, and only `service_role` may execute it.
+- **No Q2′-1, Q2′-2 or S1 object exists.**
+- **Activity:** no protocol job is claimed or running.
+- **The cluster system identifier** is recorded privately for the 0083 apply, not here.
+- **Nothing was changed.**
+- **Next gate:** the founder's authorisation of step 1, 0083 by the reserved-version procedure, with the worker stopped. Steps 2 to 4 (Q2′-1, Q2′-2, S1) each need their own.

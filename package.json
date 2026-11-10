@@ -141,6 +141,7 @@
     "test:s1-schema": "tsx scripts/test-s1-schema-contract.ts",
     "test:s1-accounts": "tsx scripts/test-s1-accounts.ts",
     "test:prod-preflight": "tsx scripts/test-prod-preflight-contract.ts",
+    "s1:real-auth-check": "tsx scripts/s1-real-auth-check.ts",
     "test:outbound-url-safety": "tsx scripts/test-outbound-url-safety.ts",
     "test:crawl-apex-www-fallback": "tsx scripts/test-crawl-apex-www-fallback.ts",
     "test:w1-contract": "tsx scripts/test-w1-contract.ts",

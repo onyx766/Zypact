@@ -34,7 +34,12 @@ export interface AuthUser {
 /** The Auth operations S1 needs, bound to the current request's cookies. */
 export interface AuthPort {
   signUp(email: string, password: string, workspaceName: string, redirectTo: string): Promise<{ sessionCreated: boolean; errorCode: string | null }>;
-  signInWithPassword(email: string, password: string): Promise<AuthUser | null>;
+  /**
+   * The signed-in user, null for wrong credentials, or "email_not_confirmed"
+   * when the password is right but the address is unverified. Supabase Auth
+   * with Confirm email on refuses that sign-in itself, with this error code.
+   */
+  signInWithPassword(email: string, password: string): Promise<AuthUser | null | "email_not_confirmed">;
   getUser(): Promise<AuthUser | null>;
   /** Ends this browser's Auth session only (scope "local"). */
   signOut(): Promise<void>;
@@ -206,6 +211,10 @@ export function handleSignIn(
     if (!(await withinLimits(deps, "sign_in", { ip: ctx.ip, email }))) return tooMany();
 
     const user = await deps.auth.signInWithPassword(email, input.password);
+    if (user === "email_not_confirmed") {
+      deps.log({ event: "account_sign_in", outcome: "email_not_verified" });
+      return json(403, { ok: false, error: "email_not_verified", message: "Verify your email first. We can send a new link." });
+    }
     if (!user) {
       deps.log({ event: "account_sign_in", outcome: "invalid_credentials" });
       return json(401, { ok: false, error: "invalid_credentials", message: SIGN_IN_FAILED });

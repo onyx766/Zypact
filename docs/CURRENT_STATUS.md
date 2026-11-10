@@ -1731,3 +1731,20 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 - **The cluster system identifier** is recorded privately for the 0083 apply, not here.
 - **Nothing was changed.**
 - **Next gate:** the founder's authorisation of step 1, 0083 by the reserved-version procedure, with the worker stopped. Steps 2 to 4 (Q2′-1, Q2′-2, S1) each need their own.
+
+**0083 applied to production, 2026-11-09 evening PST (founder-authorised: "yes you can"):**
+
+- **Procedure:** the D-041 reserved-version procedure, which is the body of `scripts/sql/sv1-apply-reserved-migration.sql` below its rehearsal header (sha256 `b011ccc2…`, matching the recorded source). It ran with `--single-transaction`, `target_sysid` equal to the preflight's P1.1, and `expected_tail=20260924023646`. The file sha256 is `742c0e1d…`, as allowlisted.
+- **Rehearsed first** on a disposable PostgreSQL built to production's state:
+  - a wrong `target_sysid` was refused;
+  - the apply succeeded;
+  - a second apply was refused ("version already recorded").
+- **Live preflight**, re-run immediately before the apply: 15/15 PASS, with no protocol job claimed or running.
+- **The apply was run by the engineer** from their own terminal.
+- **Read-only verification afterwards:**
+  - `0083` is recorded;
+  - the ledger has 82 rows;
+  - the tail is still `20260924023646`;
+  - `reconcile_attempt_for_job` has md5 `721e487901b2272708e38565b7070c53`, the procedure's pinned post-state;
+  - only `service_role` may execute it.
+- **The 0083 production HOLD is lifted.** Next: Q2′-1 (`20261102132000`, `expected_prev=20260924023646`) by the named-file procedure. That needs its own founder authorisation.

@@ -112,14 +112,14 @@ export async function readCookie(name: string): Promise<string | null> {
   return (await cookies()).get(name)?.value ?? null;
 }
 
-/** JSON only, at most MAX_BODY_BYTES; anything else is refused before parsing. */
-export async function readJsonBody(request: Request): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; response: NextResponse }> {
+/** JSON only, at most `maxBytes` (MAX_BODY_BYTES unless a route sets a larger cap); anything else is refused before parsing. */
+export async function readJsonBody(request: Request, maxBytes: number = MAX_BODY_BYTES): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; response: NextResponse }> {
   const type = request.headers.get("content-type") ?? "";
   if (!type.toLowerCase().startsWith("application/json")) {
     return { ok: false, response: NextResponse.json({ ok: false, error: "unsupported_media_type" }, { status: 415 }) };
   }
   const text = await request.text();
-  if (Buffer.byteLength(text, "utf8") > MAX_BODY_BYTES) {
+  if (Buffer.byteLength(text, "utf8") > maxBytes) {
     return { ok: false, response: NextResponse.json({ ok: false, error: "payload_too_large" }, { status: 413 }) };
   }
   try {

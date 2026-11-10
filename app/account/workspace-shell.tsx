@@ -11,10 +11,10 @@ const NAV: Array<{ id: WorkspaceSection; label: string; href: string; later?: bo
   { id: "overview", label: "Overview", href: "/account" },
   { id: "website", label: "Website", href: "/account/website" },
   { id: "profile", label: "Brand profile", href: "/account/profile" },
-  { id: "questions", label: "Questions", href: "/account/questions", later: true },
+  { id: "questions", label: "Questions", href: "/account/questions" },
   { id: "sources", label: "Sources", href: "/account/sources", later: true },
-  { id: "actions", label: "Actions", href: "/account/actions", later: true },
-  { id: "reports", label: "Reports", href: "/account/reports", later: true },
+  { id: "actions", label: "Actions", href: "/account/actions" },
+  { id: "reports", label: "Reports", href: "/account/reports" },
 ];
 
 export function WorkspaceShell({

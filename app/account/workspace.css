@@ -87,7 +87,34 @@ details.zw-details > summary { cursor: pointer; font-weight: 600; padding: 4px 0
 .zw-alert.is-success { background: rgba(45, 212, 191, 0.1); color: #99f6e4; }
 .zw-later { color: var(--zw-muted); }
 .zw-later ul { margin: 8px 0 0; padding-left: 18px; }
+/* P2 */
+.zw-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.zw-inline { display: inline-flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.zw-button.is-small { padding: 5px 11px; font-size: 13px; }
+.zw-radio { display: flex; gap: 10px; align-items: center; font-weight: 400; padding: 4px 0; cursor: pointer; }
+.zw-radio input { accent-color: var(--zw-accent); }
+.zw-editor { border-top: 1px solid var(--zw-line); padding-top: 14px; margin-top: 10px; }
+.zw-item { border-top: 1px solid var(--zw-line); padding: 14px 0; display: grid; gap: 6px; }
+.zw-item:first-of-type { border-top: 0; padding-top: 4px; }
+.zw-item-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.zw-item-text { font-weight: 550; }
+.zw-warn { font-size: 13px; color: #fcd34d; }
+.zw-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.zw-dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 4px 0 0; font-size: 14px; }
+.zw-dl dt { color: var(--zw-muted); }
+.zw-dl dd { margin: 0; overflow-wrap: anywhere; }
+.zw-brief h3 { font-size: 15px; margin: 18px 0 6px; }
+.zw-brief h3:first-child { margin-top: 0; }
+.zw-brief ul { margin: 0; padding-left: 18px; color: var(--zw-text); }
+.zw-brief li { margin: 3px 0; }
+.zw-plain { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; background: var(--zw-bg); border: 1px solid var(--zw-line); border-radius: 8px; padding: 12px; max-height: 360px; overflow: auto; color: var(--zw-text); }
+.zw-section-title { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--zw-muted); margin: 26px 0 10px; font-weight: 600; }
+.zw-grid3 .zw-card ul { margin: 6px 0 0; padding-left: 18px; }
+.zw-grid3 .zw-card li { margin: 4px 0; font-size: 14px; }
+.zw-grid3 .zw-card a { color: var(--zw-text); }
+
 @media (max-width: 820px) {
+  .zw-dl { grid-template-columns: 1fr; }
   .zw-body { grid-template-columns: 1fr; }
   .zw-nav { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--zw-line); padding: 8px; }
   .zw-nav a { white-space: nowrap; }

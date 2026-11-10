@@ -43,11 +43,11 @@ export interface WorkspaceResult {
   body: Record<string, unknown>;
 }
 
-const json = (status: number, body: Record<string, unknown>): WorkspaceResult => ({ status, body });
-const invalid = (field: string, message: string) => json(400, { ok: false, error: "invalid_input", field, message });
-const notSignedIn = () => json(401, { ok: false, error: "not_signed_in", message: "Please sign in again." });
+export const json = (status: number, body: Record<string, unknown>): WorkspaceResult => ({ status, body });
+export const invalid = (field: string, message: string) => json(400, { ok: false, error: "invalid_input", field, message });
+export const notSignedIn = () => json(401, { ok: false, error: "not_signed_in", message: "Please sign in again." });
 
-async function guarded(deps: WorkspaceDeps, event: string, account: AccountContext | null, token: string | null,
+export async function guarded(deps: WorkspaceDeps, event: string, account: AccountContext | null, token: string | null,
   run: (account: AccountContext, token: string) => Promise<WorkspaceResult>): Promise<WorkspaceResult> {
   if (!deps.config.enabled) return json(404, { ok: false, error: "not_found" });
   if (!account || !token) return notSignedIn();
@@ -63,7 +63,7 @@ export function diagnosticBucketKey(secret: string, kind: string, value: string)
   return createHmac("sha256", secret).update(`${DIAG_RATE_PURPOSE}\u001f${kind}\u001f${value}`).digest("hex");
 }
 
-const clean = (value: unknown, max: number): string | null => {
+export const clean = (value: unknown, max: number): string | null => {
   if (typeof value !== "string") return null;
   const text = value.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
   return text.length > 0 && text.length <= max ? text : null;

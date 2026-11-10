@@ -409,10 +409,27 @@ async function main(): Promise<void> {
 
   /* S: static checks ---------------------------------------------- */
   {
-    const routes = readdirSync("app/api/account").map((d) => `app/api/account/${d}/route.ts`);
-    check("S1 seven account API routes exist", routes.length === 7 && routes.every((r) => existsSync(r)));
-    check("S1 every account API route is POST-only through accountPost",
-      routes.every((r) => { const s = readFileSync(r, "utf8"); return s.includes("export const POST = accountPost(") && !/export (async )?function (GET|PUT|PATCH|DELETE)/.test(s); }));
+    // S1's own seven routes go through accountPost. Every other route under
+    // app/api/account is a workspace route (P1 D-046, P2 D-047) and goes
+    // through workspacePost, which applies the same kill switch and body rules.
+    const S1_ROUTES = ["sign-up", "sign-in", "sign-out", "resend-verification", "forgot-password", "reset-password", "step-up"];
+    const allRoutes: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir)) {
+        const p = `${dir}/${entry}`;
+        if (statSync(p).isDirectory()) walk(p);
+        else if (entry === "route.ts") allRoutes.push(p);
+      }
+    };
+    walk("app/api/account");
+    const routes = S1_ROUTES.map((d) => `app/api/account/${d}/route.ts`);
+    const workspaceRoutes = allRoutes.filter((r) => !routes.includes(r));
+    const postOnly = (s: string) => !/export (async )?function (GET|PUT|PATCH|DELETE)/.test(s) && !/export const (GET|PUT|PATCH|DELETE)\b/.test(s);
+    check("S1 the seven S1 account API routes exist", routes.every((r) => existsSync(r)));
+    check("S1 every S1 account API route is POST-only through accountPost",
+      routes.every((r) => { const s = readFileSync(r, "utf8"); return s.includes("export const POST = accountPost(") && postOnly(s); }));
+    check("S1 every other account API route is a POST-only workspace route through workspacePost",
+      workspaceRoutes.length > 0 && workspaceRoutes.every((r) => { const s = readFileSync(r, "utf8"); return s.includes("export const POST = workspacePost(") && postOnly(s); }));
     const pages = ["app/account/page.tsx", "app/account/sign-up/page.tsx", "app/account/sign-in/page.tsx", "app/account/verify/page.tsx", "app/account/forgot-password/page.tsx", "app/account/reset-password/page.tsx"];
     check("S2 every account page returns 404 while accounts are off", pages.every((p) => readFileSync(p, "utf8").includes("readAccountsConfig()") && readFileSync(p, "utf8").includes("notFound()")));
     check("S2 every account page is noindex", pages.every((p) => readFileSync(p, "utf8").includes("robots: { index: false, follow: false }")) && readFileSync("lib/seo/legacy-routes.ts", "utf8").includes('"/account",'));
@@ -423,26 +440,40 @@ async function main(): Promise<void> {
     check("S4 browser components never import the store, the handlers or the HTTP adapter",
       clientFiles.every((f) => { const s = readFileSync(f, "utf8"); return s.startsWith('"use client"') && !/@\/lib\/accounts\//.test(s); }));
 
-    const FORBIDDEN = [/^lib\/llm\//, /^lib\/probes\//, /^lib\/pipeline\//, /^lib\/agents\//, /^lib\/protocol-worker\//, /^lib\/worker-control\//, /^lib\/db\//, /^lib\/site-diagnostic\//];
-    const seen = new Set<string>();
-    const stack = ["lib/accounts/http.ts", "lib/accounts/handlers.ts", "lib/accounts/store.ts", ...routes, ...pages, "app/account/auth/callback/route.ts"];
+    const NEVER = [/^lib\/llm\//, /^lib\/probes\//, /^lib\/pipeline\//, /^lib\/agents\//, /^lib\/protocol-worker\//, /^lib\/worker-control\//, /^lib\/db\//];
     const resolve = (from: string, spec: string): string | null => {
       const base = spec.startsWith("@/") ? spec.slice(2) : spec.startsWith(".") ? path.posix.normalize(path.posix.join(path.posix.dirname(from), spec)) : null;
       if (!base) return null;
       for (const c of [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`]) if (existsSync(c) && statSync(c).isFile()) return c;
       return null;
     };
-    while (stack.length) {
-      const f = stack.pop() as string;
-      if (seen.has(f)) continue;
-      seen.add(f);
-      for (const m of readFileSync(f, "utf8").matchAll(/(?:from|import)\s*\(?\s*["']([^"']+)["']/g)) {
-        const t = resolve(f, m[1]);
-        if (t) stack.push(t);
+    const reach = (seeds: string[]): Set<string> => {
+      const seen = new Set<string>();
+      const stack = [...seeds];
+      while (stack.length) {
+        const f = stack.pop() as string;
+        if (seen.has(f)) continue;
+        seen.add(f);
+        for (const m of readFileSync(f, "utf8").matchAll(/(?:from|import)\s*\(?\s*["']([^"']+)["']/g)) {
+          const t = resolve(f, m[1]);
+          if (t) stack.push(t);
+        }
       }
-    }
-    const offending = [...seen].filter((f) => FORBIDDEN.some((re) => re.test(f)));
-    check(`S5 no account module reaches a model, probe, worker, pipeline or legacy DB adapter${offending.length ? ` — ${offending.join(", ")}` : ""}`, offending.length === 0);
+      return seen;
+    };
+    // S1's own modules: no model, probe, worker, pipeline, legacy DB adapter,
+    // and no website diagnostic.
+    const authPages = pages.filter((p) => p !== "app/account/page.tsx");
+    const s1Reach = reach(["lib/accounts/http.ts", "lib/accounts/handlers.ts", "lib/accounts/store.ts", ...routes, ...authPages, "app/account/auth/callback/route.ts"]);
+    const s1Offending = [...s1Reach].filter((f) => [...NEVER, /^lib\/site-diagnostic\//, /^lib\/workspace\//].some((re) => re.test(f)));
+    check(`S5 no S1 account module reaches a model, probe, worker, pipeline, legacy DB adapter, the diagnostic or the workspace${s1Offending.length ? ` — ${s1Offending.join(", ")}` : ""}`, s1Offending.length === 0);
+    // Workspace modules (D-046, D-047) may reach the W1 website diagnostic —
+    // it fetches only the workspace's own site, with no model call — and
+    // nothing else on the list.
+    const workspacePages = readdirSync("app/account").filter((d) => existsSync(`app/account/${d}/page.tsx`) && !authPages.includes(`app/account/${d}/page.tsx`) && d !== "auth").map((d) => `app/account/${d}/page.tsx`);
+    const wsReach = reach(["app/account/page.tsx", ...workspacePages, ...workspaceRoutes]);
+    const wsOffending = [...wsReach].filter((f) => NEVER.some((re) => re.test(f)));
+    check(`S5 no workspace module reaches a model, probe, worker, pipeline or legacy DB adapter${wsOffending.length ? ` — ${wsOffending.join(", ")}` : ""}`, workspacePages.length >= 6 && wsOffending.length === 0, String(workspacePages.length));
     check("S5 founder login and the founder guard are untouched by S1",
       !readFileSync("app/login/page.tsx", "utf8").includes("accounts") && !readFileSync("lib/auth/founder.ts", "utf8").includes("accounts"));
 

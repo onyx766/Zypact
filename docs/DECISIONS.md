@@ -778,10 +778,31 @@ Each entry records:
   5. `_s1_purge_account_rate_limit_events()` is scheduled.
 - **Known limitation:** a verification link opened in a different browser from the one used to sign up cannot complete the code exchange. The email is still verified, and the person is told to sign in.
 
+## D-046 — P1: customer workspace setup — the website, customer-run site diagnostics and a versioned Brand Profile
+
+- **Date:** 2026-11-10
+- **Status:** **Approved by the Founder on 2026-11-10** (written message: "merge, and I agree, go ahead", which covered D-046 and D-047 in full). Merged into `main` with D-047 through PR #117. Migration `20261110120000_p1_workspace_setup.sql` is **not applied to any Supabase project**. The area is reachable only when `ZYPACT_ACCOUNTS_ENABLED` is exactly `true`, and the diagnostic only when `ZYPACT_WORKSPACE_DIAGNOSTIC_ENABLED` is exactly `true`.
+- **Builds on:** D-040 (self-service; the first release is the website diagnostic with no paid call), D-041 (migration order), D-042 and D-043 (Q2′-1 and Q2′-2 closed tables), D-045 (account sessions).
+- **Decision:**
+  - **One website per workspace.** `set_workspace_website` sets it once. The same domain again is `ALREADY_SET`; a different one is `DIFFERENT_WEBSITE_SET`, so the diagnostic cannot be pointed at arbitrary sites. Changing the website is a support action. Setting it creates the workspace's project (rule `p1.workspace_setup`) and its Q2′-2 domain row.
+  - **Customer-run W1 diagnostic.** It fetches only `https://<workspace domain>/`, through W1's bounds (10 pages, RFC 9309, SSRF-safe fetching, no model call). It is rate-limited per account (3 a day), per domain (5 a day) and per IP (10 a day), in Q2′-2's keyed table with HMAC bucket keys (`zypact.diag.rate_limit.v1`). Results are written into Q2′-2's run, page and finding tables by `record_site_diagnostic`, which refuses a domain other than the workspace's (`DOMAIN_MISMATCH`).
+  - **Brand Profile.** A closed, append-only, versioned table (`workspace_brand_profiles`): company name, description, category, audience, up to 10 competitors (no case-insensitive duplicates) and the objective (`describe_product`, `compare_competitors`, `investigate_sources`, `review_after_change`). Saves need the expected version (`VERSION_CONFLICT` otherwise), and every version is kept. A profile may cite a diagnostic run of its own workspace only. The first draft is copied only from the homepage's own meta description or H1; nothing is generated.
+  - **Security shape.** Every function takes the account session token and the account id the server read from a verified Auth user, re-checks the session through S1's `check_account_session`, and takes the workspace from the session. Writes serialise on a per-workspace advisory lock. RLS is on with no policy and no API-role table privilege; functions are executable by `service_role` only, and `_p1_` helpers by no role. Logs carry closed fields only.
+  - **S1's boundary is kept and made explicit.** S1's own modules (its seven routes, its sign-in pages and `lib/accounts`) still may not reach the diagnostic or the workspace. Workspace modules may reach the W1 diagnostic and nothing else on S1's forbidden list (`scripts/test-s1-accounts.ts`, S1 and S5).
+- **Tests:** `npm run test:p1-workspace` (handlers, offline) and `npm run test:p2-workspace-db`, which also runs `scripts/test-p1-workspace-db.ts` on a disposable Supabase Postgres.
+- **Recovery:** forward recovery is a later migration. A rollback drops P1's functions and `workspace_brand_profiles`. Diagnostic rows live in Q2′-2's tables and are kept.
+- **Gates before customer use:** the D-045 gates, then a named-file apply under D-041 in this order: Q2′-1, Q2′-2, S1, P1, P2.
+
 ## D-047 — P2: workspace sections without spend, and the founder rulings the pricing and workspace direction needs
 
 - **Date:** 2026-11-10
-- **Status:** **Proposed — awaiting founder approval.** Built on branch `feat/p2-workspace-sections`, stacked on the unmerged P1 branch `feat/p1-workspace` (whose migration cites D-046, not yet recorded in this file). Migration `20261111120000_p2_workspace_drafts_actions.sql` is **not applied to any Supabase project**. Like P1, it is reachable only when `ZYPACT_ACCOUNTS_ENABLED` is exactly `true`.
+- **Status:** **Approved by the Founder on 2026-11-10**, Part A and every item of Part B (written message: "merge, and I agree, go ahead"). Built in PR #116 and merged into `main` with P1 through PR #117.
+  - **Rulings given with the approval (2026-11-10):**
+    - the billing provider is **Stripe**;
+    - every paid path (Free-plan runs, Starter monitoring, ChatGPT measurement) is **built, tested with simulated providers, and kept switched off**;
+    - going live stays a separate founder step, after verified provider costs and a reviewed Stripe test-mode checkout.
+  - The PG-9 HOLD is **not** lifted by this approval. No production apply, live Stripe charge or live paid call happens without its own explicit authorisation.
+  - Migration `20261111120000_p2_workspace_drafts_actions.sql` is **not applied to any Supabase project**. Like P1, it is reachable only when `ZYPACT_ACCOUNTS_ENABLED` is exactly `true`.
 - **Context:** the founder's pricing, packaging and workspace direction (2026-11-10) proposes Free and Starter plans, ChatGPT and Perplexity measurement, weekly monitoring, AI-suggested buyer questions, and a five-section workspace (Overview, Questions, Sources, Actions, Reports). Part of it fits the approved scope and needs no paid call; part of it conflicts with V1_SCOPE, D-039 and D-040. Part A records what was built; Part B lists the rulings needed before anything else from the direction is built.
 
 ### Part A — built in P2 (no paid call, no model call, no measurement)
@@ -817,9 +838,9 @@ Each entry records:
 - **Tests:** `npm run test:p2-workspace` (107 checks, offline) and `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` (71 checks on a disposable Supabase Postgres with every migration applied).
 - **Recovery:** nothing else references the four tables. Rollback drops the six functions, three helpers and four tables, and loses only P2 drafts and actions.
 
-### Part B — rulings needed before building more of the direction
+### Part B — approved by the Founder on 2026-11-10, to be built behind switches that stay off
 
-Each item conflicts with a document that governs today. Nothing below is built.
+Each item below departed from a document that governed before this approval: V1_SCOPE §8, D-039 or D-040. The approval lifts those deferrals for the items listed, and only for them. Each item is built in its own pull request, with its own tests.
 
 1. **Weekly monitoring (Starter).** V1_SCOPE §8 defers continuous monitoring, and D-040 / SELF_SERVICE_PRODUCT §9 keeps that deferral ("monitor results" means registered baselines, retests and Outcome Cards only). Lifting it needs a decision that also defines a monitoring measurement type, kept separate from baselines and retests, with its own protocol, denominators and copy. The direction itself requires that separation.
 2. **ChatGPT as a measured surface.** V1 measures with Perplexity Sonar only, presented as a directional proxy; OpenAI is used for analysis, not as a measured surface. A new measured provider needs a provider decision: provenance fields, raw-evidence capture, cost verification, and how results are presented per engine.

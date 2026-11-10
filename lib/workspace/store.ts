@@ -139,6 +139,27 @@ export interface FindingRef {
   pageUrl: string | null;
 }
 
+/* E1 (D-048): the workspace's plan and usage. */
+export interface UsageLine {
+  type: "free_trial" | "monitoring" | "deep_baseline" | "retest";
+  allowance: number;
+  lifetime: boolean;
+  consumed: number;
+  held: number;
+  released: number;
+}
+
+export interface WorkspaceUsage {
+  plan: "free" | "starter";
+  source: "default" | "founder" | "system" | "stripe";
+  periodStart: string;
+  periodEnd: string;
+  activeQuestionLimit: number;
+  engines: Array<"perplexity" | "chatgpt">;
+  paidMeasurementOn: boolean;
+  types: UsageLine[];
+}
+
 export type AddDraftStatus = "ADDED" | "DUPLICATE" | "LIMIT_REACHED" | "NOT_SIGNED_IN";
 export type ReviseStatus = "SAVED" | "UNCHANGED" | "VERSION_CONFLICT" | "NOT_FOUND" | "DUPLICATE" | "LIMIT_REACHED" | "NOT_SIGNED_IN";
 export type CreateActionStatus = "CREATED" | "ALREADY_TRACKED" | "EVIDENCE_NOT_FOUND" | "LIMIT_REACHED" | "NOT_SIGNED_IN";
@@ -156,6 +177,7 @@ export interface WorkspaceStore {
   createAction(token: string, accountId: string, evidence: FindingRef | { note: string }, fields: ActionFields): Promise<{ status: CreateActionStatus; actionId: string | null }>;
   reviseAction(token: string, accountId: string, actionId: string, expectedVersion: number, fields: ActionFields, status: ActionStatus, decisionNote: string | null): Promise<{ status: ReviseStatus; version: number | null }>;
   listActions(token: string, accountId: string): Promise<WorkspaceAction[] | NotSignedIn>;
+  getUsage(token: string, accountId: string): Promise<WorkspaceUsage | NotSignedIn>;
 }
 
 async function rpcRow<T>(promise: PromiseLike<{ data: unknown; error: { code?: string } | null }>): Promise<T> {
@@ -396,6 +418,27 @@ export function supabaseWorkspaceStore(client: SupabaseClient = serviceClient())
           evidence,
         };
       });
+    },
+    async getUsage(token, accountId) {
+      const u = await rpcRow<Json>(client.rpc("get_workspace_usage", { p_token: token, p_account_id: accountId }));
+      if (u.status !== "OK") return { status: "NOT_SIGNED_IN" };
+      return {
+        plan: u.plan as WorkspaceUsage["plan"],
+        source: u.source as WorkspaceUsage["source"],
+        periodStart: String(u.period_start),
+        periodEnd: String(u.period_end),
+        activeQuestionLimit: Number(u.active_question_limit),
+        engines: (u.engines as WorkspaceUsage["engines"]) ?? [],
+        paidMeasurementOn: u.paid_measurement_on === true,
+        types: (u.types as Json[]).map((t) => ({
+          type: t.type as UsageLine["type"],
+          allowance: Number(t.allowance),
+          lifetime: t.lifetime === true,
+          consumed: Number(t.consumed),
+          held: Number(t.held),
+          released: Number(t.released),
+        })),
+      };
     },
   };
 }

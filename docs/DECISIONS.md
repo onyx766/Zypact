@@ -852,3 +852,41 @@ Each item below departed from a document that governed before this approval: V1_
 8. **Team Brief exports and read-only sharing.** These are deferred in the direction itself until access controls are confirmed. A sharing link needs its own access decision.
 
 - **Not decided here:** prices; plan names; any change to the outcome statuses, integrity statuses or the non-causality rules, which the direction keeps unchanged.
+
+## D-048 — E1: plans, allowances, the usage ledger and the paid-measurement switch
+
+- **Date:** 2026-11-10
+- **Status:** **Implements D-047 Part B item 3, approved by the Founder on 2026-11-10.** The allowances are the direction's figures. The engineering rules marked *(engineer)* below are **proposed for founder confirmation**. Migration `20261112120000_e1_plans_and_usage.sql` is **not applied to any Supabase project**.
+  - **Nothing is charged:** Stripe is not connected yet (it will assign plans through `assign_workspace_plan` with source `stripe`).
+  - **Paid measurement stays off:** with no founder switch record, no reservation can succeed.
+- **Decision:**
+  - **Plans** (enforced in `_e1_allowance`, `_e1_active_question_limit` and `_e1_engine_allowed`; mirrored in `lib/plans/catalog.ts`, and `test:e1-plans` fails if they differ):
+
+    | | Free ($0) | Starter ($49/month, proposed) |
+    |---|---|---|
+    | Active buyer questions | 1 | 20 |
+    | Engines | Perplexity Sonar | Perplexity Sonar, ChatGPT |
+    | Free-trial runs | 3, lifetime, never reset | — |
+    | Monitoring runs per billing month | — | 160 |
+    | Deep-baseline runs per billing month | — | 50 |
+    | Retest runs per billing month | — | 30 |
+
+  - **Plan assignment:** an append-only record per workspace, written by a founder, by the system, or by Stripe (as a system actor with source `stripe`). It is idempotent on a key, and the same key with a different body is refused. A workspace with no assignment is on Free, anchored at its creation *(engineer)*. Billing months run from the assignment's period anchor by calendar-month arithmetic.
+  - **Reservation before any attempt.** `reserve_measurement_run` must succeed before a measurement attempt is admitted. Each run is reserved, then settled exactly once:
+    - **consumed:** a successful run;
+    - **released:** failed, timed out, cancelled or excluded, with a reason.
+
+    Reserved and consumed runs count against the allowance; released runs do not. A consumed run is never given back, including when its question is archived or replaced. A replay of the same key returns the same reservation, even after the switch is off or the allowance is used up.
+  - **No overage.** An exhausted allowance refuses (`ALLOWANCE_EXHAUSTED`).
+  - **Failure budget** *(engineer)*: once a period's releases reach that period's allowance, new reservations are refused (`FAILURE_BUDGET_EXHAUSTED`), so repeated provider failures cannot keep spending. D-037's ledger gate still caps each job's actual spend.
+  - **Paid-measurement switch:** an append-only founder record (`set_paid_measurement_switch`). No record, or the latest disabled, means every new reservation is refused (`PAID_MEASUREMENT_OFF`). It is the database-level "built but switched off" of D-047.
+  - **Customer view:** `/account/plan` shows the plan, billing month, allowance per measurement type (consumed, in progress, released), and the usage rules in plain words, read through the session-checked `get_workspace_usage`.
+- **Not in E1:**
+  - the measurement paths that call `reserve_measurement_run` and `settle_measurement_run`;
+  - question activation within the active-question limit;
+  - Stripe;
+  - an expiry sweep for reservations a crashed worker never settles *(engineer: needed before go-live; until then a founder settles them)*.
+- **Tests:**
+  - `npm run test:e1-plans`: catalogue/SQL parity, closed shape and copy lint, each detector mutation-tested (52);
+  - `scripts/test-e1-plans-db.ts`, run by `npm run test:p2-workspace-db`: periods, switch, reservation, settlement, allowances, failure budget, plans, isolation, append-only and privileges (74).
+- **Recovery:** no existing table references the three new tables. A rollback drops them with their functions and loses plan and usage history only.

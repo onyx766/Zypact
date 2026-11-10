@@ -5,7 +5,7 @@ import { ZypactLogo } from "@/components/zypact-logo";
 import { SignOutButton } from "./account-form";
 import "./workspace.css";
 
-export type WorkspaceSection = "overview" | "website" | "profile" | "questions" | "sources" | "actions" | "reports";
+export type WorkspaceSection = "overview" | "website" | "profile" | "questions" | "sources" | "actions" | "reports" | "plan";
 
 const NAV: Array<{ id: WorkspaceSection; label: string; href: string; later?: boolean }> = [
   { id: "overview", label: "Overview", href: "/account" },
@@ -15,6 +15,7 @@ const NAV: Array<{ id: WorkspaceSection; label: string; href: string; later?: bo
   { id: "sources", label: "Sources", href: "/account/sources", later: true },
   { id: "actions", label: "Actions", href: "/account/actions" },
   { id: "reports", label: "Reports", href: "/account/reports" },
+  { id: "plan", label: "Plan & usage", href: "/account/plan" },
 ];
 
 export function WorkspaceShell({

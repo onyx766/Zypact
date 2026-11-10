@@ -65,4 +65,5 @@ cd "${ROOT}"
 status=0
 ZYPACT_P2_DB_CONTAINER="${NAME}" npx tsx scripts/test-p1-workspace-db.ts || status=1
 ZYPACT_P2_DB_CONTAINER="${NAME}" npx tsx scripts/test-p2-workspace-db.ts || status=1
+ZYPACT_P2_DB_CONTAINER="${NAME}" npx tsx scripts/test-e1-plans-db.ts || status=1
 exit "${status}"

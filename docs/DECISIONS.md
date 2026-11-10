@@ -726,7 +726,9 @@ Each entry records:
 ## D-045 — S1: customer accounts with email and password, closed account sessions, pilot-gated sign-up
 
 - **Date:** 2026-11-09
-- **Status:** **Proposed, awaiting founder review and the S1 security review.** The founder approved building S1 and opening its pull request on 2026-11-09. That approval does not cover applying anything to a database. Implemented on `feat/s1-accounts` as a draft PR. Not merged, not applied to any Supabase project, not deployed. The account area is off unless `ZYPACT_ACCOUNTS_ENABLED` is exactly `true`.
+- **Status:** **Approved by the Founder on 2026-11-09** (written reply "I approve"). Merged as PR #108 (`2dac4f0`). **Not applied to any Supabase project and not live:** the account area is off unless `ZYPACT_ACCOUNTS_ENABLED` is exactly `true`.
+  - **The same reply approved:** a security review before customer use (the reviewer is not yet named); running the read-only production preflight (`PROD_PREFLIGHT_SPEC.md`); and a real-login test on a non-production Supabase project, or the local stack, before customer use.
+  - **Still separately gated:** each production apply (0083, Q2′-1, Q2′-2, S1) needs its own authorisation after the preflight passes.
 - **Builds on:** D-040 (self-service; identity is not a grant; separate session types), D-041 (migration naming and release order), D-042 (closed tables; Q2′-1's F1 and membership model).
 - **Choices made for S1 (engineer, 2026-11-09):** email and password sign-in with email verification; sign-up limited to approved pilot emails by default; database cases run in the Level 2 harness.
 - **Decision:**

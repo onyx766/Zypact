@@ -920,3 +920,34 @@ Each item below departed from a document that governed before this approval: V1_
   - `npm run test:q4-activation` (42, offline);
   - `scripts/test-q4-activation-db.ts` (52, disposable Supabase Postgres, run by `npm run test:p2-workspace-db`).
 - **Recovery:** a rollback drops the two Q4 tables and functions. Buyer questions and versions created through Q4 stay, as every M4 version does, and remain identifiable by `approved_by`.
+
+## D-050 — X1: ChatGPT engine adapter (OpenAI Responses API with web search), not wired
+
+- **Date:** 2026-11-10
+- **Status:** **Implements the adapter half of D-047 Part B (the Starter plan's ChatGPT engine), approved by the Founder on 2026-11-10.** The adapter-validity note, `docs/ADAPTER_VALIDITY_CHATGPT.md`, is a **draft for founder approval**. Rules marked *(engineer)* are **proposed for founder confirmation**. No migration. The adapter is wired into no worker, and no live call has been made.
+- **Builds on:** METHODOLOGY §4 (a second surface needs a written validity note), D-044 (cited versus retrieved sources), the M1 evidence contract, and PR #4's provider routing.
+- **Decision:**
+  - **What "ChatGPT" means.** It means OpenAI's developer Responses API (`POST /v1/responses`) with the `web_search` tool, sent the approved buyer question and nothing else. It is not the ChatGPT app, and every artifact that uses it carries the limitation in the note.
+  - **Fixed setting `openai-responses-websearch-v1`:**
+    - model `gpt-5-mini` *(engineer default)*;
+    - `tool_choice: "auto"` *(engineer)*;
+    - reasoning effort `low`;
+    - `max_output_tokens` 4000;
+    - sources requested with `include: ["web_search_call.action.sources"]`;
+    - `store: false`;
+    - no temperature, instructions or fallback models.
+
+    Any change to the setting is a new version and a new instrument.
+  - **Served model.** Only the approved name or a dated snapshot of it is accepted. Anything else fails with the whole body as evidence.
+  - **Evidence and failures.** The evidence is the same as Sonar's: request and response bytes with their hashes, status, latency and `x-request-id`. The adapter uses the same `PerplexityProbeResult` and `PerplexityProbeFailure` types and 0037's three failure reasons, so the worker can later record it unchanged.
+  - **Sources (D-044).** Cited sources are the `url_citation` URLs only. Retrieved sources are the search sources plus every cited URL. A retrieved-only URL is never cited.
+  - **Separate key** *(engineer)*: `OPENAI_PROBE_API_KEY`. The analysis key `OPENAI_API_KEY` is never read, so its presence cannot enable measurement.
+  - **Cost.** The Responses API reports tokens, not a charged amount, so the cost of a ChatGPT run is **unknown** until the founder approves a versioned price table. It is never recorded as zero.
+  - **Provider value.** The provider value `openai_chatgpt` is reserved. The worker still refuses it (`UNKNOWN_PROVIDER`) before admission, and it refuses to replay a stored ChatGPT body as an answer.
+- **Not in X1:**
+  - wiring the adapter into the worker (a provider route, answer replay, cost basis and the per-attempt deadline);
+  - any live or staging call;
+  - showing ChatGPT results anywhere.
+- **Open founder items:** see the note's final section. They cover the model, `tool_choice`, the OpenAI terms and data controls, the price table, and approval of the note.
+- **Tests:** `npm run test:chatgpt-adapter` (64, offline; no network). `npm run test:paid-execution-guards` now also checks that no web entry point reaches `lib/probes/chatgpt.ts`.
+- **Recovery:** nothing to roll back. The adapter is unreferenced code.

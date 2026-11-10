@@ -1894,3 +1894,24 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 | `npm run test:q4-activation` | 42/42 |
 | `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | P1 45/45, P2 71/71, E1 74/74, Q4 52/52 (all 89 migrations applied) |
 | `npm run test:prod-preflight` | pass (Q4's version, 2 tables, 3 functions and `_q4_` listed) |
+
+## 29. X1 ChatGPT adapter (D-050) — branch `feat/x1-chatgpt-adapter`, not wired, no live call
+
+- **What it adds:**
+  - `lib/probes/chatgpt.ts`, the OpenAI Responses API with web search under the fixed setting `openai-responses-websearch-v1`;
+  - the endpoint constant;
+  - the METHODOLOGY §4 adapter-validity note `docs/ADAPTER_VALIDITY_CHATGPT.md`, a draft awaiting founder approval.
+- **Not connected:**
+  - the worker refuses provider `openai_chatgpt`;
+  - no web entry point or other module imports the adapter;
+  - the adapter needs its own key, `OPENAI_PROBE_API_KEY`, which is not set anywhere.
+- **Commands and local results (2026-11-10):**
+
+| Command | Result |
+|---|---|
+| `npm run test:chatgpt-adapter` | 64/64 |
+| `npm run test:paid-execution-guards` | 143/143 (includes the new ChatGPT boundary check) |
+| `npm run test:perplexity-agent-adapter` | 158/158 |
+| `npm run test:measurement-compatibility` | 89/89 |
+| `npm run test:s1-accounts` | 74/74 |
+| `npm run typecheck`, `npm run build:verify` | pass |

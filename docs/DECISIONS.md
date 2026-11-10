@@ -777,3 +777,57 @@ Each entry records:
   4. `ZYPACT_ACCOUNT_HMAC_SECRET` is set. Without it every rate-limited action refuses with 503.
   5. `_s1_purge_account_rate_limit_events()` is scheduled.
 - **Known limitation:** a verification link opened in a different browser from the one used to sign up cannot complete the code exchange. The email is still verified, and the person is told to sign in.
+
+## D-047 — P2: workspace sections without spend, and the founder rulings the pricing and workspace direction needs
+
+- **Date:** 2026-11-10
+- **Status:** **Proposed — awaiting founder approval.** Built on branch `feat/p2-workspace-sections`, stacked on the unmerged P1 branch `feat/p1-workspace` (whose migration cites D-046, not yet recorded in this file). Migration `20261111120000_p2_workspace_drafts_actions.sql` is **not applied to any Supabase project**. Like P1, it is reachable only when `ZYPACT_ACCOUNTS_ENABLED` is exactly `true`.
+- **Context:** the founder's pricing, packaging and workspace direction (2026-11-10) proposes Free and Starter plans, ChatGPT and Perplexity measurement, weekly monitoring, AI-suggested buyer questions, and a five-section workspace (Overview, Questions, Sources, Actions, Reports). Part of it fits the approved scope and needs no paid call; part of it conflicts with V1_SCOPE, D-039 and D-040. Part A records what was built; Part B lists the rulings needed before anything else from the direction is built.
+
+### Part A — built in P2 (no paid call, no model call, no measurement)
+
+- **Workspace UI for P1:** Overview, Website (set the website, run the W1 diagnostic, results by area, fix list, history), and Brand Profile with the customer objective step (the four objectives P1 stores).
+- **Draft buyer questions:**
+  - Closed, append-only tables `workspace_question_drafts` and `workspace_question_draft_versions`.
+  - A draft is the customer's working list. It is **not** an approved buyer-question version (D-039), takes no active-question slot, and starts, authorises or reserves nothing.
+  - Categories: Discovery, Comparison, Evaluation, Use cases.
+  - Each version records its origin: `customer_written`, `suggested` (with the suggestion rule id), or `suggestion_edited`.
+  - Edits use an expected version (`VERSION_CONFLICT` otherwise). Archive and restore are new versions, and every version is kept.
+  - At most 50 live drafts. Live drafts with identical text are refused as `DUPLICATE`.
+- **Suggestions** are fixed wording rules (`p2.suggest.<rule>.v1`) filled from the saved Brand Profile:
+  - no model call and no research; at most 8, ordered by the customer's objective;
+  - a rule whose inputs are missing is skipped, never filled with generic text;
+  - every suggestion is labelled as suggested wording that is not evidence of real buyer questions (the D-040 `hypothesis` class).
+- **Overlap warnings** reuse the Q1 duplicate rules (same duplicate key, or content-token Jaccard ≥ 0.8). They warn and never block.
+- **Actions (investigation log):**
+  - Closed, append-only tables `workspace_actions` and `workspace_action_versions`.
+  - Fields: observation, why it matters, evidence, next step, owner, status (`open`, `in_progress`, `done`, `dismissed`) and decision note.
+  - Evidence is fixed at creation. It is either one stored W1 finding of the same workspace (resolved by run, check and page inside the database; a trigger refuses another workspace's finding) or a customer note.
+  - Suggested investigations come only from the latest diagnostic's issues and the W1 catalogue's own text.
+  - An action is **not** a registered intervention: it never starts a retest or feeds an Outcome Card.
+  - At most 100 live actions. A finding with a live action is `ALREADY_TRACKED`.
+- **Reports:** a copyable Team Brief with the direction's nine sections, built at view time from stored rows. Sections that need measured answers (competitor observations, cited sources, retest outcomes) say that none exist. No PDF, image export or sharing link.
+- **Sources:** an empty section that states what it will hold once measurement exists, including the D-044 cited versus retrieved-only rules.
+- **Security shape** (as Q2′ and P1):
+  - every function takes the account session token and re-checks it through P1's `_p1_session`;
+  - the workspace comes from the session, and writes serialise on P1's per-workspace advisory lock;
+  - RLS is on with no policy and no table privilege for any API role; functions are executable by `service_role` only;
+  - logs carry closed fields only;
+  - request bodies keep S1's 4 KB cap, except the two action routes, which allow 32 KB because an action carries up to six 1,000-character fields.
+- **Tests:** `npm run test:p2-workspace` (107 checks, offline) and `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` (71 checks on a disposable Supabase Postgres with every migration applied).
+- **Recovery:** nothing else references the four tables. Rollback drops the six functions, three helpers and four tables, and loses only P2 drafts and actions.
+
+### Part B — rulings needed before building more of the direction
+
+Each item conflicts with a document that governs today. Nothing below is built.
+
+1. **Weekly monitoring (Starter).** V1_SCOPE §8 defers continuous monitoring, and D-040 / SELF_SERVICE_PRODUCT §9 keeps that deferral ("monitor results" means registered baselines, retests and Outcome Cards only). Lifting it needs a decision that also defines a monitoring measurement type, kept separate from baselines and retests, with its own protocol, denominators and copy. The direction itself requires that separation.
+2. **ChatGPT as a measured surface.** V1 measures with Perplexity Sonar only, presented as a directional proxy; OpenAI is used for analysis, not as a measured surface. A new measured provider needs a provider decision: provenance fields, raw-evidence capture, cost verification, and how results are presented per engine.
+3. **Free and Starter plans and their run allowances.** V1_SCOPE §8 defers complex self-serve pricing entitlements, and B1′ (billing and entitlements) needs a billing provider chosen first. The direction's own figures (240 successful runs a month, no overages) are marked unconfirmed until provider costs are verified. Needed: verified costs, the entitlement model, the billing provider, and how a "successful run" is counted against D-037's spend gate.
+4. **Free plan's three measurement runs.** These are paid execution. They need X1, which depends on PG-9 (the HOLD), PT-1, AD-1, B1′, G1 and V1d (domain verification). There is no path to a paid run for a self-service workspace today.
+5. **AI-generated suggested questions.** D-039 recommends questions from attributable buyer evidence, and D-040 puts model-written wording in the `hypothesis` class. P2 uses fixed rules instead. Any model-generated suggestion needs a decision on the model call, its cost and its labelling, and must stay `hypothesis`.
+6. **Approve and activate within the plan allowance.** Approval today is Q2′-1's `approve_buyer_question_set`: an invitation session, 1–3 versions per set, tied to a snapshot request. Account-session approval of up to 20 questions is Q4′ (behind legal review D5) plus a schema decision on research sets without a snapshot request.
+7. **Material edits to measured questions create a new version and baseline; archiving restores no consumed runs.** P2 drafts are never measured, so neither applies yet. Both need settling with items 3 and 6.
+8. **Team Brief exports and read-only sharing.** These are deferred in the direction itself until access controls are confirmed. A sharing link needs its own access decision.
+
+- **Not decided here:** prices; plan names; any change to the outcome statuses, integrity statuses or the non-causality rules, which the direction keeps unchanged.

@@ -1830,3 +1830,31 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
   - the Next.js cookie adapter end to end.
 
   These depend on production SMTP and a deployed environment, and remain part of the customer-use gates (D-045).
+
+## 26. P2 workspace sections (D-047, proposed) — local branch only, not applied anywhere, not deployed
+
+- **Branch:** `feat/p2-workspace-sections`, stacked on the unmerged `feat/p1-workspace` (`7297638`). D-047 is **proposed, not approved**.
+- **What it adds:**
+  - customer pages for P1 (Overview, Website, Brand profile with the objective step);
+  - P2 draft buyer questions, the action log, and a copyable Team Brief;
+  - a Sources page that states what it will hold;
+  - migration `20261111120000_p2_workspace_drafts_actions.sql`.
+  - No paid call, no model call, no measurement.
+- **Commands and local results (2026-11-10):**
+
+| Command | Result |
+|---|---|
+| `npm run test:p2-workspace` | 107/107 (offline; suggestions, overlaps, parsing, investigations, comparison, brief, handlers, request-size caps, claim-language lint) |
+| `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | 71/71 on a disposable `supabase/postgres:17.6.1.167` with all 87 migrations applied |
+| `npm run typecheck` | pass |
+| `npm run build:verify` | pass |
+| `npm run test:s1-schema` | 63/63 |
+| `npm run test:q2p2-schema` | pass |
+| `npm run test:w1` | pass |
+| `npm run test:s1-accounts` | 69/72. The same three checks fail on the P1 base (`7297638`) without P2: S1 ×2 (P1's workspace routes are not `accountPost` routes) and S5 (P1 imports `lib/site-diagnostic/` into the account area). Updating the S1 contract is a P1 decision. |
+
+- **Not established:**
+  - no browser walk-through of the pages against a running Supabase stack;
+  - no concurrency test of the draft and action caps (they rely on P1's per-workspace advisory lock);
+  - no Supabase-stack (SV1-style) run of the P2 objects.
+- **Gates before customer use:** D-047 approval; P1 (D-046) recorded and merged; then the D-045 gates and a named-file apply under D-041 for P1 and P2.

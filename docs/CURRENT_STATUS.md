@@ -1772,3 +1772,29 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
   - all 16 `_q2p2_` helpers exist, and no API role may execute them.
 - **The Q2′-2 production HOLD is lifted.** Still open as a gate before customer use: scheduling `_q2p2_purge_rate_limit_events()` (Q2-R4).
 - **Next:** S1 (`20261109120000`, `expected_prev=20261103173000`). That needs its own founder authorisation.
+
+**S1 applied to production, 2026-11-10 PST (founder-authorised: "agree"):**
+
+- **The file applied** is the corrected one from PR #113 (`6bd179f`): it also revokes `account_rate_limit_events_id_seq` from the API roles.
+- **Procedure:** the D-041 named-file procedure (the verified copy, sha256 `8a430331…`), with `new_version=20261109120000` and `expected_prev=20261103173000`.
+- **Rehearsed first** on a disposable PostgreSQL built to the live state **with Supabase-like default privileges**:
+  - a wrong `expected_prev` was refused;
+  - the apply succeeded;
+  - a second apply was refused.
+- **Live read-only pre-check:** 84 ledger rows, tail `20261103173000`, no S1 table, no protocol job claimed or running.
+- **The apply was run by the engineer.**
+- **Read-only verification afterwards:**
+  - `20261109120000` is recorded; the ledger has 85 rows with that version as the tail;
+  - both S1 tables exist with RLS on and no policy;
+  - no API-role privilege on either table or on the identity sequence;
+  - the 6 S1 functions are executable by `service_role` only;
+  - the 5 `_s1_` helpers exist, and no API role may execute them;
+  - `account_sessions` is empty.
+- **The production database order of D-045 gate 1 is complete:** 0083, Q2′-1, Q2′-2 and S1 are all applied.
+- **The account area is still off** (`ZYPACT_ACCOUNTS_ENABLED` unset).
+- **Still open before any customer use (D-045):**
+  - the S1 security review (reviewer not yet named);
+  - the real-login test on a non-production Supabase project;
+  - Supabase Auth settings and SMTP;
+  - `ZYPACT_ACCOUNT_HMAC_SECRET`;
+  - scheduling `_s1_purge_account_rate_limit_events()` and `_q2p2_purge_rate_limit_events()`.

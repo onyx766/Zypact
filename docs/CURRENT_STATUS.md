@@ -1860,3 +1860,20 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
   - no concurrency test of the draft and action caps (they rely on P1's per-workspace advisory lock);
   - no Supabase-stack (SV1-style) run of the P2 objects.
 - **Gates before customer use:** the D-045 gates, then named-file applies under D-041 for P1 and P2, each separately authorised.
+
+## 27. E1 plans and usage (D-048) — branch `feat/e1-plans-usage`, not applied anywhere, paid measurement off
+
+- **What it adds:**
+  - Free and Starter allowances, enforced in the database;
+  - append-only plan assignments;
+  - a usage ledger in which every run is reserved before any attempt, then consumed or released;
+  - a founder paid-measurement switch, off by default;
+  - the `/account/plan` page.
+- **Not connected yet:** no measurement path calls the ledger, and Stripe is not connected.
+- **Commands and local results (2026-11-10):**
+
+| Command | Result |
+|---|---|
+| `npm run test:e1-plans` | 52/52 |
+| `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | P1 45/45, P2 71/71, E1 74/74 (all 88 migrations applied) |
+| `npm run test:prod-preflight` | pass (E1's version, 3 tables, 5 functions and `_e1_` listed) |

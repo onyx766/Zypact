@@ -45,12 +45,12 @@ psql -X -q -v ON_ERROR_STOP=1 "<connection string>" -f scripts/sql/prod-prefligh
 | P2.1 | PASS | The ledger holds 0001 to 0080, each once. |
 | P2.2 | PASS | The ledger holds the 0081 alias `20260924023646`. |
 | P2.3 | PASS | The ledger tail is `20260924023646`. |
-| P2.4 | PASS | None of 0081 to 0085, `20261102132000`, `20261103173000`, `20261109120000`, `20261110120000` or `20261111120000` is recorded. |
+| P2.4 | PASS | None of 0081 to 0085, `20261102132000`, `20261103173000`, `20261109120000`, `20261110120000`, `20261111120000` or `20261112120000` is recorded. |
 | P2.5 | PASS | Exactly 81 ledger rows: no version anyone added outside the procedures. |
 | P3.1 | PASS | `reconcile_attempt_for_job` is exactly as 0050 left it (md5 `baaf43cc539611ec78fef9762c168a53`, the reserved procedure's pinned pre-state). |
 | P3.2 | PASS | Only `service_role` may execute it. |
-| P4.1 | PASS | None of the 30 Q2′-1, Q2′-2, S1, P1 or P2 tables exists. |
-| P4.2 | PASS | None of their public functions or `_q2p_`, `_q2p2_`, `_s1_`, `_p1_` or `_p2_` helpers exists. |
+| P4.1 | PASS | None of the 33 Q2′-1, Q2′-2, S1, P1, P2 or E1 tables exists. |
+| P4.2 | PASS | None of their public functions or `_q2p_`, `_q2p2_`, `_s1_`, `_p1_`, `_p2_` or `_e1_` helpers exists. |
 | P4.3 | PASS | `projects`, `buyer_question_versions` and `snapshot_requests`, which Q2′ references, exist. |
 | P5.1 | PASS | `anon`, `authenticated` and `service_role` exist. |
 | P5.2 | PASS | `service_role` has BYPASSRLS. |

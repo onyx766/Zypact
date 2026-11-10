@@ -154,6 +154,7 @@
     "w1:diagnose": "tsx scripts/w1-diagnose.ts",
     "test:p1-workspace": "tsx scripts/test-p1-workspace.ts",
     "test:p2-workspace": "tsx scripts/test-p2-workspace.ts",
+    "test:e1-plans": "tsx scripts/test-e1-plans.ts",
     "test:p2-workspace-db": "bash scripts/run-p2-workspace-db-local.sh",
     "test:source-insights": "tsx scripts/test-source-insights.ts",
     "source-insights:audit": "tsx scripts/source-insights-audit.ts"

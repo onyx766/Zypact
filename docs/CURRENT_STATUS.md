@@ -1731,3 +1731,23 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 - **The cluster system identifier** is recorded privately for the 0083 apply, not here.
 - **Nothing was changed.**
 - **Next gate:** the founder's authorisation of step 1, 0083 by the reserved-version procedure, with the worker stopped. Steps 2 to 4 (Q2′-1, Q2′-2, S1) each need their own.
+
+**Q2′-1 applied to production, 2026-11-09 evening PST (founder-authorised: "I agree"):**
+
+- **Procedure:** the D-041 named-file procedure, which is the body of `scripts/sql/sv1-apply-named-migration.sql` below its rehearsal header (sha256 `8a430331…`, matching the recorded source). It ran with `--single-transaction`, `new_version=20261102132000` and `expected_prev=20260924023646`.
+- **Rehearsed first** on a disposable PostgreSQL built to the live state (0001–0081 plus 0083):
+  - a wrong `expected_prev` was refused;
+  - the apply succeeded;
+  - a second apply was refused.
+- **Live read-only pre-check** immediately before:
+  - 0083 recorded, 82 ledger rows, tail `20260924023646`;
+  - no Q2′-1 table present;
+  - no protocol job claimed or running.
+- **The apply was run by the engineer** from their own terminal.
+- **Read-only verification afterwards:**
+  - `20261102132000` is recorded; the ledger has 83 rows with that version as the tail;
+  - all 15 Q2′-1 tables exist, each with RLS on and no policy;
+  - no API role holds any table privilege;
+  - the five founder/system functions are executable by `service_role` only;
+  - no API role may execute the `_q2p_` helpers or `assert_current_account_member`.
+- **Next:** Q2′-2 (`20261103173000`, `expected_prev=20261102132000`), then S1 (`20261109120000`, `expected_prev=20261103173000`). Each needs its own founder authorisation.

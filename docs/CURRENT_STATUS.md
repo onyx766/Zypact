@@ -1877,3 +1877,20 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 | `npm run test:e1-plans` | 52/52 |
 | `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | P1 45/45, P2 71/71, E1 74/74 (all 88 migrations applied) |
 | `npm run test:prod-preflight` | pass (E1's version, 3 tables, 5 functions and `_e1_` listed) |
+
+## 28. Q4 question approval and activation (D-049) — branch `feat/q4-question-activation`, not applied anywhere
+
+- **What it adds:**
+  - customers approve drafts into M4 buyer-question versions in their own project, with a step-up and a consent record;
+  - the plan's active-question limit;
+  - changed wording becomes a new version;
+  - archive and reactivation;
+  - an Active questions section on `/account/questions`.
+- **Not connected yet:** nothing measures active questions.
+- **Commands and local results (2026-11-10):**
+
+| Command | Result |
+|---|---|
+| `npm run test:q4-activation` | 42/42 |
+| `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | P1 45/45, P2 71/71, E1 74/74, Q4 52/52 (all 89 migrations applied) |
+| `npm run test:prod-preflight` | pass (Q4's version, 2 tables, 3 functions and `_q4_` listed) |

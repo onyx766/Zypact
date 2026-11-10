@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Local runner for the P2 database test (scripts/test-p2-workspace-db.ts).
+# Local runner for the P1 and P2 database tests
+# (scripts/test-p1-workspace-db.ts, scripts/test-p2-workspace-db.ts).
 #
 # Starts a disposable Supabase Postgres container (no published port),
 # applies every repository migration in filename order, runs the test
@@ -61,4 +62,7 @@ done
 echo "Applied ${count} migrations."
 
 cd "${ROOT}"
-ZYPACT_P2_DB_CONTAINER="${NAME}" npx tsx scripts/test-p2-workspace-db.ts
+status=0
+ZYPACT_P2_DB_CONTAINER="${NAME}" npx tsx scripts/test-p1-workspace-db.ts || status=1
+ZYPACT_P2_DB_CONTAINER="${NAME}" npx tsx scripts/test-p2-workspace-db.ts || status=1
+exit "${status}"

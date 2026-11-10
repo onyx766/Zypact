@@ -12,85 +12,21 @@
  * is never a pass). No network: the diagnostic it stores comes from the W1
  * fixture site through the real engine.
  */
-import { execFileSync } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 
 import { runSiteDiagnostic } from "@/lib/site-diagnostic/engine";
 import { toQ2p2Rows } from "@/lib/site-diagnostic/persistence-shape";
 
 import { acmeSite, fixtureNet } from "./fixtures/w1/fixture-net";
+import { db, lit, makeChecker, makeTenant, requireContainer, row, who, type Tenant } from "./lib/workspace-db";
 
-const CONTAINER = process.env.ZYPACT_P2_DB_CONTAINER;
-if (!CONTAINER) {
-  console.log("SKIP: set ZYPACT_P2_DB_CONTAINER (see scripts/run-p2-workspace-db-local.sh).");
-  process.exit(2);
-}
-if (!/^zp-[a-z0-9-]+$/.test(CONTAINER)) {
-  console.error("STOP: ZYPACT_P2_DB_CONTAINER must name a disposable zp-* container.");
-  process.exit(4);
-}
+const CONTAINER = requireContainer();
 (globalThis as unknown as { fetch: unknown }).fetch = () => {
   throw new Error("network disabled");
 };
-
-let failures = 0;
-let total = 0;
-function check(label: string, ok: boolean, detail = ""): void {
-  total += 1;
-  if (ok) console.log(`  ✓ ${label}`);
-  else {
-    failures += 1;
-    console.error(`  ✗ ${label}${detail ? ` — ${detail}` : ""}`);
-  }
-}
-
-/** A dollar-quoted literal; refuses content that could close the quote. */
-function lit(value: string | null): string {
-  if (value === null) return "null";
-  if (value.includes("$zq$")) throw new Error("literal contains its own quote tag");
-  return `$zq$${value}$zq$`;
-}
-
-function psql(sql: string, role: "supabase_admin" | "service_role" | "anon" | "authenticated" = "service_role"): string {
-  const prefix = role === "supabase_admin" ? "" : `set role ${role};\n`;
-  return execFileSync(
-    "docker",
-    ["exec", "-i", CONTAINER as string, "psql", "-U", "supabase_admin", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-qtA"],
-    { input: prefix + sql, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
-  ).trim();
-}
-
-function fails(sql: string, role: Parameters<typeof psql>[1] = "service_role"): string | null {
-  try {
-    psql(sql, role);
-    return null;
-  } catch (error) {
-    return String((error as { stderr?: string }).stderr ?? error);
-  }
-}
-
-const row = (out: string) => out.split("|");
-
-interface Tenant {
-  accountId: string;
-  token: string;
-}
-
-function tenant(name: string, domain: string): Tenant {
-  const accountId = randomUUID();
-  const token = randomBytes(32).toString("hex");
-  psql(
-    `select status from public.create_workspace_with_owner(${lit(accountId)}::uuid, ${lit(name)}, ${lit(randomUUID())}, 'system', null, 'p2.test', '1');`,
-    "supabase_admin"
-  );
-  const opened = psql(`select status from public.open_account_session(${lit(accountId)}::uuid, ${lit(token)}, 3600, 1800);`);
-  if (opened !== "OPENED" && opened !== "ACTIVE") throw new Error(`session not opened: ${opened}`);
-  const site = psql(`select status from public.set_workspace_website(${lit(token)}, ${lit(accountId)}::uuid, ${lit(domain)}, ${lit(name)});`);
-  if (site !== "SET") throw new Error(`website not set: ${site}`);
-  return { accountId, token };
-}
-
-const who = (t: Tenant) => `${lit(t.token)}, ${lit(t.accountId)}::uuid`;
+const { psql, fails } = db(CONTAINER);
+const { check, finish } = makeChecker();
+const tenant = (name: string, domain: string) => makeTenant(psql, name, domain);
 
 function addDraft(t: Tenant, text: string, category = "discovery", rule: string | null = null): string[] {
   return row(psql(`select status, draft_id from public.add_question_draft(${who(t)}, ${lit(text)}, ${lit(category)}, ${lit(rule)});`));
@@ -245,8 +181,7 @@ async function main(): Promise<void> {
   }
   check("P7 service_role cannot call a _p2_ helper", fails(`select public._p2_text_ok('abc', 1, 5);`)?.includes("permission denied") === true);
 
-  console.log(`\n${total - failures}/${total} passed`);
-  process.exit(failures === 0 ? 0 : 1);
+  finish();
 }
 
 main().catch((error) => {

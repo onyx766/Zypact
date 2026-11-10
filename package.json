@@ -152,6 +152,7 @@
     "test:w1-preview": "tsx scripts/test-w1-preview.ts",
     "test:w1": "npm run -s test:w1-contract && npm run -s test:w1-robots && npm run -s test:w1-safe-fetch && npm run -s test:w1-crawl && npm run -s test:w1-report && npm run -s test:w1-preview && npm run -s test:outbound-url-safety && npm run -s test:crawl-apex-www-fallback",
     "w1:diagnose": "tsx scripts/w1-diagnose.ts",
+    "test:p1-workspace": "tsx scripts/test-p1-workspace.ts",
     "test:p2-workspace": "tsx scripts/test-p2-workspace.ts",
     "test:p2-workspace-db": "bash scripts/run-p2-workspace-db-local.sh",
     "test:source-insights": "tsx scripts/test-source-insights.ts",

@@ -1895,22 +1895,24 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 | `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | P1 45/45, P2 71/71, E1 74/74, Q4 52/52 (all 89 migrations applied) |
 | `npm run test:prod-preflight` | pass (Q4's version, 2 tables, 3 functions and `_q4_` listed) |
 
-## 29. X1 ChatGPT adapter (D-050) — branch `feat/x1-chatgpt-adapter`, not wired, no live call
+## 29. X1 ChatGPT adapter and model benchmark (D-050) — branch `feat/x1-chatgpt-adapter`, not wired, no live call
 
 - **What it adds:**
-  - `lib/probes/chatgpt.ts`, the OpenAI Responses API with web search under the fixed setting `openai-responses-websearch-v1`;
-  - the endpoint constant;
-  - the METHODOLOGY §4 adapter-validity note `docs/ADAPTER_VALIDITY_CHATGPT.md`, a draft awaiting founder approval.
+  - `lib/probes/chatgpt.ts`, the OpenAI Responses API with web search under versioned settings (`auto` for monitoring, `required` as a separate protocol). No model is approved yet.
+  - `lib/probes/chatgpt-pricing.ts`, usage capture and cost estimation from the dated price table. Unknown, never $0.
+  - `scripts/benchmark-chatgpt-models.ts`, a dry run by default. It compares `gpt-6-luna` and `gpt-6.1-terra` against the `chat-latest` reference, capped at $40.
+  - The validity note `docs/ADAPTER_VALIDITY_CHATGPT.md`, recording the founder's 2026-11-10 decisions.
 - **Not connected:**
   - the worker refuses provider `openai_chatgpt`;
-  - no web entry point or other module imports the adapter;
-  - the adapter needs its own key, `OPENAI_PROBE_API_KEY`, which is not set anywhere.
+  - no web entry point or other app module imports the adapter;
+  - `OPENAI_PROBE_API_KEY` is not set anywhere.
 - **Commands and local results (2026-11-10):**
 
 | Command | Result |
 |---|---|
-| `npm run test:chatgpt-adapter` | 64/64 |
-| `npm run test:paid-execution-guards` | 143/143 (includes the new ChatGPT boundary check) |
+| `npm run test:chatgpt-adapter` | 114/114 |
+| `npm run benchmark:chatgpt-models` (dry run) | prints the 150-run plan, no call |
+| `npm run test:paid-execution-guards` | 143/143 |
 | `npm run test:perplexity-agent-adapter` | 158/158 |
 | `npm run test:measurement-compatibility` | 89/89 |
 | `npm run test:s1-accounts` | 74/74 |

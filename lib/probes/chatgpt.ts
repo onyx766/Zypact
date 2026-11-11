@@ -24,7 +24,19 @@
  *                           { type: "url_citation", url, title, … } ] } ] } ],
  *               usage }
  *
- * Fixed configuration, never chosen at run time (CHATGPT_MEASUREMENT_SETTING).
+ * Fixed configuration, never chosen at run time: a `ChatGptSetting` names
+ * the model, the search mode and every request parameter, and its `version`
+ * names all of them. Founder decisions (2026-11-10, D-050):
+ *   - no model is approved until the benchmark (scripts/benchmark-chatgpt-
+ *     models.ts) reports results and cost and the founder approves one, so
+ *     CHATGPT_APPROVED_MODEL is null and a run without an explicit setting
+ *     is refused before any call;
+ *   - the main monitoring protocol uses automatic search, and whether search
+ *     happened is recorded on every run; search-required is a separate
+ *     setting, never mixed with automatic results;
+ *   - token usage and web search calls are kept on every run, and cost is
+ *     estimated from them (lib/probes/chatgpt-pricing.ts), unknown if it
+ *     cannot be, never 0.
  * No instructions are sent: the buyer question goes exactly as approved, with
  * no brand, domain or project context, as with Sonar. `store: false` asks
  * OpenAI not to keep the response for later retrieval; Zypact keeps its own
@@ -51,6 +63,7 @@
 
 import { sha256Hex } from "@/lib/evidence/hash";
 import { OPENAI_RESPONSES_ENDPOINT } from "@/lib/probes/endpoints";
+import { chatGptUsageFromBody, estimateChatGptCostUsd, type ChatGptUsage, type CostEstimate } from "@/lib/probes/chatgpt-pricing";
 import {
   PerplexityProbeFailure,
   buildUserPrompt,
@@ -65,47 +78,108 @@ import {
 /** The protocol provider value for this engine. */
 export const CHATGPT_PROVIDER = "openai_chatgpt";
 
-/**
- * The ChatGPT measurement setting, versioned. Any change is a new version
- * and a new measuring instrument; results across versions are not directly
- * comparable. The model is an engineer default awaiting founder approval
- * (D-050 open item 1).
- *
- * No temperature: OpenAI's reasoning models reject one. Reasoning effort
- * "low" is the lowest level the web search tool accepts. Output tokens
- * include reasoning tokens, hence a larger cap than Sonar's 1200.
- */
-export const CHATGPT_MEASUREMENT_SETTING = {
-  version: "openai-responses-websearch-v1",
-  model: "gpt-5-mini",
-  tool: "web_search",
-  toolChoice: "auto",
-  reasoningEffort: "low",
-  maxOutputTokens: 4000,
-} as const;
+/** The setting family. Any change to request shape or rules is a new family. */
+export const CHATGPT_SETTING_FAMILY = "openai-responses-websearch-v2";
 
-export const CHATGPT_MODEL = CHATGPT_MEASUREMENT_SETTING.model;
+export type ChatGptSearchMode = "auto" | "required";
 
-/**
- * The served model is the approved model or a dated snapshot of it
- * (`gpt-5-mini-2025-08-07`). Anything else, including a different family
- * member, is a different instrument and fails.
- */
-export function isApprovedServedModel(served: string): boolean {
-  return served === CHATGPT_MODEL || new RegExp(`^${CHATGPT_MODEL.replace(/[.]/g, "\\.")}-\\d{4}-\\d{2}-\\d{2}$`).test(served);
+export interface ChatGptSetting {
+  /** `${family}:${search}:${model}` — names every choice below. */
+  version: string;
+  model: string;
+  search: ChatGptSearchMode;
+  /** null sends no `reasoning` field (a model that does not take one). */
+  reasoningEffort: "low" | null;
+  /** Output tokens include reasoning tokens, hence a larger cap than Sonar's 1200. */
+  maxOutputTokens: number;
+  /**
+   * exact_or_snapshot: the served model must be the requested name or a dated
+   * snapshot of it, or the run fails. recorded_only: the served model is
+   * recorded but not checked — allowed for a benchmark reference model only,
+   * never for an approved measurement.
+   */
+  servedModelRule: "exact_or_snapshot" | "recorded_only";
 }
 
-export function buildChatGptRequestBody(prompt: string, maxTokens?: number): Record<string, unknown> {
+export const CHATGPT_MAX_OUTPUT_TOKENS = 4000;
+
+export function chatGptSetting(
+  model: string,
+  search: ChatGptSearchMode,
+  opts: { reasoningEffort?: "low" | null; servedModelRule?: ChatGptSetting["servedModelRule"] } = {}
+): ChatGptSetting {
   return {
-    model: CHATGPT_MEASUREMENT_SETTING.model,
-    input: prompt,
-    tools: [{ type: CHATGPT_MEASUREMENT_SETTING.tool }],
-    tool_choice: CHATGPT_MEASUREMENT_SETTING.toolChoice,
-    include: ["web_search_call.action.sources"],
-    reasoning: { effort: CHATGPT_MEASUREMENT_SETTING.reasoningEffort },
-    max_output_tokens: maxTokens ?? CHATGPT_MEASUREMENT_SETTING.maxOutputTokens,
-    store: false,
+    version: `${CHATGPT_SETTING_FAMILY}:${search}:${model}`,
+    model,
+    search,
+    reasoningEffort: opts.reasoningEffort === undefined ? "low" : opts.reasoningEffort,
+    maxOutputTokens: CHATGPT_MAX_OUTPUT_TOKENS,
+    servedModelRule: opts.servedModelRule ?? "exact_or_snapshot",
   };
+}
+
+/**
+ * Models the benchmark compares (founder, 2026-11-10: a currently supported,
+ * cost-efficient model with web search; chat-latest as a reference only,
+ * never assumed to reproduce ChatGPT.com). chat-latest takes no reasoning
+ * field and its served name is recorded, not checked.
+ */
+export const CHATGPT_BENCHMARK_CANDIDATES: ReadonlyArray<{ role: "candidate" | "reference"; setting: ChatGptSetting }> = [
+  { role: "candidate", setting: chatGptSetting("gpt-6-luna", "auto") },
+  { role: "candidate", setting: chatGptSetting("gpt-6.1-terra", "auto") },
+  { role: "reference", setting: chatGptSetting("chat-latest", "auto", { reasoningEffort: null, servedModelRule: "recorded_only" }) },
+];
+
+/** No model is approved yet. Setting one is a founder decision and a code change. */
+export const CHATGPT_APPROVED_MODEL: string | null = null;
+
+/** The approved setting for a search mode, or null while no model is approved. */
+export function approvedChatGptSetting(search: ChatGptSearchMode, approvedModel: string | null = CHATGPT_APPROVED_MODEL): ChatGptSetting | null {
+  if (approvedModel === null) return null;
+  const s = chatGptSetting(approvedModel, search);
+  return s.servedModelRule === "exact_or_snapshot" ? s : null;
+}
+
+/** The requested model or a dated snapshot of it (`gpt-6-luna-2026-05-18`). */
+export function isServedModelOf(requested: string, served: string): boolean {
+  const escaped = requested.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return served === requested || new RegExp(`^${escaped}-\\d{4}-\\d{2}-\\d{2}$`).test(served);
+}
+
+export function buildChatGptRequestBody(prompt: string, setting: ChatGptSetting, maxTokens?: number): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    model: setting.model,
+    input: prompt,
+    tools: [{ type: "web_search" }],
+    tool_choice: setting.search === "required" ? "required" : "auto",
+    include: ["web_search_call.action.sources"],
+  };
+  if (setting.reasoningEffort !== null) body.reasoning = { effort: setting.reasoningEffort };
+  body.max_output_tokens = maxTokens ?? setting.maxOutputTokens;
+  body.store = false;
+  return body;
+}
+
+/** The adapter's result: the shared probe result plus the run's usage, cost and setting. */
+export interface ChatGptProbeResult extends PerplexityProbeResult {
+  setting: ChatGptSetting;
+  usage: ChatGptUsage;
+  cost: CostEstimate;
+}
+
+/**
+ * A failure with whatever usage the 2xx body reported, so a billed-but-
+ * unusable run still counts toward spend.
+ */
+export class ChatGptProbeFailure extends PerplexityProbeFailure {
+  readonly usage: ChatGptUsage | null;
+  readonly cost: CostEstimate;
+  constructor(message: string, fields: ConstructorParameters<typeof PerplexityProbeFailure>[1], usage: ChatGptUsage | null, cost: CostEstimate) {
+    super(message, fields);
+    this.name = "ChatGptProbeFailure";
+    this.usage = usage;
+    this.cost = cost;
+  }
 }
 
 interface OutputItem {
@@ -166,12 +240,6 @@ export function chatGptSearchSources(output: unknown): string[] {
   return uniqueStrings(urls);
 }
 
-/** How many web searches the model chose to run. Zero is an observation, not a failure. */
-export function chatGptSearchCount(output: unknown): number {
-  if (!Array.isArray(output)) return 0;
-  return (output as OutputItem[]).filter((i) => i?.type === "web_search_call").length;
-}
-
 /** The analysis transcript: answer, then cited, then retrieved sources. */
 function buildChatGptTranscript(answer: string, cited: Array<{ url: string; title?: string }>, retrieved: string[]): string {
   const lines: string[] = [answer.trim()];
@@ -186,7 +254,17 @@ function buildChatGptTranscript(answer: string, cited: Array<{ url: string; titl
   return lines.join("\n").trim();
 }
 
-export async function runChatGptProbe(input: RunPerplexityProbeInput): Promise<PerplexityProbeResult> {
+export interface RunChatGptProbeInput extends RunPerplexityProbeInput {
+  /** The measurement setting. Omitted → the approved setting for `search` (default "auto"). */
+  setting?: ChatGptSetting;
+  search?: ChatGptSearchMode;
+}
+
+export async function runChatGptProbe(input: RunChatGptProbeInput): Promise<ChatGptProbeResult> {
+  const setting = input.setting ?? approvedChatGptSetting(input.search ?? "auto");
+  // Refused before any key is read or any request is built: nothing is spent.
+  if (!setting) throw new Error("No ChatGPT model is approved; pass an explicit benchmark setting.");
+
   if (input.mockResponse) {
     return {
       ...input.mockResponse,
@@ -195,6 +273,9 @@ export async function runChatGptProbe(input: RunPerplexityProbeInput): Promise<P
       fullRequestBody: undefined,
       fullRequestBodySha256: undefined,
       usedMock: true,
+      setting,
+      usage: chatGptUsageFromBody(null),
+      cost: { usd: null, basis: "unknown", reason: "usage_missing" },
     };
   }
 
@@ -204,10 +285,11 @@ export async function runChatGptProbe(input: RunPerplexityProbeInput): Promise<P
   const fetcher = input.fetchImpl ?? fetch;
   const rawProbeRequest = buildUserPrompt(input);
   // Serialized once: the bytes sent and the bytes hashed are the same string.
-  const requestBodyJson = JSON.stringify(buildChatGptRequestBody(rawProbeRequest, input.maxTokens));
+  const requestBodyJson = JSON.stringify(buildChatGptRequestBody(rawProbeRequest, setting, input.maxTokens));
   const rawProbeRequestSha256 = sha256Hex(rawProbeRequest);
   const fullRequestBodySha256 = sha256Hex(requestBodyJson);
   const evidence = { rawProbeRequestSha256, fullRequestBody: requestBodyJson, fullRequestBodySha256 };
+  const unknownCost: CostEstimate = { usd: null, basis: "unknown", reason: "usage_missing" };
 
   const startedAt = Date.now();
   let res: Response;
@@ -218,10 +300,11 @@ export async function runChatGptProbe(input: RunPerplexityProbeInput): Promise<P
       body: requestBodyJson,
     });
   } catch (networkErr) {
-    throw new PerplexityProbeFailure(
+    throw new ChatGptProbeFailure(
       `OpenAI Responses API network error: ${networkErr instanceof Error ? networkErr.message : String(networkErr)}`,
       { reason: "network_error", httpStatus: null, errorBody: null, errorBodySha256: null,
-        latencyMs: Date.now() - startedAt, providerRequestId: null, ...evidence }
+        latencyMs: Date.now() - startedAt, providerRequestId: null, ...evidence },
+      null, unknownCost
     );
   }
 
@@ -230,26 +313,32 @@ export async function runChatGptProbe(input: RunPerplexityProbeInput): Promise<P
 
   if (!res.ok) {
     const err = await res.text();
-    throw new PerplexityProbeFailure(`OpenAI Responses API ${res.status}: ${err.slice(0, 500)}`, {
+    throw new ChatGptProbeFailure(`OpenAI Responses API ${res.status}: ${err.slice(0, 500)}`, {
       reason: "http_error", httpStatus: res.status, errorBody: err, errorBodySha256: sha256Hex(err),
       latencyMs, providerRequestId, ...evidence,
-    });
+    }, null, unknownCost);
   }
 
   const rawResponseBody = await res.text();
   const rawResponseBodySha256 = sha256Hex(rawResponseBody);
-  const unusable = (cause: string) =>
-    new PerplexityProbeFailure(`OpenAI Responses API returned an unusable 2xx response (${cause}).`, {
-      reason: "empty_answer", httpStatus: res.status, errorBody: rawResponseBody,
-      errorBodySha256: rawResponseBodySha256, latencyMs, providerRequestId, ...evidence,
-    });
-
   let json: unknown;
+  let parsedOk = true;
   try {
     json = JSON.parse(rawResponseBody);
   } catch {
-    throw unusable("invalid_json");
+    parsedOk = false;
   }
+  // Usage is read from whatever the body reported, success or not, so a
+  // billed-but-unusable run still counts toward spend.
+  const usage = parsedOk ? chatGptUsageFromBody(json) : null;
+  const cost = usage ? estimateChatGptCostUsd(setting.model, usage) : unknownCost;
+  const unusable = (cause: string) =>
+    new ChatGptProbeFailure(`OpenAI Responses API returned an unusable 2xx response (${cause}).`, {
+      reason: "empty_answer", httpStatus: res.status, errorBody: rawResponseBody,
+      errorBodySha256: rawResponseBodySha256, latencyMs, providerRequestId, ...evidence,
+    }, usage, cost);
+
+  if (!parsedOk) throw unusable("invalid_json");
   if (!json || typeof json !== "object" || Array.isArray(json)) throw unusable("not_an_object");
   const body = json as Record<string, unknown>;
   if (body.object !== "response") throw unusable(`unexpected_object:${String(body.object)}`);
@@ -257,7 +346,12 @@ export async function runChatGptProbe(input: RunPerplexityProbeInput): Promise<P
   if (body.status !== "completed") throw unusable(`status:${String(body.status)}`);
   if (typeof body.id !== "string" || body.id.trim() === "") throw unusable("missing_id");
   if (typeof body.model !== "string" || body.model.trim() === "") throw unusable("missing_served_model");
-  if (!isApprovedServedModel(body.model)) throw unusable(`unexpected_served_model:${body.model}`);
+  if (setting.servedModelRule === "exact_or_snapshot" && !isServedModelOf(setting.model, body.model)) {
+    throw unusable(`unexpected_served_model:${body.model}`);
+  }
+  // Search-required: a run in which the model did not search is not a
+  // measurement under that setting.
+  if (setting.search === "required" && !usage?.searchOccurred) throw unusable("search_required_not_performed");
 
   const answer = chatGptOutputText(body.output).trim();
   if (!answer) throw unusable("empty_output_text");
@@ -292,5 +386,8 @@ export async function runChatGptProbe(input: RunPerplexityProbeInput): Promise<P
     httpStatus: res.status,
     latencyMs,
     providerRequestId,
+    setting,
+    usage: usage ?? chatGptUsageFromBody(null),
+    cost,
   };
 }

@@ -26,17 +26,35 @@ import path from "node:path";
 import { sha256Hex } from "@/lib/evidence/hash";
 import { OPENAI_RESPONSES_ENDPOINT } from "@/lib/probes/endpoints";
 import {
-  CHATGPT_MEASUREMENT_SETTING,
-  CHATGPT_MODEL,
+  CHATGPT_APPROVED_MODEL,
+  CHATGPT_BENCHMARK_CANDIDATES,
   CHATGPT_PROVIDER,
+  CHATGPT_SETTING_FAMILY,
+  ChatGptProbeFailure,
+  approvedChatGptSetting,
   buildChatGptRequestBody,
   chatGptCitedUrls,
   chatGptOutputText,
-  chatGptSearchCount,
   chatGptSearchSources,
-  isApprovedServedModel,
+  chatGptSetting,
+  isServedModelOf,
   runChatGptProbe,
 } from "@/lib/probes/chatgpt";
+import {
+  OPENAI_PRICE_TABLE,
+  chatGptUsageFromBody,
+  estimateChatGptCostUsd,
+  worstCaseRunUsd,
+} from "@/lib/probes/chatgpt-pricing";
+import {
+  BENCHMARK_HARD_CEILING_USD,
+  BenchmarkBudget,
+  citedDomainStability,
+  parseBenchmarkArgs,
+  planBenchmark,
+  summariseBenchmark,
+  type BenchmarkRecord,
+} from "./lib/chatgpt-benchmark";
 import { PerplexityProbeFailure } from "@/lib/probes/perplexity";
 import { answerFromRawResponseBody, probeRunnerForProtocol } from "@/lib/protocol-worker/worker";
 import { FORBIDDEN_W1_PHRASES } from "@/lib/site-diagnostic/copy";
@@ -59,7 +77,10 @@ globalThis.fetch = (async () => {
 }) as typeof fetch;
 
 const QUESTION = "What is the best SOC 2 compliance software for a 50-person SaaS company?";
-const SERVED = `${CHATGPT_MODEL}-2025-08-07`;
+const MODEL = "gpt-6-luna";
+const SERVED = `${MODEL}-2026-05-18`;
+const AUTO = chatGptSetting(MODEL, "auto");
+const REQUIRED = chatGptSetting(MODEL, "required");
 
 type Wire = { url: string; init: RequestInit };
 function fixtureFetch(status: number, body: string, wire: Wire[], headers: Record<string, string> = { "x-request-id": "req_abc" }): typeof fetch {
@@ -92,7 +113,7 @@ function responseBody(over: Record<string, unknown> = {}, output?: unknown[]): s
         ] },
       ] },
     ],
-    usage: { input_tokens: 20, output_tokens: 300, total_tokens: 320 },
+    usage: { input_tokens: 12000, input_tokens_details: { cached_tokens: 2000 }, output_tokens: 900, output_tokens_details: { reasoning_tokens: 400 }, total_tokens: 12900 },
     ...over,
   });
 }
@@ -113,19 +134,20 @@ async function main(): Promise<void> {
 
   /* Q: request -------------------------------------------------------- */
   const wire: Wire[] = [];
-  const ok = await runChatGptProbe({ prompt: `  ${QUESTION}  `, brandName: "Acme Compliance", domain: "acme.example", fetchImpl: fixtureFetch(200, responseBody(), wire) });
+  const ok = await runChatGptProbe({ setting: AUTO, prompt: `  ${QUESTION}  `, brandName: "Acme Compliance", domain: "acme.example", fetchImpl: fixtureFetch(200, responseBody(), wire) });
   const sent = String(wire[0]?.init.body ?? "");
   const parsed = JSON.parse(sent || "{}") as Record<string, unknown>;
   check("Q1 one POST to the Responses endpoint", wire.length === 1 && wire[0].url === OPENAI_RESPONSES_ENDPOINT && wire[0].init.method === "POST");
   check("Q2 the endpoint is OpenAI's /v1/responses", OPENAI_RESPONSES_ENDPOINT === "https://api.openai.com/v1/responses");
   check("Q3 the input is the buyer question exactly, trimmed", parsed.input === QUESTION);
   check("Q4 no brand, domain or instructions are sent", !/acme/i.test(sent) && !("instructions" in parsed) && !("previous_response_id" in parsed));
-  check("Q5 the body is the fixed setting", sent === JSON.stringify(buildChatGptRequestBody(QUESTION)));
+  check("Q5 the body is the fixed setting", sent === JSON.stringify(buildChatGptRequestBody(QUESTION, AUTO)));
   check("Q6 web search tool, auto choice, sources included, store:false",
     JSON.stringify(parsed.tools) === '[{"type":"web_search"}]' && parsed.tool_choice === "auto" &&
     JSON.stringify(parsed.include) === '["web_search_call.action.sources"]' && parsed.store === false);
   check("Q7 no temperature and no fallback model list", !("temperature" in parsed) && !("models" in parsed));
-  check("Q8 the setting is versioned", CHATGPT_MEASUREMENT_SETTING.version === "openai-responses-websearch-v1" && parsed.model === CHATGPT_MODEL);
+  check("Q8 the setting is versioned and names search mode and model", AUTO.version === `${CHATGPT_SETTING_FAMILY}:auto:${MODEL}` && parsed.model === MODEL);
+  check("Q8b reasoning effort low is sent; output cap 4000", JSON.stringify(parsed.reasoning) === '{"effort":"low"}' && parsed.max_output_tokens === 4000);
   check("Q9 the bearer key is OPENAI_PROBE_API_KEY", (wire[0].init.headers as Record<string, string>).authorization === "Bearer test-key-not-real");
   check("Q10 the hashed body is the sent body", ok.fullRequestBody === sent && ok.fullRequestBodySha256 === sha256Hex(sent));
   check("Q11 the prompt hash is of the trimmed question", ok.rawProbeRequestSha256 === sha256Hex(QUESTION) && ok.rawProbeRequest === QUESTION);
@@ -134,7 +156,7 @@ async function main(): Promise<void> {
   const prevAnalysis = process.env.OPENAI_API_KEY;
   process.env.OPENAI_API_KEY = "analysis-key";
   const noKeyWire: Wire[] = [];
-  const noKey = await expectFailure(() => runChatGptProbe({ prompt: QUESTION, brandName: "A", fetchImpl: fixtureFetch(200, responseBody(), noKeyWire) }));
+  const noKey = await expectFailure(() => runChatGptProbe({ setting: AUTO, prompt: QUESTION, brandName: "A", fetchImpl: fixtureFetch(200, responseBody(), noKeyWire) }));
   check("Q12 the analysis key alone does not enable a probe", !!noKey && /OPENAI_PROBE_API_KEY/.test(noKey.message) && noKeyWire.length === 0);
   if (prevAnalysis === undefined) delete process.env.OPENAI_API_KEY;
   else process.env.OPENAI_API_KEY = prevAnalysis;
@@ -155,21 +177,24 @@ async function main(): Promise<void> {
   check("S8 source classification uses cited URLs only", ok.sourceCitations.length === 3 && ok.sourceCitations.some((s) => s.type === "review_site"));
   check("S9 the transcript separates cited from retrieved", /cited sources:[\s\S]*retrieved sources:/.test(ok.rawResponse) && ok.rawResponseSha256 === sha256Hex(ok.rawResponse));
   check("S10 no citation markers are invented", ok.citationMarkers === undefined);
-  const noSearch = await runChatGptProbe({ prompt: QUESTION, brandName: "A", fetchImpl: fixtureFetch(200, responseBody({}, [
+  const noSearch = await runChatGptProbe({ setting: AUTO, prompt: QUESTION, brandName: "A", fetchImpl: fixtureFetch(200, responseBody({}, [
     { type: "message", content: [{ type: "output_text", text: "An answer from model knowledge.", annotations: [] }] },
   ]), []) });
   check("S11 an answer with no search and no citations is an observation", noSearch.answer.length > 0 && noSearch.citations.length === 0 && noSearch.searchResults.length === 0);
-  check("S12 the bare model name is accepted as served", (await runChatGptProbe({ prompt: QUESTION, brandName: "A", fetchImpl: fixtureFetch(200, responseBody({ model: CHATGPT_MODEL }), []) })).model === CHATGPT_MODEL);
+  check("S12 the bare model name is accepted as served", (await runChatGptProbe({ setting: AUTO, prompt: QUESTION, brandName: "A", fetchImpl: fixtureFetch(200, responseBody({ model: MODEL }), []) })).model === MODEL);
 
   /* H: helpers -------------------------------------------------------- */
   const out = JSON.parse(raw).output;
   check("H1 output text joins every output_text part", chatGptOutputText([{ type: "message", content: [{ type: "output_text", text: "a" }, { type: "refusal", refusal: "x" }, { type: "output_text", text: "b" }] }]) === "ab");
   check("H2 sources come from web_search_call items only", JSON.stringify(chatGptSearchSources(out)) === JSON.stringify(["https://vendor-a.example/soc2", "https://www.g2.com/categories/soc-2", "https://retrieved-only.example/page"]));
-  check("H3 search count", chatGptSearchCount(out) === 1 && chatGptSearchCount(null) === 0);
+  check("H3 usage counts web search calls and search actions", (() => {
+    const u = chatGptUsageFromBody({ output: [...out, { type: "web_search_call", action: { type: "open_page", url: "https://x.example" } }] });
+    return u.webSearchCalls === 2 && u.searchActions === 1 && u.searchOccurred;
+  })());
   check("H4 cited URLs ignore non-url annotations", chatGptCitedUrls([{ type: "message", content: [{ type: "output_text", text: "x", annotations: [{ type: "file_citation", file_id: "f" }, { type: "url_citation", url: "https://a.example/)" }] }] }]).map((c) => c.url).join() === "https://a.example/");
   check("H5 served-model rule: exact or dated snapshot only",
-    isApprovedServedModel(CHATGPT_MODEL) && isApprovedServedModel(`${CHATGPT_MODEL}-2026-01-31`) &&
-    !isApprovedServedModel(`${CHATGPT_MODEL}-pro`) && !isApprovedServedModel("gpt-5") && !isApprovedServedModel(`${CHATGPT_MODEL}-2026-01-31-x`));
+    isServedModelOf(MODEL, MODEL) && isServedModelOf(MODEL, `${MODEL}-2026-01-31`) && isServedModelOf("gpt-6.1-terra", "gpt-6.1-terra-2026-09-01") &&
+    !isServedModelOf("gpt-6.1-terra", "gpt-641-terra") && !isServedModelOf(MODEL, `${MODEL}-pro`) && !isServedModelOf(MODEL, "gpt-6") && !isServedModelOf(MODEL, `${MODEL}-2026-01-31-x`));
 
   /* F: failures ------------------------------------------------------- */
   const unusableCases: Array<[string, string, RegExp]> = [
@@ -181,13 +206,13 @@ async function main(): Promise<void> {
     ["status failed", responseBody({ status: "failed" }), /status:failed/],
     ["a missing id", responseBody({ id: "" }), /missing_id/],
     ["a missing served model", responseBody({ model: null }), /missing_served_model/],
-    ["another model served", responseBody({ model: "gpt-4o-2024-08-06" }), /unexpected_served_model/],
+    ["another model served", responseBody({ model: "gpt-6.1-terra-2026-09-01" }), /unexpected_served_model/],
     ["empty output text", responseBody({}, [{ type: "message", content: [{ type: "output_text", text: "   ", annotations: [] }] }]), /empty_output_text/],
     ["a refusal only", responseBody({}, [{ type: "message", content: [{ type: "refusal", refusal: "no" }] }]), /empty_output_text/],
   ];
   for (const [label, body, cause] of unusableCases) {
     const w: Wire[] = [];
-    const e = await expectFailure(() => runChatGptProbe({ prompt: QUESTION, brandName: "A", fetchImpl: fixtureFetch(200, body, w) }));
+    const e = await expectFailure(() => runChatGptProbe({ setting: AUTO, prompt: QUESTION, brandName: "A", fetchImpl: fixtureFetch(200, body, w) }));
     const f = e instanceof PerplexityProbeFailure ? e : null;
     check(`F ${label} fails with the whole body as evidence`,
       !!f && cause.test(f.message) && f.reason === "empty_answer" && f.httpStatus === 200 && f.errorBody === body &&
@@ -196,21 +221,117 @@ async function main(): Promise<void> {
   }
   for (const status of [400, 401, 429, 500]) {
     const errBody = JSON.stringify({ error: { message: "nope", type: "x" } });
-    const e = await expectFailure(() => runChatGptProbe({ prompt: QUESTION, brandName: "A", fetchImpl: fixtureFetch(status, errBody, []) }));
+    const e = await expectFailure(() => runChatGptProbe({ setting: AUTO, prompt: QUESTION, brandName: "A", fetchImpl: fixtureFetch(status, errBody, []) }));
     const f = e instanceof PerplexityProbeFailure ? e : null;
     check(`F HTTP ${status} is http_error with the body`, !!f && f.reason === "http_error" && f.httpStatus === status && f.errorBody === errBody && f.errorBodySha256 === sha256Hex(errBody));
   }
-  const net = await expectFailure(() => runChatGptProbe({ prompt: QUESTION, brandName: "A", fetchImpl: (async () => { throw new Error("aborted"); }) as typeof fetch }));
+  const net = await expectFailure(() => runChatGptProbe({ setting: AUTO, prompt: QUESTION, brandName: "A", fetchImpl: (async () => { throw new Error("aborted"); }) as typeof fetch }));
   check("F a network error or timeout is network_error with the request", net instanceof PerplexityProbeFailure && net.reason === "network_error" && net.httpStatus === null && net.fullRequestBodySha256 === sha256Hex(net.fullRequestBody));
   check("F the failure message never echoes the key", !/test-key-not-real/.test(String(net?.message)));
 
   /* M: mock ----------------------------------------------------------- */
-  const mock = await runChatGptProbe({ prompt: QUESTION, brandName: "A", mockResponse: { ...ok, fullRequestBody: "forged", fullRequestBodySha256: sha256Hex("forged") } });
+  const mock = await runChatGptProbe({ setting: AUTO, prompt: QUESTION, brandName: "A", mockResponse: { ...ok, fullRequestBody: "forged", fullRequestBodySha256: sha256Hex("forged") } });
   check("M1 a mock is marked and carries no outbound body", mock.usedMock === true && mock.fullRequestBody === undefined && mock.fullRequestBodySha256 === undefined);
+
+  /* A: approval ------------------------------------------------------ */
+  check("A1 no model is approved yet", CHATGPT_APPROVED_MODEL === null && approvedChatGptSetting("auto") === null && approvedChatGptSetting("required") === null);
+  const refusedWire: Wire[] = [];
+  const refused = await expectFailure(() => runChatGptProbe({ prompt: QUESTION, brandName: "A", fetchImpl: fixtureFetch(200, responseBody(), refusedWire) }));
+  check("A2 a run without a setting is refused before any request", !!refused && /No ChatGPT model is approved/.test(refused.message) && refusedWire.length === 0);
+  const mockRefused = await expectFailure(() => runChatGptProbe({ prompt: QUESTION, brandName: "A", mockResponse: ok }));
+  check("A3 even a mock needs a setting", !!mockRefused);
+  check("A4 an approved model yields an exact-snapshot setting per search mode", (() => {
+    const a = approvedChatGptSetting("auto", MODEL);
+    const r = approvedChatGptSetting("required", MODEL);
+    return !!a && !!r && a.servedModelRule === "exact_or_snapshot" && a.version !== r.version;
+  })());
+  check("A5 gpt-5-mini is not a candidate (OpenAI shutdown 2026-12-11)", !CHATGPT_BENCHMARK_CANDIDATES.some((c) => c.setting.model.startsWith("gpt-5")));
+  check("A6 chat-latest is a reference only, recorded not checked, no reasoning field", (() => {
+    const ref = CHATGPT_BENCHMARK_CANDIDATES.find((c) => c.setting.model === "chat-latest");
+    return !!ref && ref.role === "reference" && ref.setting.servedModelRule === "recorded_only" && !("reasoning" in buildChatGptRequestBody("q", ref.setting));
+  })());
+  check("A7 every candidate is priced", CHATGPT_BENCHMARK_CANDIDATES.every((c) => worstCaseRunUsd(c.setting.model, c.setting.maxOutputTokens) !== null));
+  const ref = CHATGPT_BENCHMARK_CANDIDATES.find((c) => c.role === "reference")!.setting;
+  const refRun = await runChatGptProbe({ setting: ref, prompt: QUESTION, brandName: "A", fetchImpl: fixtureFetch(200, responseBody({ model: "gpt-6-chat-2026-10-01" }), []) });
+  check("A8 the reference records whatever model was served", refRun.model === "gpt-6-chat-2026-10-01");
+
+  /* R: search modes ---------------------------------------------------- */
+  const reqWire: Wire[] = [];
+  const req = await runChatGptProbe({ setting: REQUIRED, prompt: QUESTION, brandName: "A", fetchImpl: fixtureFetch(200, responseBody(), reqWire) });
+  check("R1 search-required sends tool_choice required and is its own version", JSON.parse(String(reqWire[0].init.body)).tool_choice === "required" && req.setting.version !== AUTO.version && req.usage.searchOccurred);
+  const noSearchBody = responseBody({}, [{ type: "message", content: [{ type: "output_text", text: "From memory.", annotations: [] }] }]);
+  const reqNoSearch = await expectFailure(() => runChatGptProbe({ setting: REQUIRED, prompt: QUESTION, brandName: "A", fetchImpl: fixtureFetch(200, noSearchBody, []) }));
+  check("R2 search-required without a search fails with evidence", reqNoSearch instanceof ChatGptProbeFailure && /search_required_not_performed/.test(reqNoSearch.message) && reqNoSearch.errorBody === noSearchBody);
+  check("R3 automatic search without a search is recorded, not failed", noSearch.usage.searchOccurred === false && noSearch.usage.webSearchCalls === 0);
+  check("R4 automatic search that searched is recorded", ok.usage.searchOccurred === true && ok.usage.webSearchCalls === 1 && ok.setting.search === "auto");
+
+  /* P: usage and cost --------------------------------------------------- */
+  check("P1 usage is kept on the result", ok.usage.inputTokens === 12000 && ok.usage.cachedInputTokens === 2000 && ok.usage.outputTokens === 900 && ok.usage.reasoningTokens === 400 && ok.usage.totalTokens === 12900);
+  const expectUsd = Math.round(((10000 * 0.1 + 2000 * 0.01 + 900 * 0.5) / 1e6 + 0.01) * 1e6) / 1e6;
+  check("P2 cost is estimated from usage and the price table", ok.cost.usd === expectUsd && ok.cost.basis === "estimated_from_usage" && (ok.cost as { priceTable: string }).priceTable === OPENAI_PRICE_TABLE.version, JSON.stringify(ok.cost));
+  check("P3 missing usage is unknown, never 0", (() => {
+    const c = estimateChatGptCostUsd(MODEL, chatGptUsageFromBody({ output: [] }));
+    return c.usd === null && c.basis === "unknown";
+  })());
+  check("P4 an unpriced model is unknown", estimateChatGptCostUsd("gpt-9-unknown", ok.usage).usd === null);
+  check("P5 malformed usage values are null, not 0", (() => {
+    const u = chatGptUsageFromBody({ usage: { input_tokens: -1, output_tokens: "9", total_tokens: 1.5 } });
+    return u.inputTokens === null && u.outputTokens === null && u.totalTokens === null && u.cachedInputTokens === null;
+  })());
+  check("P6 cached tokens above input are capped at input", estimateChatGptCostUsd(MODEL, { ...ok.usage, cachedInputTokens: 99999 }).usd! < (ok.cost.usd as number));
+  check("P7 the price table is dated and sourced", OPENAI_PRICE_TABLE.recordedOn === "2026-11-10" && OPENAI_PRICE_TABLE.source.startsWith("https://developers.openai.com/") && OPENAI_PRICE_TABLE.webSearchPerCallUsd === 0.01);
+  check("P8 worst case exceeds a typical run", (worstCaseRunUsd(MODEL, 4000) as number) > (ok.cost.usd as number));
+  const billedFail = await expectFailure(() => runChatGptProbe({ setting: AUTO, prompt: QUESTION, brandName: "A", fetchImpl: fixtureFetch(200, responseBody({ status: "incomplete" }), []) }));
+  check("P9 a billed-but-unusable run carries its usage and cost", billedFail instanceof ChatGptProbeFailure && billedFail.usage?.outputTokens === 900 && billedFail.cost.usd !== null);
+  const httpFail = await expectFailure(() => runChatGptProbe({ setting: AUTO, prompt: QUESTION, brandName: "A", fetchImpl: fixtureFetch(500, "{}", []) }));
+  check("P10 an HTTP failure has unknown cost, not 0", httpFail instanceof ChatGptProbeFailure && httpFail.cost.usd === null && httpFail.usage === null);
+  check("P11 the mock has unknown cost", mock.cost.usd === null && mock.usage.inputTokens === null);
+
+  /* K: benchmark -------------------------------------------------------- */
+  const kq = [{ id: "q1", category: "discovery" as const, text: "a b c" }, { id: "q2", category: "comparison" as const, text: "d e f" }];
+  const kplan = planBenchmark(kq, CHATGPT_BENCHMARK_CANDIDATES, 2);
+  check("K1 the plan is questions × repeats × models", kplan.length === 12 && new Set(kplan.map((p) => p.index)).size === 12);
+  check("K2 the plan interleaves models within each question", kplan[0].setting.model !== kplan[1].setting.model && kplan[0].question.id === kplan[1].question.id && kplan[3].question.id === "q2");
+  check("K3 the full default plan is 150 runs", planBenchmark(new Array(10).fill(kq[0]), CHATGPT_BENCHMARK_CANDIDATES, 5).length === 150);
+  check("K4 dry run is the default", (() => { const a = parseBenchmarkArgs([]); return a.ok && !a.args.live; })());
+  check("K5 live needs a cap", !parseBenchmarkArgs(["--live", "--i-confirm-founder-approved-budget"]).ok);
+  check("K6 live needs the confirmation flag", !parseBenchmarkArgs(["--live", "--max-usd=10"]).ok);
+  check("K7 the cap may not exceed the founder ceiling", BENCHMARK_HARD_CEILING_USD === 40 && !parseBenchmarkArgs(["--live", "--max-usd=40.01", "--i-confirm-founder-approved-budget"]).ok && parseBenchmarkArgs(["--live", "--max-usd=40", "--i-confirm-founder-approved-budget"]).ok);
+  check("K8 repeats are bounded and unknown flags refused", !parseBenchmarkArgs(["--repeats=6"]).ok && !parseBenchmarkArgs(["--repeats=0"]).ok && !parseBenchmarkArgs(["--yes"]).ok);
+  const budget = new BenchmarkBudget(1);
+  check("K9 a run is refused when its worst case could pass the cap", budget.canStart(1) && !budget.canStart(1.01));
+  budget.settle({ usd: null, basis: "unknown", reason: "usage_missing" }, 0.4);
+  check("K10 an unknown cost settles at the worst case", budget.spentUsd === 0.4);
+  check("K11 a run above its worst case is an overrun", budget.settle({ usd: 0.5, basis: "estimated_from_usage", priceTable: "x" }, 0.3).overrun && budget.spentUsd === 0.9);
+  check("K12 a null cost (no call) settles at the worst case", (() => { const b = new BenchmarkBudget(5); b.settle(null, 0.2); return b.spentUsd === 0.2; })());
+  check("K13 cited-domain stability", citedDomainStability([{ citations: ["https://www.a.example/x", "https://b.example"] }, { citations: ["https://a.example/y"] }]) === 0.5 &&
+    citedDomainStability([{ citations: [] }, { citations: [] }]) === 1 && citedDomainStability([{ citations: [] }]) === null);
+  const rec = (over: Partial<BenchmarkRecord>): BenchmarkRecord => ({
+    index: 0, model: MODEL, role: "candidate", settingVersion: AUTO.version, questionId: "q1", repeat: 1, startedAt: "", outcome: "completed", failure: null,
+    httpStatus: 200, latencyMs: 1000, servedModel: SERVED, providerRequestId: null, usage: ok.usage, cost: ok.cost, citations: ["https://a.example"], retrievedCount: 3,
+    answerChars: 100, requestBody: null, requestBodySha256: null, responseBody: null, responseBodySha256: null, ...over,
+  });
+  const sum = summariseBenchmark([
+    rec({}),
+    rec({ repeat: 2, latencyMs: 3000, usage: noSearch.usage, citations: [] }),
+    rec({ repeat: 3, outcome: "failed", failure: "http_error:429", usage: null, cost: { usd: null, basis: "unknown", reason: "usage_missing" }, citations: [] }),
+  ])[0];
+  check("K14 summary counts runs, failures and search rate", sum.runs === 3 && sum.completed === 2 && sum.failures["http_error:429"] === 1 && sum.searchRate === 0.5 && sum.answersWithoutCitation === 1);
+  check("K15 summary cost excludes unknowns and counts them", sum.runsWithUnknownCost === 1 && sum.estimatedCostUsd === Math.round(2 * (ok.cost.usd as number) * 1e6) / 1e6);
+  check("K16 summary latency and stability", sum.latencyP50Ms === 1000 && sum.latencyP90Ms === 3000 && sum.medianCitedDomainStability === 0);
+  const runnerSrc = fs.readFileSync("scripts/benchmark-chatgpt-models.ts", "utf8");
+  check("K17 the runner reads the key only to check it is set (never prints or writes it)",
+    (runnerSrc.match(/process\.env\.OPENAI_PROBE_API_KEY/g) ?? []).length === 1 && runnerSrc.includes("if (!process.env.OPENAI_PROBE_API_KEY)"));
+  check("K18 the runner writes only under .benchmark-out or outside the repo", runnerSrc.includes('".benchmark-out"') && /must be under \.benchmark-out/.test(runnerSrc));
+  check("K19 .benchmark-out is git-ignored", /^\.benchmark-out\/$/m.test(fs.readFileSync(".gitignore", "utf8")));
+  const qs = JSON.parse(fs.readFileSync("scripts/fixtures/chatgpt-benchmark-questions.json", "utf8")) as { questions: Array<{ text: string; category: string }> };
+  check("K20 ten questions across the four categories", qs.questions.length === 10 && new Set(qs.questions.map((q) => q.category)).size === 4);
+  check("K21 the questions pass the claim-language lint", qs.questions.every((q) => !FORBIDDEN_W1_PHRASES.some((p) => q.text.toLowerCase().includes(p))));
+  check("K22 the benchmark is not a test:* command (CI never runs it)", !/"test:[^"]*": "[^"]*benchmark-chatgpt/.test(fs.readFileSync("package.json", "utf8")));
 
   /* W: worker --------------------------------------------------------- */
   const runner = async () => ok;
-  const route = probeRunnerForProtocol({ runProbe: runner, runAgentProbe: runner }, { provider: CHATGPT_PROVIDER, modelConfig: { model: CHATGPT_MODEL } });
+  const route = probeRunnerForProtocol({ runProbe: runner, runAgentProbe: runner }, { provider: CHATGPT_PROVIDER, modelConfig: { model: MODEL } });
   check("W1 the worker refuses an openai_chatgpt protocol (not wired)", !route.ok && route.detail === "UNKNOWN_PROVIDER");
   check("W2 a stored ChatGPT body is not replayed as an answer", answerFromRawResponseBody(raw) === null);
   check("W3 the worker does not import the adapter", !/probes\/chatgpt/.test(fs.readFileSync("lib/protocol-worker/worker.ts", "utf8")));
@@ -220,11 +341,16 @@ async function main(): Promise<void> {
     fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
       const p = path.join(dir, e.name);
       if (e.isDirectory()) return importers(p);
-      return /\.(ts|tsx)$/.test(e.name) && /@\/lib\/probes\/chatgpt|probes\/chatgpt"/.test(fs.readFileSync(p, "utf8")) ? [p] : [];
+      return /\.(ts|tsx)$/.test(e.name) && /probes\/chatgpt"/.test(fs.readFileSync(p, "utf8")) ? [p] : [];
     });
   check("B1 nothing under app/ imports the adapter", importers("app").length === 0, importers("app").join(", "));
   const libImporters = importers("lib").filter((p) => p !== path.join("lib", "probes", "chatgpt.ts"));
   check("B2 nothing else under lib/ imports the adapter yet", libImporters.length === 0, libImporters.join(", "));
+  const pricingSrc = fs.readFileSync("lib/probes/chatgpt-pricing.ts", "utf8");
+  check("B4 the pricing module cannot make a call", !/fetch\(|process\.env|from "@\/lib\/probes\/chatgpt"/.test(pricingSrc));
+  const scriptImporters = importers("scripts").map((p) => p.replace(/\\/g, "/")).sort();
+  check("B5 only the benchmark and this test import the adapter under scripts/",
+    JSON.stringify(scriptImporters) === JSON.stringify(["scripts/benchmark-chatgpt-models.ts", "scripts/lib/chatgpt-benchmark.ts", "scripts/test-chatgpt-adapter.ts"]), scriptImporters.join(", "));
   check("B3 the adapter never reads the analysis key", !/process\.env\.OPENAI_API_KEY\b/.test(fs.readFileSync("lib/probes/chatgpt.ts", "utf8")));
 
   /* N: validity note -------------------------------------------------- */
@@ -239,7 +365,9 @@ async function main(): Promise<void> {
     "Comparability with existing surfaces",
   ]) check(`N §4 note covers "${heading}"`, note.includes(`## ${heading}`));
   check("N the note states the required limitation", note.includes("It is not what users of the ChatGPT app see"));
-  check("N the note names the pinned setting version", note.includes(CHATGPT_MEASUREMENT_SETTING.version));
+  check("N the note names the setting family and price table", note.includes(CHATGPT_SETTING_FAMILY) && note.includes(OPENAI_PRICE_TABLE.version));
+  check("N the note states the V1 claim boundary", note.includes("controlled OpenAI API responses, not observations of ChatGPT.com"));
+  check("N the note records that no scraping service is used", /third-party ChatGPT scraping/.test(note));
   const hit = FORBIDDEN_W1_PHRASES.find((p) => note.toLowerCase().includes(p));
   check("N the note passes the claim-language lint", !hit, hit ?? "");
 

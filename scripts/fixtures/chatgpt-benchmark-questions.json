@@ -1,0 +1,16 @@
+{
+  "version": "x1-benchmark-questions-v1",
+  "note": "Non-confidential, brand-free buyer-style questions for the X1 model benchmark (D-050). No prospect, customer or company data.",
+  "questions": [
+    { "id": "d1", "category": "discovery", "text": "What are the best project management tools for a small remote team?" },
+    { "id": "d2", "category": "discovery", "text": "Which accounting software do small agencies use for invoicing and expenses?" },
+    { "id": "d3", "category": "discovery", "text": "What tools help a SaaS company prepare for a SOC 2 audit?" },
+    { "id": "c1", "category": "comparison", "text": "How do open-source CRM systems compare with hosted CRM software for a 20-person sales team?" },
+    { "id": "c2", "category": "comparison", "text": "What are the differences between help desk software built for email support and software built for live chat?" },
+    { "id": "e1", "category": "evaluation", "text": "What should I check before choosing a payroll provider for a company with employees in two countries?" },
+    { "id": "e2", "category": "evaluation", "text": "Is an all-in-one marketing platform worth it for a startup, or are separate tools better?" },
+    { "id": "e3", "category": "evaluation", "text": "What are common complaints about employee scheduling software for restaurants?" },
+    { "id": "u1", "category": "use_case", "text": "What software can a property manager use to collect rent and track maintenance requests?" },
+    { "id": "u2", "category": "use_case", "text": "How can a small online store automate inventory updates across several sales channels?" }
+  ]
+}

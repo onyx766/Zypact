@@ -1916,7 +1916,8 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 | `npm run test:chatgpt-adapter` | 126/126 (2026-11-11) |
 | Live benchmark, 2026-11-11, founder-confirmed budget | 124 of 150 runs reached the models before the account credit ran out; estimated spend $5.73 plus $0.22 for the smoke test; results in the validity note |
 | `npm run benchmark:chatgpt-models` (dry run) | prints the 150-run plan, no call |
-| Smaller-vendor validation dry run, 2026-11-11 (`--question-set=smaller-vendor`, 110 runs, `--max-usd=10`) | plan and lifetime ledger printed, no call; paid run awaiting go-ahead |
+| Smaller-vendor validation dry run, 2026-11-11 (`--question-set=smaller-vendor`, 110 runs, `--max-usd=10`) | plan and lifetime ledger printed, no call |
+| Smaller-vendor validation, live, 2026-11-11 (founder-approved $10 phase) | 84 of 110 runs before the $10 cap stopped it as designed; estimated spend $9.41 (lifetime $15.35 of $40); results and blind review in the validity note; recommendation `gpt-5.4-2026-03-05`, pending founder decision |
 | `npm run test:paid-execution-guards` | 143/143 |
 | `npm run test:perplexity-agent-adapter` | 158/158 |
 | `npm run test:measurement-compatibility` | 89/89 |

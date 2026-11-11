@@ -284,6 +284,58 @@ How these were measured:
 - **Analysis after the run:** vendor coverage, especially smaller vendors; citation reliability, with a blind review and link checks; search behaviour; and consistency across repeats.
 - **Approval:** results go to the founder before any further paid run. No model is approved, and nothing is activated in production.
 
+**Smaller-vendor validation results (run 2026-11-11).**
+- **Runs:** 84 of the 110 planned. The $10 cap stopped the run as designed, because these questions drew more searches and longer answers than the planning estimate assumed.
+- **Coverage:** every question has at least 2 repeats for every model, and some have 3.
+- **Spend:** estimated $9.41, so lifetime benchmark spend is $15.35 of $40.
+- **Served models:** both dated snapshots were served under their exact dated ID on every run.
+
+| | `gpt-5.4-2026-03-05` | `gpt-5.5-2026-04-23` | `gpt-6-luna` | `chat-latest` (ref.) |
+|---|---|---|---|---|
+| Pinning | dated snapshot | dated snapshot | undated ID | moving alias |
+| Runs (completed) | 21 (19) | 21 (21) | 22 (22) | 20 (16) |
+| Failures | 2 at the 4,000-token output cap | 0 | 0 | 4 at the output cap |
+| Vendors per answer (median) | 8 | 13 | 4 | 8 |
+| Smaller vendors per answer (mean) | 5.6 | 9.6 | 2.2 | 5.2 |
+| Smaller vendors named at least once (of 138 pooled) | 74 | 119 | 39 | 61 |
+| Smaller-vendor mentions with a citation on the same line or table cell | 91% | 35% | 35% | 15% |
+| Unique cited URLs per answer (median) | 9 | 4 | 4 | 5 |
+| Cited links that load (unique links; rest blocked the check) | 151 of 160 | 52 of 62 | 67 of 70 | 65 of 71 (1 broken) |
+| Vendor-list similarity across repeats | 0.64 | 0.71 | 0.50 | 0.76 |
+| Same vendor named first across repeats | 87% | 75% | 68% | 94% |
+| Searched / search queries per run (mean) | 100% / 15 | 100% / 5 | 100% / 6 | 100% / 6 |
+| Latency p50 / p90 | 46 s / 66 s | 25 s / 47 s | 12 s / 16 s | 21 s / 28 s |
+| Cost per run (mean estimate) | $0.138 | $0.121 | $0.020 | $0.157 |
+
+How these were measured:
+- **Smaller vendors** are every vendor except each question's three most-mentioned, pooled across models.
+- **Vendor detection** used a list of known names, with common-word names counted only in list or table context. Bold names it missed were checked by hand and added.
+- **Every citation** from every model was found in that model's own retrieved sources.
+
+**Blind review.** An independent reviewer rated 24 answers (6 questions × 4 models, first completed repeat) without knowing which model wrote which. The reviewer's style grouping matched the models exactly. Average scores out of 5:
+
+| | Accuracy | Usefulness | Smaller-vendor coverage | Citation support |
+|---|---|---|---|---|
+| `gpt-5.4-2026-03-05` | 4.0 | 4.2 | 3.5 | 3.8 |
+| `gpt-6-luna` | 4.0 | 3.3 | 3.3 | 3.8 |
+| `chat-latest` | 3.5 | 3.7 | 3.5 | 3.2 |
+| `gpt-5.5-2026-04-23` | 3.7 | 4.0 | 4.0 | 2.2 |
+
+Notable findings:
+- **`chat-latest`** recommended a product that had shut down (June, wound down in August 2025), citing a page that now returns 404.
+- **`gpt-5.5-2026-04-23`** has the broadest vendor recall, but rests most vendor claims on roundups, Reddit or a single listicle.
+- **`gpt-5.4-2026-03-05`** ties nearly every vendor claim to that vendor's own page. Its weaknesses:
+  - its source lists repeat URLs;
+  - two misattributions were found;
+  - its sources are vendor marketing rather than independent evidence.
+- **`gpt-6-luna`** is precise and cleanly cited, but names about 4 vendors per answer.
+
+**Engineer recommendation (pending founder decision): `gpt-5.4-2026-03-05`.** It is the only option that is pinned, covers smaller vendors at about the reference's level, and ties those mentions to evidence. Open points before approval:
+1. **Output cap.** 2 of 21 runs stopped at the 4,000-token cap, so the cap needs raising (for example to 8,000). That is a new setting version and must be validated.
+2. **Latency.** p90 is 66 s, so the worker's per-attempt deadline must be at least about 90 s.
+3. **Cost.** About $0.14 per run, so a 240-run Starter month costs about $33. `gpt-6-luna` would cost about $5.
+4. **Sample size.** This is a small sample (2–3 repeats). A confirmation run at the raised cap is proposed before approval.
+
 ## Open items for the founder
 
 1. ~~Confirm the benchmark budget~~: confirmed by the founder on 2026-11-11. On the same day the founder clarified that the $40 is a lifetime ceiling including earlier spend.

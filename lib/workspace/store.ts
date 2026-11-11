@@ -139,6 +139,66 @@ export interface FindingRef {
   pageUrl: string | null;
 }
 
+/* E1 (D-048): the workspace's plan and usage. */
+export interface UsageLine {
+  type: "free_trial" | "monitoring" | "deep_baseline" | "retest";
+  allowance: number;
+  lifetime: boolean;
+  consumed: number;
+  held: number;
+  released: number;
+}
+
+export interface WorkspaceUsage {
+  plan: "free" | "starter";
+  source: "default" | "founder" | "system" | "stripe";
+  periodStart: string;
+  periodEnd: string;
+  activeQuestionLimit: number;
+  engines: Array<"perplexity" | "chatgpt">;
+  paidMeasurementOn: boolean;
+  types: UsageLine[];
+}
+
+/* Q4 (D-049): approved, active buyer questions. */
+export type ApproveStatus =
+  | "ACTIVATED"
+  | "VERSION_ADDED"
+  | "REACTIVATED"
+  | "UNCHANGED"
+  | "ALREADY_APPROVED"
+  | "IDEMPOTENCY_KEY_CONFLICT"
+  | "STEP_UP_REQUIRED"
+  | "NO_WEBSITE"
+  | "NOT_FOUND"
+  | "VERSION_CONFLICT"
+  | "DRAFT_ARCHIVED"
+  | "ALREADY_ACTIVE_WORDING"
+  | "LIMIT_REACHED"
+  | "NOT_SIGNED_IN";
+
+export interface ActiveQuestionVersion {
+  id: string;
+  number: number;
+  text: string;
+  category: string;
+  approvedAt: string | null;
+}
+
+export interface ActiveQuestion {
+  buyerQuestionId: string;
+  draftId: string;
+  active: boolean;
+  since: string;
+  versions: ActiveQuestionVersion[];
+}
+
+export interface ActiveQuestions {
+  limit: number;
+  activeCount: number;
+  questions: ActiveQuestion[];
+}
+
 export type AddDraftStatus = "ADDED" | "DUPLICATE" | "LIMIT_REACHED" | "NOT_SIGNED_IN";
 export type ReviseStatus = "SAVED" | "UNCHANGED" | "VERSION_CONFLICT" | "NOT_FOUND" | "DUPLICATE" | "LIMIT_REACHED" | "NOT_SIGNED_IN";
 export type CreateActionStatus = "CREATED" | "ALREADY_TRACKED" | "EVIDENCE_NOT_FOUND" | "LIMIT_REACHED" | "NOT_SIGNED_IN";
@@ -156,6 +216,10 @@ export interface WorkspaceStore {
   createAction(token: string, accountId: string, evidence: FindingRef | { note: string }, fields: ActionFields): Promise<{ status: CreateActionStatus; actionId: string | null }>;
   reviseAction(token: string, accountId: string, actionId: string, expectedVersion: number, fields: ActionFields, status: ActionStatus, decisionNote: string | null): Promise<{ status: ReviseStatus; version: number | null }>;
   listActions(token: string, accountId: string): Promise<WorkspaceAction[] | NotSignedIn>;
+  getUsage(token: string, accountId: string): Promise<WorkspaceUsage | NotSignedIn>;
+  approveDraft(token: string, accountId: string, draftId: string, expectedDraftVersion: number, idempotencyKey: string, consentVersion: string, consentSha256: string): Promise<{ status: ApproveStatus; buyerQuestionId: string | null; versionId: string | null }>;
+  archiveActive(token: string, accountId: string, buyerQuestionId: string): Promise<"ARCHIVED" | "ALREADY_ARCHIVED" | "NOT_FOUND" | "NOT_SIGNED_IN">;
+  listActive(token: string, accountId: string): Promise<ActiveQuestions | NotSignedIn>;
 }
 
 async function rpcRow<T>(promise: PromiseLike<{ data: unknown; error: { code?: string } | null }>): Promise<T> {
@@ -396,6 +460,68 @@ export function supabaseWorkspaceStore(client: SupabaseClient = serviceClient())
           evidence,
         };
       });
+    },
+    async getUsage(token, accountId) {
+      const u = await rpcRow<Json>(client.rpc("get_workspace_usage", { p_token: token, p_account_id: accountId }));
+      if (u.status !== "OK") return { status: "NOT_SIGNED_IN" };
+      return {
+        plan: u.plan as WorkspaceUsage["plan"],
+        source: u.source as WorkspaceUsage["source"],
+        periodStart: String(u.period_start),
+        periodEnd: String(u.period_end),
+        activeQuestionLimit: Number(u.active_question_limit),
+        engines: (u.engines as WorkspaceUsage["engines"]) ?? [],
+        paidMeasurementOn: u.paid_measurement_on === true,
+        types: (u.types as Json[]).map((t) => ({
+          type: t.type as UsageLine["type"],
+          allowance: Number(t.allowance),
+          lifetime: t.lifetime === true,
+          consumed: Number(t.consumed),
+          held: Number(t.held),
+          released: Number(t.released),
+        })),
+      };
+    },
+    async approveDraft(token, accountId, draftId, expectedDraftVersion, idempotencyKey, consentVersion, consentSha256) {
+      const row = await rpcRow<{ status: ApproveStatus; buyer_question_id: string | null; buyer_question_version_id: string | null }>(
+        client.rpc("approve_question_draft", {
+          p_token: token,
+          p_account_id: accountId,
+          p_draft_id: draftId,
+          p_expected_draft_version: expectedDraftVersion,
+          p_idempotency_key: idempotencyKey,
+          p_consent_text_version: consentVersion,
+          p_consent_text_sha256: consentSha256,
+        })
+      );
+      return { status: row.status, buyerQuestionId: row.buyer_question_id, versionId: row.buyer_question_version_id };
+    },
+    async archiveActive(token, accountId, buyerQuestionId) {
+      const row = await rpcRow<{ status: "ARCHIVED" | "ALREADY_ARCHIVED" | "NOT_FOUND" | "NOT_SIGNED_IN" }>(
+        client.rpc("archive_active_question", { p_token: token, p_account_id: accountId, p_buyer_question_id: buyerQuestionId })
+      );
+      return row.status;
+    },
+    async listActive(token, accountId) {
+      const out = await rpcRow<Json>(client.rpc("list_active_questions", { p_token: token, p_account_id: accountId }));
+      if (out.status !== "OK") return { status: "NOT_SIGNED_IN" };
+      return {
+        limit: Number(out.limit),
+        activeCount: Number(out.active_count),
+        questions: (out.questions as Json[]).map((q) => ({
+          buyerQuestionId: String(q.buyer_question_id),
+          draftId: String(q.draft_id),
+          active: q.active === true,
+          since: String(q.since),
+          versions: ((q.versions as Json[]) ?? []).map((v) => ({
+            id: String(v.id),
+            number: Number(v.number),
+            text: String(v.text),
+            category: String(v.category),
+            approvedAt: (v.approved_at as string | null) ?? null,
+          })),
+        })),
+      };
     },
   };
 }

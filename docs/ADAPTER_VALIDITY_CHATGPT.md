@@ -43,13 +43,20 @@ The buyer question is sent exactly as approved, with no brand, domain or project
 
 OpenAI lists `gpt-5-mini` for shutdown on 2026-12-11, so it is not a candidate.
 
-| Model | Role | Price per 1M tokens (input / cached / output) |
-|---|---|---|
-| `gpt-6-luna` | candidate: OpenAI's most cost-efficient current model with web search | $0.10 / $0.01 / $0.50 |
-| `gpt-6.1-terra` | candidate: higher quality | $1.00 / $0.05 / $5.00 |
-| `chat-latest` | **reference only** | $5.00 / $0.50 / $30.00 |
+| Model | Role | Pinning (OpenAI model pages, read 2026-11-11) | Price per 1M tokens (input / cached / output) |
+|---|---|---|---|
+| `gpt-6-luna` | candidate: OpenAI's most cost-efficient current model with web search | undated ID | $0.10 / $0.01 / $0.50 |
+| `gpt-6.1-terra` | candidate: higher quality | undated ID | $1.00 / $0.05 / $5.00 |
+| `chat-latest` | **reference only** | moving alias | $5.00 / $0.50 / $30.00 |
+| `gpt-5.5-2026-04-23` | candidate (added 2026-11-11) | dated snapshot | $5.00 / $0.50 / $30.00 |
+| `gpt-5.4-2026-03-05` | candidate (added 2026-11-11) | dated snapshot | $2.50 / $0.25 / $15.00 |
 
-Prices are from OpenAI's public pricing page, recorded on 2026-11-10 as price table `openai-prices-2026-11-10`. Each web search call costs $0.01, and search content tokens are billed at the model's input rate.
+Prices are from OpenAI's public pricing page. The first three were recorded on 2026-11-10, and the two dated snapshots were added on 2026-11-11. The table is price table `openai-prices-2026-11-11`. Each web search call costs $0.01, and search content tokens are billed at the model's input rate.
+
+**Pinning.** OpenAI's model pages and `GET /v1/models` were checked on 2026-11-11:
+- **Dated snapshot.** Only `gpt-5.5-2026-04-23` and `gpt-5.4-2026-03-05` carry a date-stamped snapshot ID among the candidates. This is the strongest pin OpenAI offers.
+- **Undated ID.** `gpt-6-luna` and `gpt-6.1-terra` are each listed as their own default snapshot. OpenAI does not say they change, but it publishes no dated ID, and the API reports the undated name. A silent update therefore cannot be ruled out from the documentation; it could only be detected afterwards, from drift in recorded behaviour. An earlier version of this note called `gpt-6-luna` a fixed version, which overstated it.
+- **Moving alias.** `chat-latest` is described as pointing to "the latest Instant model currently used in ChatGPT", and "the underlying model snapshot will be regularly updated." No dated snapshot of it exists.
 
 `chat-latest` is a reference, never an approved instrument:
 
@@ -128,7 +135,7 @@ A billed-but-unusable response keeps its usage, so its cost still counts.
 - **No temperature** is set, because the reasoning models reject one.
 - **Under `auto`, search use is itself variable.** It is recorded on every run.
 - **The web changes over time.** A later retest observes a different web, which is a confounder (METHODOLOGY §14).
-- **The served snapshot is recorded**, so a model update behind an undated name is visible.
+- **The served model name is recorded.** A change of served name is visible. A model whose served name is undated (`gpt-6-luna`, `gpt-6.1-terra`) could still change without the name changing; only a dated snapshot rules that out.
 - **`store: false`.** Zypact's stored copy is the only record.
 
 ## Terms and policy constraints
@@ -230,7 +237,13 @@ The protocol is designed so the founder can choose a model.
 - No human has rated answer quality. A founder read of a few answers per model is recommended before approval.
 - **Cited sources vary a lot between repeats for every model** (stability 0.23–0.46). One run per question is not a stable result, and the METHODOLOGY §7 sampling rules matter for this engine.
 
-**Engineer recommendation:**
+**Superseded on 2026-11-11.** A follow-up analysis of the same answers found two things, recorded in the next section:
+- `gpt-6-luna` names far fewer smaller vendors than the reference;
+- it has no dated snapshot.
+
+The founder did not approve a model, and asked for a smaller validation first. The original recommendation is kept below as a record.
+
+**Original engineer recommendation (superseded):**
 - **Approve `gpt-6-luna`** for the automatic-search monitoring setting:
   - it is the cheapest, about 9× below `chat-latest` per run;
   - it is the fastest;
@@ -245,9 +258,35 @@ The protocol is designed so the founder can choose a model.
 - check its usage tier's rate limits;
 - set the worker's per-attempt deadline from these latencies (for example 30 seconds against a p90 of 14 s).
 
+## Follow-up analysis and smaller-vendor validation (2026-11-11)
+
+**Follow-up analysis of the first benchmark's answers.** This was offline and cost nothing.
+
+| | `gpt-6-luna` | `gpt-6.1-terra` | `chat-latest` |
+|---|---|---|---|
+| Smaller vendors named per answer (mean) | 0.9 | 1.0 | 3.8 |
+| Smaller vendors named at least once, of 68 named by any model | 18 | 22 | 58 |
+| Blind review: citation support (1–5) | 3.8 | 3.2 | 2.4 |
+| Blind review: accuracy (1–5) | 4.3 | 4.3 | 3.8 |
+
+How these were measured:
+- "Smaller vendors" means every named vendor except each question's three most-mentioned.
+- Vendors were detected against a list of known names, and false matches were removed by hand.
+- The blind review used 17 answers (6 questions, first repeat). An independent reviewer rated them without knowing which model wrote which answer.
+
+`chat-latest` names the most vendors but supports them least with citations. `gpt-6-luna` is the most accurate and best cited, but rarely names smaller vendors.
+
+**Smaller-vendor validation (founder, 2026-11-11).** This is a capped first phase, run before any decision on the full validation:
+- **Questions:** `x1-smaller-vendor-questions-v1`, 10 brand-free B2B SaaS buyer questions where credible smaller vendors belong in a good answer.
+- **Models:** `gpt-5.5-2026-04-23`, `gpt-5.4-2026-03-05` and `gpt-6-luna` at 3 repeats each, and `chat-latest` (reference) at 2 repeats. That is 110 runs.
+- **Cap:** $10 for this phase.
+- **Lifetime ceiling:** benchmarking has a single $40 ceiling that includes all earlier spend. The runner counts earlier spend from every recorded run under `.benchmark-out/` and refuses a cap above what is left.
+- **Analysis after the run:** vendor coverage, especially smaller vendors; citation reliability, with a blind review and link checks; search behaviour; and consistency across repeats.
+- **Approval:** results go to the founder before any further paid run. No model is approved, and nothing is activated in production.
+
 ## Open items for the founder
 
-1. ~~Confirm the benchmark budget~~: confirmed by the founder on 2026-11-11.
+1. ~~Confirm the benchmark budget~~: confirmed by the founder on 2026-11-11. On the same day the founder clarified that the $40 is a lifetime ceiling including earlier spend.
 2. **Confirm that OpenAI's terms** permit this use.
-3. **Approve one model.** The recommendation is `gpt-6-luna` (see the results above). Approval is a code change to `CHATGPT_APPROVED_MODEL`.
+3. **Approve one model.** No recommendation stands until the smaller-vendor validation reports. Approval is a code change to `CHATGPT_APPROVED_MODEL`.
 4. **Wire the adapter into the worker.** That is a separate step, and it still runs behind the paid-measurement switch.

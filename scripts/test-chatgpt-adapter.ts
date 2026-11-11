@@ -44,12 +44,17 @@ import {
   OPENAI_PRICE_TABLE,
   chatGptUsageFromBody,
   estimateChatGptCostUsd,
+  typicalRunUsd,
   worstCaseRunUsd,
 } from "@/lib/probes/chatgpt-pricing";
 import {
   BENCHMARK_HARD_CEILING_USD,
+  BENCHMARK_LIFETIME_CEILING_USD,
+  BENCHMARK_QUESTION_SETS,
   BenchmarkBudget,
+  benchmarkSpendLedger,
   citedDomainStability,
+  remainingLifetimeUsd,
   isQuotaExhausted,
   parseBenchmarkArgs,
   planBenchmark,
@@ -246,7 +251,17 @@ async function main(): Promise<void> {
     const r = approvedChatGptSetting("required", MODEL);
     return !!a && !!r && a.servedModelRule === "exact_or_snapshot" && a.version !== r.version;
   })());
-  check("A5 gpt-5-mini is not a candidate (OpenAI shutdown 2026-12-11)", !CHATGPT_BENCHMARK_CANDIDATES.some((c) => c.setting.model.startsWith("gpt-5")));
+  check("A5 gpt-5-mini is not a candidate (OpenAI shutdown 2026-12-11)", !CHATGPT_BENCHMARK_CANDIDATES.some((c) => c.setting.model.startsWith("gpt-5-mini")));
+  check("A9 the dated snapshots are candidates, checked exactly, pinning recorded", (() => {
+    const dated = CHATGPT_BENCHMARK_CANDIDATES.filter((c) => c.pinning === "dated_snapshot");
+    return dated.length === 2 && dated.every((c) => /-\d{4}-\d{2}-\d{2}$/.test(c.setting.model) && c.role === "candidate" && c.setting.servedModelRule === "exact_or_snapshot") &&
+      isServedModelOf("gpt-5.5-2026-04-23", "gpt-5.5-2026-04-23") && !isServedModelOf("gpt-5.5-2026-04-23", "gpt-5.5") && !isServedModelOf("gpt-5.5-2026-04-23", "gpt-5.5-2026-06-01");
+  })());
+  check("A10 pinning matches OpenAI's documentation (luna undated, chat-latest moving)", (() => {
+    const p = Object.fromEntries(CHATGPT_BENCHMARK_CANDIDATES.map((c) => [c.setting.model, c.pinning]));
+    return p["gpt-6-luna"] === "undated_id" && p["gpt-6.1-terra"] === "undated_id" && p["chat-latest"] === "moving_alias" &&
+      p["gpt-5.5-2026-04-23"] === "dated_snapshot" && p["gpt-5.4-2026-03-05"] === "dated_snapshot";
+  })());
   check("A6 chat-latest is a reference only, recorded not checked, no reasoning field", (() => {
     const ref = CHATGPT_BENCHMARK_CANDIDATES.find((c) => c.setting.model === "chat-latest");
     return !!ref && ref.role === "reference" && ref.setting.servedModelRule === "recorded_only" && !("reasoning" in buildChatGptRequestBody("q", ref.setting));
@@ -280,7 +295,11 @@ async function main(): Promise<void> {
     return u.inputTokens === null && u.outputTokens === null && u.totalTokens === null && u.cachedInputTokens === null;
   })());
   check("P6 cached tokens above input are capped at input", estimateChatGptCostUsd(MODEL, { ...ok.usage, cachedInputTokens: 99999 }).usd! < (ok.cost.usd as number));
-  check("P7 the price table is dated and sourced", OPENAI_PRICE_TABLE.recordedOn === "2026-11-10" && OPENAI_PRICE_TABLE.source.startsWith("https://developers.openai.com/") && OPENAI_PRICE_TABLE.webSearchPerCallUsd === 0.01);
+  check("P12 the dated snapshots are priced as published (2026-11-11)",
+    JSON.stringify(OPENAI_PRICE_TABLE.models["gpt-5.5-2026-04-23"]) === JSON.stringify({ input: 5, cachedInput: 0.5, output: 30 }) &&
+    JSON.stringify(OPENAI_PRICE_TABLE.models["gpt-5.4-2026-03-05"]) === JSON.stringify({ input: 2.5, cachedInput: 0.25, output: 15 }));
+  check("P13 a typical run is estimated below its worst case, and unpriced is null", (typicalRunUsd("gpt-5.5-2026-04-23") as number) < (worstCaseRunUsd("gpt-5.5-2026-04-23", 4000) as number) && typicalRunUsd("unpriced-model") === null);
+  check("P7 the price table is dated and sourced", OPENAI_PRICE_TABLE.recordedOn === "2026-11-11" && OPENAI_PRICE_TABLE.source.startsWith("https://developers.openai.com/") && OPENAI_PRICE_TABLE.webSearchPerCallUsd === 0.01);
   check("P8 worst case exceeds a typical run", (worstCaseRunUsd(MODEL, 4000) as number) > (ok.cost.usd as number));
   const billedFail = await expectFailure(() => runChatGptProbe({ setting: AUTO, prompt: QUESTION, brandName: "A", fetchImpl: fixtureFetch(200, responseBody({ status: "incomplete" }), []) }));
   check("P9 a billed-but-unusable run carries its usage and cost", billedFail instanceof ChatGptProbeFailure && billedFail.usage?.outputTokens === 900 && billedFail.cost.usd !== null);
@@ -290,10 +309,34 @@ async function main(): Promise<void> {
 
   /* K: benchmark -------------------------------------------------------- */
   const kq = [{ id: "q1", category: "discovery" as const, text: "a b c" }, { id: "q2", category: "comparison" as const, text: "d e f" }];
-  const kplan = planBenchmark(kq, CHATGPT_BENCHMARK_CANDIDATES, 2);
+  const firstThree = CHATGPT_BENCHMARK_CANDIDATES.slice(0, 3);
+  const kplan = planBenchmark(kq, firstThree, 2);
   check("K1 the plan is questions × repeats × models", kplan.length === 12 && new Set(kplan.map((p) => p.index)).size === 12);
   check("K2 the plan interleaves models within each question", kplan[0].setting.model !== kplan[1].setting.model && kplan[0].question.id === kplan[1].question.id && kplan[3].question.id === "q2");
-  check("K3 the full default plan is 150 runs", planBenchmark(new Array(10).fill(kq[0]), CHATGPT_BENCHMARK_CANDIDATES, 5).length === 150);
+  check("K3 the first benchmark's plan (three models) is 150 runs", planBenchmark(new Array(10).fill(kq[0]), firstThree, 5).length === 150);
+  const phase2Models = ["gpt-5.5-2026-04-23", "gpt-5.4-2026-03-05", "gpt-6-luna", "chat-latest"];
+  const phase2 = planBenchmark(new Array(10).fill(kq[0]), CHATGPT_BENCHMARK_CANDIDATES.filter((c) => phase2Models.includes(c.setting.model)), 3, { "chat-latest": 2 });
+  check("K24 per-model repeats: the smaller validation is 3×10×3 + 10×2 = 110 runs", phase2.length === 110 &&
+    phase2.filter((p) => p.setting.model === "chat-latest").length === 20 && phase2.filter((p) => p.setting.model === "gpt-6-luna").length === 30 &&
+    !phase2.some((p) => p.setting.model === "chat-latest" && p.repeat === 3) && new Set(phase2.map((p) => p.index)).size === 110);
+  check("K25 the reduced model drops out of the last round only (fair partial stop)", phase2.slice(0, 80).every((p) => p.repeat <= 2) && phase2.slice(80).every((p) => p.repeat === 3));
+  check("K26 --repeats-by-model and --question-set are parsed and bounded", (() => {
+    const a = parseBenchmarkArgs(["--question-set=smaller-vendor", "--repeats=3", "--repeats-by-model=chat-latest:2,gpt-5.5-2026-04-23:1"]);
+    return a.ok && a.args.questionSet === "smaller-vendor" && a.args.repeatsByModel["chat-latest"] === 2 && a.args.repeatsByModel["gpt-5.5-2026-04-23"] === 1 &&
+      !parseBenchmarkArgs(["--repeats-by-model=chat-latest:6"]).ok && !parseBenchmarkArgs(["--repeats-by-model=chat-latest"]).ok && !parseBenchmarkArgs(["--question-set=other"]).ok;
+  })());
+  const lrec = (over: Partial<BenchmarkRecord>) => ({ model: "gpt-6-luna", cost: null, httpStatus: 200, responseBody: null, usage: null, ...over }) as Pick<BenchmarkRecord, "model" | "cost" | "httpStatus" | "responseBody" | "usage">;
+  const quota = JSON.stringify({ error: { type: "insufficient_quota", code: "credit_balance_exhausted" } });
+  const ledger = benchmarkSpendLedger([
+    lrec({ cost: { usd: 1.5, basis: "estimated_from_usage", priceTable: "x" } }),
+    lrec({ httpStatus: 429, responseBody: quota }),
+    lrec({ httpStatus: 500, responseBody: "{}" }),
+  ], () => 0.25);
+  check("K27 the ledger counts estimates, $0 for credit refusals, worst case for other unknowns", !!ledger && ledger.estimatedUsd === 1.5 && ledger.refusedNotBilled === 1 && ledger.unknownCountedAtWorstCase === 1 && ledger.totalUsd === 1.75);
+  check("K28 the ledger refuses an unpriced unknown, and the lifetime ceiling is $40 including earlier spend",
+    benchmarkSpendLedger([lrec({ httpStatus: 500 })], () => null) === null && BENCHMARK_LIFETIME_CEILING_USD === 40 &&
+    remainingLifetimeUsd({ runs: 1, estimatedUsd: 5.95, refusedNotBilled: 0, unknownCountedAtWorstCase: 0, totalUsd: 5.95 }) === 34.05 &&
+    remainingLifetimeUsd({ runs: 1, estimatedUsd: 41, refusedNotBilled: 0, unknownCountedAtWorstCase: 0, totalUsd: 41 }) === 0);
   check("K4 dry run is the default", (() => { const a = parseBenchmarkArgs([]); return a.ok && !a.args.live; })());
   check("K5 live needs a cap", !parseBenchmarkArgs(["--live", "--i-confirm-founder-approved-budget"]).ok);
   check("K6 live needs the confirmation flag", !parseBenchmarkArgs(["--live", "--max-usd=10"]).ok);
@@ -323,7 +366,16 @@ async function main(): Promise<void> {
   const runnerSrc = fs.readFileSync("scripts/benchmark-chatgpt-models.ts", "utf8");
   check("K17 the runner reads the key only to check it is set (never prints or writes it)",
     (runnerSrc.match(/process\.env\.OPENAI_PROBE_API_KEY/g) ?? []).length === 1 && runnerSrc.includes("if (!process.env.OPENAI_PROBE_API_KEY)"));
-  check("K18 the runner writes only under .benchmark-out or outside the repo", runnerSrc.includes('".benchmark-out"') && /must be under \.benchmark-out/.test(runnerSrc));
+  check("K18 the runner writes only under .benchmark-out (the spend ledger)", runnerSrc.includes('".benchmark-out"') && /--out must be under \.benchmark-out/.test(runnerSrc));
+  check("K29 a live run is refused when its cap exceeds what is left of the lifetime ceiling",
+    /benchmarkSpendLedger\(readLedgerRecords\(\)/.test(runnerSrc) && /if \(\(args\.maxUsd as number\) > remaining\)/.test(runnerSrc) &&
+    runnerSrc.indexOf("(args.maxUsd as number) > remaining") < runnerSrc.indexOf("process.env.OPENAI_PROBE_API_KEY"));
+  const sv = JSON.parse(fs.readFileSync(BENCHMARK_QUESTION_SETS["smaller-vendor"], "utf8")) as { version: string; questions: Array<{ id: string; text: string; category: string }> };
+  const vendorNames = ["asana", "hubspot", "salesforce", "zendesk", "gainsight", "chargebee", "stripe", "mixpanel", "amplitude", "pagerduty", "greenhouse", "lever", "outreach", "salesloft", "productboard", "pendo", "appcues", "bamboohr", "rippling", "ironclad", "docusign"];
+  check("K30 the smaller-vendor set: ten brand-free questions across four categories, lint-clean",
+    sv.version === "x1-smaller-vendor-questions-v1" && sv.questions.length === 10 && new Set(sv.questions.map((q) => q.id)).size === 10 &&
+    new Set(sv.questions.map((q) => q.category)).size === 4 && sv.questions.every((q) => !vendorNames.some((v) => q.text.toLowerCase().includes(v))) &&
+    sv.questions.every((q) => !FORBIDDEN_W1_PHRASES.some((p) => q.text.toLowerCase().includes(p))));
   check("K19 .benchmark-out is git-ignored", /^\.benchmark-out\/$/m.test(fs.readFileSync(".gitignore", "utf8")));
   const qs = JSON.parse(fs.readFileSync("scripts/fixtures/chatgpt-benchmark-questions.json", "utf8")) as { questions: Array<{ text: string; category: string }> };
   check("K20 ten questions across the four categories", qs.questions.length === 10 && new Set(qs.questions.map((q) => q.category)).size === 4);

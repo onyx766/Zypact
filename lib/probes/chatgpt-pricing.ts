@@ -14,9 +14,10 @@
  */
 
 export const OPENAI_PRICE_TABLE = {
-  version: "openai-prices-2026-11-10",
+  /** 2026-11-11: added the two dated snapshots; earlier rows unchanged from openai-prices-2026-11-10. */
+  version: "openai-prices-2026-11-11",
   source: "https://developers.openai.com/api/docs/pricing",
-  recordedOn: "2026-11-10",
+  recordedOn: "2026-11-11",
   /** Copied by an engineer from the public page; not yet reconciled with an invoice. */
   status: "recorded_from_public_page",
   /** "$10.00 / 1k calls + search content tokens billed at model rates." */
@@ -26,6 +27,9 @@ export const OPENAI_PRICE_TABLE = {
     "gpt-6-luna": { input: 0.1, cachedInput: 0.01, output: 0.5 },
     "gpt-6.1-terra": { input: 1.0, cachedInput: 0.05, output: 5.0 },
     "chat-latest": { input: 5.0, cachedInput: 0.5, output: 30.0 },
+    /** Dated snapshots (the only genuinely pinned IDs found, 2026-11-11). */
+    "gpt-5.5-2026-04-23": { input: 5.0, cachedInput: 0.5, output: 30.0 },
+    "gpt-5.4-2026-03-05": { input: 2.5, cachedInput: 0.25, output: 15.0 },
   },
 } as const;
 
@@ -113,4 +117,21 @@ export function worstCaseRunUsd(model: string, maxOutputTokens: number): number 
         ASSUMED_MAX_SEARCH_CALLS * OPENAI_PRICE_TABLE.webSearchPerCallUsd) * 1e6
     ) / 1e6
   );
+}
+
+/**
+ * A TYPICAL run, for planning estimates only (never for reservation): the
+ * medians observed in the first benchmark (2026-11-11) — about 12,000 input
+ * tokens of which about 4,400 cached, one search call — with output set to
+ * 2,500 tokens, above the largest median output seen (chat-latest, ~2,300).
+ */
+export const TYPICAL_RUN_ASSUMPTION = { inputTokens: 12_000, cachedInputTokens: 4_400, outputTokens: 2_500, webSearchCalls: 1 } as const;
+
+export function typicalRunUsd(model: string): number | null {
+  const u = TYPICAL_RUN_ASSUMPTION;
+  const est = estimateChatGptCostUsd(model, {
+    inputTokens: u.inputTokens, cachedInputTokens: u.cachedInputTokens, outputTokens: u.outputTokens,
+    reasoningTokens: null, totalTokens: null, webSearchCalls: u.webSearchCalls, searchActions: u.webSearchCalls, searchOccurred: true,
+  });
+  return est.usd;
 }

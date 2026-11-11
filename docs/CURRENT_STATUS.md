@@ -1900,7 +1900,10 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 - **What it adds:**
   - `lib/probes/chatgpt.ts`, the OpenAI Responses API with web search under versioned settings (`auto` for monitoring, `required` as a separate protocol). No model is approved yet.
   - `lib/probes/chatgpt-pricing.ts`, usage capture and cost estimation from the dated price table. Unknown, never $0.
-  - `scripts/benchmark-chatgpt-models.ts`, a dry run by default. It compares `gpt-6-luna` and `gpt-6.1-terra` against the `chat-latest` reference, capped at $40.
+  - `scripts/benchmark-chatgpt-models.ts`, a dry run by default. It compares candidate models against the `chat-latest` reference:
+    - candidates: `gpt-6-luna`, `gpt-6.1-terra`, and, from 2026-11-11, the dated snapshots `gpt-5.5-2026-04-23` and `gpt-5.4-2026-03-05`;
+    - question sets: `general` or `smaller-vendor`, with per-model repeats;
+    - spending: a $40 lifetime ceiling counted from every recorded run.
   - The validity note `docs/ADAPTER_VALIDITY_CHATGPT.md`, recording the founder's 2026-11-10 decisions.
 - **Not connected:**
   - the worker refuses provider `openai_chatgpt`;
@@ -1910,9 +1913,10 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 
 | Command | Result |
 |---|---|
-| `npm run test:chatgpt-adapter` | 115/115 |
+| `npm run test:chatgpt-adapter` | 126/126 (2026-11-11) |
 | Live benchmark, 2026-11-11, founder-confirmed budget | 124 of 150 runs reached the models before the account credit ran out; estimated spend $5.73 plus $0.22 for the smoke test; results in the validity note |
 | `npm run benchmark:chatgpt-models` (dry run) | prints the 150-run plan, no call |
+| Smaller-vendor validation dry run, 2026-11-11 (`--question-set=smaller-vendor`, 110 runs, `--max-usd=10`) | plan and lifetime ledger printed, no call; paid run awaiting go-ahead |
 | `npm run test:paid-execution-guards` | 143/143 |
 | `npm run test:perplexity-agent-adapter` | 158/158 |
 | `npm run test:measurement-compatibility` | 89/89 |

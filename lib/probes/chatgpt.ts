@@ -124,10 +124,22 @@ export function chatGptSetting(
  * never assumed to reproduce ChatGPT.com). chat-latest takes no reasoning
  * field and its served name is recorded, not checked.
  */
-export const CHATGPT_BENCHMARK_CANDIDATES: ReadonlyArray<{ role: "candidate" | "reference"; setting: ChatGptSetting }> = [
-  { role: "candidate", setting: chatGptSetting("gpt-6-luna", "auto") },
-  { role: "candidate", setting: chatGptSetting("gpt-6.1-terra", "auto") },
-  { role: "reference", setting: chatGptSetting("chat-latest", "auto", { reasoningEffort: null, servedModelRule: "recorded_only" }) },
+/**
+ * How fixed a model ID is, from OpenAI's model pages (read 2026-11-11):
+ * - dated_snapshot: a date-stamped snapshot ID; the strongest pin OpenAI offers.
+ * - undated_id: the ID is listed as its own default snapshot and OpenAI does
+ *   not say it changes, but there is no dated ID, so a silent change cannot
+ *   be ruled out from the documentation.
+ * - moving_alias: OpenAI says the underlying snapshot is regularly updated.
+ */
+export type ModelPinning = "dated_snapshot" | "undated_id" | "moving_alias";
+
+export const CHATGPT_BENCHMARK_CANDIDATES: ReadonlyArray<{ role: "candidate" | "reference"; pinning: ModelPinning; setting: ChatGptSetting }> = [
+  { role: "candidate", pinning: "undated_id", setting: chatGptSetting("gpt-6-luna", "auto") },
+  { role: "candidate", pinning: "undated_id", setting: chatGptSetting("gpt-6.1-terra", "auto") },
+  { role: "reference", pinning: "moving_alias", setting: chatGptSetting("chat-latest", "auto", { reasoningEffort: null, servedModelRule: "recorded_only" }) },
+  { role: "candidate", pinning: "dated_snapshot", setting: chatGptSetting("gpt-5.5-2026-04-23", "auto") },
+  { role: "candidate", pinning: "dated_snapshot", setting: chatGptSetting("gpt-5.4-2026-03-05", "auto") },
 ];
 
 /** No model is approved yet. Setting one is a founder decision and a code change. */

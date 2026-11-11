@@ -7,8 +7,13 @@
 import type { ChatGptSetting } from "@/lib/probes/chatgpt";
 import type { ChatGptUsage, CostEstimate } from "@/lib/probes/chatgpt-pricing";
 
-/** Founder, 2026-11-10: the benchmark stops itself at $40; the project hard limit is $50. */
+/**
+ * Founder, 2026-11-10: benchmarking stops itself at $40; the project hard
+ * limit is $50. Founder, 2026-11-11: the $40 is a LIFETIME ceiling across
+ * every benchmark run, including the ~$6 already spent, not a per-run cap.
+ */
 export const BENCHMARK_HARD_CEILING_USD = 40;
+export const BENCHMARK_LIFETIME_CEILING_USD = BENCHMARK_HARD_CEILING_USD;
 export const BENCHMARK_MAX_RUNS = 150;
 export const BENCHMARK_MAX_REPEATS = 5;
 
@@ -18,8 +23,17 @@ export interface BenchmarkQuestion {
   text: string;
 }
 
+export const BENCHMARK_QUESTION_SETS = {
+  general: "scripts/fixtures/chatgpt-benchmark-questions.json",
+  "smaller-vendor": "scripts/fixtures/chatgpt-benchmark-questions-smaller-vendor.json",
+} as const;
+export type BenchmarkQuestionSet = keyof typeof BENCHMARK_QUESTION_SETS;
+
 export interface BenchmarkArgs {
   live: boolean;
+  questionSet: BenchmarkQuestionSet;
+  /** Per-model repeat overrides (e.g. the reference at fewer repeats); others use `repeats`. */
+  repeatsByModel: Record<string, number>;
   maxUsd: number | null;
   confirmed: boolean;
   repeats: number;
@@ -29,7 +43,7 @@ export interface BenchmarkArgs {
 }
 
 export function parseBenchmarkArgs(argv: string[]): { ok: true; args: BenchmarkArgs } | { ok: false; error: string } {
-  const args: BenchmarkArgs = { live: false, maxUsd: null, confirmed: false, repeats: BENCHMARK_MAX_REPEATS, questionLimit: null, models: null, out: null };
+  const args: BenchmarkArgs = { live: false, questionSet: "general", repeatsByModel: {}, maxUsd: null, confirmed: false, repeats: BENCHMARK_MAX_REPEATS, questionLimit: null, models: null, out: null };
   for (const a of argv) {
     const [k, v] = a.includes("=") ? [a.slice(0, a.indexOf("=")), a.slice(a.indexOf("=") + 1)] : [a, ""];
     if (k === "--live") args.live = true;
@@ -39,6 +53,17 @@ export function parseBenchmarkArgs(argv: string[]): { ok: true; args: BenchmarkA
     else if (k === "--questions") args.questionLimit = Number(v);
     else if (k === "--models") args.models = v.split(",").map((m) => m.trim()).filter(Boolean);
     else if (k === "--out") args.out = v;
+    else if (k === "--question-set") {
+      if (!(v in BENCHMARK_QUESTION_SETS)) return { ok: false, error: `--question-set must be one of ${Object.keys(BENCHMARK_QUESTION_SETS).join(", ")}` };
+      args.questionSet = v as BenchmarkQuestionSet;
+    } else if (k === "--repeats-by-model") {
+      for (const pair of v.split(",").map((x) => x.trim()).filter(Boolean)) {
+        const at = pair.lastIndexOf(":");
+        const n = Number(pair.slice(at + 1));
+        if (at < 1 || !Number.isInteger(n) || n < 1 || n > BENCHMARK_MAX_REPEATS) return { ok: false, error: `--repeats-by-model entries are model:1..${BENCHMARK_MAX_REPEATS}` };
+        args.repeatsByModel[pair.slice(0, at)] = n;
+      }
+    }
     else return { ok: false, error: `unknown argument ${k}` };
   }
   if (!Number.isInteger(args.repeats) || args.repeats < 1 || args.repeats > BENCHMARK_MAX_REPEATS) return { ok: false, error: `--repeats must be 1..${BENCHMARK_MAX_REPEATS}` };
@@ -82,15 +107,63 @@ export interface PlannedRun {
 export function planBenchmark(
   questions: BenchmarkQuestion[],
   candidates: ReadonlyArray<{ role: "candidate" | "reference"; setting: ChatGptSetting }>,
-  repeats: number
+  repeats: number,
+  repeatsByModel: Record<string, number> = {}
 ): PlannedRun[] {
   const plan: PlannedRun[] = [];
-  for (let r = 1; r <= repeats; r += 1) {
+  const rounds = Math.max(repeats, ...candidates.map((c) => repeatsByModel[c.setting.model] ?? repeats));
+  for (let r = 1; r <= rounds; r += 1) {
     for (const q of questions) {
-      for (const c of candidates) plan.push({ index: plan.length, question: q, repeat: r, role: c.role, setting: c.setting });
+      for (const c of candidates) {
+        if (r > (repeatsByModel[c.setting.model] ?? repeats)) continue;
+        plan.push({ index: plan.length, question: q, repeat: r, role: c.role, setting: c.setting });
+      }
     }
   }
   return plan;
+}
+
+/**
+ * Spend already recorded by earlier benchmark runs, for the lifetime ceiling.
+ * A run with an estimated cost counts at that estimate. A credit-exhausted
+ * refusal (HTTP 429 insufficient_quota, no usage) counts as 0: OpenAI does
+ * not process or bill it. Any other run without a known cost counts at its
+ * worst case, and a run whose model has no price makes the ledger unusable
+ * (null), so the caller must refuse to spend.
+ */
+export interface SpendLedger {
+  runs: number;
+  estimatedUsd: number;
+  refusedNotBilled: number;
+  unknownCountedAtWorstCase: number;
+  totalUsd: number;
+}
+
+export function benchmarkSpendLedger(
+  records: ReadonlyArray<Pick<BenchmarkRecord, "model" | "cost" | "httpStatus" | "responseBody" | "usage">>,
+  worstCase: (model: string) => number | null
+): SpendLedger | null {
+  let estimated = 0;
+  let worst = 0;
+  let refused = 0;
+  let unknown = 0;
+  for (const r of records) {
+    if (r.cost && r.cost.usd !== null) estimated += r.cost.usd;
+    else if (!r.usage && isQuotaExhausted(r.httpStatus, r.responseBody)) refused += 1;
+    else {
+      const w = worstCase(r.model);
+      if (w === null) return null;
+      worst += w;
+      unknown += 1;
+    }
+  }
+  const round = (x: number) => Math.round(x * 1e6) / 1e6;
+  return { runs: records.length, estimatedUsd: round(estimated), refusedNotBilled: refused, unknownCountedAtWorstCase: unknown, totalUsd: round(estimated + worst) };
+}
+
+/** The most a new run may be capped at: what is left of the lifetime ceiling. */
+export function remainingLifetimeUsd(ledger: SpendLedger): number {
+  return Math.max(0, Math.round((BENCHMARK_LIFETIME_CEILING_USD - ledger.totalUsd) * 1e6) / 1e6);
 }
 
 /**

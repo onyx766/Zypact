@@ -928,7 +928,11 @@ Each item below departed from a document that governed before this approval: V1_
   - **Founder decisions of 2026-11-10 recorded below.** The methodology, the dedicated OpenAI project, the cost-tracking rules and automatic search for monitoring are approved.
   - **No model is approved.** One is chosen after the benchmark.
   - **Benchmark budget confirmed by the founder on 2026-11-11.** The benchmark ran the same day; see "Benchmark results" in the validity note.
-  - **Recommendation for approval: `gpt-6-luna`.**
+  - **No standing recommendation (2026-11-11).** The first recommendation, `gpt-6-luna`, is superseded for two reasons:
+    - a follow-up analysis found it names far fewer smaller vendors than the reference;
+    - OpenAI publishes no dated snapshot for it.
+  - **The founder asked for a smaller validation first**, capped at $10, on smaller-vendor B2B SaaS questions. It compares the dated snapshots `gpt-5.5-2026-04-23` and `gpt-5.4-2026-03-05` with `gpt-6-luna` and the `chat-latest` reference.
+  - **The $40 benchmark budget is a lifetime ceiling** that includes earlier spend (founder, 2026-11-11).
   - No migration, and no live call has been made. The adapter is wired into no worker.
 - **Builds on:** METHODOLOGY §4 (a second surface needs a validity note: `docs/ADAPTER_VALIDITY_CHATGPT.md`), D-044 (cited versus retrieved sources), the M1 evidence contract, PR #4's provider routing, and D-023 (spend).
 - **Founder decisions (2026-11-10):**
@@ -984,10 +988,10 @@ Each item below departed from a document that governed before this approval: V1_
     - `chat-latest` (reference): $0.110 per run, 18.3 s, stability 0.46.
   - No human rating of answer quality has been done.
 - **Open founder items:**
-  1. Approve a model. The recommendation is `gpt-6-luna`.
+  1. Approve a model after the smaller-vendor validation reports. See "Follow-up analysis and smaller-vendor validation" in the validity note.
   2. Confirm OpenAI's terms permit this use.
   3. Top up the project's credit and check its rate limits before production.
 - **Tests:**
-  - `npm run test:chatgpt-adapter` (114, offline; no network);
+  - `npm run test:chatgpt-adapter` (126, offline; no network);
   - `npm run test:paid-execution-guards`, which checks that no web entry point reaches `lib/probes/chatgpt.ts`.
 - **Recovery:** nothing to roll back. The adapter, the pricing module and the benchmark are unreferenced by the app.

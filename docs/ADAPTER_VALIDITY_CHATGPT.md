@@ -193,9 +193,61 @@ The protocol is designed so the founder can choose a model.
    - estimated cost, with runs of unknown cost counted separately.
 5. **Output:** raw requests and responses go to the git-ignored `.benchmark-out/` folder. They are never committed.
 
+## Benchmark results (2026-11-11)
+
+**Setup:**
+- Run with the founder-confirmed budget: script cap $39, plus a 3-run smoke test beforehand.
+- 10 brand-free questions, 3 models, automatic search.
+- Raw output is in the git-ignored `.benchmark-out/full-1/` and is not committed.
+
+**Coverage:**
+- 150 runs were attempted, and 124 reached the models. Repeats 1–4 are complete for every model, plus 4 runs of repeat 5.
+- From run 124 the OpenAI account ran out of prepaid credit (HTTP 429 `insufficient_quota` / `credit_balance_exhausted`). Those 26 refusals are not model failures and are not billed.
+- The script now stops at the first such refusal.
+
+| | `gpt-6-luna` | `gpt-6.1-terra` | `chat-latest` (reference) |
+|---|---|---|---|
+| Runs that reached the model | 42 | 41 | 41 |
+| Model-side failures | 0 | 0 | 1 (hit the 4000-token output cap) |
+| Served model | `gpt-6-luna` every run | `gpt-6.1-terra` every run | `chat-latest` every run |
+| Search occurred (auto) | 90.5% | 92.7% | 90.0% |
+| Mean web search calls | 1.14 | 1.00 | 0.95 |
+| Median cited sources | 2 | 3 | 4 |
+| Answers with no citation | 4 | 3 | 4 |
+| Median retrieved sources | 41.5 | 42 | 40.5 |
+| Cited-domain stability across repeats (median Jaccard) | 0.42 | 0.23 | 0.46 |
+| Latency p50 / p90 | 8.7 s / 14.0 s | 11.5 s / 14.7 s | 18.3 s / 21.9 s |
+| Median answer length | 2,006 chars | 2,042 chars | 11,610 chars |
+| Estimated cost per completed run | **$0.0126** | $0.0197 | $0.110 |
+
+**Spend:**
+- Usage-based estimate: $5.73 for the full run and $0.22 for the smoke test.
+- The script's own budget counter showed $16.62, because it counts every refused call at its worst case.
+- The credit ran out at about $6 of estimated use, which agrees with the price table. Reconcile against OpenAI's usage page.
+
+**What this does and does not show:**
+- These are structural measurements: reliability, search use, citation behaviour, consistency, latency and cost.
+- No human has rated answer quality. A founder read of a few answers per model is recommended before approval.
+- **Cited sources vary a lot between repeats for every model** (stability 0.23–0.46). One run per question is not a stable result, and the METHODOLOGY §7 sampling rules matter for this engine.
+
+**Engineer recommendation:**
+- **Approve `gpt-6-luna`** for the automatic-search monitoring setting:
+  - it is the cheapest, about 9× below `chat-latest` per run;
+  - it is the fastest;
+  - it had no model-side failures;
+  - its search rate is in line with the others;
+  - its citation consistency (0.42) is close to the reference's (0.46) and well above `gpt-6.1-terra`'s (0.23).
+- **Trade-off:** fewer cited sources per answer (median 2, against 3 and 4), so Sources pages will have fewer cited sources per run.
+- **Monthly cost:** a Starter plan's full 240 runs a month, all on this engine, costs about $3.
+
+**Before production:**
+- top up the OpenAI project's credit;
+- check its usage tier's rate limits;
+- set the worker's per-attempt deadline from these latencies (for example 30 seconds against a p90 of 14 s).
+
 ## Open items for the founder
 
-1. **Confirm the benchmark budget:** a $50 project limit, an alert at $25, and a script cap of $40 or less.
+1. ~~Confirm the benchmark budget~~: confirmed by the founder on 2026-11-11.
 2. **Confirm that OpenAI's terms** permit this use.
-3. **After the benchmark, approve one model.** That is a code change to `CHATGPT_APPROVED_MODEL`.
+3. **Approve one model.** The recommendation is `gpt-6-luna` (see the results above). Approval is a code change to `CHATGPT_APPROVED_MODEL`.
 4. **Wire the adapter into the worker.** That is a separate step, and it still runs behind the paid-measurement switch.

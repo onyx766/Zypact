@@ -35,6 +35,7 @@ import { OPENAI_PRICE_TABLE, worstCaseRunUsd } from "@/lib/probes/chatgpt-pricin
 import {
   BenchmarkBudget,
   BENCHMARK_MAX_RUNS,
+  isQuotaExhausted,
   parseBenchmarkArgs,
   planBenchmark,
   summariseBenchmark,
@@ -164,6 +165,10 @@ async function main(): Promise<void> {
     console.log(`  #${run.index} ${run.setting.model} ${run.question.id} r${run.repeat}: ${record.outcome}${record.failure ? ` (${record.failure})` : ""} — spent so far $${budget.spentUsd.toFixed(4)}`);
     if (overrun) {
       stopReason = "worst_case_exceeded";
+      break;
+    }
+    if (isQuotaExhausted(record.httpStatus, record.responseBody)) {
+      stopReason = "provider_quota_exhausted";
       break;
     }
   }

@@ -1910,7 +1910,8 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 
 | Command | Result |
 |---|---|
-| `npm run test:chatgpt-adapter` | 114/114 |
+| `npm run test:chatgpt-adapter` | 115/115 |
+| Live benchmark, 2026-11-11, founder-confirmed budget | 124 of 150 runs reached the models before the account credit ran out; estimated spend $5.73 plus $0.22 for the smoke test; results in the validity note |
 | `npm run benchmark:chatgpt-models` (dry run) | prints the 150-run plan, no call |
 | `npm run test:paid-execution-guards` | 143/143 |
 | `npm run test:perplexity-agent-adapter` | 158/158 |

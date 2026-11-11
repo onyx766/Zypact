@@ -50,6 +50,7 @@ import {
   BENCHMARK_HARD_CEILING_USD,
   BenchmarkBudget,
   citedDomainStability,
+  isQuotaExhausted,
   parseBenchmarkArgs,
   planBenchmark,
   summariseBenchmark,
@@ -327,6 +328,11 @@ async function main(): Promise<void> {
   const qs = JSON.parse(fs.readFileSync("scripts/fixtures/chatgpt-benchmark-questions.json", "utf8")) as { questions: Array<{ text: string; category: string }> };
   check("K20 ten questions across the four categories", qs.questions.length === 10 && new Set(qs.questions.map((q) => q.category)).size === 4);
   check("K21 the questions pass the claim-language lint", qs.questions.every((q) => !FORBIDDEN_W1_PHRASES.some((p) => q.text.toLowerCase().includes(p))));
+  check("K23 a credit-exhausted 429 stops the benchmark; a rate-limit 429 does not",
+    isQuotaExhausted(429, JSON.stringify({ error: { type: "insufficient_quota", code: "credit_balance_exhausted" } })) &&
+    !isQuotaExhausted(429, JSON.stringify({ error: { type: "requests", code: "rate_limit_exceeded" } })) &&
+    !isQuotaExhausted(500, JSON.stringify({ error: { type: "insufficient_quota" } })) && !isQuotaExhausted(429, "not json") &&
+    /isQuotaExhausted\(record\.httpStatus, record\.responseBody\)/.test(runnerSrc));
   check("K22 the benchmark is not a test:* command (CI never runs it)", !/"test:[^"]*": "[^"]*benchmark-chatgpt/.test(fs.readFileSync("package.json", "utf8")));
 
   /* W: worker --------------------------------------------------------- */

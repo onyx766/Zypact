@@ -51,6 +51,21 @@ export function parseBenchmarkArgs(argv: string[]): { ok: true; args: BenchmarkA
   return { ok: true, args };
 }
 
+/**
+ * OpenAI's "no credit left" refusal (HTTP 429, error type
+ * insufficient_quota). Distinct from a rate limit: retrying cannot succeed,
+ * so the benchmark stops instead of spending calls on refusals.
+ */
+export function isQuotaExhausted(httpStatus: number | null, body: string | null): boolean {
+  if (httpStatus !== 429 || !body) return false;
+  try {
+    const e = (JSON.parse(body) as { error?: { type?: unknown; code?: unknown } }).error;
+    return e?.type === "insufficient_quota" || e?.code === "insufficient_quota" || e?.code === "credit_balance_exhausted";
+  } catch {
+    return false;
+  }
+}
+
 export interface PlannedRun {
   index: number;
   question: BenchmarkQuestion;

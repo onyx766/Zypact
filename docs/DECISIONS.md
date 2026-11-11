@@ -927,7 +927,8 @@ Each item below departed from a document that governed before this approval: V1_
 - **Status:**
   - **Founder decisions of 2026-11-10 recorded below.** The methodology, the dedicated OpenAI project, the cost-tracking rules and automatic search for monitoring are approved.
   - **No model is approved.** One is chosen after the benchmark.
-  - **The benchmark budget awaits founder confirmation.**
+  - **Benchmark budget confirmed by the founder on 2026-11-11.** The benchmark ran the same day; see "Benchmark results" in the validity note.
+  - **Recommendation for approval: `gpt-6-luna`.**
   - No migration, and no live call has been made. The adapter is wired into no worker.
 - **Builds on:** METHODOLOGY §4 (a second surface needs a validity note: `docs/ADAPTER_VALIDITY_CHATGPT.md`), D-044 (cited versus retrieved sources), the M1 evidence contract, PR #4's provider routing, and D-023 (spend).
 - **Founder decisions (2026-11-10):**
@@ -968,10 +969,24 @@ Each item below departed from a document that governed before this approval: V1_
   - wiring the adapter into the worker (a provider route, answer replay, the cost basis in the ledger and the per-attempt deadline);
   - any live call;
   - showing ChatGPT results anywhere.
+- **Benchmark (2026-11-11):**
+  - 124 of 150 runs reached the models. The OpenAI account's prepaid credit ran out at run 124, and the script now stops on that refusal.
+  - Estimated spend was $5.73, plus $0.22 for the smoke test.
+  - **Results for `gpt-6-luna`:**
+    - $0.0126 per run;
+    - p50 latency 8.7 s;
+    - search on 90.5% of runs;
+    - median 2 cited sources;
+    - cited-domain stability 0.42;
+    - no model-side failures.
+  - **Comparisons:**
+    - `gpt-6.1-terra`: $0.0197 per run, stability 0.23;
+    - `chat-latest` (reference): $0.110 per run, 18.3 s, stability 0.46.
+  - No human rating of answer quality has been done.
 - **Open founder items:**
-  1. Confirm the benchmark budget: a $50 project hard limit, an alert at $25, and a script cap of $40 or less.
+  1. Approve a model. The recommendation is `gpt-6-luna`.
   2. Confirm OpenAI's terms permit this use.
-  3. Approve a model after the benchmark.
+  3. Top up the project's credit and check its rate limits before production.
 - **Tests:**
   - `npm run test:chatgpt-adapter` (114, offline; no network);
   - `npm run test:paid-execution-guards`, which checks that no web entry point reaches `lib/probes/chatgpt.ts`.

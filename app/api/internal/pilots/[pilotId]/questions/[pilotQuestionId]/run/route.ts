@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 
 import { requireFounderForRoute } from "@/lib/auth/founder";
-import { pilotIsOver, resolvePilotQuestionTarget } from "@/lib/pilots/reads";
+import { PILOT_JOB_ABANDONED_TEXT } from "@/lib/pilots/copy";
+import { pilotIsOver, pilotNotStarted, resolvePilotQuestionTarget } from "@/lib/pilots/reads";
 import { todayUtc, UUID_PATTERN } from "@/lib/pilots/validate";
 import { getReportServiceClient } from "@/lib/reports/service-client";
 import { startFailureHttpStatus, startWorkerMachine } from "@/lib/worker-control/fly-machine";
@@ -16,8 +17,8 @@ export const dynamic = "force-dynamic";
  * measurement. The start names that question's own job (D-052): the worker
  * claims that job or nothing. The paid-execution gate and the run request
  * are startWorkerMachine's own, and the database refuses the run request
- * for a pilot that is closed or past its end date, whatever this route
- * decides.
+ * for a pilot that is closed, outside its dates, or a retired question,
+ * whatever this route decides.
  */
 export async function POST(
   _request: Request,
@@ -39,6 +40,20 @@ export async function POST(
   if (pilotIsOver(target.pilotStatus, target.endsOn, todayUtc())) {
     return NextResponse.json(
       { ok: false, error: "This pilot is closed or past its end date, so its questions are no longer measured." },
+      { status: 409 }
+    );
+  }
+
+  if (pilotNotStarted(target.startsOn, todayUtc())) {
+    return NextResponse.json(
+      { ok: false, error: `This pilot starts on ${target.startsOn}. Its questions can be run from that day.` },
+      { status: 409 }
+    );
+  }
+
+  if (target.retired) {
+    return NextResponse.json(
+      { ok: false, error: "This question was retired, so it is no longer measured." },
       { status: 409 }
     );
   }
@@ -68,10 +83,18 @@ export async function POST(
   }
 
   // D-052 — an ended job is not run again by pressing Run. A failed one is
-  // retried from the pilot page, where the cause is shown.
-  if (job.status === "failed" || job.status === "abandoned_exhausted") {
+  // retried from the pilot page, where the cause is shown; one that cannot
+  // be retried, or was abandoned, is retired there (D-054).
+  if (job.status === "abandoned_exhausted") {
+    return NextResponse.json({ ok: false, error: PILOT_JOB_ABANDONED_TEXT }, { status: 409 });
+  }
+  if (job.status === "failed") {
     return NextResponse.json(
-      { ok: false, error: "This measurement stopped before it finished. Retry it from the pilot page." },
+      {
+        ok: false,
+        error:
+          "This measurement stopped before it finished. Retry it from the pilot page, or retire the question there if it cannot be retried.",
+      },
       { status: 409 }
     );
   }
@@ -106,8 +129,11 @@ export async function POST(
   );
 
   if (!start.ok) {
+    // The shared start path's words for an abandoned job name a request;
+    // a pilot question has none, so it is told to retire the question.
+    const error = start.refusal === "JOB_ATTEMPTS_EXHAUSTED" ? PILOT_JOB_ABANDONED_TEXT : start.detail;
     return NextResponse.json(
-      { ok: false, error: start.detail },
+      { ok: false, error },
       { status: startFailureHttpStatus(start.code) }
     );
   }

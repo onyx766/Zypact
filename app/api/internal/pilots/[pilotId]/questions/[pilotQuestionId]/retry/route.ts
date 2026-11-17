@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { requireFounderForRoute } from "@/lib/auth/founder";
 import { getDb } from "@/lib/db";
 import type { RetryFailedProtocolJobOutcome } from "@/lib/db/types";
-import { pilotIsOver, resolvePilotQuestionTarget } from "@/lib/pilots/reads";
+import { pilotIsOver, pilotNotStarted, resolvePilotQuestionTarget } from "@/lib/pilots/reads";
 import { todayUtc, UUID_PATTERN } from "@/lib/pilots/validate";
 import { getReportServiceClient } from "@/lib/reports/service-client";
 
@@ -30,6 +30,8 @@ const REFUSAL_TEXT: Record<Exclude<RetryFailedProtocolJobOutcome, "APPROVED">, s
   RUN_CAP_INSUFFICIENT_FOR_REMAINING_PLAN:
     "This measurement has too few runs left under its run cap to finish its plan, so a retry would be wasted.",
   IDEMPOTENCY_KEY_CONFLICT: "This page already retried a different run. Reload the page before retrying again.",
+  PILOT_CLOSED:
+    "This measurement belongs to a pilot that is closed or outside its dates, or to a retired question, so it cannot be retried.",
 };
 
 /**
@@ -38,9 +40,10 @@ const REFUSAL_TEXT: Record<Exclude<RetryFailedProtocolJobOutcome, "APPROVED">, s
  * D-054 — the D-052 founder retry for a pilot question's measurement that
  * stopped at the AI provider. It reserves one retry through
  * retry_failed_protocol_job and does not start the worker: the founder then
- * presses Run, which the database refuses once the pilot is closed or past
- * its end date. The failed run is chosen here, from the database, never
- * from the body.
+ * presses Run. The database refuses the retry itself, and any later Run,
+ * once the pilot is closed or outside its dates or the question is retired
+ * (D-054). The failed run is chosen here, from the database, never from
+ * the body.
  */
 export async function POST(
   request: Request,
@@ -86,6 +89,12 @@ export async function POST(
   if (pilotIsOver(target.pilotStatus, target.endsOn, todayUtc())) {
     return NextResponse.json(
       { ok: false, error: "This pilot is closed or past its end date, so its questions are no longer measured." },
+      { status: 409 }
+    );
+  }
+  if (pilotNotStarted(target.startsOn, todayUtc()) || target.retired) {
+    return NextResponse.json(
+      { ok: false, error: REFUSAL_TEXT.PILOT_CLOSED },
       { status: 409 }
     );
   }

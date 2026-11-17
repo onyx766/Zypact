@@ -211,10 +211,12 @@ export async function runOneIteration(
     health.markNoJob();
     // D-052 — a run request whose job could not be claimed is an answer,
     // not an empty queue: the request is closed and nothing else is tried.
+    // D-054 — a closed pilot's job refused at the claim is such an answer.
     if (
       claimed.outcome === "JOB_NOT_FOUND" ||
       claimed.outcome === "JOB_NOT_ELIGIBLE" ||
-      claimed.outcome === "JOB_LOCKED"
+      claimed.outcome === "JOB_LOCKED" ||
+      claimed.outcome === "PILOT_CLOSED"
     ) {
       return { outcome: "run_request_refused", jobId: null, detail: claimed.outcome };
     }

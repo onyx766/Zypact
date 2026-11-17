@@ -34,6 +34,8 @@ const REFUSAL_TEXT: Record<Exclude<RetryFailedProtocolJobOutcome, "APPROVED">, s
     "This measurement has too few runs left under its run cap to finish its plan, so a retry would be wasted. Close the request instead.",
   IDEMPOTENCY_KEY_CONFLICT:
     "This page already retried a different run. Reload the page before retrying again.",
+  PILOT_CLOSED:
+    "This measurement belongs to a pilot that is closed or outside its dates, or to a retired question, so it cannot be retried.",
 };
 
 /**

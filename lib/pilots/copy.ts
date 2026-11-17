@@ -6,6 +6,7 @@ import type {
   AddPilotQuestionOutcome,
   ClosePilotOutcome,
   CreatePilotOutcome,
+  RetirePilotQuestionOutcome,
 } from "@/lib/db/types";
 
 export const CREATE_PILOT_REFUSAL: Record<Exclude<CreatePilotOutcome, "CREATED" | "ALREADY_CREATED">, string> = {
@@ -13,6 +14,7 @@ export const CREATE_PILOT_REFUSAL: Record<Exclude<CreatePilotOutcome, "CREATED" 
   DOMAIN_HAS_LIVE_REQUEST:
     "That website already has an audit in progress. Finish or close it before starting a pilot for it.",
   DOMAIN_HAS_LIVE_PILOT: "That website already has an open pilot.",
+  START_DATE_OUT_OF_RANGE: "The start date must be between yesterday and 60 days from today.",
 };
 
 export const ADD_QUESTION_REFUSAL: Record<Exclude<AddPilotQuestionOutcome, "ADDED" | "ALREADY_ADDED">, string> = {
@@ -28,7 +30,31 @@ export const ADD_QUESTION_REFUSAL: Record<Exclude<AddPilotQuestionOutcome, "ADDE
 export const CLOSE_PILOT_REFUSAL: Record<Exclude<ClosePilotOutcome, "CLOSED">, string> = {
   ALREADY_CLOSED: "This pilot is already closed.",
   PILOT_NOT_FOUND: "This pilot no longer exists.",
+  PILOT_JOB_ACTIVE:
+    "One of this pilot's measurements is running or about to start. Wait for it to finish, then close the pilot.",
 };
+
+export const RETIRE_QUESTION_REFUSAL: Record<Exclude<RetirePilotQuestionOutcome, "RETIRED">, string> = {
+  ALREADY_RETIRED: "This question is already retired.",
+  PILOT_NOT_FOUND: "This pilot no longer exists.",
+  QUESTION_NOT_FOUND: "This question is not part of this pilot.",
+  PILOT_CLOSED: "This pilot is closed, so its questions are final.",
+  QUESTION_JOB_ACTIVE: "This question's measurement is running or about to start. Wait for it to finish.",
+  QUESTION_NOT_STOPPED: "Only a question whose measurement stopped and cannot go on can be retired.",
+  QUESTION_RETRYABLE: "This measurement stopped at the AI provider and can still be retried. Retry it instead.",
+  RETIRE_LIMIT_REACHED: "This pilot already has 5 retired questions, the most it may have.",
+};
+
+/** The pilot console's words for a Run of a measurement abandoned after too many worker stops. */
+export const PILOT_JOB_ABANDONED_TEXT =
+  "This measurement's worker stopped too many times, so it is now marked abandoned. Retire the question from the pilot page; you can then add it again.";
+
+/** The close prompt. It says what closing does and does not do. */
+export const CLOSE_PILOT_PROMPT =
+  "Why close this pilot? (10-2000 characters)\n\nA pilot cannot be closed while one of its measurements is running or about to start. Once closed, none of its questions can be run or retried, and the evidence already collected is kept.";
+
+/** A retired question, in words. */
+export const PILOT_QUESTION_RETIRED_LABEL = "Retired";
 
 /**
  * The engines a pilot is measured on (D-053). Only Perplexity is connected;

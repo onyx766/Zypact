@@ -1050,7 +1050,7 @@ Each item below departed from a document that governed before this approval: V1_
 ## D-054 — Pilot questions: one pilot holds all of a customer's approved questions in one project
 
 - **Date:** 2026-11-17
-- **Status:** Built on branch `feat/pilot-questions`, stacked on `feat/pilot-mode-phase1`, as the first build step D-053 lists. Rules marked *(engineer)* are **proposed for founder confirmation**. Migration `20261118120000_pilot_questions.sql` is **not applied to any Supabase project**, and nothing is deployed.
+- **Status:** Built on branch `feat/pilot-questions`, stacked on `feat/pilot-mode-phase1`, as the first build step D-053 lists. Revised the same day after an independent review found six defects, none of which spent without approval or exceeded a cap (item 11). Rules marked *(engineer)* are **proposed for founder confirmation**. Migration `20261118120000_pilot_questions.sql` is **not applied to any Supabase project**, and nothing is deployed.
 - **Builds on:**
   - D-032 (the 5-run plan);
   - D-051 (Pilot Mode rules);
@@ -1069,7 +1069,7 @@ Each item below departed from a document that governed before this approval: V1_
      - the company and website, normalized exactly as a request's;
      - how the team confirmed the customer controls the website (D-051, required);
      - the question limit (1 to 20, 15 by default, D-053);
-     - the 90-day window: `ends_on` is `starts_on` + 90 by constraint (D-053);
+     - the 90-day window: `ends_on` is `starts_on` + 90 by constraint (D-053). The start date must be between yesterday and 60 days from today *(engineer)*, checked after the replay so a repeated press on a later day still answers;
      - the status, `active` or `closed`, with who closed it, when and why.
 
      `create_pilot` creates the pilot and its one project, whose company and domain the worker names in its prompts. It takes the same per-website lock as a request. It refuses a website with a request in progress (0081's status set) or another open pilot; one open pilot per website is also a unique index. A repeated press replays; the same key with another body is a conflict.
@@ -1081,26 +1081,55 @@ Each item below departed from a document that governed before this approval: V1_
 
      It refuses:
      - a closed pilot, or one past its end date;
-     - a pilot at its limit;
-     - the same question twice in one pilot;
+     - a pilot at its limit, counting live questions only;
+     - the same live question twice in one pilot (a retired one does not count, item 9);
      - a hash that is not the SHA-256 of the exact text. The application computes the hash, and this function re-checks it in SQL *(engineer)*. That departs from 0047's rule that only the application computes it, for this path only.
 
-     Replay and conflict work as for `create_pilot`. Nothing runs: the founder presses Run per question.
+     Replay and conflict work as for `create_pilot`. A question may be added before the start date. Ordinals follow every question, retired ones included, and are never reused. Nothing runs: the founder presses Run per question.
   4. **The per-engine slot** (`pilot_question_protocols`) allows only Perplexity's baseline. ChatGPT gets a slot in the pull request that wires it (D-053 item 3), and a pilot retest gets one in the retest step. The pilot page shows ChatGPT as "Not measured", never as zero.
-  5. **A Run for a pilot question.** Pilot step 1's `request_protocol_job_run` is redefined with two changes only:
+  5. **A Run for a pilot question.** Pilot step 1's `request_protocol_job_run` is redefined:
      - the console start `admin_pilot_run` is accepted;
-     - a job of a pilot that is closed or past its end date is refused (`PILOT_CLOSED`) *(engineer)*, so that rule is enforced by the database, not only the page.
+     - a job of a pilot is refused when the pilot is closed or past its end date (`PILOT_CLOSED`), before its start date (`PILOT_NOT_STARTED`), or when its question is retired (`PILOT_QUESTION_RETIRED`) *(engineer)*;
+     - "a job of a pilot" is the pilot question's baseline, or any retest of that baseline;
+     - the pilot row is locked `FOR SHARE` before the check, so a Run and `close_pilot` or `retire_pilot_question` (`FOR UPDATE`) cannot interleave.
 
-     `test:pilot-questions` S13 checks that the body is otherwise step 1's, byte for byte. The claim, admission, reservation and the worker are unchanged.
-  6. **`close_pilot`** records who closed the pilot and why, and changes no job *(engineer)*: a queued job may hold a reserved retry, and ending it could strand that reservation. The Run gate in item 5 is what stops a closed pilot from spending.
-  7. **Retry.** A pilot question that stopped at the provider is retried through `retry_failed_protocol_job` (D-052), unchanged. The route refuses a closed or ended pilot first. The retry itself reserves but does not spend; the Run that follows is refused by the database for a closed pilot.
+     `test:pilot-questions` S13 checks that the body is otherwise step 1's, byte for byte, apart from three declarations.
+  6. **`close_pilot`** records who closed the pilot and why, and changes no job *(engineer)*: a queued job may hold a reserved retry, and ending it could strand that reservation. It is refused (`PILOT_JOB_ACTIVE`) while any of the pilot's measurements, a baseline or a retest of one, holds a live lease or has a pending run request *(engineer)*. The founder waits for it to finish, usually about two minutes, and closes again. So nothing already started spends after a close.
+  7. **Retry.** A pilot question that stopped at the provider is retried through `retry_failed_protocol_job` (D-052). It is redefined with the same pilot check, under the same `FOR SHARE` lock: a closed, ended or not-started pilot, or a retired question, is refused (`PILOT_CLOSED`) before anything is reserved *(engineer)*. `test:pilot-questions` S31 checks the body is otherwise step 1's, byte for byte, apart from three declarations. The request retry route shows the same words for that outcome.
   8. **Console.** **Pilots** in the founder console holds:
      - a list of pilots, and a page per pilot;
      - per question: its text, who supplied it, the approval reference and date, and the Perplexity status with completed and failed runs;
      - Run and Retry per question;
-     - adding a question, and closing the pilot.
+     - adding a question, retiring one (item 9), and closing the pilot.
 
-     Pilot jobs are left out of the founder-experiments list. No route logs a company name, a website address, a question, an approval reference, a note or a reason. Pilot creation logs the normalized domain, as request creation does.
+     Pilot jobs are left out of the founder-experiments list in its query, before its 20-row limit, so a pilot's 15-20 jobs never push founder experiments off it. No route logs a company name, a website address, a question, an approval reference, a note or a reason. Pilot creation logs the normalized domain, as request creation does.
+  9. **Retiring a question** *(engineer)*. A question whose measurement stopped and cannot go on would otherwise stay in the pilot for good. That covers an abandoned job, and a failed job the D-052 retry does not take: Run, Retry and adding the same text again all refuse it. `retire_pilot_question` handles that case:
+     - **When it is allowed:**
+       - the job is `abandoned_exhausted`; or
+       - the job is `failed` and cannot be retried. Retry's job, slot and run-cap gates are repeated; its call-level gates (an open or unreceipted call) are not, so such a job waits for its call to be reconciled.
+     - **What it refuses:**
+       - a question whose baseline or retest is running or has a pending run request;
+       - a closed pilot;
+       - more than 5 retired questions per pilot. That bounds the extra spend re-adding can cause to 5 protocols' caps.
+     - **What it changes:**
+       - every row and all evidence are kept;
+       - the question stops counting toward the limit;
+       - its approved text may be added again: a new question version, protocol and job, with fresh caps;
+       - any later Run or retry of it is refused.
+     - **Who and why:** the reason, the founder and the time are recorded.
+
+     The founder's console and the Run route name retiring, never "close the request", for an abandoned pilot measurement.
+  10. **The requested claim is a second barrier.** Pilot step 1's `claim_requested_protocol_execution_job` is redefined with one block: a job of a closed, ended or not-started pilot, or a retired question (its baseline or a retest of it), is refused at the claim (`PILOT_CLOSED`), and the run request is closed with that refusal code. A pilot can pass its end date while a request waits.
+      - The worker treats this like step 1's other claim refusals: it stops without calling a provider.
+      - `protocol_job_run_requests`' refusal_code CHECK gains `PILOT_CLOSED`.
+      - `test:pilot-questions` S29 checks that the body is otherwise step 1's, byte for byte.
+  11. **Review (2026-11-17).** An independent read-only review of the first version found six defects; all six are fixed here and tested on the memory adapter and a disposable PostgreSQL:
+      1. a Run already pending or running when the pilot closed could still spend (items 5, 6, 10);
+      2. a retest of a pilot baseline bypassed the closed-pilot block (items 5, 7, 10);
+      3. a Run before the start date was allowed, and the start date had no bounds (items 2, 5);
+      4. a question whose measurement could not go on could never be measured again (item 9);
+      5. pilot jobs could push founder baselines off the founder-experiments list (item 8);
+      6. the database test of the protocol key passed without proving it. It now uses a question with no slot, so only that key can refuse.
 - **Not in this step:**
   - the combined pilot report (the next step);
   - recommended actions;
@@ -1112,14 +1141,17 @@ Each item below departed from a document that governed before this approval: V1_
   - **A live pilot does not yet block a new public request for its website** *(engineer)*. The request functions are untouched, so a request can be created for a pilot's website, and its measurement would sit in a separate project. Either a redefinition of the two request-creation functions or a console check would close it.
   - **Intent type.** Every pilot question version is stored with intent `shortlist`, as a request's is. Questions about alternatives or purchase decisions are not distinguished.
   - **Release position.** The migration depends only on 0047-0081 and step 1. It goes directly after step 1, wherever the founder places step 1 (D-052).
-  - **D-037.** The held 0084/0085 plan must also cover the redefined `request_protocol_job_run`.
-  - **Interventions on pilot baselines.** The intervention console lists every baseline, so a pilot question's baseline can already be chosen for an intervention. Its Outcome Card would have no recipient, because a pilot has no request. This belongs to the pilot retest step.
+  - **D-037.** The held 0084/0085 plan must also cover the three functions this migration redefines: `request_protocol_job_run`, `claim_requested_protocol_execution_job` and `retry_failed_protocol_job`.
+  - **Interventions on pilot baselines.** The intervention console lists every baseline, so a pilot question's baseline can already be chosen for an intervention. Its retest is gated by the pilot (items 5, 7, 10), but its Outcome Card would have no recipient, because a pilot has no request. This belongs to the pilot retest step.
+  - **The older claims.** `claim_protocol_execution_job` (0054) and `claim_protocol_execution_job_by_id` (0059) are unchanged and do not check pilots. The live runner uses only the requested claim (D-052); they remain for the M5 test harnesses. A process that still used an older claim could take a pilot's queued job, including a closed pilot's. A worker running older code is such a process.
+  - **A retry reserved just before a close.** Its reservation stays held on a job that can no longer be run, and counts toward the worker's 24-hour spend ceiling until it ages out. Nothing is spent.
+  - **Concurrency.** The Run/close interleaving rests on the `FOR SHARE`/`FOR UPDATE` row lock, which the static tests check. No test races two sessions.
 - **Tests:**
-  - `npm run test:pilot-questions` (87, offline): the memory mirrors, the real worker loop on the memory adapter, static contracts and both parity checks, the routes, the pages and the copy;
-  - `scripts/test-pilot-questions-db.ts` (47, disposable Supabase Postgres, run by `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db`);
-  - updated: `test:pilot-step1` S8, `test:founder-baseline-control` and `test:prod-preflight`;
+  - `npm run test:pilot-questions` (128, offline): the memory mirrors, the real worker loop on the memory adapter (including a claim refused for a pilot that ended while its request waited), static contracts with the three redefinition parity checks and the launch parity check, the routes, the pages and the copy;
+  - `scripts/test-pilot-questions-db.ts` (69, disposable Supabase Postgres, run by `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db`). It covers the date window, closing against a pending Run and a live lease, the claim barrier, a retest of a pilot baseline, retiring through a real abandoned job and a real provider failure, the retry refused for a closed pilot, the retirement limit, and the protocol key;
+  - updated: `test:pilot-step1` S8, `test:founder-baseline-control`, `test:prod-preflight`, and `test:paid-execution-guards` (the pilot Run route is the fourth founder route that can start the worker);
   - results in `CURRENT_STATUS.md` §31.
-- **Recovery:** in the migration's header. Roll the web app back first, then restore step 1's `request_protocol_job_run` and CHECK, then drop the three functions and three tables. Every project, version, protocol, job and attempt a pilot created is an ordinary row and is kept.
+- **Recovery:** in the migration's header. Roll the web app back first, then restore step 1's three functions and the two CHECKs, then drop the four functions and three tables. Every project, version, protocol, job and attempt a pilot created is an ordinary row and is kept.
 - **Revisit trigger:**
   - a pilot with more than 20 questions or another plan;
   - a second engine's slot;

@@ -23,6 +23,9 @@ export const DEFAULT_QUESTION_LIMIT = 15;
 export const MAX_QUESTION_LIMIT = 20;
 /** D-053: 90 days. */
 export const PILOT_LENGTH_DAYS = 90;
+/** D-054: a pilot starts no earlier than yesterday and no later than 60 days ahead. */
+export const START_DAYS_BEFORE_TODAY = 1;
+export const START_DAYS_AFTER_TODAY = 60;
 
 export type Issues = Record<string, string[]>;
 
@@ -42,6 +45,13 @@ export function todayUtc(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** YYYY-MM-DD plus whole days, as the SQL's date + integer. */
+export function addDaysIso(day: string, days: number): string {
+  const d = new Date(`${day}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 function text(body: Record<string, unknown>, key: string): string {
   const v = body[key];
   return typeof v === "string" ? v.trim() : "";
@@ -57,7 +67,7 @@ export interface CreatePilotFields {
   idempotencyKey: string;
 }
 
-export function parseCreatePilot(raw: unknown): Parsed<CreatePilotFields> {
+export function parseCreatePilot(raw: unknown, today = todayUtc()): Parsed<CreatePilotFields> {
   const body = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const issues: Issues = {};
   const add = (k: string, m: string) => {
@@ -93,7 +103,14 @@ export function parseCreatePilot(raw: unknown): Parsed<CreatePilotFields> {
   }
 
   const startsOn = text(body, "startsOn");
-  if (!isIsoDay(startsOn)) add("startsOn", "Enter the start date.");
+  if (!isIsoDay(startsOn)) {
+    add("startsOn", "Enter the start date.");
+  } else if (
+    startsOn < addDaysIso(today, -START_DAYS_BEFORE_TODAY)
+    || startsOn > addDaysIso(today, START_DAYS_AFTER_TODAY)
+  ) {
+    add("startsOn", `The start date must be between yesterday and ${START_DAYS_AFTER_TODAY} days from today.`);
+  }
 
   const idempotencyKey = text(body, "idempotencyKey");
   if (!UUID_PATTERN.test(idempotencyKey)) add("idempotencyKey", "Reload the page and try again.");

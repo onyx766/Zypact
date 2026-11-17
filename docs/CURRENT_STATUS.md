@@ -1980,31 +1980,47 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 - **What it adds:** one pilot holds all of a customer's approved questions in one project. Before this, each question needed its own request, project and report.
   - Migration `20261118120000_pilot_questions.sql` adds:
     - three tables: `pilots`, `pilot_questions` and `pilot_question_protocols`, the per-engine slot, which allows Perplexity's baseline only;
-    - `create_pilot`, `add_pilot_question` and `close_pilot`;
-    - step 1's `request_protocol_job_run`, redefined to accept `admin_pilot_run` and to refuse a Run for a closed or ended pilot.
+    - `create_pilot` (start date between yesterday and 60 days ahead), `add_pilot_question`, `close_pilot` (refused while a measurement is running or about to start) and `retire_pilot_question`;
+    - three step 1 functions redefined, each byte for byte apart from its pilot block:
+      - `request_protocol_job_run` accepts `admin_pilot_run` and refuses a Run for a closed, ended or not-started pilot or a retired question, under a `FOR SHARE` lock on the pilot;
+      - `claim_requested_protocol_execution_job` refuses the same states at the claim, a second barrier;
+      - `retry_failed_protocol_job` refuses them before anything is reserved.
+
+      Each covers a pilot baseline and any retest of it.
   - Each added question gets the same Perplexity plan and caps as an audit, through the same approval sequence.
-  - **Pilots** in the founder console: create a pilot, add approved questions, Run and Retry per question, close the pilot. ChatGPT shows as "Not measured".
-  - No report, no email, no provider call, no worker change.
+  - **Pilots** in the founder console: create a pilot, add approved questions, Run, Retry or Retire per question, close the pilot. ChatGPT shows as "Not measured".
+  - No report, no email, no provider call. The worker's only change is to treat a claim refused for a closed pilot like step 1's other claim refusals.
+- **Review (2026-11-17):** an independent read-only review of the first version found six defects, none of which spent without approval or exceeded a cap. All six are fixed on this branch and tested (D-054 item 11):
+  1. a pending or running Run could spend after a close;
+  2. a retest bypassed the closed-pilot block;
+  3. there was no start-date bound and no check before the start;
+  4. a question whose measurement could not go on could never be measured again;
+  5. the founder-experiments list could lose founder baselines;
+  6. a database test did not prove the protocol key.
 - **Not established:**
   - **No browser walk-through** of the pilot pages against a running stack. The routes and pages are checked statically and by `build:verify` only.
   - **A pilot's measurements are not visible in any report yet.** The combined pilot report is the next step.
-  - **No Level 2 run with this migration.** The worker's claim path is unchanged, and the requested claim is exercised in the database test.
+  - **No Level 2 run with this migration.** The redefined requested claim is exercised by the database test and the worker loop on the memory adapter. CI's Level 2 job applies the migration.
+  - **No concurrency test.** The Run/close interleaving rests on the pilot row lock, which the static tests check; no test races two sessions.
 - **Open:** D-054 *Open*:
   - a live pilot does not block a public request for its website;
   - every question is stored with intent `shortlist`;
   - the release position;
-  - D-037 coverage of the redefined function;
-  - interventions on pilot baselines.
+  - D-037 coverage of the three redefined functions;
+  - Outcome Card recipients for interventions on pilot baselines;
+  - the older claims (0054, 0059) do not check pilots, and only the requested claim is live;
+  - a retry reserved just before a close keeps its reservation.
 - **Inventory on this branch:** 91 migrations, 219 files matching `scripts/test-*.ts`, 129 `test:*` and 4 `verify:*` commands.
-- **Commands and local results (2026-11-17):**
+- **Commands and local results (2026-11-17, after the review's fixes):**
 
 | Command | Result |
 |---|---|
 | `npm run typecheck` | pass |
-| `npm run build:verify` | pass; the five routes and two pages are built (`next-env.d.ts` restored afterwards) |
-| `npm run test:pilot-questions` | 87/87 |
-| `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | P1 45/45, P2 71/71, E1 74/74, Q4 52/52, pilot step 1 60/60, pilot questions 47/47 (all 91 migrations applied) |
+| `npm run build:verify` | pass; the six routes and two pages are built (`next-env.d.ts` restored afterwards) |
+| `npm run test:pilot-questions` | 128/128 (87 before the review's fixes) |
+| `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | P1 45/45, P2 71/71, E1 74/74, Q4 52/52, pilot step 1 60/60, pilot questions 69/69 (all 91 migrations applied) |
 | `npm run test:pilot-step1` | 75/75 (S8 now checks the release order after Q4, since this migration is newer) |
-| `npm run test:prod-preflight` | 18/18 (the version, three tables and three functions added to the absence checks) |
-| `npm run test:founder-baseline-control` | pass, with a new check that pilot protocols are left out of the founder experiments |
+| `npm run test:prod-preflight` | 18/18 (the version, three tables and four functions added to the absence checks) |
+| `npm run test:founder-baseline-control` | pass, with a check that pilot protocols are left out of the founder experiments |
 | `npm run test:worker-start` | 41/41 |
+| `npm run test:paid-execution-guards` | 143/143. Its founder-route inventory now names the pilot Run route as the fourth route that can start the worker, and checks it is founder-guarded before the start. The first version of this branch failed that check: the route was added without updating the inventory. |

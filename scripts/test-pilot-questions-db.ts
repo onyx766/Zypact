@@ -11,13 +11,19 @@
  *      requested claim takes that job only; a closed pilot, or one past its
  *      end date, cannot be run;
  *   F  the D-052 provider-failure retry works on a pilot job;
+ *   P  the review's fixes: the start date window and a Run before it; a
+ *      close waits for a pending Run or a live lease; the claim refuses a
+ *      request recorded before the pilot ended; a retest of a pilot
+ *      baseline is gated like the baseline; retiring a question whose
+ *      measurement cannot go on; a retry refused for a closed pilot;
  *   K  the keys refuse a protocol or version of another project;
  *   X  privileges.
  *
  * Failures are produced through the worker's own RPCs, never by writing
  * evidence rows. Test setup done as supabase_admin touches only rows that are
- * not evidence (a run request's status, a lease time, a pilot's dates) and
- * says so.
+ * not evidence (a run request's status, a lease time, a pilot's dates, and
+ * the draft retest protocol create_retest_protocol would write, which is
+ * then approved and queued by the real functions) and says so.
  *
  * Runs against a DISPOSABLE Supabase Postgres with every migration applied
  * (scripts/run-p2-workspace-db-local.sh). Opt-in: SKIP (exit 2) without
@@ -226,10 +232,142 @@ async function main(): Promise<void> {
   check("F3 the failed run stays failed and on record",
     admin(`select status from public.protocol_attempts where id = ${lit(failedAttempt)}::uuid;`) === "failed");
 
+  /* P: the review's fixes ------------------------------------------------ */
+  quiesce();
+  // Finding 3: the start date is bounded, and a Run waits for it.
+  check("P1 a start date two days ago, or 61 days ahead, is refused, and no pilot is written",
+    createPilot("pq-d1.example", randomUUID(), 15, "current_date - 2")[0] === "START_DATE_OUT_OF_RANGE"
+      && createPilot("pq-d1.example", randomUUID(), 15, "current_date + 61")[0] === "START_DATE_OUT_OF_RANGE"
+      && admin(`select count(*) from public.pilots where normalized_domain = 'pq-d1.example';`) === "0");
+  const keyD = randomUUID();
+  const [outD, pilotD, projectD] = createPilot("pq-d2.example", keyD, 15, "current_date + 60");
+  check("P2 a start date 60 days ahead is accepted, and the replay is checked before the window",
+    outD === "CREATED" && createPilot("pq-d2.example", keyD, 15, "current_date - 5")[0] === "IDEMPOTENCY_KEY_CONFLICT"
+      && createPilot("pq-d3.example", randomUUID(), 15, "current_date - 1")[0] === "CREATED");
+  const [, , , jobD] = addQuestion(pilotD, question(70));
+  check("P3 a question can be added before the start, but its Run is refused and nothing is recorded",
+    jobD !== "" && requestRun(jobD, projectD)[0] === "PILOT_NOT_STARTED"
+      && admin(`select count(*) from public.protocol_job_run_requests where job_id = ${lit(jobD)}::uuid;`) === "0");
+
+  // Finding 1: a close waits for a pending Run or a live lease.
+  const [, pilotE, projectE] = createPilot("pq-e.example");
+  const [, , , jobE] = addQuestion(pilotE, question(71));
+  const closeOf = (pilotId: string) =>
+    psql(`select outcome from public.close_pilot(${lit(pilotId)}::uuid, ${lit(FOUNDER)}::uuid, 'The customer ended the pilot early.');`);
+  const [eOut] = requestRun(jobE, projectE);
+  check("P4 a pilot with a pending Run cannot be closed", eOut === "REQUESTED" && closeOf(pilotE) === "PILOT_JOB_ACTIVE"
+    && admin(`select status from public.pilots where id = ${lit(pilotE)}::uuid;`) === "active");
+  const [eClaim, eJob] = claim();
+  check("P5 while the worker holds the job's lease, the pilot still cannot be closed",
+    eClaim === "CLAIMED" && eJob === jobE && closeOf(pilotE) === "PILOT_JOB_ACTIVE");
+  quiesce(); // test setup: the lease lapses
+  check("P6 once nothing is running or pending it closes, and the lapsed job cannot be resumed",
+    closeOf(pilotE) === "CLOSED" && requestRun(jobE, projectE)[0] === "PILOT_CLOSED");
+
+  // Finding 1, the second barrier: a request recorded before the pilot ended.
+  const [, pilotG, projectG] = createPilot("pq-g.example");
+  const [, , , jobG] = addQuestion(pilotG, question(72));
+  const [gOut, gReq] = requestRun(jobG, projectG);
+  // Test setup: the pilot passes its end date while the request waits (a pilot's dates).
+  admin(`update public.pilots set starts_on = current_date - 91, ends_on = current_date - 1 where id = ${lit(pilotG)}::uuid;`);
+  const [gClaim, gJob] = claim();
+  check("P7 the claim refuses that request, records why, and leaves the job queued",
+    gOut === "REQUESTED" && gClaim === "PILOT_CLOSED" && gJob === ""
+      && admin(`select status || ':' || refusal_code from public.protocol_job_run_requests where id = ${lit(gReq)}::uuid;`) === "refused:PILOT_CLOSED"
+      && jobState(jobG)[0] === "queued");
+
+  // Finding 2: a retest of a pilot baseline is gated like the baseline.
+  quiesce();
+  const [, pilotT, projectT] = createPilot("pq-t.example");
+  const [, , protoT] = addQuestion(pilotT, question(73));
+  // Test setup: the draft retest protocol create_retest_protocol (0073) writes for this baseline.
+  const retestProto = admin(`insert into public.protocols (project_id, buyer_question_version_id, baseline_protocol_id, provider, surface, model_config, planned_baseline_runs, planned_retest_runs, paraphrase_plan, unit_of_analysis, primary_metric, minimum_useful_change, sample_planning_method, sample_planning_assumptions, run_cap, spend_cap_usd, time_window_seconds, rate_limit_per_hour, concurrency_limit, retry_cap, observation_window_rule, analyzer_version, entity_resolution_version, methodology_version) select project_id, buyer_question_version_id, id, provider, surface, model_config, planned_baseline_runs, planned_retest_runs, paraphrase_plan, unit_of_analysis, primary_metric, minimum_useful_change, sample_planning_method, sample_planning_assumptions, run_cap, spend_cap_usd, time_window_seconds, rate_limit_per_hour, concurrency_limit, retry_cap, observation_window_rule, analyzer_version, entity_resolution_version, methodology_version from public.protocols where id = ${lit(protoT)}::uuid returning id;`);
+  const retestApproved = psql(`select status from public.approve_protocol(${lit(retestProto)}::uuid, ${lit(projectT)}::uuid, ${lit(FOUNDER)}::uuid);`);
+  const retestQueued = psql(`select status from public.enqueue_protocol_execution_job(${lit(retestProto)}::uuid, ${lit(projectT)}::uuid);`);
+  const retestJob = admin(`select id from public.protocol_execution_jobs where protocol_id = ${lit(retestProto)}::uuid;`);
+  const [tOut, tReq] = requestRun(retestJob, projectT);
+  check("P8 a pilot baseline's retest can be run while the pilot is open, and blocks its close",
+    retestApproved === "APPROVED" && retestQueued === "QUEUED" && tOut === "REQUESTED" && closeOf(pilotT) === "PILOT_JOB_ACTIVE");
+  admin(`update public.pilots set starts_on = current_date - 91, ends_on = current_date - 1 where id = ${lit(pilotT)}::uuid;`); // test setup
+  check("P9 the claim refuses the ended pilot's retest",
+    claim()[0] === "PILOT_CLOSED"
+      && admin(`select refusal_code from public.protocol_job_run_requests where id = ${lit(tReq)}::uuid;`) === "PILOT_CLOSED");
+  check("P10 the pilot then closes, and a Run for its retest is refused",
+    closeOf(pilotT) === "CLOSED" && requestRun(retestJob, projectT)[0] === "PILOT_CLOSED" && jobState(retestJob)[0] === "queued");
+
+  // Finding 4: retiring a question whose measurement cannot go on.
+  quiesce();
+  const [, pilotR, projectR] = createPilot("pq-r.example", randomUUID(), 3);
+  const [, pqR1, , jobR1] = addQuestion(pilotR, question(80));
+  const [, pqR2, , jobR2] = addQuestion(pilotR, question(81));
+  const retire = (pq: string, pilotId = pilotR) =>
+    psql(`select outcome from public.retire_pilot_question(${lit(pilotId)}::uuid, ${lit(pq)}::uuid, ${lit(FOUNDER)}::uuid, 'The measurement cannot go on.');`);
+  check("P11 a queued question cannot be retired", retire(pqR1) === "QUESTION_NOT_STOPPED");
+  const [r1Req] = requestRun(jobR1, projectR);
+  check("P12 a question with a pending Run cannot be retired", r1Req === "REQUESTED" && retire(pqR1) === "QUESTION_JOB_ACTIVE");
+  const [r1Claim, , r1Token] = claim();
+  const failedR1 = r1Claim === "CLAIMED" ? failAtProvider(jobR1, projectR, r1Token) : "";
+  quiesce();
+  check("P13 a provider failure that can still be retried is not retired",
+    jobState(jobR1).join(":") === "failed:provider_error" && retire(pqR1) === "QUESTION_RETRYABLE");
+  /** Through the real RPCs: three claims whose leases lapse, then a Run finds the job exhausted. */
+  const abandon = (jobId: string, projectId: string): string => {
+    for (let i = 0; i < 3; i += 1) {
+      requestRun(jobId, projectId);
+      claim();
+      quiesce(); // test setup: the lease lapses
+    }
+    return requestRun(jobId, projectId)[0];
+  };
+  check("P14 a job whose worker stopped three times is abandoned",
+    abandon(jobR2, projectR) === "JOB_ATTEMPTS_EXHAUSTED" && jobState(jobR2)[0] === "abandoned_exhausted");
+  check("P15 an abandoned question is retired once, recording who and why",
+    retire(pqR2) === "RETIRED" && retire(pqR2) === "ALREADY_RETIRED"
+      && admin(`select retired_by || ':' || (retire_reason = 'The measurement cannot go on.')::text from public.pilot_questions where id = ${lit(pqR2)}::uuid;`) === `${FOUNDER}:true`);
+  check("P16 a retired question's Run is refused, and its rows stay",
+    requestRun(jobR2, projectR)[0] === "PILOT_QUESTION_RETIRED"
+      && admin(`select count(*) from public.pilot_question_protocols where pilot_question_id = ${lit(pqR2)}::uuid;`) === "1"
+      && jobState(jobR2)[0] === "abandoned_exhausted");
+  const [againOut, againPq] = addQuestion(pilotR, question(81));
+  check("P17 its approved text can be added again, as a new question with the next ordinal",
+    againOut === "ADDED" && againPq !== pqR2 && admin(`select ordinal from public.pilot_questions where id = ${lit(againPq)}::uuid;`) === "3");
+  check("P18 a live question's text is still a duplicate, and the limit counts live questions",
+    addQuestion(pilotR, question(80))[0] === "DUPLICATE_QUESTION"
+      && addQuestion(pilotR, question(82))[0] === "ADDED" && addQuestion(pilotR, question(83))[0] === "LIMIT_REACHED");
+
+  // The smaller point: the retry refuses a closed pilot's job before reserving.
+  quiesce();
+  check("P19 the pilot closes", closeOf(pilotR) === "CLOSED");
+  const [r1Retry] = row(psql(
+    `select outcome, coalesce(denial_code, ''), coalesce(new_attempt_id::text, '') from public.retry_failed_protocol_job(${lit(jobR1)}::uuid, ${lit(projectR)}::uuid, ${lit(FOUNDER)}::uuid, 'Perplexity returned HTTP 500.', ${lit(failedR1)}::uuid, ${lit(randomUUID())});`
+  ));
+  check("P20 a retry for the closed pilot's question is refused, and nothing is reserved or reopened",
+    r1Retry === "PILOT_CLOSED" && jobState(jobR1)[0] === "failed"
+      && admin(`select count(*) from public.protocol_operator_actions where job_id = ${lit(jobR1)}::uuid;`) === "0");
+  check("P21 a closed pilot's question cannot be retired", retire(pqR1) === "PILOT_CLOSED");
+
+  const [, pilotL, projectL] = createPilot("pq-l.example", randomUUID(), 20);
+  const limitQs = Array.from({ length: 6 }, (_, i) => addQuestion(pilotL, question(90 + i)));
+  for (const q of limitQs) abandon(q[3], projectL);
+  const retiredFive = limitQs.slice(0, 5).map((q) => retire(q[1], pilotL));
+  check("P22 at most 5 questions of a pilot are retired",
+    retiredFive.every((o) => o === "RETIRED") && retire(limitQs[5][1], pilotL) === "RETIRE_LIMIT_REACHED");
+
   /* K: keys refuse another project's rows ------------------------------- */
   const otherProject = admin(`select project_id from public.protocols where id = ${lit(refProtocol)}::uuid;`);
-  check("K1 a pilot question cannot point at another project's protocol",
-    fails(`insert into public.pilot_question_protocols (pilot_question_id, project_id, engine, phase, protocol_id) values (${lit(added[0].pq)}::uuid, ${lit(projectA)}::uuid, 'perplexity_sonar', 'baseline', ${lit(refProtocol)}::uuid);`, "supabase_admin") !== null);
+  // A question with no slot yet, so only the protocol key can refuse the
+  // slot (the slot's own unique key would refuse a second slot first). The
+  // whole statement fails, so nothing it inserts stays.
+  const k1 = fails(`with q as (insert into public.buyer_questions (project_id) values (${lit(projectA)}::uuid) returning id, project_id),
+    v as (insert into public.buyer_question_versions (buyer_question_id, project_id, version_number, prompt_text, prompt_hash, intent_type, commercial_value, winnability, priority, rationale, provenance)
+          select q.id, q.project_id, 1, ${lit(question(98))}, ${lit(sha(question(98)))}, 'shortlist', 3, 3, 13, 'Test setup for the protocol key.', 'customer_supplied' from q returning id, project_id),
+    pq as (insert into public.pilot_questions (pilot_id, project_id, ordinal, buyer_question_version_id, prompt_hash, question_provenance, customer_approval_ref, customer_approved_on, added_by, idempotency_key, request_fingerprint)
+          select ${lit(pilotA)}::uuid, v.project_id, 19, v.id, ${lit(sha(question(98)))}, 'customer_supplied', 'ref', current_date, ${lit(FOUNDER)}::uuid, gen_random_uuid(), md5('k1') from v returning id, project_id)
+    insert into public.pilot_question_protocols (pilot_question_id, project_id, engine, phase, protocol_id)
+    select pq.id, pq.project_id, 'perplexity_sonar', 'baseline', ${lit(refProtocol)}::uuid from pq;`, "supabase_admin");
+  check("K1 a pilot question cannot point at another project's protocol: the protocol key itself refuses it",
+    k1 !== null && k1.includes("pilot_question_protocols_protocol_fk")
+      && admin(`select count(*) from public.pilot_questions where pilot_id = ${lit(pilotA)}::uuid and ordinal = 19;`) === "0", k1 ?? "");
   check("K2 a pilot question cannot use another project's question version",
     fails(`insert into public.pilot_questions (pilot_id, project_id, ordinal, buyer_question_version_id, prompt_hash, question_provenance, customer_approval_ref, customer_approved_on, added_by, idempotency_key, request_fingerprint) select ${lit(pilotA)}::uuid, ${lit(projectA)}::uuid, 20, v.id, v.prompt_hash, 'customer_supplied', 'ref', current_date, ${lit(FOUNDER)}::uuid, gen_random_uuid(), md5('x') from public.buyer_question_versions v where v.project_id = ${lit(otherProject)}::uuid limit 1;`, "supabase_admin") !== null);
   check("K3 a ChatGPT slot cannot be added before ChatGPT is wired",
@@ -240,7 +378,10 @@ async function main(): Promise<void> {
     "public.create_pilot(uuid,text,text,text,text,integer,date,uuid)",
     "public.add_pilot_question(uuid,uuid,text,text,text,text,date,uuid)",
     "public.close_pilot(uuid,uuid,text)",
+    "public.retire_pilot_question(uuid,uuid,uuid,text)",
     "public.request_protocol_job_run(uuid,uuid,text,uuid,integer)",
+    "public.claim_requested_protocol_execution_job(text,integer)",
+    "public.retry_failed_protocol_job(uuid,uuid,uuid,text,uuid,text)",
   ];
   check("X1 anon and authenticated can execute none of the functions; service_role can execute all",
     fns.every((fn) => admin(`select has_function_privilege('anon', ${lit(fn)}, 'execute')::text || has_function_privilege('authenticated', ${lit(fn)}, 'execute')::text || has_function_privilege('service_role', ${lit(fn)}, 'execute')::text;`) === "falsefalsetrue"));

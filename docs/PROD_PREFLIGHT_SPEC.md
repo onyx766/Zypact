@@ -88,7 +88,7 @@ The procedures are the D-041 texts. The repository holds their rehearsal copies,
 
 **Pilot step 1 (D-052, `20261114120000`) is not in this sequence yet.** Its position is the founder's choice when its apply is authorised: after 0083 and renamed below `20261102132000` (then Q2′-1's `expected_prev` becomes its version), or after Q4. Before it is applied, this preflight is re-baselined for that position: P2.3's expected tail, P2.4's list and the absence checks for whatever has been applied by then. P3.3 pins the approval function's pre-state either way.
 
-**Pilot questions (D-054, `20261118120000`) are not in this sequence yet either.** The migration depends only on 0047-0081 and pilot step 1, and redefines step 1's `request_protocol_job_run`, so it applies directly after step 1 wherever step 1 is placed, and is re-baselined with it.
+**Pilot questions (D-054, `20261118120000`) are not in this sequence yet either.** The migration depends only on 0047-0081 and pilot step 1, and redefines step 1's `request_protocol_job_run`, `claim_requested_protocol_execution_job` and `retry_failed_protocol_job` (and widens two CHECKs of `protocol_job_run_requests`), so it applies directly after step 1 wherever step 1 is placed, and is re-baselined with it. P4.2 also lists its four new functions, `retire_pilot_question` included, as absent.
 
 **This preflight is valid only before step 1.** Once 0083 is applied it fails by design, so do not re-run it as a post-check. After each step, confirm that the ledger tail and that step's objects are as expected.
 

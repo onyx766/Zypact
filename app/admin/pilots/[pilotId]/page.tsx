@@ -2,12 +2,18 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { requireFounderForPage } from "@/lib/auth/founder";
-import { ENGINE_NOT_MEASURED, PILOT_ENGINES, pilotJobStatusLabel, pilotProvenanceLabel } from "@/lib/pilots/copy";
-import { loadPilot, pilotIsOver } from "@/lib/pilots/reads";
+import {
+  ENGINE_NOT_MEASURED,
+  PILOT_ENGINES,
+  PILOT_QUESTION_RETIRED_LABEL,
+  pilotJobStatusLabel,
+  pilotProvenanceLabel,
+} from "@/lib/pilots/copy";
+import { loadPilot, pilotIsOver, pilotNotStarted } from "@/lib/pilots/reads";
 import { todayUtc, UUID_PATTERN } from "@/lib/pilots/validate";
 import { getReportServiceClient } from "@/lib/reports/service-client";
 import { AdminShell } from "../../admin-shell";
-import { AddQuestionPanel, ClosePilotButton, QuestionControls } from "../pilot-forms";
+import { AddQuestionPanel, ClosePilotButton, QuestionControls, RetireQuestionButton } from "../pilot-forms";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -27,7 +33,11 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
   const { pilot, questions } = loaded;
   const today = todayUtc();
   const over = pilotIsOver(pilot.status, pilot.endsOn, today);
-  const full = questions.length >= pilot.questionLimit;
+  const notStarted = pilotNotStarted(pilot.startsOn, today);
+  // D-054 — a retired question no longer counts toward the limit.
+  const liveCount = questions.filter((q) => q.retiredAt === null).length;
+  const retiredCount = questions.length - liveCount;
+  const full = liveCount >= pilot.questionLimit;
   const chatgpt = PILOT_ENGINES.find((e) => e.key === "openai_chatgpt")!;
 
   return (
@@ -37,7 +47,9 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
       health={
         over
           ? { ok: false, title: pilot.status === "closed" ? "Pilot closed" : "Past end date", note: "Its questions are no longer measured." }
-          : { ok: true, title: "Pilot open", note: `Ends ${pilot.endsOn}.` }
+          : notStarted
+            ? { ok: true, title: "Not started", note: `Questions can be run from ${pilot.startsOn}.` }
+            : { ok: true, title: "Pilot open", note: `Ends ${pilot.endsOn}.` }
       }
     >
       <div className="zpa-page-head">
@@ -47,7 +59,8 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
           </p>
           <h1 className="zpa-title">{pilot.companyName}</h1>
           <p className="zpa-subtitle">
-            {pilot.websiteUrl} · {pilot.startsOn} to {pilot.endsOn} · {questions.length} of {pilot.questionLimit} questions
+            {pilot.websiteUrl} · {pilot.startsOn} to {pilot.endsOn} · {liveCount} of {pilot.questionLimit} questions
+            {retiredCount > 0 ? ` · ${retiredCount} retired` : ""}
             {pilot.status === "closed" ? " · Closed" : ""}
           </p>
         </div>
@@ -96,6 +109,11 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
                     <td>
                       <p className="zpa-question">{q.questionText}</p>
                       <p className="zpa-muted">{pilotProvenanceLabel(q.questionProvenance)}.</p>
+                      {q.retiredAt ? (
+                        <p className="zpa-muted">
+                          <strong>{PILOT_QUESTION_RETIRED_LABEL}:</strong> {q.retireReason}
+                        </p>
+                      ) : null}
                     </td>
                     <td>
                       <p>{q.customerApprovalRef}</p>
@@ -117,8 +135,12 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
                             plannedRuns={m.plannedRuns}
                             runCap={m.runCap}
                             spendCapUsd={m.spendCapUsd}
-                            pilotOpen={!over}
+                            pilotOpen={!over && !notStarted && q.retiredAt === null}
                           />
+                          {!over && q.retiredAt === null
+                            && (m.jobStatus === "failed" || m.jobStatus === "abandoned_exhausted") ? (
+                            <RetireQuestionButton pilotId={pilot.id} pilotQuestionId={q.id} />
+                          ) : null}
                         </>
                       ) : (
                         <p>No measurement</p>

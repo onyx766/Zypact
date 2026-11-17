@@ -146,6 +146,10 @@ const RUN_REQUEST_REFUSAL_TEXT: Record<Exclude<RequestProtocolJobRunOutcome, "RE
     "This job is not waiting to run. It may have finished, failed or be held for review. Refresh the page.",
   PILOT_CLOSED:
     "This pilot is closed or past its end date, so its questions are no longer measured.",
+  PILOT_NOT_STARTED:
+    "This pilot has not started yet. Its questions can be run from its start date.",
+  PILOT_QUESTION_RETIRED:
+    "This pilot question was retired, so it is no longer measured.",
 };
 
 /**

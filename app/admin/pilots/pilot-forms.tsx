@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { Plus, X } from "lucide-react";
 
-import { pilotRunConfirmationText } from "@/lib/pilots/copy";
+import { CLOSE_PILOT_PROMPT, pilotRunConfirmationText } from "@/lib/pilots/copy";
 
 /**
  * D-054 — the founder's pilot controls. Each form sends a fresh
@@ -19,6 +19,12 @@ function newKey(): string {
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+function daysFromToday(days: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
 async function post(url: string, body: unknown): Promise<{ ok: boolean; payload: Record<string, any> | null }> {
@@ -123,8 +129,14 @@ export function NewPilotPanel() {
           <FieldError issues={issues} field="questionLimit" />
         </label>
         <label className="zpa-field">
-          <span>Start date (the pilot ends 90 days later)</span>
-          <input type="date" value={values.startsOn} onChange={(e) => set("startsOn", e.target.value)} />
+          <span>Start date, from yesterday to 60 days ahead (the pilot ends 90 days later)</span>
+          <input
+            type="date"
+            min={daysFromToday(-1)}
+            max={daysFromToday(60)}
+            value={values.startsOn}
+            onChange={(e) => set("startsOn", e.target.value)}
+          />
           <FieldError issues={issues} field="startsOn" />
         </label>
         <div className="zpa-new-audit-foot">
@@ -329,9 +341,7 @@ export function ClosePilotButton({ pilotId }: { pilotId: string }) {
   const [message, setMessage] = useState<string | null>(null);
 
   async function close() {
-    const reason = window.prompt(
-      "Why close this pilot? (10-2000 characters). Its questions will no longer be measured; evidence already collected is kept."
-    );
+    const reason = window.prompt(CLOSE_PILOT_PROMPT);
     if (!reason) return;
     setBusy(true);
     setMessage(null);
@@ -353,6 +363,46 @@ export function ClosePilotButton({ pilotId }: { pilotId: string }) {
     <div className="zpa-actions">
       <button type="button" className="zpa-btn zpa-btn-sm zpa-btn-warn" onClick={close} disabled={busy}>
         Close pilot
+      </button>
+      {message ? <p className="zpa-action-note">{message}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * D-054 — retires a question whose measurement stopped and cannot go on.
+ * The database decides: a measurement that can still be retried, or one
+ * that is running, is refused with the reason shown here.
+ */
+export function RetireQuestionButton({ pilotId, pilotQuestionId }: { pilotId: string; pilotQuestionId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function retire() {
+    const reason = window.prompt(
+      "Why retire this question? (10-2000 characters)\n\nIts measurement stopped and cannot go on. The question and its evidence are kept, it no longer counts toward the limit, it can never be run again, and you can add the same approved question again."
+    );
+    if (!reason) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const { ok, payload } = await post(`/api/internal/pilots/${pilotId}/questions/${pilotQuestionId}/retire`, { reason });
+      if (ok) {
+        window.location.reload();
+        return;
+      }
+      setMessage(payload?.error ?? "The question could not be retired.");
+    } catch {
+      setMessage("The request did not reach the server.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="zpa-actions">
+      <button type="button" className="zpa-btn zpa-btn-sm zpa-btn-warn" onClick={retire} disabled={busy}>
+        Retire question
       </button>
       {message ? <p className="zpa-action-note">{message}</p> : null}
     </div>

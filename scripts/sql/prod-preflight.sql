@@ -48,7 +48,7 @@ q2p_s1_functions(name) as (values
   ('approve_question_draft'), ('archive_active_question'), ('list_active_questions'),
   ('request_protocol_job_run'), ('cancel_protocol_job_run_request'), ('claim_requested_protocol_execution_job'),
   ('retry_failed_protocol_job'), ('close_failed_snapshot_request'),
-  ('create_pilot'), ('add_pilot_question'), ('close_pilot')
+  ('create_pilot'), ('add_pilot_question'), ('close_pilot'), ('retire_pilot_question')
 ),
 reconcile as (
   select to_regprocedure('public.reconcile_attempt_for_job(uuid,uuid,uuid,uuid,text,text)') as oid

@@ -11,6 +11,8 @@ import type {
   AddPilotQuestionResult,
   ClosePilotInput,
   ClosePilotOutcome,
+  RetirePilotQuestionInput,
+  RetirePilotQuestionOutcome,
   CreatePilotInput,
   CreatePilotOutcome,
   CreatePilotResult,
@@ -279,6 +281,10 @@ interface MemoryPilotQuestion {
   addedBy: string;
   idempotencyKey: string;
   requestFingerprint: string;
+  /** D-054 — set once, by retirePilotQuestion. */
+  retiredBy: string | null;
+  retiredAt: string | null;
+  retireReason: string | null;
 }
 
 /** D-054 — mirrors pilot_question_protocols (20261118120000). */
@@ -308,6 +314,53 @@ function addDays(day: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * D-054 — the pilot and question a job's protocol measures, through the
+ * protocol's own slot or the slot of the baseline it retests (as the SQL's
+ * `pqp.protocol_id = v_job.protocol_id or pqp.protocol_id = baseline`).
+ */
+function pilotOfProtocol(
+  store: MemoryStore,
+  protocolId: string
+): { pilot: MemoryPilot; question: MemoryPilotQuestion } | null {
+  const baselineId = store.protocols.get(protocolId)?.baselineProtocolId ?? null;
+  const slot = [...store.pilotQuestionProtocols.values()].find(
+    (s) => s.protocolId === protocolId || (baselineId !== null && s.protocolId === baselineId)
+  );
+  if (!slot) return null;
+  const question = store.pilotQuestions.get(slot.pilotQuestionId);
+  const pilot = question ? store.pilots.get(question.pilotId) : undefined;
+  return question && pilot ? { pilot, question } : null;
+}
+
+/** D-054 — the SQL's "closed, outside its dates, or a retired question" for a claim or retry. */
+function pilotBlocks(found: { pilot: MemoryPilot; question: MemoryPilotQuestion } | null): boolean {
+  if (!found) return false;
+  const today = currentDateUtc();
+  return found.pilot.status !== "active" || today > found.pilot.endsOn || today < found.pilot.startsOn
+    || found.question.retiredAt !== null;
+}
+
+/** D-054 — a job holds a live lease or has a pending, unexpired run request. */
+function jobIsActive(store: MemoryStore, job: ProtocolExecutionJob, nowMs: number): boolean {
+  const leased = (job.status === "claimed" || job.status === "running")
+    && job.leaseExpiresAt !== null && new Date(job.leaseExpiresAt).getTime() > nowMs;
+  const pending = [...store.protocolJobRunRequests.values()].some(
+    (r) => r.jobId === job.id && r.status === "pending" && new Date(r.expiresAt).getTime() > nowMs
+  );
+  return leased || pending;
+}
+
+/** D-054 — the jobs of a pilot slot's protocol and of every retest of it. */
+function jobsOfSlotProtocol(store: MemoryStore, slotProtocolId: string): ProtocolExecutionJob[] {
+  const protocolIds = new Set(
+    [...store.protocols.values()]
+      .filter((p) => p.id === slotProtocolId || p.baselineProtocolId === slotProtocolId)
+      .map((p) => p.id)
+  );
+  return [...store.protocolExecutionJobs.values()].filter((j) => protocolIds.has(j.protocolId));
+}
+
 /** 0081's in-flight request statuses: a request in one of them measures its website. */
 const LIVE_REQUEST_STATUSES = new Set([
   "pending_verification", "verified", "pending_approval", "approved",
@@ -326,7 +379,7 @@ interface MemoryRunRequest {
   status: "pending" | "consumed" | "expired" | "cancelled" | "refused";
   resolvedAt: string | null;
   consumedByWorker: string | null;
-  refusalCode: "JOB_NOT_FOUND" | "JOB_NOT_ELIGIBLE" | "JOB_LOCKED" | null;
+  refusalCode: "JOB_NOT_FOUND" | "JOB_NOT_ELIGIBLE" | "JOB_LOCKED" | "PILOT_CLOSED" | null;
 }
 
 /** D-052 — mirrors snapshot_request_closures (20261114120000). */
@@ -1122,6 +1175,11 @@ export const memoryAdapter: DbAdapter = {
         ? { outcome: "ALREADY_CREATED", pilotId: existing.id, projectId: existing.projectId }
         : { outcome: "IDEMPOTENCY_KEY_CONFLICT", pilotId: null, projectId: null };
     }
+    // As the SQL: between yesterday and 60 days from today, after the replay.
+    const today = currentDateUtc();
+    if (input.startsOn < addDays(today, -1) || input.startsOn > addDays(today, 60)) {
+      return { outcome: "START_DATE_OUT_OF_RANGE", pilotId: null, projectId: null };
+    }
     if ([...store.snapshotRequests.values()].some((r) => r.normalizedDomain === domain && LIVE_REQUEST_STATUSES.has(r.status))) {
       return { outcome: "DOMAIN_HAS_LIVE_REQUEST", pilotId: null, projectId: null };
     }
@@ -1196,8 +1254,9 @@ export const memoryAdapter: DbAdapter = {
     if (createHash("sha256").update(text, "utf8").digest("hex") !== input.promptHash) {
       return { outcome: "HASH_MISMATCH", ...none };
     }
-    if (questions.some((q) => q.promptHash === input.promptHash)) return { outcome: "DUPLICATE_QUESTION", ...none };
-    if (questions.length >= pilot.questionLimit) return { outcome: "LIMIT_REACHED", ...none };
+    const live = questions.filter((q) => q.retiredAt === null);
+    if (live.some((q) => q.promptHash === input.promptHash)) return { outcome: "DUPLICATE_QUESTION", ...none };
+    if (live.length >= pilot.questionLimit) return { outcome: "LIMIT_REACHED", ...none };
 
     const projectId = pilot.projectId;
     const now = nowIso();
@@ -1302,6 +1361,9 @@ export const memoryAdapter: DbAdapter = {
       addedBy: input.addedBy,
       idempotencyKey: input.idempotencyKey,
       requestFingerprint: fingerprint,
+      retiredBy: null,
+      retiredAt: null,
+      retireReason: null,
     };
     store.pilotQuestions.set(pilotQuestion.id, pilotQuestion);
     const slot: MemoryPilotQuestionProtocol = {
@@ -1325,8 +1387,57 @@ export const memoryAdapter: DbAdapter = {
     const pilot = store.pilots.get(input.pilotId);
     if (!pilot) return "PILOT_NOT_FOUND";
     if (pilot.status === "closed") return "ALREADY_CLOSED";
+    // As the SQL: refused while any of its measurements, a baseline or a
+    // retest of one, holds a live lease or a pending run request.
+    const nowMs = Date.now();
+    const questionIds = new Set([...store.pilotQuestions.values()].filter((q) => q.pilotId === pilot.id).map((q) => q.id));
+    const active = [...store.pilotQuestionProtocols.values()]
+      .filter((slot) => questionIds.has(slot.pilotQuestionId))
+      .some((slot) => jobsOfSlotProtocol(store, slot.protocolId).some((j) => jobIsActive(store, j, nowMs)));
+    if (active) return "PILOT_JOB_ACTIVE";
     store.pilots.set(pilot.id, { ...pilot, status: "closed", closedBy: input.closedBy, closedAt: nowIso(), closeReason: reason });
     return "CLOSED";
+  },
+
+  /** D-054 — mirrors retire_pilot_question, branch for branch. */
+  async retirePilotQuestion(input: RetirePilotQuestionInput): Promise<RetirePilotQuestionOutcome> {
+    const store = getStore();
+    const reason = input.reason?.trim() ?? "";
+    if (!input.pilotId || !input.pilotQuestionId || !input.retiredBy || reason.length < 10 || reason.length > 2000) {
+      throw new Error("invalid_retire_pilot_question_args");
+    }
+    const pilot = store.pilots.get(input.pilotId);
+    if (!pilot) return "PILOT_NOT_FOUND";
+    const question = store.pilotQuestions.get(input.pilotQuestionId);
+    if (!question || question.pilotId !== pilot.id) return "QUESTION_NOT_FOUND";
+    if (question.retiredAt !== null) return "ALREADY_RETIRED";
+    if (pilot.status !== "active") return "PILOT_CLOSED";
+    const slot = [...store.pilotQuestionProtocols.values()].find(
+      (s) => s.pilotQuestionId === question.id && s.engine === "perplexity_sonar" && s.phase === "baseline"
+    );
+    const job = slot ? [...store.protocolExecutionJobs.values()].find((j) => j.protocolId === slot.protocolId) : undefined;
+    if (!slot || !job) return "QUESTION_NOT_STOPPED";
+    const nowMs = Date.now();
+    if (jobsOfSlotProtocol(store, slot.protocolId).some((j) => jobIsActive(store, j, nowMs))) return "QUESTION_JOB_ACTIVE";
+    if (job.status !== "failed" && job.status !== "abandoned_exhausted") return "QUESTION_NOT_STOPPED";
+    if (job.status === "failed" && job.currentAttemptId === null && job.failureReason === "provider_error") {
+      const protocol = store.protocols.get(job.protocolId);
+      const attempts = [...store.protocolAttempts.values()];
+      const consumed = attempts.filter((a) => a.protocolId === job.protocolId && a.status !== "cancelled").length;
+      const sourceOk = attempts.some(
+        (a) => a.jobId === job.id && a.status === "failed" && a.terminalizedAt !== null
+          && a.baselineOrdinal === job.nextBaselineOrdinal
+          && !attempts.some((r) => r.retryOfAttemptId === a.id)
+          && !attempts.some((c) => c.jobId === job.id && c.baselineOrdinal === a.baselineOrdinal && c.status === "completed")
+      );
+      const capOk = protocol !== undefined
+        && consumed + 1 + Math.max((protocol.plannedBaselineRuns ?? 0) - job.nextBaselineOrdinal, 0) <= protocol.runCap;
+      if (sourceOk && capOk) return "QUESTION_RETRYABLE";
+    }
+    const retired = [...store.pilotQuestions.values()].filter((q) => q.pilotId === pilot.id && q.retiredAt !== null).length;
+    if (retired >= 5) return "RETIRE_LIMIT_REACHED";
+    store.pilotQuestions.set(question.id, { ...question, retiredBy: input.retiredBy, retiredAt: nowIso(), retireReason: reason });
+    return "RETIRED";
   },
 
   async rejectSnapshotRequest(
@@ -4243,14 +4354,18 @@ export const memoryAdapter: DbAdapter = {
     if (!job || job.projectId !== input.projectId) {
       return { outcome: "JOB_NOT_FOUND", requestId: null, expiresAt: null };
     }
-    // D-054 — as the SQL: a pilot's job runs only while its pilot is open
-    // and inside its window.
-    const pilotSlot = [...store.pilotQuestionProtocols.values()].find((s) => s.protocolId === job.protocolId);
-    if (pilotSlot) {
-      const pilotQuestion = store.pilotQuestions.get(pilotSlot.pilotQuestionId);
-      const pilot = pilotQuestion ? store.pilots.get(pilotQuestion.pilotId) : undefined;
-      if (pilot && (pilot.status !== "active" || currentDateUtc() > pilot.endsOn)) {
+    // D-054 — as the SQL: a pilot's job, its baseline or a retest of it,
+    // runs only while its pilot is open and inside its dates, and while its
+    // question is not retired.
+    const ofPilot = pilotOfProtocol(store, job.protocolId);
+    if (ofPilot) {
+      const today = currentDateUtc();
+      if (ofPilot.pilot.status !== "active" || today > ofPilot.pilot.endsOn) {
         return { outcome: "PILOT_CLOSED", requestId: null, expiresAt: null };
+      }
+      if (today < ofPilot.pilot.startsOn) return { outcome: "PILOT_NOT_STARTED", requestId: null, expiresAt: null };
+      if (ofPilot.question.retiredAt !== null) {
+        return { outcome: "PILOT_QUESTION_RETIRED", requestId: null, expiresAt: null };
       }
     }
     const leased = job.status === "claimed" || job.status === "running";
@@ -4336,7 +4451,7 @@ export const memoryAdapter: DbAdapter = {
       store.protocolJobRunRequests.set(request.id, { ...request, status: "expired", resolvedAt: nowIso() });
       return { outcome: "NO_RUN_REQUEST", job: null, claimToken: null };
     }
-    const refuse = (code: "JOB_NOT_FOUND" | "JOB_NOT_ELIGIBLE"): ClaimRequestedProtocolExecutionJobResult => {
+    const refuse = (code: "JOB_NOT_FOUND" | "JOB_NOT_ELIGIBLE" | "PILOT_CLOSED"): ClaimRequestedProtocolExecutionJobResult => {
       store.protocolJobRunRequests.set(request.id, {
         ...request, status: "refused", resolvedAt: nowIso(), refusalCode: code,
       });
@@ -4344,6 +4459,8 @@ export const memoryAdapter: DbAdapter = {
     };
     const job = store.protocolExecutionJobs.get(request.jobId);
     if (!job || job.projectId !== request.projectId) return refuse("JOB_NOT_FOUND");
+    // D-054 — as the SQL: the second barrier for a closed pilot's job.
+    if (pilotBlocks(pilotOfProtocol(store, job.protocolId))) return refuse("PILOT_CLOSED");
     const eligible =
       job.status === "queued" ||
       ((job.status === "claimed" || job.status === "running") &&
@@ -4426,6 +4543,8 @@ export const memoryAdapter: DbAdapter = {
     }
     const request = [...store.snapshotRequests.values()].find((r) => r.protocolId === job.protocolId);
     if (request && request.status !== "approved") return none("REQUEST_NOT_OPEN");
+    // D-054 — as the SQL: nothing is reserved for a closed pilot's job.
+    if (pilotBlocks(pilotOfProtocol(store, job.protocolId))) return none("PILOT_CLOSED");
 
     const source = store.protocolAttempts.get(input.sourceAttemptId);
     if (!source || source.projectId !== input.projectId || source.jobId !== input.jobId) {

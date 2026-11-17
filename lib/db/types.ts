@@ -1724,7 +1724,11 @@ export type RequestProtocolJobRunOutcome =
   | "JOB_ATTEMPTS_EXHAUSTED"
   | "JOB_NOT_RUNNABLE"
   /** D-054 — the job measures a pilot that is closed or past its end date. */
-  | "PILOT_CLOSED";
+  | "PILOT_CLOSED"
+  /** D-054 — the job measures a pilot whose start date has not come. */
+  | "PILOT_NOT_STARTED"
+  /** D-054 — the job measures a retired pilot question. */
+  | "PILOT_QUESTION_RETIRED";
 
 export interface RequestProtocolJobRunResult {
   outcome: RequestProtocolJobRunOutcome;
@@ -1739,7 +1743,9 @@ export type ClaimRequestedProtocolExecutionJobOutcome =
   | "NO_RUN_REQUEST"
   | "JOB_NOT_FOUND"
   | "JOB_NOT_ELIGIBLE"
-  | "JOB_LOCKED";
+  | "JOB_LOCKED"
+  /** D-054 — the job measures a pilot that is closed, outside its dates, or a retired question. */
+  | "PILOT_CLOSED";
 
 export interface ClaimRequestedProtocolExecutionJobResult {
   outcome: ClaimRequestedProtocolExecutionJobOutcome;
@@ -1775,7 +1781,9 @@ export type RetryFailedProtocolJobOutcome =
   | "NOT_A_PROVIDER_FAILURE"
   | "RUN_CAP_INSUFFICIENT_FOR_REMAINING_PLAN"
   /** The key was already used for a different failed run. */
-  | "IDEMPOTENCY_KEY_CONFLICT";
+  | "IDEMPOTENCY_KEY_CONFLICT"
+  /** D-054 — the job measures a pilot that is closed, outside its dates, or a retired question. */
+  | "PILOT_CLOSED";
 
 export interface RetryFailedProtocolJobResult {
   outcome: RetryFailedProtocolJobOutcome;
@@ -1809,7 +1817,9 @@ export type CreatePilotOutcome =
   | "ALREADY_CREATED"
   | "IDEMPOTENCY_KEY_CONFLICT"
   | "DOMAIN_HAS_LIVE_REQUEST"
-  | "DOMAIN_HAS_LIVE_PILOT";
+  | "DOMAIN_HAS_LIVE_PILOT"
+  /** The start date is before yesterday or more than 60 days ahead. */
+  | "START_DATE_OUT_OF_RANGE";
 
 export interface CreatePilotResult {
   outcome: CreatePilotOutcome;
@@ -1860,7 +1870,40 @@ export interface ClosePilotInput {
   reason: string;
 }
 
-export type ClosePilotOutcome = "CLOSED" | "ALREADY_CLOSED" | "PILOT_NOT_FOUND";
+export type ClosePilotOutcome =
+  | "CLOSED"
+  | "ALREADY_CLOSED"
+  | "PILOT_NOT_FOUND"
+  /** A measurement of the pilot holds a live lease or a pending run request. */
+  | "PILOT_JOB_ACTIVE";
+
+/**
+ * D-054 — retires a pilot question whose measurement can no longer finish.
+ * Its rows and evidence are kept; it stops counting toward the limit, its
+ * text may be added again, and it can no longer be run or retried.
+ */
+export interface RetirePilotQuestionInput {
+  pilotId: string;
+  pilotQuestionId: string;
+  /** The signed-in founder's user id. */
+  retiredBy: string;
+  reason: string;
+}
+
+export type RetirePilotQuestionOutcome =
+  | "RETIRED"
+  | "ALREADY_RETIRED"
+  | "PILOT_NOT_FOUND"
+  | "QUESTION_NOT_FOUND"
+  | "PILOT_CLOSED"
+  /** Its measurement holds a live lease or a pending run request. */
+  | "QUESTION_JOB_ACTIVE"
+  /** Its measurement is not stopped (failed or abandoned). */
+  | "QUESTION_NOT_STOPPED"
+  /** It stopped at the provider and can still be retried. */
+  | "QUESTION_RETRYABLE"
+  /** The pilot already has 5 retired questions. */
+  | "RETIRE_LIMIT_REACHED";
 
 /** D-052 — closes an approved request whose job ended in failure. */
 export interface CloseFailedSnapshotRequestInput {
@@ -2927,6 +2970,8 @@ export interface DbAdapter {
   addPilotQuestion(input: AddPilotQuestionInput): Promise<AddPilotQuestionResult>;
   /** D-054 — closes a pilot. */
   closePilot(input: ClosePilotInput): Promise<ClosePilotOutcome>;
+  /** D-054 — retires a pilot question whose measurement can no longer finish. */
+  retirePilotQuestion(input: RetirePilotQuestionInput): Promise<RetirePilotQuestionOutcome>;
   reserveSnapshotRequestProject(
     requestId: string
   ): Promise<SnapshotRequest | null>;

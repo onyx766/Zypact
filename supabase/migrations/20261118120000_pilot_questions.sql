@@ -21,17 +21,32 @@
 --      M4 question version.
 --   3. `pilot_question_protocols`: the per-engine slot. Only Perplexity
 --      Sonar is allowed until ChatGPT is wired (D-053 item 3).
---   4. `create_pilot`, `add_pilot_question`, `close_pilot`.
---   5. `request_protocol_job_run` (pilot step 1) is redefined with two
---      changes only: the console start `admin_pilot_run`, and a refusal
---      (`PILOT_CLOSED`) for a job of a pilot that is closed or past its end
---      date. The requested_via CHECK of `protocol_job_run_requests` gains
---      the same value.
+--   4. `create_pilot`, `add_pilot_question`, `close_pilot` and
+--      `retire_pilot_question`. A pilot starts between yesterday and 60
+--      days from today. A close is refused while any of the pilot's
+--      measurements is running or about to start.
+--   5. Three pilot step 1 functions are redefined, each byte for byte
+--      apart from its pilot block (scripts/test-pilot-questions.ts):
+--        `request_protocol_job_run`: the console start `admin_pilot_run`,
+--          and refusals for a job of a pilot that is closed or past its
+--          end date (`PILOT_CLOSED`), not yet started
+--          (`PILOT_NOT_STARTED`), or whose question is retired
+--          (`PILOT_QUESTION_RETIRED`), with the pilot row locked FOR SHARE;
+--        `claim_requested_protocol_execution_job`: the same states refuse
+--          the claim (`PILOT_CLOSED`), a second barrier;
+--        `retry_failed_protocol_job`: the same states refuse the retry
+--          (`PILOT_CLOSED`) before anything is reserved.
+--      Each covers a pilot's baseline and any retest of that baseline.
+--      The requested_via CHECK of `protocol_job_run_requests` gains
+--      `admin_pilot_run`, and its refusal_code CHECK gains `PILOT_CLOSED`.
 --
 -- Not changed: approval (`approve_buyer_question_version`,
--- `approve_protocol`), the queue (`enqueue_protocol_execution_job`), the
--- claim, admission, reservation, the worker, the report pass and every
--- request function. A pilot's jobs are never picked up by the report pass,
+-- `approve_protocol`), the queue (`enqueue_protocol_execution_job`),
+-- admission, reservation, the report pass and every request function. The
+-- older claims, `claim_protocol_execution_job` (0054) and
+-- `claim_protocol_execution_job_by_id` (0059), are not changed and do not
+-- check pilots; the live runner uses only the requested claim (D-052),
+-- and they stay for the M5 test harnesses. A pilot's jobs are never picked up by the report pass,
 -- which reads requests only, so nothing about a pilot is reported or sent
 -- by this migration.
 --
@@ -44,19 +59,26 @@
 -- Rollback / forward recovery, in the reverse of the deploy order (the web
 -- app, then the database):
 --   1. Roll the web app back. The old console never sends admin_pilot_run.
---   2. Restore pilot step 1's request_protocol_job_run and its CHECK:
---        re-apply section 1 of 20261114120000 for that function's body and
---        grants, then
+--   2. Restore pilot step 1's three functions and the two CHECKs:
+--        re-apply 20261114120000's bodies and grants of
+--        request_protocol_job_run, claim_requested_protocol_execution_job
+--        and retry_failed_protocol_job, then
 --        alter table public.protocol_job_run_requests
 --          drop constraint protocol_job_run_requests_requested_via_check;
 --        alter table public.protocol_job_run_requests
 --          add constraint protocol_job_run_requests_requested_via_check
 --          check (requested_via in ('admin_run_pipeline', 'admin_run_retest',
 --                                   'admin_founder_baseline', 'operator_cli'));
---      The second statement fails while a row records admin_pilot_run;
+--        alter table public.protocol_job_run_requests
+--          drop constraint protocol_job_run_requests_refusal_code_check;
+--        alter table public.protocol_job_run_requests
+--          add constraint protocol_job_run_requests_refusal_code_check
+--          check (refusal_code in ('JOB_NOT_FOUND', 'JOB_NOT_ELIGIBLE', 'JOB_LOCKED'));
+--      An add fails while a row records admin_pilot_run or PILOT_CLOSED;
 --      such rows are run-request history and are kept, so in that case
 --      leave the wider CHECK in place.
 --   3. Drop the rest:
+--        drop function if exists public.retire_pilot_question(uuid, uuid, uuid, text);
 --        drop function if exists public.close_pilot(uuid, uuid, text);
 --        drop function if exists public.add_pilot_question(uuid, uuid, text, text, text, text, date, uuid);
 --        drop function if exists public.create_pilot(uuid, text, text, text, text, integer, date, uuid);
@@ -121,7 +143,8 @@ create table if not exists public.pilot_questions (
   id                         uuid primary key default gen_random_uuid(),
   pilot_id                   uuid not null,
   project_id                 uuid not null,
-  ordinal                    integer not null check (ordinal between 1 and 20),
+  -- 20 live questions at most, plus at most 5 retired ones (D-054).
+  ordinal                    integer not null check (ordinal between 1 and 25),
   buyer_question_version_id  uuid not null,
   prompt_hash                text not null check (prompt_hash ~ '^[0-9a-f]{64}$'),
   -- D-052 item 4: who wrote the question.
@@ -137,7 +160,19 @@ create table if not exists public.pilot_questions (
   added_at                   timestamptz not null default now(),
   idempotency_key            uuid not null,
   request_fingerprint        text not null check (request_fingerprint ~ '^[0-9a-f]{32}$'),
+  -- D-054: a question whose measurement can no longer finish is retired,
+  -- never deleted. Its rows and evidence stay, it stops counting toward the
+  -- limit, and its approved text may be added again. Written only by
+  -- retire_pilot_question.
+  retired_by                 uuid null,
+  retired_at                 timestamptz null,
+  retire_reason              text null,
 
+  constraint pilot_questions_retire_check check (
+    (retired_at is null) = (retired_by is null)
+    and (retired_at is null) = (retire_reason is null)
+    and (retire_reason is null or char_length(btrim(retire_reason)) between 10 and 2000)
+  ),
   constraint pilot_questions_pilot_project_fk
     foreign key (pilot_id, project_id)
     references public.pilots (id, project_id)
@@ -148,10 +183,15 @@ create table if not exists public.pilot_questions (
     on delete restrict,
   constraint pilot_questions_id_project_key unique (id, project_id),
   constraint pilot_questions_ordinal_key unique (pilot_id, ordinal),
-  constraint pilot_questions_prompt_key unique (pilot_id, prompt_hash),
   constraint pilot_questions_version_key unique (buyer_question_version_id),
   constraint pilot_questions_idempotency_key unique (pilot_id, idempotency_key)
 );
+
+-- One live question per approved text in a pilot. A retired question does
+-- not count, so the same text can be measured again after a retirement.
+create unique index if not exists pilot_questions_one_live_prompt
+  on public.pilot_questions (pilot_id, prompt_hash)
+  where retired_at is null;
 
 create table if not exists public.pilot_question_protocols (
   id                 uuid primary key default gen_random_uuid(),
@@ -195,7 +235,7 @@ grant select on table public.pilot_question_protocols to service_role;
 comment on table public.pilots is
   'D-054: a managed pilot. Written only by create_pilot and close_pilot.';
 comment on table public.pilot_questions is
-  'D-054: an approved buyer question of a pilot. Written only by add_pilot_question.';
+  'D-054: an approved buyer question of a pilot. Written only by add_pilot_question and retire_pilot_question.';
 comment on table public.pilot_question_protocols is
   'D-054: the protocol measuring a pilot question on one engine. Written only by add_pilot_question.';
 
@@ -267,6 +307,15 @@ begin
     else
       return query select 'IDEMPOTENCY_KEY_CONFLICT'::text, null::uuid, null::uuid;
     end if;
+    return;
+  end if;
+
+  -- D-054: a pilot starts no earlier than yesterday and no later than 60
+  -- days from today, so a typo can neither open a window decades away nor
+  -- create a pilot that has already ended. Checked after the replay, so a
+  -- repeated press on a later day still answers the pilot it created.
+  if p_starts_on < current_date - 1 or p_starts_on > current_date + 60 then
+    return query select 'START_DATE_OUT_OF_RANGE'::text, null::uuid, null::uuid;
     return;
   end if;
 
@@ -360,6 +409,7 @@ declare
   v_existing       public.pilot_questions%rowtype;
   v_fingerprint    text;
   v_count          integer;
+  v_total          integer;
   v_project_id     uuid;
   v_question_id    uuid;
   v_version_id     uuid;
@@ -443,16 +493,21 @@ begin
     return;
   end if;
 
+  -- A retired question does not count: its text may be measured again.
   if exists (
     select 1 from public.pilot_questions q
      where q.pilot_id = p_pilot_id
        and q.prompt_hash = p_prompt_hash
+       and q.retired_at is null
   ) then
     return query select 'DUPLICATE_QUESTION'::text, null::uuid, null::uuid, null::uuid;
     return;
   end if;
 
-  select count(*) into v_count
+  -- The limit counts live questions; the ordinal follows every question,
+  -- retired ones included, so ordinals are never reused.
+  select count(*) filter (where q.retired_at is null), count(*)
+    into v_count, v_total
     from public.pilot_questions q
    where q.pilot_id = p_pilot_id;
 
@@ -550,7 +605,7 @@ begin
     question_provenance, customer_approval_ref, customer_approved_on,
     added_by, idempotency_key, request_fingerprint
   ) values (
-    p_pilot_id, v_project_id, v_count + 1, v_version_id, p_prompt_hash,
+    p_pilot_id, v_project_id, v_total + 1, v_version_id, p_prompt_hash,
     p_question_provenance, btrim(p_customer_approval_ref), p_customer_approved_on,
     p_added_by, p_idempotency_key, v_fingerprint
   )
@@ -572,8 +627,16 @@ $$;
 
 -- Records who closed the pilot, when and why. Jobs are not changed: a
 -- queued job may hold a reserved retry, and ending it here could strand
--- that reservation. request_protocol_job_run refuses every Run for a
--- closed pilot instead, so nothing more is measured.
+-- that reservation. Instead:
+--   * the close is refused (PILOT_JOB_ACTIVE) while any measurement of the
+--     pilot, a baseline or a retest of one, holds a live lease or has a
+--     pending run request, so nothing already started spends after the
+--     close. The founder waits for it to finish, then closes;
+--   * request_protocol_job_run and retry_failed_protocol_job take this
+--     row FOR SHARE before their pilot check, so neither can slip in
+--     between this check and the close;
+--   * claim_requested_protocol_execution_job refuses a closed pilot's job
+--     as a second barrier.
 create or replace function public.close_pilot(
     p_pilot_id uuid,
     p_closed_by uuid,
@@ -612,6 +675,29 @@ begin
     return;
   end if;
 
+  if exists (
+    select 1
+      from public.pilot_questions pq
+      join public.pilot_question_protocols pqp on pqp.pilot_question_id = pq.id
+      join public.protocols pr
+        on pr.id = pqp.protocol_id or pr.baseline_protocol_id = pqp.protocol_id
+      join public.protocol_execution_jobs j on j.protocol_id = pr.id
+     where pq.pilot_id = p_pilot_id
+       and (
+         (j.status in ('claimed', 'running') and j.lease_expires_at > now())
+         or exists (
+           select 1
+             from public.protocol_job_run_requests r
+            where r.job_id = j.id
+              and r.status = 'pending'
+              and r.expires_at > now()
+         )
+       )
+  ) then
+    return query select 'PILOT_JOB_ACTIVE'::text;
+    return;
+  end if;
+
   update public.pilots
      set status = 'closed',
          closed_by = p_closed_by,
@@ -621,6 +707,187 @@ begin
      and status = 'active';
 
   return query select 'CLOSED'::text;
+end;
+$$;
+
+-- =======================================================================
+-- 4b. Retire a pilot question whose measurement can no longer finish
+-- =======================================================================
+
+-- A question whose job ended `abandoned_exhausted`, or `failed` in a way
+-- the D-052 retry does not take, would otherwise stay in the pilot for
+-- good: Run and Retry refuse it, and the same text would be a duplicate.
+-- Retiring keeps every row and all evidence, stops the question counting
+-- toward the limit, lets its approved text be added again (a new question
+-- version, protocol and job, with fresh caps), and refuses any later Run
+-- or retry of it. At most 5 questions per pilot may be retired, which
+-- bounds the extra spend re-adding can cause.
+create or replace function public.retire_pilot_question(
+    p_pilot_id uuid,
+    p_pilot_question_id uuid,
+    p_retired_by uuid,
+    p_reason text
+  )
+returns table (
+  outcome text
+)
+language plpgsql
+security definer
+volatile
+set search_path = public, pg_temp
+as $$
+declare
+  v_pilot public.pilots%rowtype;
+  v_question public.pilot_questions%rowtype;
+  v_slot_protocol_id uuid;
+  v_job public.protocol_execution_jobs%rowtype;
+  v_protocol public.protocols%rowtype;
+  v_consumed integer;
+  v_retired integer;
+begin
+  if p_pilot_id is null or p_pilot_question_id is null or p_retired_by is null
+     or p_reason is null or char_length(btrim(p_reason)) not between 10 and 2000 then
+    raise exception using
+      errcode = '22023',
+      message = 'invalid_retire_pilot_question_args';
+  end if;
+
+  -- The lock add_pilot_question and close_pilot take, so the limit, the
+  -- duplicate rule and the retirement count are read under it. Every Run
+  -- and retry takes it FOR SHARE before its pilot check.
+  select p.* into v_pilot
+    from public.pilots p
+   where p.id = p_pilot_id
+   for update;
+
+  if not found then
+    return query select 'PILOT_NOT_FOUND'::text;
+    return;
+  end if;
+
+  select q.* into v_question
+    from public.pilot_questions q
+   where q.id = p_pilot_question_id
+     and q.pilot_id = p_pilot_id;
+
+  if not found then
+    return query select 'QUESTION_NOT_FOUND'::text;
+    return;
+  end if;
+
+  if v_question.retired_at is not null then
+    return query select 'ALREADY_RETIRED'::text;
+    return;
+  end if;
+
+  if v_pilot.status <> 'active' then
+    return query select 'PILOT_CLOSED'::text;
+    return;
+  end if;
+
+  select pqp.protocol_id into v_slot_protocol_id
+    from public.pilot_question_protocols pqp
+   where pqp.pilot_question_id = v_question.id
+     and pqp.engine = 'perplexity_sonar'
+     and pqp.phase = 'baseline';
+
+  select j.* into v_job
+    from public.protocol_execution_jobs j
+   where j.protocol_id = v_slot_protocol_id;
+
+  if not found then
+    return query select 'QUESTION_NOT_STOPPED'::text;
+    return;
+  end if;
+
+  -- Nothing of this question may be running or about to start: its
+  -- baseline job, or a retest of that baseline.
+  if exists (
+    select 1
+      from public.protocols pr
+      join public.protocol_execution_jobs j on j.protocol_id = pr.id
+     where (pr.id = v_slot_protocol_id or pr.baseline_protocol_id = v_slot_protocol_id)
+       and (
+         (j.status in ('claimed', 'running') and j.lease_expires_at > now())
+         or exists (
+           select 1
+             from public.protocol_job_run_requests r
+            where r.job_id = j.id
+              and r.status = 'pending'
+              and r.expires_at > now()
+         )
+       )
+  ) then
+    return query select 'QUESTION_JOB_ACTIVE'::text;
+    return;
+  end if;
+
+  if v_job.status not in ('failed', 'abandoned_exhausted') then
+    return query select 'QUESTION_NOT_STOPPED'::text;
+    return;
+  end if;
+
+  -- A run that failed at the provider and can still be retried is retried,
+  -- not retired. These are retry_failed_protocol_job's job, slot and
+  -- run-cap gates (pilot step 1); its call-level gates (an open or
+  -- unreceipted call) are not repeated, so such a job waits for its call
+  -- to be reconciled.
+  if v_job.status = 'failed'
+     and v_job.review_resolution is null
+     and v_job.current_attempt_id is null
+     and v_job.failure_reason = 'provider_error' then
+    select p.* into v_protocol
+      from public.protocols p
+     where p.id = v_job.protocol_id;
+
+    select count(*) into v_consumed
+      from public.protocol_attempts pa
+     where pa.protocol_id = v_job.protocol_id
+       and pa.status <> 'cancelled';
+
+    if exists (
+         select 1
+           from public.protocol_attempts pa
+          where pa.job_id = v_job.id
+            and pa.status = 'failed'
+            and pa.terminalized_at is not null
+            and pa.baseline_ordinal = v_job.next_baseline_ordinal
+            and not exists (
+              select 1 from public.protocol_attempts r where r.retry_of_attempt_id = pa.id
+            )
+            and not exists (
+              select 1 from public.protocol_attempts c
+               where c.job_id = v_job.id
+                 and c.baseline_ordinal = pa.baseline_ordinal
+                 and c.status = 'completed'
+            )
+       )
+       and v_consumed + 1
+             + greatest(coalesce(v_protocol.planned_baseline_runs, 0) - v_job.next_baseline_ordinal, 0)
+           <= v_protocol.run_cap then
+      return query select 'QUESTION_RETRYABLE'::text;
+      return;
+    end if;
+  end if;
+
+  select count(*) into v_retired
+    from public.pilot_questions q
+   where q.pilot_id = p_pilot_id
+     and q.retired_at is not null;
+
+  if v_retired >= 5 then
+    return query select 'RETIRE_LIMIT_REACHED'::text;
+    return;
+  end if;
+
+  update public.pilot_questions
+     set retired_by = p_retired_by,
+         retired_at = now(),
+         retire_reason = btrim(p_reason)
+   where id = v_question.id
+     and retired_at is null;
+
+  return query select 'RETIRED'::text;
 end;
 $$;
 
@@ -665,6 +932,10 @@ declare
   v_row public.protocol_job_run_requests%rowtype;
   v_found boolean := false;
   v_expires timestamptz;
+  -- D-054
+  v_pilot public.pilots%rowtype;
+  v_pilot_id uuid;
+  v_question_retired boolean := false;
 begin
   if p_job_id is null or p_project_id is null
      or p_requested_via is null
@@ -739,19 +1010,40 @@ begin
     return;
   end if;
 
-  -- D-054: a pilot's measurement runs only while its pilot is open and
-  -- inside its window. Closing a pilot changes no job, so this is what
-  -- stops a closed pilot from spending.
-  if exists (
-    select 1
-      from public.pilot_question_protocols pqp
-      join public.pilot_questions pq on pq.id = pqp.pilot_question_id
-      join public.pilots pl on pl.id = pq.pilot_id
-     where pqp.protocol_id = v_job.protocol_id
-       and (pl.status <> 'active' or current_date > pl.ends_on)
-  ) then
-    return query select 'PILOT_CLOSED'::text, null::uuid, null::timestamptz;
-    return;
+  -- D-054: a pilot's measurement, its baseline or a retest of that
+  -- baseline, runs only while its pilot is open and inside its dates, and
+  -- only while its question is not retired. The pilot row is locked FOR
+  -- SHARE, so this Run and close_pilot or retire_pilot_question (FOR
+  -- UPDATE) cannot interleave: whichever commits second sees the other.
+  select pq.pilot_id, pq.retired_at is not null
+    into v_pilot_id, v_question_retired
+    from public.pilot_question_protocols pqp
+    join public.pilot_questions pq on pq.id = pqp.pilot_question_id
+   where pqp.protocol_id = v_job.protocol_id
+      or pqp.protocol_id = (
+        select pr.baseline_protocol_id from public.protocols pr where pr.id = v_job.protocol_id
+      );
+
+  if v_pilot_id is not null then
+    select pl.* into v_pilot
+      from public.pilots pl
+     where pl.id = v_pilot_id
+     for share;
+
+    if v_pilot.status <> 'active' or current_date > v_pilot.ends_on then
+      return query select 'PILOT_CLOSED'::text, null::uuid, null::timestamptz;
+      return;
+    end if;
+
+    if current_date < v_pilot.starts_on then
+      return query select 'PILOT_NOT_STARTED'::text, null::uuid, null::timestamptz;
+      return;
+    end if;
+
+    if v_question_retired then
+      return query select 'PILOT_QUESTION_RETIRED'::text, null::uuid, null::timestamptz;
+      return;
+    end if;
   end if;
 
   -- A dead lease with no claims left is what the global claim's sweep turns
@@ -802,6 +1094,459 @@ end;
 $$;
 
 -- =======================================================================
+-- 6. The requested claim refuses a closed pilot's job (second barrier)
+-- =======================================================================
+
+alter table public.protocol_job_run_requests
+  drop constraint protocol_job_run_requests_refusal_code_check;
+alter table public.protocol_job_run_requests
+  add constraint protocol_job_run_requests_refusal_code_check
+  check (refusal_code in ('JOB_NOT_FOUND', 'JOB_NOT_ELIGIBLE', 'JOB_LOCKED', 'PILOT_CLOSED'));
+
+-- Pilot step 1's function, unchanged except for the pilot block after the
+-- job is found (scripts/test-pilot-questions.ts checks it byte for byte).
+-- The signature is unchanged, so `create or replace` keeps its grants;
+-- they are restated below.
+create or replace function public.claim_requested_protocol_execution_job(
+    p_worker_id text,
+    p_lease_seconds integer
+  )
+returns table (
+  outcome     text,
+  job         public.protocol_execution_jobs,
+  claim_token uuid
+)
+language plpgsql
+security definer
+volatile
+set search_path = public, pg_temp
+as $$
+declare
+  v_request public.protocol_job_run_requests%rowtype;
+  v_job public.protocol_execution_jobs%rowtype;
+  v_found boolean := false;
+  v_token uuid;
+begin
+  if p_worker_id is null or btrim(p_worker_id) = ''
+     or p_lease_seconds is null or p_lease_seconds <= 0 then
+    raise exception using
+      errcode = '22023',
+      message = 'invalid_claim_protocol_execution_job_args';
+  end if;
+
+  with abandoned as (
+    update public.protocol_execution_jobs j
+       set status = 'abandoned_exhausted', updated_at = now()
+     where j.status in ('claimed', 'running')
+       and j.lease_expires_at < now()
+       and j.attempt_count >= j.max_attempts
+    returning j.id, j.project_id
+  ),
+  inserted_alerts as (
+    insert into public.protocol_execution_job_alerts (project_id, job_id, event_type, reason_code)
+    select project_id, id, 'abandoned_exhausted', 'attempts_exhausted'
+      from abandoned
+    returning alert_event_id
+  )
+  insert into public.protocol_execution_job_alert_deliveries (alert_event_id)
+  select alert_event_id from inserted_alerts;
+
+  select r.* into v_request
+    from public.protocol_job_run_requests r
+   where r.status = 'pending'
+   for update;
+
+  if not found then
+    return query select 'NO_RUN_REQUEST'::text, null::public.protocol_execution_jobs, null::uuid;
+    return;
+  end if;
+
+  if v_request.expires_at <= now() then
+    update public.protocol_job_run_requests r
+       set status = 'expired', resolved_at = now()
+     where r.id = v_request.id;
+    return query select 'NO_RUN_REQUEST'::text, null::public.protocol_execution_jobs, null::uuid;
+    return;
+  end if;
+
+  -- Lock the named row first, evaluate second, and never step over it.
+  begin
+    select j.* into v_job
+      from public.protocol_execution_jobs j
+     where j.id = v_request.job_id
+       and j.project_id = v_request.project_id
+     for update nowait;
+    v_found := found;
+  exception
+    when lock_not_available then
+      update public.protocol_job_run_requests r
+         set status = 'refused', resolved_at = now(), refusal_code = 'JOB_LOCKED'
+       where r.id = v_request.id;
+      return query select 'JOB_LOCKED'::text, null::public.protocol_execution_jobs, null::uuid;
+      return;
+  end;
+
+  if not v_found then
+    update public.protocol_job_run_requests r
+       set status = 'refused', resolved_at = now(), refusal_code = 'JOB_NOT_FOUND'
+     where r.id = v_request.id;
+    return query select 'JOB_NOT_FOUND'::text, null::public.protocol_execution_jobs, null::uuid;
+    return;
+  end if;
+
+  -- D-054: the second barrier. A job of a pilot that is closed or outside
+  -- its dates, or whose question is retired (its baseline, or a retest of
+  -- that baseline), is never claimed, even when its run request was
+  -- recorded before the pilot changed: a pilot can pass its end date while
+  -- a request waits. close_pilot already refuses while a request is
+  -- pending. Read without a lock: nothing here is written to the pilot.
+  if exists (
+    select 1
+      from public.pilot_question_protocols pqp
+      join public.pilot_questions pq on pq.id = pqp.pilot_question_id
+      join public.pilots pl on pl.id = pq.pilot_id
+     where (pqp.protocol_id = v_job.protocol_id
+            or pqp.protocol_id = (
+              select pr.baseline_protocol_id from public.protocols pr where pr.id = v_job.protocol_id
+            ))
+       and (pl.status <> 'active'
+            or current_date > pl.ends_on
+            or current_date < pl.starts_on
+            or pq.retired_at is not null)
+  ) then
+    update public.protocol_job_run_requests r
+       set status = 'refused', resolved_at = now(), refusal_code = 'PILOT_CLOSED'
+     where r.id = v_request.id;
+    return query select 'PILOT_CLOSED'::text, null::public.protocol_execution_jobs, null::uuid;
+    return;
+  end if;
+
+  if not (
+    v_job.status = 'queued'
+    or (v_job.status in ('claimed', 'running')
+        and v_job.lease_expires_at < now()
+        and v_job.attempt_count < v_job.max_attempts)
+  ) then
+    update public.protocol_job_run_requests r
+       set status = 'refused', resolved_at = now(), refusal_code = 'JOB_NOT_ELIGIBLE'
+     where r.id = v_request.id;
+    return query select 'JOB_NOT_ELIGIBLE'::text, null::public.protocol_execution_jobs, null::uuid;
+    return;
+  end if;
+
+  v_token := gen_random_uuid();
+
+  update public.protocol_execution_jobs
+     set status = 'claimed',
+         worker_id = p_worker_id,
+         claim_token = v_token,
+         lease_expires_at = now() + make_interval(secs => p_lease_seconds),
+         attempt_count = attempt_count + 1,
+         updated_at = now()
+   where id = v_job.id
+  returning * into v_job;
+
+  update public.protocol_job_run_requests r
+     set status = 'consumed', resolved_at = now(), consumed_by_worker = p_worker_id
+   where r.id = v_request.id;
+
+  return query select 'CLAIMED'::text, v_job, v_token;
+end;
+$$;
+
+-- =======================================================================
+-- 7. The provider-failure retry refuses a closed pilot's job
+-- =======================================================================
+
+-- Pilot step 1's function, unchanged except for three declarations and the
+-- pilot block after the request check (scripts/test-pilot-questions.ts
+-- checks both byte for byte). The signature is unchanged, so
+-- `create or replace` keeps its grants; they are restated below.
+create or replace function public.retry_failed_protocol_job(
+    p_job_id uuid,
+    p_project_id uuid,
+    p_actor uuid,
+    p_reason text,
+    p_source_attempt_id uuid,
+    p_idempotency_key text
+  )
+returns table (
+  outcome           text,
+  denial_code       text,
+  new_attempt_id    uuid
+)
+language plpgsql
+security definer
+volatile
+set search_path = public, pg_temp
+as $$
+declare
+  v_job public.protocol_execution_jobs%rowtype;
+  v_protocol public.protocols%rowtype;
+  v_source public.protocol_attempts%rowtype;
+  v_perplexity public.protocol_external_calls%rowtype;
+  v_analysis public.protocol_external_calls%rowtype;
+  v_request_status text;
+  v_consumed integer;
+  v_key text;
+  v_result record;
+  v_replay_perplexity numeric;
+  v_replay_analysis numeric;
+  -- D-054
+  v_pilot public.pilots%rowtype;
+  v_pilot_id uuid;
+  v_question_retired boolean := false;
+begin
+  if p_job_id is null or p_project_id is null or p_actor is null
+     or p_reason is null or char_length(btrim(p_reason)) not between 10 and 2000
+     or p_source_attempt_id is null
+     or p_idempotency_key is null or btrim(p_idempotency_key) = ''
+     or char_length(p_idempotency_key) > 200 then
+    raise exception using
+      errcode = '22023',
+      message = 'invalid_retry_failed_protocol_job_args';
+  end if;
+
+  -- Founder console retries share the operator-action key space with the
+  -- worker's own operator retries, under their own prefix.
+  v_key := 'failed-job-retry:' || p_idempotency_key;
+
+  select j.* into v_job
+    from public.protocol_execution_jobs j
+   where j.id = p_job_id and j.project_id = p_project_id
+   for update;
+
+  if not found then
+    return query select 'JOB_NOT_FOUND'::text, null::text, null::uuid;
+    return;
+  end if;
+
+  -- Replay first, whatever the job's status is now (the D-021 ordering). The
+  -- recorded decision is answered by authorize_operator_retry itself, which
+  -- compares the request's fingerprint (the source run and its reserved
+  -- amounts): the same key for a different failed run is a conflict, never
+  -- the first run's answer.
+  if exists (
+    select 1 from public.protocol_operator_actions a
+     where a.project_id = p_project_id
+       and a.job_id = p_job_id
+       and a.idempotency_key = v_key
+  ) then
+    select ec.reserved_cost_usd into v_replay_perplexity
+      from public.protocol_external_calls ec
+     where ec.protocol_attempt_id = p_source_attempt_id
+       and ec.call_kind = 'perplexity' and ec.generation = 1;
+    select ec.reserved_cost_usd into v_replay_analysis
+      from public.protocol_external_calls ec
+     where ec.protocol_attempt_id = p_source_attempt_id
+       and ec.call_kind = 'analysis' and ec.generation = 1;
+
+    select * into v_result
+      from public.authorize_operator_retry(
+        p_job_id, p_project_id, p_actor::text, btrim(p_reason), 'retry_full_attempt',
+        p_source_attempt_id, coalesce(v_replay_analysis, 0), v_key,
+        null, coalesce(v_replay_perplexity, 0)
+      );
+
+    if v_result.status = 'APPROVED' then
+      return query select 'APPROVED'::text, null::text, (v_result.new_attempt).id;
+    elsif v_result.status = 'DENIED' then
+      return query select 'DENIED'::text, v_result.denial_code::text, null::uuid;
+    else
+      return query select 'IDEMPOTENCY_KEY_CONFLICT'::text, null::text, null::uuid;
+    end if;
+    return;
+  end if;
+
+  if v_job.status <> 'failed' then
+    return query select 'JOB_NOT_FAILED'::text, null::text, null::uuid;
+    return;
+  end if;
+
+  -- A job the founder closed through review, a cap failure, or a job still
+  -- pointing at a run is final here.
+  if v_job.review_resolution is not null
+     or v_job.current_attempt_id is not null
+     or v_job.failure_reason is distinct from 'provider_error' then
+    return query select 'JOB_NOT_RETRYABLE'::text, null::text, null::uuid;
+    return;
+  end if;
+
+  -- A request that launched this job and has since been closed is final.
+  -- A retest job has no snapshot request; its protocol status governs it.
+  select r.status into v_request_status
+    from public.snapshot_requests r
+   where r.protocol_id = v_job.protocol_id;
+
+  if found and v_request_status <> 'approved' then
+    return query select 'REQUEST_NOT_OPEN'::text, null::text, null::uuid;
+    return;
+  end if;
+
+  -- D-054: a pilot's measurement is retried only while its pilot is open
+  -- and inside its dates, and only while its question is not retired, so
+  -- nothing is reserved for a job that could never be run. The pilot row
+  -- is locked FOR SHARE, as for a Run, so a retry and close_pilot or
+  -- retire_pilot_question cannot interleave.
+  select pq.pilot_id, pq.retired_at is not null
+    into v_pilot_id, v_question_retired
+    from public.pilot_question_protocols pqp
+    join public.pilot_questions pq on pq.id = pqp.pilot_question_id
+   where pqp.protocol_id = v_job.protocol_id
+      or pqp.protocol_id = (
+        select pr.baseline_protocol_id from public.protocols pr where pr.id = v_job.protocol_id
+      );
+
+  if v_pilot_id is not null then
+    select pl.* into v_pilot
+      from public.pilots pl
+     where pl.id = v_pilot_id
+     for share;
+
+    if v_pilot.status <> 'active'
+       or current_date > v_pilot.ends_on
+       or current_date < v_pilot.starts_on
+       or v_question_retired then
+      return query select 'PILOT_CLOSED'::text, null::text, null::uuid;
+      return;
+    end if;
+  end if;
+
+  select pa.* into v_source
+    from public.protocol_attempts pa
+   where pa.id = p_source_attempt_id
+     and pa.project_id = p_project_id
+     and pa.job_id = p_job_id
+   for update;
+
+  if not found then
+    return query select 'SOURCE_ATTEMPT_NOT_OWNED_BY_JOB'::text, null::text, null::uuid;
+    return;
+  end if;
+
+  -- The newest run of the slot that failed: terminal `failed`, in the slot
+  -- the job stopped at, never retried, with no completed run in its slot.
+  if v_source.status <> 'failed'
+     or v_source.terminalized_at is null
+     or v_source.baseline_ordinal is distinct from v_job.next_baseline_ordinal
+     or exists (
+       select 1 from public.protocol_attempts pa
+        where pa.retry_of_attempt_id = v_source.id
+     )
+     or exists (
+       select 1 from public.protocol_attempts pa
+        where pa.job_id = p_job_id
+          and pa.baseline_ordinal = v_source.baseline_ordinal
+          and pa.status = 'completed'
+     ) then
+    return query select 'SOURCE_ATTEMPT_NOT_RETRYABLE'::text, null::text, null::uuid;
+    return;
+  end if;
+
+  -- No call of the run may be open or sent without a receipt.
+  if exists (
+    select 1 from public.protocol_external_calls ec
+     where ec.protocol_attempt_id = v_source.id
+       and (
+         ec.status in ('reserved', 'in_progress')
+         or (ec.request_sent_at is not null
+             and not exists (select 1 from public.provider_call_receipts r where r.external_call_id = ec.id)
+             and not exists (select 1 from public.analysis_call_receipts r where r.external_call_id = ec.id))
+       )
+  ) then
+    return query select 'AMBIGUOUS_CALL_PRESENT'::text, null::text, null::uuid;
+    return;
+  end if;
+
+  select ec.* into v_perplexity
+    from public.protocol_external_calls ec
+   where ec.protocol_attempt_id = v_source.id
+     and ec.call_kind = 'perplexity'
+     and ec.generation = 1;
+
+  if not found
+     or v_perplexity.status <> 'failed'
+     or not exists (
+       select 1 from public.provider_call_receipts r where r.external_call_id = v_perplexity.id
+     ) then
+    return query select 'NOT_A_PROVIDER_FAILURE'::text, null::text, null::uuid;
+    return;
+  end if;
+
+  select ec.* into v_analysis
+    from public.protocol_external_calls ec
+   where ec.protocol_attempt_id = v_source.id
+     and ec.call_kind = 'analysis'
+     and ec.generation = 1;
+
+  if not found then
+    return query select 'NOT_A_PROVIDER_FAILURE'::text, null::text, null::uuid;
+    return;
+  end if;
+
+  -- The retry must leave room in the run cap for the rest of the plan; a
+  -- paid retry that cannot finish it is refused before anything is reserved.
+  select p.* into v_protocol
+    from public.protocols p
+   where p.id = v_job.protocol_id and p.project_id = p_project_id;
+
+  select count(*) into v_consumed
+    from public.protocol_attempts pa
+   where pa.protocol_id = v_job.protocol_id
+     and pa.status <> 'cancelled';
+
+  if v_consumed + 1
+       + greatest(coalesce(v_protocol.planned_baseline_runs, 0) - v_job.next_baseline_ordinal, 0)
+     > v_protocol.run_cap then
+    return query select 'RUN_CAP_INSUFFICIENT_FOR_REMAINING_PLAN'::text, null::text, null::uuid;
+    return;
+  end if;
+
+  -- Reopen for review, then authorise through the one operator-retry path.
+  update public.protocol_execution_jobs
+     set status = 'needs_review',
+         needs_review_reason = 'operator_retry_of_failed_job',
+         updated_at = now()
+   where id = p_job_id;
+
+  select * into v_result
+    from public.authorize_operator_retry(
+      p_job_id, p_project_id, p_actor::text, btrim(p_reason), 'retry_full_attempt',
+      v_source.id, v_analysis.reserved_cost_usd, v_key,
+      null, v_perplexity.reserved_cost_usd
+    );
+
+  if v_result.status = 'APPROVED' then
+    -- Queued again with a fresh claim budget, as reactivate_abandoned_job
+    -- does (D-024). The earlier failure stays on the failed run
+    -- (termination_reason) and in the operator-action record.
+    update public.protocol_execution_jobs
+       set attempt_count = 0,
+           worker_id = null,
+           claim_token = null,
+           lease_expires_at = null,
+           failure_reason = null,
+           updated_at = now()
+     where id = p_job_id;
+
+    return query select 'APPROVED'::text, null::text, (v_result.new_attempt).id;
+    return;
+  end if;
+
+  -- A denied retry leaves the job exactly as it was. The denial stays
+  -- recorded, so a replay of the same key answers the same way.
+  update public.protocol_execution_jobs
+     set status = 'failed',
+         needs_review_reason = null,
+         failure_reason = v_job.failure_reason,
+         updated_at = now()
+   where id = p_job_id;
+
+  return query select 'DENIED'::text, v_result.denial_code::text, null::uuid;
+end;
+$$;
+
+-- =======================================================================
 -- Privileges: service role only.
 -- =======================================================================
 
@@ -824,3 +1569,18 @@ revoke all on function public.request_protocol_job_run(uuid, uuid, text, uuid, i
 revoke all on function public.request_protocol_job_run(uuid, uuid, text, uuid, integer) from anon;
 revoke all on function public.request_protocol_job_run(uuid, uuid, text, uuid, integer) from authenticated;
 grant execute on function public.request_protocol_job_run(uuid, uuid, text, uuid, integer) to service_role;
+
+revoke all on function public.retire_pilot_question(uuid, uuid, uuid, text) from public;
+revoke all on function public.retire_pilot_question(uuid, uuid, uuid, text) from anon;
+revoke all on function public.retire_pilot_question(uuid, uuid, uuid, text) from authenticated;
+grant execute on function public.retire_pilot_question(uuid, uuid, uuid, text) to service_role;
+
+revoke all on function public.claim_requested_protocol_execution_job(text, integer) from public;
+revoke all on function public.claim_requested_protocol_execution_job(text, integer) from anon;
+revoke all on function public.claim_requested_protocol_execution_job(text, integer) from authenticated;
+grant execute on function public.claim_requested_protocol_execution_job(text, integer) to service_role;
+
+revoke all on function public.retry_failed_protocol_job(uuid, uuid, uuid, text, uuid, text) from public;
+revoke all on function public.retry_failed_protocol_job(uuid, uuid, uuid, text, uuid, text) from anon;
+revoke all on function public.retry_failed_protocol_job(uuid, uuid, uuid, text, uuid, text) from authenticated;
+grant execute on function public.retry_failed_protocol_job(uuid, uuid, uuid, text, uuid, text) to service_role;

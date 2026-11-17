@@ -17,6 +17,7 @@ export interface PilotSummary {
   startsOn: string;
   endsOn: string;
   createdAt: string;
+  /** Live questions: a retired question does not count toward the limit. */
   questionCount: number;
 }
 
@@ -35,6 +36,9 @@ export interface PilotQuestionRow {
   customerApprovalRef: string;
   customerApprovedOn: string;
   addedAt: string;
+  /** D-054 — set when the question was retired; it is then never measured again. */
+  retiredAt: string | null;
+  retireReason: string | null;
   /** The Perplexity baseline measurement. */
   perplexity: PilotMeasurement | null;
 }
@@ -79,7 +83,8 @@ export async function listPilots(client: SupabaseClient, limit = 100): Promise<P
   const { data: questions, error: qError } = await client
     .from("pilot_questions")
     .select("pilot_id")
-    .in("pilot_id", rows.map((r) => String(r.id)));
+    .in("pilot_id", rows.map((r) => String(r.id)))
+    .is("retired_at", null);
   if (qError) throw qError;
   const counts = new Map<string, number>();
   for (const q of (questions ?? []) as Array<Record<string, unknown>>) {
@@ -107,7 +112,7 @@ export async function loadPilot(
   const { data: questionRows, error: qError } = await client
     .from("pilot_questions")
     .select(
-      "id,ordinal,buyer_question_version_id,question_provenance,customer_approval_ref,customer_approved_on,added_at"
+      "id,ordinal,buyer_question_version_id,question_provenance,customer_approval_ref,customer_approved_on,added_at,retired_at,retire_reason"
     )
     .eq("pilot_id", pilotId)
     .order("ordinal", { ascending: true });
@@ -115,7 +120,7 @@ export async function loadPilot(
   const qs = (questionRows ?? []) as Array<Record<string, unknown>>;
 
   const pilot: PilotDetail = {
-    ...summary(p, qs.length),
+    ...summary(p, qs.filter((q) => !q.retired_at).length),
     websiteUrl: String(p.website_url),
     siteControlNote: String(p.site_control_note),
     closedAt: p.closed_at ? String(p.closed_at) : null,
@@ -194,6 +199,8 @@ export async function loadPilot(
       customerApprovalRef: String(q.customer_approval_ref),
       customerApprovedOn: String(q.customer_approved_on),
       addedAt: String(q.added_at),
+      retiredAt: q.retired_at ? String(q.retired_at) : null,
+      retireReason: q.retire_reason ? String(q.retire_reason) : null,
       perplexity: protocolId ? measurements.get(protocolId) ?? null : null,
     };
   });
@@ -203,7 +210,10 @@ export async function loadPilot(
 /** The pilot state a Run or Retry needs, or null when the question is not this pilot's. */
 export interface PilotQuestionTarget {
   pilotStatus: "active" | "closed";
+  startsOn: string;
   endsOn: string;
+  /** D-054 — a retired question is never run or retried again. */
+  retired: boolean;
   protocolId: string;
   job: {
     id: string;
@@ -222,7 +232,7 @@ export async function resolvePilotQuestionTarget(
 ): Promise<PilotQuestionTarget | null> {
   const { data: pilotRow, error } = await client
     .from("pilots")
-    .select("id,status,ends_on")
+    .select("id,status,starts_on,ends_on")
     .eq("id", pilotId)
     .maybeSingle();
   if (error) throw error;
@@ -230,7 +240,7 @@ export async function resolvePilotQuestionTarget(
 
   const { data: questionRow, error: qError } = await client
     .from("pilot_questions")
-    .select("id,pilot_id")
+    .select("id,pilot_id,retired_at")
     .eq("id", pilotQuestionId)
     .eq("pilot_id", pilotId)
     .maybeSingle();
@@ -263,7 +273,9 @@ export async function resolvePilotQuestionTarget(
   const planned = (protocolRow as Record<string, unknown> | null)?.planned_baseline_runs;
   return {
     pilotStatus: p.status === "closed" ? "closed" : "active",
+    startsOn: String(p.starts_on),
     endsOn: String(p.ends_on),
+    retired: Boolean((questionRow as Record<string, unknown>).retired_at),
     protocolId,
     job: j
       ? {
@@ -288,4 +300,9 @@ export async function pilotProtocolIds(client: SupabaseClient): Promise<Set<stri
 /** True when a pilot no longer measures: closed, or past its end date. */
 export function pilotIsOver(status: "active" | "closed", endsOn: string, today: string): boolean {
   return status !== "active" || today > endsOn;
+}
+
+/** D-054 — true before a pilot's start date: its questions cannot be run yet. */
+export function pilotNotStarted(startsOn: string, today: string): boolean {
+  return today < startsOn;
 }

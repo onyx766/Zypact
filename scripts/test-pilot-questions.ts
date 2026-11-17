@@ -2,13 +2,16 @@
 /**
  * Pilot questions (D-054), offline.
  *
- *   M  the memory mirrors of create_pilot, add_pilot_question, close_pilot
- *      and the pilot gate in request_protocol_job_run, branch for branch;
+ *   M  the memory mirrors of create_pilot, add_pilot_question, close_pilot,
+ *      retire_pilot_question and the pilot gates of the Run request, the
+ *      requested claim and the retry, branch for branch, including a retest
+ *      of a pilot baseline;
  *   W  the real worker loop on the memory adapter: a pilot question's Run
  *      claims that question's job only, its five runs send the approved
  *      question for the pilot's company, and a closed pilot runs nothing;
- *   S  static contracts: the migration (including the two parity checks
- *      against pilot step 1), the routes, the pages and the preflight;
+ *   S  static contracts: the migration (including the parity checks of
+ *      the three redefinitions and the launch sequence against pilot step
+ *      1), the routes, the pages and the preflight;
  *   C  copy: the Run confirmation, refusals and labels.
  *
  * The same rules against a real PostgreSQL are in test-pilot-questions-db.ts.
@@ -57,6 +60,7 @@ const daysAgo = (n: number) => {
   d.setUTCDate(d.getUTCDate() - n);
   return d.toISOString().slice(0, 10);
 };
+const daysAhead = (n: number) => daysAgo(-n);
 
 const OPTS: WorkerOptions = {
   workerId: "pilot-questions", leaseSeconds: 30, idleBackoffMs: 1, maxBackoffMs: 2,
@@ -238,6 +242,141 @@ async function main(): Promise<void> {
   check("M39 the website can start a new pilot once the old one is closed",
     (await db.createPilot(createInput("pilot-m.example"))).outcome === "CREATED");
 
+  /* M: the review's fixes (D-054) ----------------------------------------- */
+  console.log("\n[M] dates, closing, the claim barrier, retests and retiring");
+  const setJob = (jobId: string, over: Partial<ProtocolExecutionJob>) => {
+    const j = store().protocolExecutionJobs.get(jobId)!;
+    store().protocolExecutionJobs.set(jobId, { ...j, ...over });
+  };
+  const setPilot = (pilotId: string, over: Record<string, unknown>) => {
+    const row = store().pilots.get(pilotId)!;
+    store().pilots.set(pilotId, { ...row, ...over } as typeof row);
+  };
+  const claimNow = () => db.claimRequestedProtocolExecutionJob({ workerId: "pilot-questions", leaseSeconds: 30 });
+  const runRequestOf = (jobId: string) =>
+    [...(store() as unknown as { protocolJobRunRequests: Map<string, { jobId: string; status: string; refusalCode: string | null }> })
+      .protocolJobRunRequests.values()].filter((r) => r.jobId === jobId);
+
+  // Finding 3: the start date is bounded, and a Run waits for it.
+  check("M40 a start date two days ago is refused",
+    (await db.createPilot(createInput("pilot-d1.example", { startsOn: daysAgo(2) }))).outcome === "START_DATE_OUT_OF_RANGE");
+  check("M41 a start date 61 days ahead is refused",
+    (await db.createPilot(createInput("pilot-d1.example", { startsOn: daysAhead(61) }))).outcome === "START_DATE_OUT_OF_RANGE");
+  const fromYesterdayInput = createInput("pilot-d2.example", { startsOn: daysAgo(1) });
+  const fromYesterday = await db.createPilot(fromYesterdayInput);
+  const later = await db.createPilot(createInput("pilot-d3.example", { startsOn: daysAhead(60) }));
+  check("M42 yesterday and 60 days ahead are accepted", fromYesterday.outcome === "CREATED" && later.outcome === "CREATED");
+  check("M43 the replay is checked before the date window: the same key with an out-of-range date is a conflict",
+    (await db.createPilot({ ...fromYesterdayInput, startsOn: daysAgo(5) })).outcome === "IDEMPOTENCY_KEY_CONFLICT");
+  const laterQ = await db.addPilotQuestion(addInput(later.pilotId!, question(400)));
+  check("M44 questions can be added before the start, but their Run is refused and nothing is recorded",
+    laterQ.outcome === "ADDED" && (await runFor(laterQ.jobId!)).outcome === "PILOT_NOT_STARTED" && runRequestOf(laterQ.jobId!).length === 0);
+
+  // Finding 1: a close waits for a pending Run or a live lease.
+  const c1 = await db.createPilot(createInput("pilot-c1.example"));
+  const c1q = await db.addPilotQuestion(addInput(c1.pilotId!, question(410)));
+  const c1run = await runFor(c1q.jobId!);
+  check("M45 a pilot with a pending Run cannot be closed",
+    c1run.outcome === "REQUESTED"
+      && (await db.closePilot({ pilotId: c1.pilotId!, closedBy: FOUNDER, reason: "The customer ended the pilot early." })) === "PILOT_JOB_ACTIVE"
+      && store().pilots.get(c1.pilotId!)?.status === "active");
+  await db.cancelProtocolJobRunRequest(c1run.requestId!);
+  check("M46 once the Run is withdrawn, it closes",
+    (await db.closePilot({ pilotId: c1.pilotId!, closedBy: FOUNDER, reason: "The customer ended the pilot early." })) === "CLOSED");
+  const c2 = await db.createPilot(createInput("pilot-c2.example"));
+  const c2q = await db.addPilotQuestion(addInput(c2.pilotId!, question(420)));
+  setJob(c2q.jobId!, { status: "running", leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() }); // test setup: a run in progress
+  const c2busy = await db.closePilot({ pilotId: c2.pilotId!, closedBy: FOUNDER, reason: "The customer ended the pilot early." });
+  setJob(c2q.jobId!, { leaseExpiresAt: new Date(Date.now() - 1_000).toISOString() }); // test setup: its lease lapses
+  check("M47 a measurement holding a live lease blocks the close; once its lease lapses, the pilot closes",
+    c2busy === "PILOT_JOB_ACTIVE"
+      && (await db.closePilot({ pilotId: c2.pilotId!, closedBy: FOUNDER, reason: "The customer ended the pilot early." })) === "CLOSED");
+  check("M48 the lapsed job of the closed pilot cannot be resumed", (await runFor(c2q.jobId!)).outcome === "PILOT_CLOSED");
+
+  // Finding 1, second barrier: a request recorded before the pilot ended is refused at the claim.
+  const c3 = await db.createPilot(createInput("pilot-c3.example"));
+  const c3q = await db.addPilotQuestion(addInput(c3.pilotId!, question(430)));
+  check("M49 a Run for an open pilot is recorded", (await runFor(c3q.jobId!)).outcome === "REQUESTED");
+  setPilot(c3.pilotId!, { startsOn: daysAgo(91), endsOn: daysAgo(1) }); // test setup: the pilot ends while the request waits
+  const c3claim = await claimNow();
+  check("M50 the claim refuses that job, records the refusal, and leaves the job queued",
+    c3claim.outcome === "PILOT_CLOSED" && c3claim.job === null
+      && runRequestOf(c3q.jobId!).every((r) => r.status === "refused" && r.refusalCode === "PILOT_CLOSED")
+      && store().protocolExecutionJobs.get(c3q.jobId!)?.status === "queued");
+
+  // Finding 2: a retest of a pilot baseline is gated like the baseline.
+  const r1 = await db.createPilot(createInput("pilot-r1.example"));
+  const r1q = await db.addPilotQuestion(addInput(r1.pilotId!, question(440)));
+  const baseline = store().protocols.get(r1q.protocolId!)!;
+  const retestProtocol: Protocol = { ...baseline, id: randomUUID(), baselineProtocolId: baseline.id }; // test setup: what create_retest_protocol writes
+  store().protocols.set(retestProtocol.id, retestProtocol);
+  const baselineJob = store().protocolExecutionJobs.get(r1q.jobId!)!;
+  const retestJob: ProtocolExecutionJob = { ...baselineJob, id: randomUUID(), protocolId: retestProtocol.id, status: "queued" };
+  store().protocolExecutionJobs.set(retestJob.id, retestJob);
+  const retestRun = await runFor(retestJob.id);
+  check("M51 a pilot baseline's retest can be run while the pilot is open, and blocks its close",
+    retestRun.outcome === "REQUESTED"
+      && (await db.closePilot({ pilotId: r1.pilotId!, closedBy: FOUNDER, reason: "The customer ended the pilot early." })) === "PILOT_JOB_ACTIVE");
+  setPilot(r1.pilotId!, { status: "closed", closedBy: FOUNDER, closedAt: new Date().toISOString(), closeReason: "Closed for the test." }); // test setup
+  check("M52 the claim refuses the closed pilot's retest", (await claimNow()).outcome === "PILOT_CLOSED");
+  check("M53 a Run for the closed pilot's retest is refused", (await runFor(retestJob.id)).outcome === "PILOT_CLOSED");
+
+  // Finding 4: retiring a question whose measurement cannot go on.
+  const t1 = await db.createPilot(createInput("pilot-t1.example", { questionLimit: 3 }));
+  const t1a = await db.addPilotQuestion(addInput(t1.pilotId!, question(450)));
+  const t1b = await db.addPilotQuestion(addInput(t1.pilotId!, question(451)));
+  const retire = (pilotQuestionId: string, pilotId = t1.pilotId!) =>
+    db.retirePilotQuestion({ pilotId, pilotQuestionId, retiredBy: FOUNDER, reason: "The measurement cannot go on." });
+  check("M54 a queued question cannot be retired", (await retire(t1a.pilotQuestionId!)) === "QUESTION_NOT_STOPPED");
+  const t1aRun = await runFor(t1a.jobId!);
+  check("M55 a question with a pending Run cannot be retired", (await retire(t1a.pilotQuestionId!)) === "QUESTION_JOB_ACTIVE");
+  await db.cancelProtocolJobRunRequest(t1aRun.requestId!);
+  // Test setup: run 1 failed at the provider (a terminal failed attempt in slot 1).
+  setJob(t1a.jobId!, { status: "failed", failureReason: "provider_error", currentAttemptId: null, nextBaselineOrdinal: 1 });
+  (store().protocolAttempts as unknown as Map<string, unknown>).set(randomUUID(), {
+    id: randomUUID(), projectId: t1.projectId!, jobId: t1a.jobId!, protocolId: t1a.protocolId!, status: "failed",
+    terminalizedAt: new Date().toISOString(), baselineOrdinal: 1, retryOfAttemptId: null,
+  });
+  check("M56 a provider failure that can still be retried is not retired", (await retire(t1a.pilotQuestionId!)) === "QUESTION_RETRYABLE");
+  setJob(t1b.jobId!, { status: "abandoned_exhausted" }); // test setup: the worker stopped too many times
+  check("M57 an abandoned question is retired, once", (await retire(t1b.pilotQuestionId!)) === "RETIRED"
+    && (await retire(t1b.pilotQuestionId!)) === "ALREADY_RETIRED");
+  check("M58 a retired question's Run is refused", (await runFor(t1b.jobId!)).outcome === "PILOT_QUESTION_RETIRED");
+  const t1again = await db.addPilotQuestion(addInput(t1.pilotId!, question(451)));
+  check("M59 its approved text can be added again, as a new question with the next ordinal",
+    t1again.outcome === "ADDED" && t1again.pilotQuestionId !== t1b.pilotQuestionId
+      && [...store().pilotQuestions.values()].find((q) => q.id === t1again.pilotQuestionId)?.ordinal === 3);
+  check("M60 a live question's text is still a duplicate", (await db.addPilotQuestion(addInput(t1.pilotId!, question(450)))).outcome === "DUPLICATE_QUESTION");
+  check("M61 the limit counts live questions only: a fourth is refused at 3 live",
+    (await db.addPilotQuestion(addInput(t1.pilotId!, question(452)))).outcome === "ADDED"
+      && (await db.addPilotQuestion(addInput(t1.pilotId!, question(453)))).outcome === "LIMIT_REACHED");
+  check("M62 retiring needs a reason, and answers an unknown question",
+    await throwsWith(() => db.retirePilotQuestion({ pilotId: t1.pilotId!, pilotQuestionId: t1a.pilotQuestionId!, retiredBy: FOUNDER, reason: "no" }), "invalid_retire_pilot_question_args")
+      && (await retire(randomUUID())) === "QUESTION_NOT_FOUND");
+
+  const t2 = await db.createPilot(createInput("pilot-t2.example", { questionLimit: 20 }));
+  const t2qs = [];
+  for (let n = 0; n < 6; n += 1) t2qs.push(await db.addPilotQuestion(addInput(t2.pilotId!, question(460 + n))));
+  for (const q of t2qs) setJob(q.jobId!, { status: "abandoned_exhausted" }); // test setup
+  const retiredFive = [];
+  for (const q of t2qs.slice(0, 5)) retiredFive.push(await retire(q.pilotQuestionId!, t2.pilotId!));
+  check("M63 at most 5 questions of a pilot are retired", retiredFive.every((o) => o === "RETIRED")
+    && (await retire(t2qs[5].pilotQuestionId!, t2.pilotId!)) === "RETIRE_LIMIT_REACHED");
+
+  // Smaller point: the retry refuses a closed pilot's job before reserving.
+  const f1 = await db.createPilot(createInput("pilot-f1.example"));
+  const f1q = await db.addPilotQuestion(addInput(f1.pilotId!, question(470)));
+  setJob(f1q.jobId!, { status: "failed", failureReason: "provider_error", currentAttemptId: null }); // test setup
+  await db.closePilot({ pilotId: f1.pilotId!, closedBy: FOUNDER, reason: "The customer ended the pilot early." });
+  const f1retry = await db.retryFailedProtocolJob({
+    jobId: f1q.jobId!, projectId: f1.projectId!, actor: FOUNDER, reason: "Perplexity returned HTTP 500.",
+    sourceAttemptId: randomUUID(), idempotencyKey: randomUUID(),
+  });
+  check("M64 a retry for a closed pilot's question is refused before anything is reserved",
+    f1retry.outcome === "PILOT_CLOSED" && store().protocolExecutionJobs.get(f1q.jobId!)?.status === "failed");
+  check("M65 a closed pilot's question cannot be retired",
+    (await retire(f1q.pilotQuestionId!, f1.pilotId!)) === "PILOT_CLOSED");
+
   /* W: the worker loop ---------------------------------------------------- */
   console.log("\n[W] a pilot question's Run measures that question only");
   const prompts: Array<{ prompt: string; brandName?: string }> = [];
@@ -296,6 +435,16 @@ async function main(): Promise<void> {
   const after = await runLoop();
   check("W7 and the worker claims nothing", after.length === 1 && after[0].detail === "NO_RUN_REQUEST"
     && store().protocolExecutionJobs.get(q1.jobId!)?.status === "queued");
+  const wEnd = await db.createPilot(createInput("pilot-w2.example", { companyName: "Worker Pilot Two" }));
+  const wEndQ = await db.addPilotQuestion(addInput(wEnd.pilotId!, question(303)));
+  check("W8 a Run for an open pilot's question is recorded", (await runFor(wEndQ.jobId!)).outcome === "REQUESTED");
+  setPilot(wEnd.pilotId!, { startsOn: daysAgo(91), endsOn: daysAgo(1) }); // test setup: the pilot ends while the request waits
+  const promptsBefore = prompts.length;
+  const refused = await runLoop();
+  check("W9 the worker's claim refuses it as a run request, calls no provider, and the job stays queued",
+    refused.length === 1 && refused[0].outcome === "run_request_refused" && refused[0].detail === "PILOT_CLOSED"
+      && prompts.length === promptsBefore && store().protocolExecutionJobs.get(wEndQ.jobId!)?.status === "queued",
+    JSON.stringify(refused));
 
   /* S: static contracts ---------------------------------------------------- */
   console.log("\n[S] static contracts");
@@ -309,16 +458,22 @@ async function main(): Promise<void> {
   const sql = read(path.join(DIR, FILE));
   const code = sql.replace(/--[^\n]*/g, "");
   const defined = [...code.matchAll(/create\s+or\s+replace\s+function\s+public\.([a-z_0-9]+)/gi)].map((m) => m[1]).sort();
-  check("S2 it defines exactly the three pilot functions and the Run request redefinition",
-    defined.join(",") === ["add_pilot_question", "close_pilot", "create_pilot", "request_protocol_job_run"].join(","), defined.join(","));
+  check("S2 it defines exactly the four pilot functions and the three step 1 redefinitions",
+    defined.join(",") === [
+      "add_pilot_question", "claim_requested_protocol_execution_job", "close_pilot", "create_pilot",
+      "request_protocol_job_run", "retire_pilot_question", "retry_failed_protocol_job",
+    ].join(","), defined.join(","));
   const blocks = code.split(/create\s+or\s+replace\s+function/i).slice(1);
   check("S3 every function is SECURITY DEFINER with search_path pinned",
-    blocks.length === 4 && blocks.every((b) => /security definer/i.test(b) && /set search_path = public, pg_temp/i.test(b)));
+    blocks.length === 7 && blocks.every((b) => /security definer/i.test(b) && /set search_path = public, pg_temp/i.test(b)));
   const SIGNATURES = [
     "create_pilot(uuid, text, text, text, text, integer, date, uuid)",
     "add_pilot_question(uuid, uuid, text, text, text, text, date, uuid)",
     "close_pilot(uuid, uuid, text)",
+    "retire_pilot_question(uuid, uuid, uuid, text)",
     "request_protocol_job_run(uuid, uuid, text, uuid, integer)",
+    "claim_requested_protocol_execution_job(text, integer)",
+    "retry_failed_protocol_job(uuid, uuid, uuid, text, uuid, text)",
   ];
   check("S4 each function is revoked from public, anon and authenticated and granted to service_role only",
     SIGNATURES.every((s) => ["public", "anon", "authenticated"].every((r) => code.includes(`revoke all on function public.${s} from ${r};`))
@@ -332,28 +487,30 @@ async function main(): Promise<void> {
   check("S6 only Perplexity's baseline slot exists until ChatGPT is wired (D-053 item 3)",
     code.includes("engine             text not null check (engine = 'perplexity_sonar')")
       && code.includes("phase              text not null check (phase = 'baseline')"));
-  check("S7 a pilot holds at most 20 questions and lasts 90 days",
-    code.includes("check (question_limit between 1 and 20)") && code.includes("check (ordinal between 1 and 20)")
+  check("S7 a pilot holds at most 20 live questions (25 with retired ones) and lasts 90 days",
+    code.includes("check (question_limit between 1 and 20)") && code.includes("check (ordinal between 1 and 25)")
       && code.includes("check (ends_on = starts_on + 90)") && code.includes("p_starts_on + 90"));
   check("S8 no evidence row is written directly",
     !/(insert\s+into|update|delete\s+from)\s+public\.(protocol_attempts|protocol_external_calls|provider_call_receipts|analysis_call_receipts|external_call_requests|probe_runs|probe_results)\b/i.test(code));
-  check("S9 the only rows updated are a pilot's close, and the Run request's own housekeeping",
+  check("S9 the only rows updated are a pilot's close, a question's retirement, and step 1's own job and request housekeeping",
     [...code.matchAll(/update\s+public\.([a-z_]+)/gi)].every((m) =>
-      ["pilots", "protocol_job_run_requests", "protocol_execution_jobs"].includes(m[1])));
+      ["pilots", "pilot_questions", "protocol_job_run_requests", "protocol_execution_jobs"].includes(m[1])));
   check("S10 nothing from the account stack is referenced (it may apply before Q2'-1)",
     !/\b(workspace[a-z_]*|account_[a-z_]+|_q2p[a-z0-9_]*|_s1_[a-z_]*|_p1_[a-z_]*|_e1_[a-z_]*|_q4_[a-z_]*)\b/i.test(code));
   const GUARDED = [
-    "claim_protocol_execution_job", "claim_protocol_execution_job_by_id", "claim_requested_protocol_execution_job",
-    "authorize_operator_retry", "retry_failed_protocol_job", "reactivate_abandoned_job", "resolve_protocol_job_review",
+    "claim_protocol_execution_job", "claim_protocol_execution_job_by_id",
+    "authorize_operator_retry", "reactivate_abandoned_job", "resolve_protocol_job_review",
     "complete_protocol_execution_job", "abort_attempt_and_fail_job_for_job", "admit_and_reserve_attempt_for_job",
     "_admit_and_reserve_attempt_core", "reconcile_attempt_for_job", "approve_protocol", "approve_buyer_question_version",
     "enqueue_protocol_execution_job", "approve_and_launch_snapshot_baseline", "create_snapshot_request_as_founder",
     "begin_snapshot_report_delivery",
   ];
-  check("S11 it redefines none of the guarded approval, queue, claim, retry or request functions",
+  check("S11 it redefines none of the guarded approval, queue, older claim, retry or request functions",
     GUARDED.every((fn) => !new RegExp(`create\\s+or\\s+replace\\s+function\\s+public\\.${fn}\\s*\\(`, "i").test(code)));
   check("S12 the requested_via CHECK keeps step 1's four starts and adds admin_pilot_run only",
     code.includes("check (requested_via in (\n    'admin_run_pipeline', 'admin_run_retest',\n    'admin_founder_baseline', 'operator_cli', 'admin_pilot_run'\n  ));"));
+  check("S12b the refusal_code CHECK keeps step 1's three codes and adds PILOT_CLOSED only",
+    code.includes("check (refusal_code in ('JOB_NOT_FOUND', 'JOB_NOT_ELIGIBLE', 'JOB_LOCKED', 'PILOT_CLOSED'));"));
 
   // Parity 1: request_protocol_job_run is step 1's, with two changes only.
   const step1 = read(path.join(DIR, "20261114120000_pilot_step1_operator_controls.sql"));
@@ -363,25 +520,69 @@ async function main(): Promise<void> {
   };
   const actualRun = fnOf(sql, "request_protocol_job_run");
   const pilotBlock = actualRun.slice(
-    actualRun.indexOf("\n  -- D-054: a pilot's measurement runs only"),
+    actualRun.indexOf("\n  -- D-054: a pilot's measurement, its baseline"),
     actualRun.indexOf("\n  -- A dead lease with no claims left")
   );
+  const PILOT_DECLARATIONS =
+    "  -- D-054\n  v_pilot public.pilots%rowtype;\n  v_pilot_id uuid;\n  v_question_retired boolean := false;\n";
   let expectedRun = fnOf(step1, "request_protocol_job_run");
   const swapRun = (from: string, to: string) => {
     if (expectedRun.split(from).length !== 2) throw new Error(`step 1 no longer contains exactly once: ${from.slice(0, 60)}`);
     expectedRun = expectedRun.replace(from, to);
   };
+  swapRun("  v_expires timestamptz;\nbegin", "  v_expires timestamptz;\n" + PILOT_DECLARATIONS + "begin");
   swapRun("'admin_run_pipeline', 'admin_run_retest', 'admin_founder_baseline', 'operator_cli'\n     )",
     "'admin_run_pipeline', 'admin_run_retest', 'admin_founder_baseline', 'operator_cli',\n       'admin_pilot_run'\n     )");
   const notFound = "  if not v_found then\n    return query select 'JOB_NOT_FOUND'::text, null::uuid, null::timestamptz;\n    return;\n  end if;\n";
   swapRun(notFound, notFound + pilotBlock);
-  check("S13 request_protocol_job_run is pilot step 1's, byte for byte, apart from admin_pilot_run and the pilot block",
+  check("S13 request_protocol_job_run is pilot step 1's, byte for byte, apart from admin_pilot_run, three declarations and the pilot block",
     pilotBlock.length > 0 && actualRun === expectedRun);
-  check("S14 the pilot block refuses a closed pilot and one past its end date, after the job is found and locked",
-    pilotBlock.includes("pl.status <> 'active' or current_date > pl.ends_on")
-      && pilotBlock.includes("'PILOT_CLOSED'::text")
+  const RETEST_MATCH = "or pqp.protocol_id = (\n        select pr.baseline_protocol_id from public.protocols pr where pr.id = v_job.protocol_id\n      )";
+  check("S14 the pilot block covers a retest of a pilot baseline, locks the pilot FOR SHARE, and refuses closed, ended, not started and retired",
+    pilotBlock.includes(RETEST_MATCH)
+      && pilotBlock.includes("where pl.id = v_pilot_id\n     for share;")
+      && pilotBlock.includes("v_pilot.status <> 'active' or current_date > v_pilot.ends_on")
+      && pilotBlock.includes("current_date < v_pilot.starts_on")
+      && ["'PILOT_CLOSED'::text", "'PILOT_NOT_STARTED'::text", "'PILOT_QUESTION_RETIRED'::text"].every((o) => pilotBlock.includes(o))
       && actualRun.indexOf(pilotBlock) > actualRun.indexOf("for update nowait")
       && actualRun.indexOf(pilotBlock) < actualRun.indexOf("insert into public.protocol_job_run_requests"));
+
+  // Parity 1b: the requested claim is step 1's, apart from its pilot block.
+  const actualClaim = fnOf(sql, "claim_requested_protocol_execution_job");
+  const claimBlock = actualClaim.slice(
+    actualClaim.indexOf("  -- D-054: the second barrier."),
+    actualClaim.indexOf("  if not (\n    v_job.status = 'queued'")
+  );
+  const claimAnchor = "    return query select 'JOB_NOT_FOUND'::text, null::public.protocol_execution_jobs, null::uuid;\n    return;\n  end if;\n\n";
+  const step1Claim = fnOf(step1, "claim_requested_protocol_execution_job");
+  check("S29 claim_requested_protocol_execution_job is pilot step 1's, byte for byte, apart from the pilot block after the job is found",
+    claimBlock.length > 0 && step1Claim.split(claimAnchor).length === 2
+      && actualClaim === step1Claim.replace(claimAnchor, claimAnchor + claimBlock));
+  check("S30 the claim's pilot block covers retests, refuses closed, ended, not started and retired, and records the refusal",
+    claimBlock.includes("select pr.baseline_protocol_id from public.protocols pr where pr.id = v_job.protocol_id")
+      && ["pl.status <> 'active'", "current_date > pl.ends_on", "current_date < pl.starts_on", "pq.retired_at is not null"].every((c) => claimBlock.includes(c))
+      && claimBlock.includes("refusal_code = 'PILOT_CLOSED'")
+      && claimBlock.includes("'PILOT_CLOSED'::text, null::public.protocol_execution_jobs, null::uuid"));
+
+  // Parity 1c: the provider-failure retry is step 1's, apart from its declarations and pilot block.
+  const actualRetry = fnOf(sql, "retry_failed_protocol_job");
+  const retryBlock = actualRetry.slice(
+    actualRetry.indexOf("  -- D-054: a pilot's measurement is retried only"),
+    actualRetry.indexOf("  select pa.* into v_source")
+  );
+  const retryAnchor = "  if found and v_request_status <> 'approved' then\n    return query select 'REQUEST_NOT_OPEN'::text, null::text, null::uuid;\n    return;\n  end if;\n\n";
+  let expectedRetry = fnOf(step1, "retry_failed_protocol_job");
+  const retryDeclOld = "  v_replay_analysis numeric;\nbegin";
+  const retryParts = [expectedRetry.split(retryAnchor).length, expectedRetry.split(retryDeclOld).length];
+  expectedRetry = expectedRetry.replace(retryDeclOld, "  v_replay_analysis numeric;\n" + PILOT_DECLARATIONS + "begin")
+    .replace(retryAnchor, retryAnchor + retryBlock);
+  check("S31 retry_failed_protocol_job is pilot step 1's, byte for byte, apart from three declarations and the pilot block after the request check",
+    retryBlock.length > 0 && retryParts.join(",") === "2,2" && actualRetry === expectedRetry);
+  check("S32 the retry's pilot block covers retests, locks the pilot FOR SHARE and refuses before the source run is read or anything reserved",
+    retryBlock.includes("select pr.baseline_protocol_id from public.protocols pr where pr.id = v_job.protocol_id")
+      && retryBlock.includes("for share;")
+      && ["v_pilot.status <> 'active'", "current_date > v_pilot.ends_on", "current_date < v_pilot.starts_on", "v_question_retired"].every((c) => retryBlock.includes(c))
+      && actualRetry.indexOf(retryBlock) < actualRetry.indexOf("from public.authorize_operator_retry(\n      p_job_id, p_project_id, p_actor::text, btrim(p_reason), 'retry_full_attempt',\n      v_source.id"));
 
   // Parity 2: add_pilot_question launches exactly as approve_and_launch does.
   const segment = (src: string) => {
@@ -414,7 +615,31 @@ async function main(): Promise<void> {
       && createFn.includes("'DOMAIN_HAS_LIVE_REQUEST'") && createFn.includes("'DOMAIN_HAS_LIVE_PILOT'")
       && ["pending_verification", "verified", "pending_approval", "approved", "queued", "running", "quality_review", "needs_founder_review"]
         .every((st) => createFn.includes(`'${st}'`)));
-  check("S19 close_pilot changes no job", !fnOf(sql, "close_pilot").includes("protocol_execution_jobs"));
+  const closeFn = fnOf(sql, "close_pilot");
+  check("S19 close_pilot changes no job, and refuses while a baseline or retest holds a live lease or a pending request",
+    !/update\s+public\.protocol_execution_jobs/i.test(closeFn)
+      && closeFn.includes("'PILOT_JOB_ACTIVE'::text")
+      && closeFn.includes("on pr.id = pqp.protocol_id or pr.baseline_protocol_id = pqp.protocol_id")
+      && closeFn.includes("j.status in ('claimed', 'running') and j.lease_expires_at > now()")
+      && closeFn.includes("r.status = 'pending'\n              and r.expires_at > now()")
+      && closeFn.indexOf("for update;") < closeFn.indexOf("'PILOT_JOB_ACTIVE'::text"));
+  check("S19b create_pilot bounds the start date to [yesterday, today + 60], after the replay",
+    createFn.includes("if p_starts_on < current_date - 1 or p_starts_on > current_date + 60 then")
+      && createFn.indexOf("'IDEMPOTENCY_KEY_CONFLICT'::text") < createFn.indexOf("'START_DATE_OUT_OF_RANGE'::text"));
+  check("S19c add_pilot_question ignores retired questions for duplicates and the limit, and never reuses an ordinal",
+    addFn.includes("and q.prompt_hash = p_prompt_hash\n       and q.retired_at is null")
+      && addFn.includes("select count(*) filter (where q.retired_at is null), count(*)\n    into v_count, v_total")
+      && addFn.includes("p_pilot_id, v_project_id, v_total + 1, v_version_id")
+      && code.includes("create unique index if not exists pilot_questions_one_live_prompt\n  on public.pilot_questions (pilot_id, prompt_hash)\n  where retired_at is null;")
+      && !code.includes("pilot_questions_prompt_key"));
+  const retireFn = fnOf(sql, "retire_pilot_question");
+  check("S19d retire_pilot_question locks the pilot, takes only a stopped question that cannot be retried, at most 5, and changes no job",
+    retireFn.indexOf("for update;") < retireFn.indexOf("'QUESTION_JOB_ACTIVE'::text")
+      && retireFn.includes("if v_job.status not in ('failed', 'abandoned_exhausted') then")
+      && retireFn.includes("'QUESTION_RETRYABLE'::text") && retireFn.includes("if v_retired >= 5 then")
+      && retireFn.includes("v_job.failure_reason = 'provider_error'")
+      && !/update\s+public\.protocol_execution_jobs/i.test(retireFn)
+      && /update public\.pilot_questions\s+set retired_by = p_retired_by/.test(retireFn));
 
   // Routes.
   const R = "app/api/internal/pilots";
@@ -424,13 +649,14 @@ async function main(): Promise<void> {
     close: `${R}/[pilotId]/close/route.ts`,
     run: `${R}/[pilotId]/questions/[pilotQuestionId]/run/route.ts`,
     retry: `${R}/[pilotId]/questions/[pilotQuestionId]/retry/route.ts`,
+    retire: `${R}/[pilotId]/questions/[pilotQuestionId]/retire/route.ts`,
   };
-  for (const key of ["create", "add", "close", "retry"] as const) {
+  for (const key of ["create", "add", "close", "retry", "retire"] as const) {
     const src = read(routeFiles[key]);
     check(`S20 ${key}: the kill switch, then the founder guard, the actor from the session`,
       src.indexOf('process.env.SNAPSHOT_APPROVAL_ENABLED !== "true"') > 0
         && src.indexOf('process.env.SNAPSHOT_APPROVAL_ENABLED !== "true"') < src.indexOf("requireFounderForRoute(")
-        && /(createdBy|addedBy|closedBy|actor): guard\.user\.id/.test(src));
+        && /(createdBy|addedBy|closedBy|retiredBy|actor): guard\.user\.id/.test(src));
   }
   const runSrc = read(routeFiles.run);
   check("S21 run: founder guard, then the pilot window, then the job state, then a start naming its job as admin_pilot_run",
@@ -438,6 +664,10 @@ async function main(): Promise<void> {
       && runSrc.indexOf("pilotIsOver(") > runSrc.indexOf("requireFounderForRoute(")
       && ["\"failed\"", "\"abandoned_exhausted\"", "\"succeeded\"", "\"needs_review\""].every((s) => runSrc.indexOf(s) > 0 && runSrc.indexOf(s) < runSrc.indexOf("startWorkerMachine({"))
       && runSrc.includes('via: "admin_pilot_run"') && runSrc.includes("requestedBy: guard.user.id"));
+  check("S21b run: refuses before the start date and for a retired question, and names retiring for an abandoned measurement",
+    runSrc.indexOf("pilotNotStarted(") > runSrc.indexOf("pilotIsOver(") && runSrc.includes("target.retired")
+      && runSrc.includes('start.refusal === "JOB_ATTEMPTS_EXHAUSTED" ? PILOT_JOB_ABANDONED_TEXT')
+      && !runSrc.includes("Close the request"));
   const retrySrc = read(routeFiles.retry);
   check("S22 retry never starts the worker and never takes the failed run from the body",
     !retrySrc.includes("startWorkerMachine") && !retrySrc.includes("body.sourceAttemptId") && retrySrc.includes("pilotIsOver("));
@@ -452,16 +682,23 @@ async function main(): Promise<void> {
   check("S24 the pilot page shows ChatGPT as not measured and provenance in words, never the stored code",
     page.includes("{ENGINE_NOT_MEASURED}") && page.includes("pilotProvenanceLabel(q.questionProvenance)")
       && !/>\s*\{q\.questionProvenance\}\s*</.test(page) && !/>\s*\{m\.jobStatus\}\s*</.test(page));
-  check("S25 the founder-experiments list leaves pilot protocols out",
-    read("app/admin/snapshot-requests/page.tsx").includes("for (const protocolId of await pilotProtocolIds(client)) attachedIds.add(protocolId);"));
+  const adminPage = read("app/admin/snapshot-requests/page.tsx");
+  check("S25 the founder-experiments list leaves pilot protocols out in the query, before its 20-row limit",
+    adminPage.includes('jobsQuery = jobsQuery.not("protocol_id", "in", `(${pilotIds.join(",")})`);')
+      && adminPage.indexOf("jobsQuery.not(") < adminPage.indexOf(".limit(20)")
+      && adminPage.indexOf("await pilotProtocolIds(client)") < adminPage.indexOf("jobsQuery.not("));
   const fly = read("lib/worker-control/fly-machine.ts");
   check("S26 the start path accepts admin_pilot_run and has fixed words for PILOT_CLOSED",
-    fly.includes('"admin_founder_baseline" | "admin_pilot_run"') && /PILOT_CLOSED:\s*\n\s*"This pilot is closed/.test(fly));
+    fly.includes('"admin_founder_baseline" | "admin_pilot_run"') && /PILOT_CLOSED:\s*\n\s*"This pilot is closed/.test(fly)
+      && /PILOT_NOT_STARTED:\s*\n\s*"This pilot has not started/.test(fly) && /PILOT_QUESTION_RETIRED:\s*\n\s*"This pilot question was retired/.test(fly));
+  const workerSrc = read("lib/protocol-worker/worker.ts");
+  check("S26b the worker treats a claim refused for a closed pilot as a refused run request",
+    /claimed\.outcome === "JOB_LOCKED" \|\|\s*\n\s*claimed\.outcome === "PILOT_CLOSED"\s*\n\s*\) \{\s*\n\s*return \{ outcome: "run_request_refused"/.test(workerSrc));
   const preflight = read("scripts/sql/prod-preflight.sql");
   check("S27 the preflight checks the version, the three tables and the three functions as absent",
     (preflight.match(/'20261118120000'/g) ?? []).length === 2
       && TABLES.every((t) => preflight.includes(`('${t}')`))
-      && ["create_pilot", "add_pilot_question", "close_pilot"].every((f) => preflight.includes(`('${f}')`)));
+      && ["create_pilot", "add_pilot_question", "close_pilot", "retire_pilot_question"].every((f) => preflight.includes(`('${f}')`)));
   check("S28 the DB runner runs the pilot-questions database test",
     read("scripts/run-p2-workspace-db-local.sh").includes("npx tsx scripts/test-pilot-questions-db.ts"));
 
@@ -493,11 +730,11 @@ async function main(): Promise<void> {
   const okCreate = parseCreatePilot({
     companyName: " Acme ", websiteUrl: "www.Acme.example/path", siteControlNote: "Customer added our DNS record.",
     questionLimit: "15", startsOn: "2026-11-20", idempotencyKey: randomUUID(),
-  });
+  }, "2026-11-17");
   check("C7 the website is normalized as a request's, and the limit read as a number",
     okCreate.ok && okCreate.value.normalizedDomain === "acme.example" && okCreate.value.websiteUrl === "https://www.acme.example"
       && okCreate.value.companyName === "Acme" && okCreate.value.questionLimit === 15);
-  const badCreate = parseCreatePilot({ companyName: "A", websiteUrl: "localhost", siteControlNote: "x", questionLimit: 21, startsOn: "2026-02-30", idempotencyKey: "k" });
+  const badCreate = parseCreatePilot({ companyName: "A", websiteUrl: "localhost", siteControlNote: "x", questionLimit: 21, startsOn: "2026-02-30", idempotencyKey: "k" }, "2026-11-17");
   check("C8 every bad field is named", !badCreate.ok
     && ["companyName", "websiteUrl", "siteControlNote", "questionLimit", "startsOn", "idempotencyKey"].every((k) => k in badCreate.issues));
   const okAdd = parseAddPilotQuestion({
@@ -510,6 +747,20 @@ async function main(): Promise<void> {
   const badAdd = parseAddPilotQuestion({ questionText: "short", customerApprovalRef: "", customerApprovedOn: "2026-11-18", idempotencyKey: "x" }, "2026-11-17");
   check("C10 a short question, a missing supplier, reference or key, and a future approval date are each refused",
     !badAdd.ok && ["questionText", "questionProvenance", "customerApprovalRef", "customerApprovedOn", "idempotencyKey"].every((k) => k in badAdd.issues));
+  const startOn = (startsOn: string) => parseCreatePilot({
+    companyName: "Acme", websiteUrl: "acme.example", siteControlNote: "Customer added our DNS record.",
+    questionLimit: 15, startsOn, idempotencyKey: randomUUID(),
+  }, "2026-11-17");
+  check("C11 the start date is accepted from yesterday to 60 days ahead, as the database checks it",
+    startOn("2026-11-16").ok && startOn("2027-01-16").ok
+      && !startOn("2026-11-15").ok && !startOn("2027-01-17").ok && !startOn("2062-11-17").ok);
+  check("C12 the new refusals and prompts have fixed words, with no stored code",
+    [copy.CREATE_PILOT_REFUSAL.START_DATE_OUT_OF_RANGE, copy.CLOSE_PILOT_REFUSAL.PILOT_JOB_ACTIVE, copy.CLOSE_PILOT_PROMPT,
+      copy.PILOT_JOB_ABANDONED_TEXT, ...Object.values(copy.RETIRE_QUESTION_REFUSAL)]
+      .every((t) => t.length > 10 && !/[A-Z]{2,}_[A-Z]|[a-z]+_[a-z]+/.test(t))
+      && copy.CLOSE_PILOT_PROMPT.includes("cannot be closed while one of its measurements is running")
+      && !copy.CLOSE_PILOT_PROMPT.includes("will no longer be measured")
+      && !copy.PILOT_JOB_ABANDONED_TEXT.includes("request"));
 
   console.log(`\n${checks - failures}/${checks} checks passed.`);
   console.log(failures === 0 ? "Pilot questions PASSED." : `${failures} check(s) failed. Pilot questions FAILED.`);

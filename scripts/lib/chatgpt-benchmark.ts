@@ -27,7 +27,7 @@ export const BENCHMARK_MAX_REPEATS = 5;
  * runs and this spend; later runs cannot stand in for missing earlier ones.
  * Moved forward in the commit that records each paid phase.
  */
-export const BENCHMARK_SPEND_CHECKPOINT = { through: "2026-11-11T23:59:59.999Z", runs: 237, usd: 15.351313 } as const;
+export const BENCHMARK_SPEND_CHECKPOINT = { through: "2026-11-17T23:59:59.999Z", runs: 297, usd: 20.99554 } as const;
 
 export interface BenchmarkQuestion {
   id: string;

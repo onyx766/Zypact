@@ -518,15 +518,16 @@ async function main(): Promise<void> {
       !!l && l.unsettledReservations === 1 && l.unknownCountedAtWorstCase === 1 && l.totalUsd === 0.95 && l.runs === 2;
   })());
   check("K36 the repository's recorded spend is a floor: a ledger holding less from that period cannot authorise a live run",
-    BENCHMARK_SPEND_CHECKPOINT.runs === 237 && BENCHMARK_SPEND_CHECKPOINT.usd === 15.351313 && BENCHMARK_SPEND_CHECKPOINT.through === "2026-11-11T23:59:59.999Z" &&
-    ledgerCoversCheckpoint({ runs: 237, totalUsd: 15.351313 }) && ledgerCoversCheckpoint({ runs: 240, totalUsd: 16 }) &&
-    !ledgerCoversCheckpoint({ runs: 0, totalUsd: 0 }) && !ledgerCoversCheckpoint({ runs: 237, totalUsd: 9.4 }) && !ledgerCoversCheckpoint({ runs: 84, totalUsd: 15.351313 }) &&
-    !ledgerCoversCheckpoint({ runs: 237, totalUsd: Number.NaN }) && !ledgerCoversCheckpoint(null));
+    BENCHMARK_SPEND_CHECKPOINT.runs === 297 && BENCHMARK_SPEND_CHECKPOINT.usd === 20.99554 && BENCHMARK_SPEND_CHECKPOINT.through === "2026-11-17T23:59:59.999Z" &&
+    ledgerCoversCheckpoint({ runs: 297, totalUsd: 20.99554 }) && ledgerCoversCheckpoint({ runs: 300, totalUsd: 21 }) &&
+    !ledgerCoversCheckpoint({ runs: 0, totalUsd: 0 }) && !ledgerCoversCheckpoint({ runs: 237, totalUsd: 15.351313 }) &&
+    !ledgerCoversCheckpoint({ runs: 297, totalUsd: 9.4 }) && !ledgerCoversCheckpoint({ runs: 60, totalUsd: 20.99554 }) &&
+    !ledgerCoversCheckpoint({ runs: 297, totalUsd: Number.NaN }) && !ledgerCoversCheckpoint(null));
   check("K49 later runs cannot stand in for missing earlier ones: only runs started up to the checkpoint count toward it",
-    recordsThroughCheckpoint([{ startedAt: "2026-11-11T09:09:28.645Z" }, { startedAt: "2026-11-11T23:59:59.999Z" }, { startedAt: "2026-11-12T00:00:00.000Z" }, { startedAt: "2026-11-14T10:00:00.000Z" }, { startedAt: undefined }, {}]).length === 2 &&
+    recordsThroughCheckpoint([{ startedAt: "2026-11-17T09:09:28.645Z" }, { startedAt: "2026-11-17T23:59:59.999Z" }, { startedAt: "2026-11-18T00:00:00.000Z" }, { startedAt: "2026-11-20T10:00:00.000Z" }, { startedAt: undefined }, {}]).length === 2 &&
     // Compared as instants: a timestamp without milliseconds or with an offset is read for what it is, and an unreadable one is left out.
-    recordsThroughCheckpoint([{ startedAt: "2026-11-11T23:59:59Z" }, { startedAt: "2026-11-11T20:00:00+02:00" }]).length === 2 &&
-    recordsThroughCheckpoint([{ startedAt: "2026-11-11T19:30:00-05:00" }, { startedAt: "not a time" }, { startedAt: "" }]).length === 0);
+    recordsThroughCheckpoint([{ startedAt: "2026-11-17T23:59:59Z" }, { startedAt: "2026-11-17T20:00:00+02:00" }]).length === 2 &&
+    recordsThroughCheckpoint([{ startedAt: "2026-11-17T19:30:00-05:00" }, { startedAt: "not a time" }, { startedAt: "" }]).length === 0);
   check("K37 a cap is accepted only as a positive test: NaN, a missing amount or no remaining figure is a refusal",
     capFitsLifetime(12, 24.648687) && capFitsLifetime(24.648687, 24.648687) && !capFitsLifetime(24.65, 24.648687) && !capFitsLifetime(Number.NaN, 24) &&
     !capFitsLifetime(12, Number.NaN) && !capFitsLifetime(null, 24) && !capFitsLifetime(12, null) && !capFitsLifetime(0, 24) && !capFitsLifetime(-1, 24) && !capFitsLifetime(Number.POSITIVE_INFINITY, 24));

@@ -1015,6 +1015,7 @@ Each item below departed from a document that governed before this approval: V1_
     - `chat-latest` (reference): $0.110 per run, 18.3 s, stability 0.46.
   - No human rating of answer quality was done in this first benchmark. A blind review followed in the smaller-vendor validation.
 - **Smaller-vendor validation (2026-11-11):** 84 of 110 runs before the $10 cap stopped it; estimated spend $9.41. Results, the blind review and the engineer's recommendation of `gpt-5.4-2026-03-05` are in the validity note.
+- **Confirmation run result (2026-11-17):** all 60 runs completed with a usable answer, all on flex, from the pinned model, none at the output cap, the slowest 145 s, estimated $5.64 (upper bound). All seven criteria pass. Lifetime spend $20.9955 of $40 over 297 runs. Approving `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05` for measurement is the founder's decision; `CHATGPT_APPROVED_SETTING_VERSION` stays `null` until then.
 - **Confirmation run on the flex tier (authorised 2026-11-17):**
   - `gpt-5.4-2026-03-05` under the `v4` setting, the same 60 runs and $12 cap. Projected at $7.68 counted at the upper bound (output at the flex rate, input and search calls at the standard rate), or $5.98 if flex halves the input tokens too; $9.05 on the standard tier.
   - **New spend rules, written before any flex call:**

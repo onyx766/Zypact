@@ -4,7 +4,8 @@
   - The methodology, the dedicated OpenAI project and the cost-tracking rules were **approved by the founder on 2026-11-10** (D-050).
   - **The founder chose `gpt-5.4-2026-03-05` on 2026-11-13.** That is a choice of model, not yet an approval to measure.
   - **On 2026-11-17 the founder agreed to run the confirmation run on OpenAI's half-price flex tier**, under the same $12 cap, and added OpenAI credit. That authorises the run; it does not approve the model. See "The half-price tier and the revised confirmation run".
-  - **No model is approved yet.** Approval follows the confirmation run under the chosen model's flex setting, which also raises the output cap.
+  - **The confirmation run was made on 2026-11-17 and passed all seven criteria** (60 of 60 usable, all on flex, estimated $5.64). See "Confirmation run results".
+  - **No model is approved yet.** Approval of `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05` for measurement is the founder's next decision.
   - Until a model is approved the adapter refuses every run that passes no explicit setting, and only the benchmark passes one. It is not wired into any worker, and the paid-measurement switch stays off.
 - **Required by:** METHODOLOGY §4, "Adding another surface".
 - **Adapter:** `lib/probes/chatgpt.ts`. Pricing is in `lib/probes/chatgpt-pricing.ts`.
@@ -531,6 +532,55 @@ A call refused for lack of credit is not an attempt and counts toward none of th
 - One day's run cannot say how often flex is short of capacity at other times.
 - It cannot say how the model behaves after OpenAI retires this snapshot.
 
+## Confirmation run results (2026-11-17)
+
+**The run.**
+- **Setting:** `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05`.
+- **Plan:** the 20 questions of both fixtures, 3 repeats each: 60 runs.
+- **Time:** started 2026-11-17 at 13:28 UTC and finished at 14:06 UTC.
+- **Output:** `.benchmark-out/confirm-flex-1/` (git-ignored); every response body re-hashes to its recorded SHA-256.
+- **Lifetime spend** is now $20.9955 of $40 over 297 runs; `BENCHMARK_SPEND_CHECKPOINT` is moved forward.
+- **A failed first attempt:** it gave `--out` as a bare name and was refused before any call. The log is `confirm-flex-0-refused-out-path.log`.
+
+**The seven criteria, all met:**
+
+| Criterion | Result |
+|---|---|
+| 1. Pinned model | 60 of 60 served by exactly `gpt-5.4-2026-03-05` |
+| 2. Tier | 60 of 60 responses say flex served them |
+| 3. Output cap | 0 of 60 stopped at the 8,000 cap; the longest answer used 4,268 output tokens |
+| 4. Reliability | 60 of 60 completed with a usable answer; 0 failed |
+| 5. Speed | no call took 240 s or more; the slowest took 145 s |
+| 6. Request as configured | 60 of 60 echo `max_output_tokens` 8,000 and reasoning effort `low` |
+| 7. Budget | estimated $5.64 at the upper bound ($4.39 if flex also halved the input tokens), against the $12 cap |
+
+**Reported for the founder's judgment, per question set.** Costs are estimates at the upper bound; OpenAI's usage page is the check.
+
+| Figure | General (30 runs) | Smaller-vendor (30 runs) |
+|---|---|---|
+| Cost per run (all completed) | $0.061 | $0.127 |
+| Latency p50 / p90 / slowest | 25 s / 42 s / 52 s | 41 s / 69 s / 145 s |
+| Runs that searched | 67% | 100% |
+| Search calls per run (mean) | 2.3 | 5.1 |
+| Cited sources per answer (median) | 6.5 | 8 |
+| Answers without a citation | 10 of 30 | 0 of 30 |
+| Cited-domain stability across the 3 repeats (median) | 0.36 | 0.57 |
+
+**Other findings.**
+- **Capacity:** flex refused no request for lack of capacity, and the run waited 0 s. One afternoon says nothing about other times.
+- **Retirement:** OpenAI's models endpoint returned `shutdown_date: null` for `gpt-5.4-2026-03-05` on 2026-11-17, so no retirement is scheduled.
+- **Starter month:** at the mean of $0.094 per run, a 240-run Starter month on this engine is about $23 at the upper bound. The mix of questions changes this, from $0.061 to $0.127 per run.
+
+**Not done in this run:**
+- vendor coverage;
+- the share of smaller-vendor mentions with a nearby citation;
+- whether cited links load;
+- a blind review of answer quality.
+
+These need reading the answers or fetching third-party pages, and they are left for the founder to request.
+
+**What it does not show:** 20 questions is a small sample. It measures the OpenAI API, not ChatGPT.com. It says nothing about flex capacity at busier times, or about this model after OpenAI retires the snapshot.
+
 ## Open items for the founder
 
 1. ~~Confirm the benchmark budget~~: confirmed by the founder on 2026-11-11. On the same day the founder clarified that the $40 is a lifetime ceiling including earlier spend.
@@ -538,6 +588,6 @@ A call refused for lack of credit is not an attempt and counts toward none of th
 3. ~~Choose a model~~: the founder chose `gpt-5.4-2026-03-05` on 2026-11-13.
 4. ~~Authorise the confirmation run~~: authorised on 2026-11-17, on the half-price flex tier, under a $12 cap. The founder added OpenAI credit the same day.
 5. **Say whether the Starter-month cost fits the plan's price**, if all 240 runs go to this engine. On the standard tier it is about $35–38; on flex it is projected at about $24–31, and the confirmation run measures it.
-6. **Approve the model for measurement** after the confirmation run reports. Approval is a code change to `CHATGPT_APPROVED_SETTING_VERSION`.
+6. **Approve the model for measurement** now that the confirmation run has passed (2026-11-17). Approval is a code change to `CHATGPT_APPROVED_SETTING_VERSION`.
 7. **After the confirmation run, judge whether flex's speed and capacity refusals suit the worker.** The worker's time limits are decided when the engine is wired.
 8. **Wire the adapter into the worker.** That is a separate step behind the paid-measurement switch, and for this model it also needs the longer worker time limits described above.

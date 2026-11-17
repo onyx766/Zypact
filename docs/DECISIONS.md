@@ -926,14 +926,16 @@ Each item below departed from a document that governed before this approval: V1_
 - **Date:** 2026-11-10
 - **Status:**
   - **Founder decisions of 2026-11-10 recorded below.** The methodology, the dedicated OpenAI project, the cost-tracking rules and automatic search for monitoring are approved.
-  - **No model is approved.** One is chosen after the benchmark.
+  - **The founder chose `gpt-5.4-2026-03-05` on 2026-11-13** (written reply relayed by the engineer: "I recommend gpt-5.4-2026-03-05 model."). It is a choice of model. It authorises no paid run and is not yet an approval to measure.
+  - **On 2026-11-17 the founder agreed to run the confirmation run on OpenAI's half-price flex tier**, with the same $12 cap, and added OpenAI credit (reply relayed by the engineer). That authorises the run under the new setting `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05`. It is not an approval to measure.
+  - **No model is approved.** Approval follows that confirmation run (output cap 8,000, flex tier).
   - **Benchmark budget confirmed by the founder on 2026-11-11.** The benchmark ran the same day; see "Benchmark results" in the validity note.
-  - **No standing recommendation (2026-11-11).** The first recommendation, `gpt-6-luna`, is superseded for two reasons:
+  - **First recommendation superseded (2026-11-11).** The first recommendation, `gpt-6-luna`, is superseded for two reasons:
     - a follow-up analysis found it names far fewer smaller vendors than the reference;
     - OpenAI publishes no dated snapshot for it.
   - **The founder asked for a smaller validation first**, capped at $10, on smaller-vendor B2B SaaS questions. It compares the dated snapshots `gpt-5.5-2026-04-23` and `gpt-5.4-2026-03-05` with `gpt-6-luna` and the `chat-latest` reference.
-  - **The $40 benchmark budget is a lifetime ceiling** that includes earlier spend (founder, 2026-11-11).
-  - No migration, and no live call has been made. The adapter is wired into no worker.
+  - **The $40 benchmark budget is a lifetime ceiling** that includes earlier spend (founder, 2026-11-11). $15.35 of it is spent.
+  - No migration. The only paid provider calls made are the benchmark's, on 2026-11-11 (237 recorded runs). The adapter is wired into no worker.
 - **Builds on:** METHODOLOGY §4 (a second surface needs a validity note: `docs/ADAPTER_VALIDITY_CHATGPT.md`), D-044 (cited versus retrieved sources), the M1 evidence contract, PR #4's provider routing, and D-023 (spend).
 - **Founder decisions (2026-11-10):**
   1. **Model.**
@@ -949,30 +951,55 @@ Each item below departed from a document that governed before this approval: V1_
   5. **Methodology.** V1 measures controlled OpenAI API responses, not consumer ChatGPT.com observations. Original responses, citations, configurations, timestamps and limitations are kept.
   6. **No third-party ChatGPT scraping services.** Using one needs separate legal, data-rights and reliability validation.
 - **Implementation:**
-  - **Settings.** A `ChatGptSetting` fixes the model, the search mode (`auto` or `required`), the reasoning effort (`low`), `max_output_tokens` 4000, `store: false` and the served-model rule. Its version, `openai-responses-websearch-v2:<search>:<model>`, names every choice.
+  - **Settings.**
+    - A `ChatGptSetting` fixes the model, the search mode (`auto` or `required`), the reasoning effort (`low`), the output cap, `store: false` and the served-model rule.
+    - Its version is `<family>:<search>:<model>`. A setting is built from those three parts only, so one version names one request.
+    - Two families exist, and a family is never edited once a run is recorded under it: `openai-responses-websearch-v2` (cap 4,000; every run through 2026-11-11) and `openai-responses-websearch-v3` (cap 8,000; added 2026-11-13).
+    - A run cannot change the request. Settings are frozen, and before any request the adapter refuses a setting that is not exactly what its version names, a different `maxTokens`, and a search mode that contradicts the setting.
   - **Approval.**
-    - `CHATGPT_APPROVED_MODEL` is `null`, so a run without an explicit setting is refused before any request.
+    - Approval names one exact setting version, in `CHATGPT_APPROVED_SETTING_VERSION`. It is `null`, so a run without an explicit setting is refused before any request.
+    - The version to approve if the confirmation run passes is `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05` (since 2026-11-17; it was the `v3` version before), so what is approved is exactly what that run validates.
+    - A third family, `openai-responses-websearch-v4` (2026-11-17), is `v3` on OpenAI's flex tier: it sends `service_tier: "flex"` last, and a response that names another tier, or none, is a failure that stops the benchmark. `v2` and `v3` requests are byte-for-byte unchanged.
+    - A `v2` setting can never be approved (its cap cut answers off), nor can the `chat-latest` reference. Approving the `auto` version does not approve `required`, which has never been run.
+    - Approval names a version, not a model, so preparing a later confirmation run can neither change nor switch off what is approved.
+    - Before 2026-11-13 the approval function would have accepted any model name, including the `chat-latest` reference, at the 4,000 cap; nothing was approved through it.
     - An approved setting requires the served model to be the approved name or its dated snapshot.
-    - The reference `chat-latest` records its served model without checking it, and can never be approved.
+  - **Failures.** A response body that fails to arrive after the headers did is a `network_error` carrying the request evidence and the status received, not a bare error.
   - **Search.**
     - Every run records `searchOccurred`, the number of web search calls and the number of search actions.
     - Under `required`, a run without a search fails with its evidence.
     - Under `auto`, a run without a search is an observation.
   - **Usage and cost** (`lib/probes/chatgpt-pricing.ts`, pure).
     - Recorded usage: input, cached, output, reasoning and total tokens, plus search calls. A usage field the provider didn't report is null.
-    - Cost is estimated from usage and the dated price table `openai-prices-2026-11-10`, copied from OpenAI's public page. It is unknown when usage is missing, the model is unpriced, or the call failed before a body arrived.
+    - Cost is estimated from usage and a dated price table copied from OpenAI's public page: `openai-prices-2026-11-10` at first, `openai-prices-2026-11-11` since the dated snapshots were added. It is unknown when usage is missing, the model is unpriced, or the call failed before a body arrived.
     - A billed-but-unusable response keeps its usage and cost.
+    - The estimate counts every search item as a billed call. OpenAI's own counter in the stored responses counts fewer (311 against 340). If OpenAI bills by that counter, the estimate is about $0.29 high over the runs so far. The higher count is kept until an invoice settles it.
   - **Benchmark** (`scripts/benchmark-chatgpt-models.ts`).
     - Runs a dry run by default. A paid run needs `--live`, `--max-usd` at or below $40, `--i-confirm-founder-approved-budget` and `OPENAI_PROBE_API_KEY`.
-    - Makes one call at a time, with no retries and a 120-second deadline.
-    - Reserves each run's worst case before the call and stops before the cap. An unknown cost counts as the worst case, and a run above its worst case stops the benchmark.
-    - Covers 10 brand-free questions × 5 repeats × `gpt-6-luna`, `gpt-6.1-terra` and the `chat-latest` reference.
+    - Makes one call at a time, with no retries. The deadline follows the output cap: 120 seconds at 4,000 (every run so far) and 240 seconds at 8,000.
+    - Reserves each run's worst case before the call and stops before the cap. An unknown cost counts as the worst case, and a run above its worst case stops the benchmark. A call refused for lack of credit is the exception: OpenAI neither processes nor bills it, so it counts as nothing.
+    - The first benchmark covered 10 brand-free questions × 5 repeats × `gpt-6-luna`, `gpt-6.1-terra` and the `chat-latest` reference. Later phases choose question sets, models and repeats by flag.
     - Writes raw output only to the git-ignored `.benchmark-out/`.
+    - **Added on 2026-11-13, before any run at the 8,000 cap:**
+      - the lifetime check fails closed on a damaged record, an amount that isn't a number, or a run of unknown cost whose worst case can't be worked out;
+      - the spend the repository records (237 runs, $15.35 through 2026-11-11) is a floor, so a machine without the earlier output can't count from $0;
+      - each call's worst case is written to `reservations.jsonl` before the call, and an unsettled reservation counts toward the ceiling;
+      - one paid run at a time: a lock file is taken before the ledger is read, because two runs started together would each pass the ceiling check;
+      - the run stops at a rejected request (HTTP 400, 401, 403, 404), after two runs in a row of unknown cost or three in one invocation, and past `--max-failed` failed runs of the phase, a count that carries across a resume;
+      - a stopped run continues with `--resume=<its folder>`: the start index, what the phase already booked and its failed runs are read from that run's files, so one cap covers every part and no call that reached the model is made again. A higher cap than the stopped run had needs a separate switch, and a phase past its failure limit is not continued;
+      - an output folder that holds a run is refused, and so is a path that leaves the ledger folder through a symbolic link;
+      - the dry run projects cost from the model's recorded runs and states that basis, because the fixed assumption understated the smaller-vendor phase ($8.65 projected for 110 runs; $9.41 spent on 84) and gives the chosen model less than half its recorded cost.
+    - The live loop was exercised offline on 2026-11-13 in a scratch copy with a stand-in for the provider (no network, a fake key). That is a check of the runner's rules, not a validation against OpenAI.
+    - Independent reviews on 2026-11-13 reproduced three gaps in the first versions of these safeguards: two overlapping runs could pass the ceiling together, a resumed run started with a fresh cap, and a resumed run started its failure count again. The lock, `--resume` and the phase-wide failure count close them.
   - **Unchanged from the first X1 commit:** the evidence contract, sources (D-044) and the separate key (`OPENAI_PROBE_API_KEY`). The worker still refuses `openai_chatgpt` (`UNKNOWN_PROVIDER`).
 - **Not in X1:**
   - wiring the adapter into the worker (a provider route, answer replay, the cost basis in the ledger and the per-attempt deadline);
-  - any live call;
+  - any measurement call (the benchmark's calls are the only ones);
   - showing ChatGPT results anywhere.
+- **Consequence of the chosen model for the worker (not built here).**
+  - The production and staging worker configurations allow 45 seconds per provider call, and the startup rule keeps the call time plus the 10-second grace under the 60-second lease.
+  - 12 of the chosen model's 21 recorded runs took longer than 45 seconds at the 4,000 cap, and a full 8,000-token answer extrapolates to about 135 seconds.
+  - Wiring this engine therefore needs a longer provider timeout, lease, runtime ceiling and readiness window. A changed provider timeout is a revisit trigger in D-029, D-030, D-034 and D-036, so it needs its own decision and a worker redeploy.
 - **Benchmark (2026-11-11):**
   - 124 of 150 runs reached the models. The OpenAI account's prepaid credit ran out at run 124, and the script now stops on that refusal.
   - Estimated spend was $5.73, plus $0.22 for the smoke test.
@@ -986,12 +1013,30 @@ Each item below departed from a document that governed before this approval: V1_
   - **Comparisons:**
     - `gpt-6.1-terra`: $0.0197 per run, stability 0.23;
     - `chat-latest` (reference): $0.110 per run, 18.3 s, stability 0.46.
-  - No human rating of answer quality has been done.
+  - No human rating of answer quality was done in this first benchmark. A blind review followed in the smaller-vendor validation.
+- **Smaller-vendor validation (2026-11-11):** 84 of 110 runs before the $10 cap stopped it; estimated spend $9.41. Results, the blind review and the engineer's recommendation of `gpt-5.4-2026-03-05` are in the validity note.
+- **Confirmation run on the flex tier (authorised 2026-11-17):**
+  - `gpt-5.4-2026-03-05` under the `v4` setting, the same 60 runs and $12 cap. Projected at $7.68 counted at the upper bound (output at the flex rate, input and search calls at the standard rate), or $5.98 if flex halves the input tokens too; $9.05 on the standard tier.
+  - **New spend rules, written before any flex call:**
+    - cost on flex is an upper bound, and the worst case reserved per run stays at the standard rates;
+    - a flex capacity refusal (HTTP 429 "Resource Unavailable", which OpenAI does not charge) is not an attempt. It books nothing and counts as no failure, and its plan index is called again after a wait of 30 s, doubling: at most 5 times per index and an hour per invocation;
+    - any other 429 keeps the unknown-cost rule;
+    - reservations are settled by count per plan index;
+    - the call deadline is 290 s on flex.
+  - Its seven pass criteria are in the validity note: pinned model, flex tier on every processed response, no run at the cap, at least 57 of 60 usable, no call of 240 s or more, the request echoed as configured, and the cap respected.
+- **Confirmation run under `v3` (prepared 2026-11-13, never authorised, never run; replaced by the flex run above):**
+  - `gpt-5.4-2026-03-05` under the `v3` setting, the 20 questions of both fixtures × 3 repeats = 60 runs, with a $12 cap.
+  - Projected at about $9 from the model's 21 recorded runs. Lifetime spend would be at most $27.35 of $40.
+  - Its pass criteria are written in the validity note before the run: pinned model, no run at the cap, at least 57 of 60 usable, no call at the deadline, the request echoed as configured, and the cap respected.
+  - **Corrected figures:** a Starter month of 240 usable runs on this engine is about $35–38, not the $33 first reported, which left out the cost of failed runs. The "about 90 seconds" worker deadline was read at the 4,000 cap and is too low for 8,000.
 - **Open founder items:**
-  1. Approve a model after the smaller-vendor validation reports. See "Follow-up analysis and smaller-vendor validation" in the validity note.
-  2. Confirm OpenAI's terms permit this use.
-  3. Top up the project's credit and check its rate limits before production.
+  1. ~~Choose a model~~: `gpt-5.4-2026-03-05`, chosen on 2026-11-13.
+  2. ~~Authorise the confirmation run~~: authorised on 2026-11-17, on the flex tier, with a $12 cap; the founder added OpenAI credit.
+  3. Say whether about $35–38 per Starter month fits the plan's price.
+  4. Approve the model for measurement after the confirmation run reports, and judge whether flex's speed and capacity refusals suit the worker.
+  5. Confirm OpenAI's terms permit this use.
+  6. Check the project's rate limits before production.
 - **Tests:**
-  - `npm run test:chatgpt-adapter` (126, offline; no network);
+  - `npm run test:chatgpt-adapter` (182 on 2026-11-13, 193 on 2026-11-17 with the flex setting; offline, no network). On 2026-11-13 the suite was checked by mutation: 79 deliberate single-line defects were introduced into the adapter, the pricing module, the benchmark logic and the runner, one at a time, and the suite failed on every one. The runner's own checks are on its source text, so its behaviour end to end rests on the offline simulation above;
   - `npm run test:paid-execution-guards`, which checks that no web entry point reaches `lib/probes/chatgpt.ts`.
 - **Recovery:** nothing to roll back. The adapter, the pricing module and the benchmark are unreferenced by the app.

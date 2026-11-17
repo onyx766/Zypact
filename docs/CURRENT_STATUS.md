@@ -1895,29 +1895,38 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 | `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | P1 45/45, P2 71/71, E1 74/74, Q4 52/52 (all 89 migrations applied) |
 | `npm run test:prod-preflight` | pass (Q4's version, 2 tables, 3 functions and `_q4_` listed) |
 
-## 29. X1 ChatGPT adapter and model benchmark (D-050) — branch `feat/x1-chatgpt-adapter`, not wired, no live call
+## 29. X1 ChatGPT adapter and model benchmark (D-050) — branch `feat/x1-chatgpt-adapter`, not wired, benchmark calls only
 
 - **What it adds:**
   - `lib/probes/chatgpt.ts`, the OpenAI Responses API with web search under versioned settings (`auto` for monitoring, `required` as a separate protocol). No model is approved yet.
   - `lib/probes/chatgpt-pricing.ts`, usage capture and cost estimation from the dated price table. Unknown, never $0.
   - `scripts/benchmark-chatgpt-models.ts`, a dry run by default. It compares candidate models against the `chat-latest` reference:
     - candidates: `gpt-6-luna`, `gpt-6.1-terra`, and, from 2026-11-11, the dated snapshots `gpt-5.5-2026-04-23` and `gpt-5.4-2026-03-05`;
-    - question sets: `general` or `smaller-vendor`, with per-model repeats;
+    - question sets: `general`, `smaller-vendor` or both, with per-model repeats;
     - spending: a $40 lifetime ceiling counted from every recorded run.
   - The validity note `docs/ADAPTER_VALIDITY_CHATGPT.md`, recording the founder's 2026-11-10 decisions.
+- **Model choice (2026-11-13):**
+  - The founder chose `gpt-5.4-2026-03-05`. It is not approved for measurement yet, and `CHATGPT_APPROVED_SETTING_VERSION` is still `null`.
+  - Its new setting, `openai-responses-websearch-v3:auto:gpt-5.4-2026-03-05`, raises the output cap from 4,000 to 8,000 tokens. It is the version to approve if the confirmation run passes, and the 4,000-cap setting can never be approved.
+  - A 60-run confirmation run with a $12 cap was prepared under that setting and never run. On 2026-11-17 the founder agreed to run it on OpenAI's half-price flex tier and added OpenAI credit. The run now uses `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05` (the `v3` setting plus `service_tier: "flex"`), which is the version to approve if it passes.
+  - Wiring this model into the worker would need longer worker time limits than the present 45 seconds per provider call. That is a separate decision; see D-050.
 - **Not connected:**
   - the worker refuses provider `openai_chatgpt`;
   - no web entry point or other app module imports the adapter;
-  - `OPENAI_PROBE_API_KEY` is not set anywhere.
-- **Commands and local results (2026-11-10):**
+  - `OPENAI_PROBE_API_KEY` appears in no deployment configuration in the repository, and this work did not add it to Vercel or Fly. It is used only for local benchmark runs.
+- **Commands and local results (2026-11-13 unless dated otherwise):**
 
 | Command | Result |
 |---|---|
-| `npm run test:chatgpt-adapter` | 126/126 (2026-11-11) |
+| `npm run test:chatgpt-adapter` | 182/182 on 2026-11-13; 193/193 on 2026-11-17 with the `v4` (flex) setting |
+| Mutation check of that suite, in a scratch copy: 79 deliberate single-line defects, one at a time | the suite failed on all 79 |
 | Live benchmark, 2026-11-11, founder-confirmed budget | 124 of 150 runs reached the models before the account credit ran out; estimated spend $5.73 plus $0.22 for the smoke test; results in the validity note |
-| `npm run benchmark:chatgpt-models` (dry run) | prints the 150-run plan, no call |
+| `npm run benchmark:chatgpt-models` (dry run, no flags) | prints the plan for all five models: 250 runs, over the 150-run limit, so a live run of it would be refused; no call |
 | Smaller-vendor validation dry run, 2026-11-11 (`--question-set=smaller-vendor`, 110 runs, `--max-usd=10`) | plan and lifetime ledger printed, no call |
-| Smaller-vendor validation, live, 2026-11-11 (founder-approved $10 phase) | 84 of 110 runs before the $10 cap stopped it as designed; estimated spend $9.41 (lifetime $15.35 of $40); results and blind review in the validity note; recommendation `gpt-5.4-2026-03-05`, pending founder decision |
+| Smaller-vendor validation, live, 2026-11-11 (founder-approved $10 phase) | 84 of 110 runs before the $10 cap stopped it as designed; estimated spend $9.41 (lifetime $15.35 of $40); results and blind review in the validity note; recommendation `gpt-5.4-2026-03-05` |
+| Confirmation dry run (`--models=gpt-5.4-2026-03-05 --question-set=general,smaller-vendor --repeats=3 --max-failed=3 --max-usd=12`) | 60 runs under the `v3` setting; projected $9.05, worst case $0.54 per run; lifetime $15.35 spent, $24.65 left; no call |
+| The same dry run on 2026-11-17, under the `v4` (flex) setting | 60 runs; projected $7.68 at the upper bound ($5.98 if flex halves the input tokens too), worst case $0.54 per run, deadline 290 s per call; lifetime $15.35 spent, $24.65 left; no call |
+| Offline simulation of the live loop, in a scratch copy with a stand-in provider (no network, fake key) | each of these behaved as designed: a complete run; a run cut off at the cap; repeated and alternating failures; a rejected request; a deadline; an overrun; a budget stop; a credit refusal; resume under one cap, with the failure count carried over; a resume refused past the failure limit or with a higher cap; a second resume of the same run; two runs at once; a killed process; missing earlier output; a damaged ledger. Not a validation against OpenAI |
 | `npm run test:paid-execution-guards` | 143/143 |
 | `npm run test:perplexity-agent-adapter` | 158/158 |
 | `npm run test:measurement-compatibility` | 89/89 |

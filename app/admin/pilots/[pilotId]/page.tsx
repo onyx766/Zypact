@@ -2,7 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { requireFounderForPage } from "@/lib/auth/founder";
-import { listPilotActionsForAdmin } from "@/lib/pilots/action-store";
+import { revisionActionsCurrent, STALE_REVISION_WORDS } from "@/lib/pilots/action-rules";
+import { currentReportableVersionIds, listPilotActionsForAdmin } from "@/lib/pilots/action-store";
 import {
   ENGINE_NOT_MEASURED,
   PILOT_ENGINES,
@@ -47,6 +48,10 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
   const revisions = await listPilotReportRevisions(client, pilot.id);
   // D-057 — the team's suggested actions, and the questions whose answers they may link to.
   const actions = await listPilotActionsForAdmin(client, pilot.id);
+  // D-057 — a revision whose listed actions are no longer the reviewed, current ones cannot be shared.
+  const currentActionVersions = await currentReportableVersionIds(client, pilot.id);
+  const isStale = (r: { actionVersionIds: string[]; sharedAt: string | null }) =>
+    r.sharedAt === null && !revisionActionsCurrent(r.actionVersionIds, currentActionVersions);
   const actionQuestions = questions
     .filter((q) => q.retiredAt === null && q.perplexity !== null)
     .map((q) => ({ pilotQuestionId: q.id, ordinal: q.ordinal, text: q.questionText }));
@@ -198,7 +203,13 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
             alternativeExplanations: a.alternativeExplanations,
             openQuestions: a.openQuestions,
             withdrawReason: a.withdrawReason,
-            evidence: a.evidence,
+            evidence: a.evidence.map((e) => ({
+              attemptId: e.attemptId,
+              sourceUrl: e.sourceUrl,
+              words: e.words,
+              answerText: e.answerText,
+              answerNote: e.answerNote,
+            })),
           }))}
         />
       </div>
@@ -260,7 +271,9 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
                         {r.integrityStatus === "blocked"
                           ? "Cannot be shared"
                           : r.id === revisions[0]?.id
-                            ? "Not shared: read it to share it"
+                            ? isStale(r)
+                              ? STALE_REVISION_WORDS
+                              : "Not shared: read it to share it"
                             : "Not shared (a newer revision exists)"}
                       </span>
                     )}

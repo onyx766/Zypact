@@ -46,9 +46,25 @@ export const WITHDRAW_PILOT_ACTION_REFUSAL: Record<string, string> = {
   ALREADY_WITHDRAWN: "This suggested action is already withdrawn.",
 };
 
-/** The founder's confirmation before a review. */
+/**
+ * The founder's confirmation before a review. The console shows each linked
+ * answer's stored text and its source beside the action, so the claim that
+ * they were read can be true.
+ */
 export const REVIEW_PILOT_ACTION_PROMPT =
-  "I have read this suggested action, and the answers and sources it links to, and it says nothing they do not show. Mark it reviewed? Only reviewed actions appear in a report, and any later edit needs a new review.";
+  "I have read this suggested action, the stored answers it links to (shown under each link) and the sources it names, and it says nothing they do not show. Mark it reviewed? Only reviewed actions appear in a report: a report built before this review can no longer be shared, so build the report again. Any later edit needs a new review.";
+
+/** The founder's prompt before a withdrawal (D-057). */
+export const WITHDRAW_PILOT_ACTION_PROMPT =
+  "Why withdraw this suggested action? (10-2000 characters)\n\nIt is kept with its history and can no longer be edited. A report built while it was shown can no longer be shared: build the report again. A report already shared keeps what it showed.";
+
+/** Shown with the Edit button and on the edit form (D-057). */
+export const EDIT_PILOT_ACTION_NOTE =
+  "An edit is saved as a new draft version. Until you review it, the action is in no report, and a report built with the earlier version can no longer be shared: review the edit, then build the report again.";
+
+/** A revision whose listed actions are no longer the pilot's reviewed, current ones (D-057). */
+export const STALE_REVISION_WORDS =
+  "Out of date: a suggested action was reviewed, edited or withdrawn after this revision was built. It cannot be shared. Build the report again.";
 
 export type PilotActionStatus = "draft" | "reviewed" | "withdrawn";
 

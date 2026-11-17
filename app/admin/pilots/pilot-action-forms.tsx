@@ -4,10 +4,12 @@ import { useState } from "react";
 import { Plus, X } from "lucide-react";
 
 import {
+  EDIT_PILOT_ACTION_NOTE,
   MAX_ACTION_EVIDENCE,
   PILOT_ACTION_STATUS_WORDS,
   PILOT_ACTION_TEXT_FIELDS,
   REVIEW_PILOT_ACTION_PROMPT,
+  WITHDRAW_PILOT_ACTION_PROMPT,
   type PilotActionStatus,
 } from "@/lib/pilots/action-copy";
 
@@ -33,7 +35,14 @@ export interface PilotActionView {
   alternativeExplanations: string;
   openQuestions: string;
   withdrawReason: string | null;
-  evidence: { attemptId: string; sourceUrl: string | null; words: string }[];
+  evidence: {
+    attemptId: string;
+    sourceUrl: string | null;
+    words: string;
+    /** The stored answer's text, read after its fingerprint check, for the founder to read before a review. */
+    answerText: string | null;
+    answerNote: string | null;
+  }[];
 }
 
 export interface PilotActionQuestion {
@@ -123,11 +132,30 @@ export function PilotActionsPanel({
             </p>
             <ul className="zpa-muted">
               {a.evidence.map((e) => (
-                <li key={`${e.attemptId}-${e.sourceUrl ?? ""}`}>{e.words}</li>
+                <li key={`${e.attemptId}-${e.sourceUrl ?? ""}`}>
+                  {e.words}
+                  {e.sourceUrl ? (
+                    <>
+                      {" "}
+                      <a href={e.sourceUrl} target="_blank" rel="noopener noreferrer nofollow">
+                        open the source
+                      </a>
+                    </>
+                  ) : null}
+                  <details>
+                    <summary>Read the stored answer</summary>
+                    {e.answerText !== null ? (
+                      <p style={{ whiteSpace: "pre-wrap" }}>{e.answerText}</p>
+                    ) : (
+                      <p>{e.answerNote ?? "No stored answer."}</p>
+                    )}
+                  </details>
+                </li>
               ))}
             </ul>
             {a.status !== "withdrawn" ? (
               <div className="zpa-actions">
+                <p className="zpa-muted">{EDIT_PILOT_ACTION_NOTE}</p>
                 <button type="button" className="zpa-btn zpa-btn-sm" onClick={() => setEditing(a)}>
                   Edit (a new version, reviewed again)
                 </button>
@@ -162,7 +190,9 @@ function PilotActionForm({
     alternativeExplanations: action?.alternativeExplanations ?? "",
     openQuestions: action?.openQuestions ?? "",
   }));
-  const [links, setLinks] = useState<Link[]>(() => action?.evidence ?? []);
+  const [links, setLinks] = useState<Link[]>(() =>
+    (action?.evidence ?? []).map((e) => ({ attemptId: e.attemptId, sourceUrl: e.sourceUrl, words: e.words }))
+  );
   const [questionId, setQuestionId] = useState("");
   const [choices, setChoices] = useState<Choice[] | null>(null);
   const [answerId, setAnswerId] = useState("");
@@ -238,6 +268,7 @@ function PilotActionForm({
             a report only once you review it. It names no owner, timing or expected result: those are set if the customer
             chooses to test it as a registered change.
           </p>
+          {action ? <p className="zpa-muted">{EDIT_PILOT_ACTION_NOTE}</p> : null}
         </div>
         <button type="button" className="zpa-icon-btn" onClick={onClose} disabled={busy} aria-label="Cancel">
           <X size={18} />
@@ -370,9 +401,7 @@ function WithdrawActionButton({ pilotId, actionId }: { pilotId: string; actionId
   const [message, setMessage] = useState<string | null>(null);
 
   async function withdraw() {
-    const reason = window.prompt(
-      "Why withdraw this suggested action? (10-2000 characters)\n\nIt is kept with its history, appears in no later report and can no longer be edited. A report already shared keeps what it showed."
-    );
+    const reason = window.prompt(WITHDRAW_PILOT_ACTION_PROMPT);
     if (!reason) return;
     setBusy(true);
     setMessage(null);

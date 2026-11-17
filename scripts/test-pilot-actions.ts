@@ -5,7 +5,9 @@
  *   P  the rules, the copy and the action builder are pure;
  *   F  an action version needs every field and 1-10 well-formed links;
  *   L  the wording lint: METHODOLOGY §19, causal and promise wording, the
- *      repository's claim-language list; it runs at save and at build;
+ *      repository's claim-language list, hedged predictions and causal
+ *      verbs, read after NFKC, format-character and look-alike folding; it
+ *      runs at save and at build; ordinary wording passes;
  *   S  only each action's latest version, reviewed and not withdrawn, is
  *      reportable; an edit after a review is a draft again;
  *   R  the report: the section on the page and in the Markdown from one
@@ -13,13 +15,20 @@
  *      not in the answer, an answer outside the pilot, not completed,
  *      tampered or retired blocks it), any action holds it for review, no
  *      section without a reviewed action;
- *   T  the routes: founder guard first, lint and evidence checks before the
+ *   T  the routes: founder guard first, parse and lint before the checked
  *      save, closed log fields; the console's client code loads no server
  *      module;
+ *   K  the store run for real against a fake client: the evidence check
+ *      returns the answer's own source URL and refuses what is not in the
+ *      answer, the checked save calls the database only after it, the
+ *      picker, the reportable versions, the console's stored answer text;
+ *   C  the console and share copy: rebuild after a change, stale
+ *      revisions, the review prompt, the customer note;
  *   M  the migration's contract: append-only tables, RLS, privileges, the
- *      evidence trigger, refusals before any write, and
- *      save_pilot_report_artifact redefined byte for byte apart from its
- *      marked block;
+ *      evidence trigger, refusals before any write, review and withdrawal
+ *      serialised on the pilot row, and save_pilot_report_artifact and
+ *      share_pilot_report_artifact redefined byte for byte apart from their
+ *      marked blocks (the content check and ACTIONS_STALE);
  *   D  the decision, the status and the runbook are written.
  */
 import { createHash } from "node:crypto";
@@ -35,6 +44,8 @@ import {
 import {
   lintPilotActionText,
   METHODOLOGY_19_PHRASES,
+  normaliseForLint,
+  revisionActionsCurrent,
   parseSavePilotAction,
   pilotActionStatus,
   PILOT_ACTION_PROMISE_PHRASES,
@@ -44,6 +55,23 @@ import {
   type PilotActionVersionRow,
 } from "@/lib/pilots/action-rules";
 import { FORBIDDEN_W1_PHRASES } from "@/lib/site-diagnostic/copy";
+import {
+  currentReportableVersionIds,
+  listPilotActionsForAdmin,
+  loadEvidenceChoices,
+  readReportableActions,
+  savePilotActionChecked,
+  storedAnswerText,
+  verifyActionEvidence,
+} from "@/lib/pilots/action-store";
+import {
+  EDIT_PILOT_ACTION_NOTE,
+  REVIEW_PILOT_ACTION_PROMPT,
+  STALE_REVISION_WORDS,
+  WITHDRAW_PILOT_ACTION_PROMPT,
+} from "@/lib/pilots/action-copy";
+import { SHARE_PILOT_REPORT_REFUSAL } from "@/lib/reports/pilot-report-copy";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { buildPilotReport, type PilotReportInput, type PilotReportQuestionInput } from "@/lib/reports/build-pilot-report";
 import type { PilotReportActionInput } from "@/lib/reports/build-pilot-actions";
 import { runOrdinalsByAttemptId } from "@/lib/reports/build-protocol-report";
@@ -297,11 +325,45 @@ check("L2 causal and promise wording is refused",
 check("L3 the repository's claim-language list is refused too", FORBIDDEN_W1_PHRASES.every((p) => lintPilotActionText(`Note: ${p}.`).length > 0));
 check("L4 case and typographic apostrophes do not hide a phrase",
   lintPilotActionText("WILL IMPROVE").length > 0 && lintPilotActionText("AI buyers can’t find you").length > 0);
-check("L5 a hypothesis worded as one passes, and a phrase only matches at a word start",
+check("L5 a hypothesis worded as one passes, and a phrase matches only as whole words",
   lintPilotActionText(TEXT.whyItMightMatter).length === 0 && lintPilotActionText("The post was censured by moderators.").length === 0 &&
+  lintPilotActionText("Make sure to keep the G2 profile current.").length === 0 && lintPilotActionText("Use proven tools to compare answers.").length === 0 &&
   Object.values(TEXT).every((t) => lintPilotActionText(t).length === 0));
 const linted = parseSavePilotAction(body({ suggestedAction: "Publish a page; it will improve how often you are named." }));
 check("L6 a lint hit refuses the save, on the field that has it", !linted.ok && (linted.issues.suggestedAction?.[0] ?? "").includes("will improve"));
+const REVIEW_EVASIONS = [
+  "This will likely improve how often you are named.",
+  "Publishing this should increase mentions.",
+  "This is expected to increase mentions.",
+  "Adding schema causes Perplexity to cite you.",
+  "The missing page led to the absence.",
+  "AI buyers can not find you.",
+  "We guar\u00ADantee this.",
+  "This will\u200Bimprove the answers.",
+  "The missing page c\u0430used it.",
+];
+check("L8 every rewording the review found to slip through is refused (hedges, inflections, causal verbs, invisible characters, look-alike letters)",
+  REVIEW_EVASIONS.every((t) => lintPilotActionText(t).length > 0),
+  REVIEW_EVASIONS.filter((t) => lintPilotActionText(t).length === 0).join(" | "));
+const HARMLESS = [
+  "Make sure to keep the comparison page current.",
+  "Use proven tools to compare the answers.",
+  "We want to know how likely buyers are to open such a page.",
+  "Whether this could be tested within the pilot is open.",
+  "The engine may favour other sources for reasons unrelated to any page.",
+  "Whether the engine would read a new page at all within the pilot.",
+];
+check("L9 ordinary wording passes, both ways round: the patterns need a modal and a change verb, or a causal verb, as whole words",
+  HARMLESS.every((t) => lintPilotActionText(t).length === 0),
+  HARMLESS.filter((t) => lintPilotActionText(t).length > 0).map((t) => `${t} → ${lintPilotActionText(t).join(",")}`).join(" | "));
+check("L10 the lint reads NFKC text with format characters removed and spaced, look-alike letters folded, whitespace collapsed",
+  normaliseForLint("guar\u00ADantee", "remove") === "guarantee" && normaliseForLint("will\u200Bimprove", "space") === "will improve" &&
+  normaliseForLint("c\u0430used", "remove") === "caused" && normaliseForLint("ＷＩＬＬ   improve", "remove") === "will improve" &&
+  normaliseForLint("\uFEFFcan\u2019t find you", "remove") === "can't find you");
+check("L11 hedged and causal variants each name the words that matched, so the writer sees what to reword",
+  lintPilotActionText("This will likely improve how often you are named.").includes("will likely improve") &&
+  lintPilotActionText("Publishing this should increase mentions.").includes("should increase") &&
+  lintPilotActionText("The missing page led to the absence.").includes("led to"));
 check("L7 the promise list covers the words the decision names",
   ["will improve", "will increase", "guarantee", "caused", "because of this page", "ensure", "boost your ranking"].every((p) => PILOT_ACTION_PROMISE_PHRASES.includes(p)));
 
@@ -411,9 +473,9 @@ check("T1 every route checks the founder before it reads the request or the data
     const firstRead = Math.min(...["request.json()", "getReportServiceClient()", "new URL(request.url)"].map((m) => (s.indexOf(m) < 0 ? Infinity : s.indexOf(m))));
     return guard > 0 && guard < firstRead;
   }));
-check("T2 the save route lints and checks the links before the database write",
-  src.save.indexOf("parseSavePilotAction(") < src.save.indexOf("verifyActionEvidence(") &&
-  src.save.indexOf("verifyActionEvidence(") < src.save.indexOf("savePilotAction(client"));
+check("T2 the save route parses and lints first, then saves only through the checked save (exercised in K below)",
+  src.save.indexOf("parseSavePilotAction(") > 0 && src.save.indexOf("parseSavePilotAction(") < src.save.indexOf("savePilotActionChecked(") &&
+  !/savePilotAction\(client/.test(src.save) && !/verifyActionEvidence/.test(src.save));
 const logBlocks = Object.values(src).flatMap((s) => [...s.matchAll(/console\.info\(\s*JSON\.stringify\(\{([\s\S]*?)\}\)\s*\);/g)].map((m) => m[1]));
 check("T3 the routes log closed fields only: no wording, reason, source or question text",
   logBlocks.length === 4 && logBlocks.every((b) => !/title|observation|suggested|why|alternative|openQuestions|reason|sourceUrl|summary|text/i.test(b)),
@@ -435,6 +497,161 @@ const store = read("lib/pilots/action-store.ts");
 check("T9 the store writes only through the three functions", ["save_pilot_action", "review_pilot_action", "withdraw_pilot_action"].every((f) => store.includes(`rpc("${f}"`)) &&
   !/\.(insert|update|upsert|delete)\(/.test(store));
 
+/* ---------------------------------------------------------------- K: the store, run for real against a fake client */
+
+type FakeRow = Record<string, unknown>;
+interface FakeRpcCall { fn: string; args: Record<string, unknown> }
+/** A read-only stand-in for the Supabase query builder: select, eq, in, order; and rpc recorded. */
+function fakeClient(tables: Record<string, FakeRow[]>, rpcCalls: FakeRpcCall[] = []): SupabaseClient {
+  const from = (table: string) => {
+    let rows = [...(tables[table] ?? [])];
+    const q: Record<string, unknown> = {};
+    q.select = () => q;
+    q.eq = (c: string, v: unknown) => { rows = rows.filter((r) => r[c] === v); return q; };
+    q.in = (c: string, vs: unknown[]) => { rows = rows.filter((r) => vs.includes(r[c])); return q; };
+    q.order = (c: string, o?: { ascending?: boolean }) => {
+      rows.sort((a, b) => (String(a[c]) < String(b[c]) ? -1 : String(a[c]) > String(b[c]) ? 1 : 0) * (o?.ascending === false ? -1 : 1));
+      return q;
+    };
+    q.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+      Promise.resolve({ data: rows, error: null }).then(resolve, reject);
+    return q;
+  };
+  const rpc = async (fn: string, args: Record<string, unknown>) => {
+    rpcCalls.push({ fn, args });
+    return { data: [{ outcome: "SAVED", saved_action_id: uid(6001), saved_version_id: uid(6002), saved_version_number: 1 }], error: null };
+  };
+  return { from, rpc } as unknown as SupabaseClient;
+}
+
+const kq1 = question(11, FIVE);
+const kq2 = question(12, FIVE, "2026-11-19T00:00:00Z");
+const kTampered = question(13, FIVE);
+kTampered.slots[0].evidence.results[0] = { ...kTampered.slots[0].evidence.results[0], rawResponse: `${kTampered.slots[0].evidence.results[0].rawResponse} ` };
+const attemptRows = (q: PilotReportQuestionInput) => q.slots[0].evidence.attempts.map((a) => ({
+  id: a.id, protocol_id: q.slots[0].protocolId, attempt_kind: a.attemptKind, status: a.status, baseline_ordinal: a.baselineOrdinal,
+  probe_run_id: a.probeRunId, retry_of_attempt_id: a.retryOfAttemptId, termination_reason: a.terminationReason,
+}));
+const resultRows = (q: PilotReportQuestionInput) => q.slots[0].evidence.results.map((r) => ({
+  probe_run_id: r.probeRunId, raw_response: r.rawResponse, raw_response_sha256: r.rawResponseSha256, answer_summary: r.answerSummary,
+}));
+const KQS = [kq1, kq2, kTampered];
+const K_ACT = { a: uid(6101), b: uid(6102), c: uid(6103) };
+const K_VER = { a1: uid(6111), a2: uid(6112), b1: uid(6121), c1: uid(6131) };
+const kAtt = kq1.slots[0].evidence.attempts;
+const kTables: Record<string, FakeRow[]> = {
+  pilot_questions: KQS.map((q) => ({ id: q.pilotQuestionId, pilot_id: PILOT, ordinal: q.ordinal, retired_at: q.retiredAt })),
+  pilot_question_protocols: KQS.map((q) => ({ pilot_question_id: q.pilotQuestionId, engine: "perplexity_sonar", phase: "baseline", protocol_id: q.slots[0].protocolId })),
+  protocol_attempts: KQS.flatMap(attemptRows),
+  probe_results: KQS.flatMap(resultRows),
+  pilot_actions: [
+    { id: K_ACT.a, pilot_id: PILOT, created_at: "2026-11-19T01:00:00Z" },
+    { id: K_ACT.b, pilot_id: PILOT, created_at: "2026-11-19T02:00:00Z" },
+    { id: K_ACT.c, pilot_id: PILOT, created_at: "2026-11-19T03:00:00Z" },
+  ],
+  pilot_action_versions: [
+    { id: K_VER.a1, action_id: K_ACT.a, pilot_id: PILOT, version_number: 1, title: "A v1", observation: TEXT.observation, suggested_action: TEXT.suggestedAction, why_it_might_matter: TEXT.whyItMightMatter, alternative_explanations: TEXT.alternativeExplanations, open_questions: TEXT.openQuestions, written_at: "2026-11-19T01:00:00Z" },
+    { id: K_VER.a2, action_id: K_ACT.a, pilot_id: PILOT, version_number: 2, title: "A v2", observation: TEXT.observation, suggested_action: TEXT.suggestedAction, why_it_might_matter: TEXT.whyItMightMatter, alternative_explanations: TEXT.alternativeExplanations, open_questions: TEXT.openQuestions, written_at: "2026-11-19T04:00:00Z" },
+    { id: K_VER.b1, action_id: K_ACT.b, pilot_id: PILOT, version_number: 1, title: "B v1", observation: TEXT.observation, suggested_action: TEXT.suggestedAction, why_it_might_matter: TEXT.whyItMightMatter, alternative_explanations: TEXT.alternativeExplanations, open_questions: TEXT.openQuestions, written_at: "2026-11-19T02:00:00Z" },
+    { id: K_VER.c1, action_id: K_ACT.c, pilot_id: PILOT, version_number: 1, title: "C v1", observation: TEXT.observation, suggested_action: TEXT.suggestedAction, why_it_might_matter: TEXT.whyItMightMatter, alternative_explanations: TEXT.alternativeExplanations, open_questions: TEXT.openQuestions, written_at: "2026-11-19T03:00:00Z" },
+  ],
+  pilot_action_events: [
+    { action_id: K_ACT.a, action_version_id: K_VER.a1, pilot_id: PILOT, event: "reviewed", created_at: "2026-11-19T01:30:00Z", reason: null },
+    { action_id: K_ACT.b, action_version_id: K_VER.b1, pilot_id: PILOT, event: "reviewed", created_at: "2026-11-19T02:30:00Z", reason: null },
+    { action_id: K_ACT.c, action_version_id: K_VER.c1, pilot_id: PILOT, event: "reviewed", created_at: "2026-11-19T03:30:00Z", reason: null },
+    { action_id: K_ACT.c, action_version_id: null, pilot_id: PILOT, event: "withdrawn", created_at: "2026-11-19T05:00:00Z", reason: "No longer supported." },
+  ],
+  pilot_action_evidence: [
+    { action_version_id: K_VER.b1, position: 2, attempt_id: kAtt[1].id, source_url: null },
+    { action_version_id: K_VER.b1, position: 1, attempt_id: kAtt[0].id, source_url: G2 },
+    { action_version_id: K_VER.a2, position: 1, attempt_id: kAtt[0].id, source_url: null },
+    { action_version_id: K_VER.c1, position: 1, attempt_id: kTampered.slots[0].evidence.attempts[0].id, source_url: null },
+  ],
+};
+
+const kDone = (async () => {
+  const kc = fakeClient(kTables);
+  const posted = "https://WWW.G2.com/categories/analytics#reviews";
+  const v1 = await verifyActionEvidence(kc, PILOT, [{ attemptId: kAtt[0].id, sourceUrl: posted }, { attemptId: kAtt[0].id, sourceUrl: G2 }, { attemptId: kAtt[1].id, sourceUrl: null }]);
+  check("K1 verifyActionEvidence accepts a source of that answer and returns it as the answer's own extracted URL, two spellings collapsing to one link",
+    v1.outcome === "OK" && v1.links.length === 2 && v1.links[0].sourceUrl === G2 && v1.links[1].sourceUrl === null, JSON.stringify(v1));
+  const v2 = await verifyActionEvidence(kc, PILOT, [{ attemptId: kAtt[0].id, sourceUrl: "https://www.example.com/not-in-the-answer" }]);
+  const v3 = await verifyActionEvidence(kc, PILOT, [{ attemptId: uid(424299), sourceUrl: null }]);
+  const v4 = await verifyActionEvidence(kc, PILOT, [{ attemptId: kAtt[2].id, sourceUrl: G2 }]);
+  const v5 = await verifyActionEvidence(kc, PILOT, [{ attemptId: kTampered.slots[0].evidence.attempts[0].id, sourceUrl: G2 }]);
+  check("K2 a source not in that answer, an answer outside the pilot, a failed attempt, or a tampered answer is refused with nothing to store",
+    v2.outcome === "SOURCE_NOT_IN_ANSWER" && v3.outcome === "EVIDENCE_OUTSIDE_PILOT" && v4.outcome === "EVIDENCE_NOT_AN_ANSWER" &&
+    v5.outcome === "SOURCE_NOT_IN_ANSWER" && [v2, v3, v4, v5].every((v) => v.links.length === 0),
+    [v2, v3, v4, v5].map((v) => v.outcome).join(","));
+
+  const calls: FakeRpcCall[] = [];
+  const kc2 = fakeClient(kTables, calls);
+  const fields = (evidenceLinks: { attemptId: string; sourceUrl: string | null }[]) => {
+    const parsed = parseSavePilotAction({ ...TEXT, evidence: evidenceLinks, idempotencyKey: KEY });
+    if (!parsed.ok) throw new Error("fixture does not parse");
+    return parsed.value;
+  };
+  const refused = await savePilotActionChecked(kc2, { pilotId: PILOT, writtenBy: uid(1), fields: fields([{ attemptId: kAtt[0].id, sourceUrl: "https://www.example.com/not-in-the-answer" }]) });
+  const callsAfterRefusal = calls.length;
+  const saved = await savePilotActionChecked(kc2, { pilotId: PILOT, writtenBy: uid(1), fields: fields([{ attemptId: kAtt[0].id, sourceUrl: posted }]) });
+  const sentEvidence = calls[0]?.args.p_evidence as { attemptId: string; sourceUrl: string | null }[] | undefined;
+  check("K3 the checked save calls the database only when the links pass, and sends each source as the answer's own extracted URL, never as posted",
+    refused.outcome === "SOURCE_NOT_IN_ANSWER" && callsAfterRefusal === 0 && saved.outcome === "SAVED" && calls.length === 1 &&
+    calls[0].fn === "save_pilot_action" && sentEvidence?.length === 1 && sentEvidence[0].sourceUrl === G2, JSON.stringify(calls));
+
+  const choices = await loadEvidenceChoices(kc, PILOT, kq1.pilotQuestionId);
+  check("K4 the picker offers a question's completed answers that re-hash, each with its own sources, in answer order",
+    choices !== null && choices.length === 4 && choices.every((c) => c.engineLabel === "Perplexity") &&
+    choices[0].sources.some((x) => x.url === G2 && x.cited) && choices[0].sources.some((x) => x.url === REDDIT && !x.cited) &&
+    choices.map((c) => c.answerNumber).join() === [...choices.map((c) => c.answerNumber)].sort((a, b) => a - b).join(), JSON.stringify(choices?.map((c) => c.answerNumber)));
+  const tamperedChoices = await loadEvidenceChoices(kc, PILOT, kTampered.pilotQuestionId);
+  check("K5 a tampered answer is not offered, a retired question offers nothing, and another pilot's question is unknown",
+    tamperedChoices?.length === 3 && (await loadEvidenceChoices(kc, PILOT, kq2.pilotQuestionId))?.length === 0 &&
+    (await loadEvidenceChoices(kc, uid(31337), kq1.pilotQuestionId)) === null);
+
+  const reportable = await readReportableActions(kc, PILOT);
+  check("K6 a report reads each action's latest reviewed version only: an edited action (draft again) and a withdrawn one are left out",
+    reportable.length === 1 && reportable[0].versionId === K_VER.b1 && reportable[0].title === "B v1" && reportable[0].reviewedAt === "2026-11-19T02:30:00Z",
+    JSON.stringify(reportable.map((r) => r.versionId)));
+  check("K7 its links come in their stored order, with the stored source",
+    reportable[0]?.evidence.map((e) => `${e.attemptId}|${e.sourceUrl ?? ""}`).join() === `${kAtt[0].id}|${G2},${kAtt[1].id}|`);
+  check("K8 the versions a report built now would list are exactly those",
+    JSON.stringify(await currentReportableVersionIds(kc, PILOT)) === JSON.stringify([K_VER.b1]));
+
+  const admin = await listPilotActionsForAdmin(kc, PILOT);
+  const b = admin.find((x) => x.actionId === K_ACT.b);
+  const cRow = admin.find((x) => x.actionId === K_ACT.c);
+  check("K9 the console shows each linked answer's stored text after its fingerprint check, so the review prompt's claim can be true",
+    b?.evidence[0].answerText === "Options include Vanta [1]." && b.evidence[0].answerNote === null &&
+    cRow?.evidence[0].answerText === null && (cRow?.evidence[0].answerNote ?? "").includes("fingerprint") &&
+    admin.find((x) => x.actionId === K_ACT.a)?.status === "draft" && cRow?.status === "withdrawn", JSON.stringify(b?.evidence[0]));
+  check("K10 the stored answer text is read from a Sonar or a Responses-shaped body, and nothing is made up",
+    storedAnswerText(sonarBody("Answer text.", [])) === "Answer text." &&
+    storedAnswerText(JSON.stringify({ object: "response", output: [{ type: "message", content: [{ type: "output_text", text: "Part one." }, { type: "output_text", text: "Part two." }] }] })) === "Part one.\nPart two." &&
+    storedAnswerText("not json") === null && storedAnswerText(JSON.stringify({ choices: [] })) === null && storedAnswerText(null) === null);
+  check("K11 a revision is current only when its listed versions are exactly the reviewed, current ones",
+    revisionActionsCurrent([K_VER.b1], [K_VER.b1]) && revisionActionsCurrent([], []) &&
+    !revisionActionsCurrent([K_VER.b1, K_VER.c1], [K_VER.b1]) && !revisionActionsCurrent([], [K_VER.b1]) && !revisionActionsCurrent([K_VER.a1], [K_VER.a2]));
+})().catch((error) => {
+  check("K the store checks ran", false, String(error));
+});
+
+/* ---------------------------------------------------------------- C: console and share copy */
+
+check("C1 a withdrawal, an edit and a review each tell the founder that a report built before must be built again",
+  /build the report again/i.test(WITHDRAW_PILOT_ACTION_PROMPT) && /build the report again/i.test(EDIT_PILOT_ACTION_NOTE) &&
+  /build the report again/i.test(REVIEW_PILOT_ACTION_PROMPT));
+check("C2 a stale revision is named so, and the share refusal says what to do",
+  SHARE_PILOT_REPORT_REFUSAL.ACTIONS_STALE === "An action changed after this revision was built. Build the report again." &&
+  /cannot be shared/.test(STALE_REVISION_WORDS));
+check("C3 the console marks a stale revision and offers no Share for it",
+  /isStale\(r\)[\s\S]*STALE_REVISION_WORDS/.test(read("app/admin/pilots/[pilotId]/page.tsx")) &&
+  /&& !stale;/.test(read("app/admin/pilots/[pilotId]/report/[artifactId]/page.tsx")));
+check("C4 the review prompt names what the console shows: the stored answers under each link",
+  /stored answers it links to \(shown under each link\)/.test(REVIEW_PILOT_ACTION_PROMPT) && /Read the stored answer/.test(read("app/admin/pilots/pilot-action-forms.tsx")));
+check("C5 the customer's note promises no step that does not exist: the team registers a test with the customer",
+  /the Zypact team registers it with you as a separate step/.test(ACTIONS_NOT_REGISTERED_NOTE));
+
 /* ---------------------------------------------------------------- M */
 
 const MIG = read("supabase/migrations/20261120120000_pilot_actions.sql");
@@ -452,23 +669,25 @@ check("M2 every table is append-only: a trigger refuses every update and delete"
 check("M3 the trigger functions are executable by no role",
   ["pilot_actions_append_only()", "pilot_action_evidence_check()"].every((f) =>
     MIG.includes(`revoke all on function public.${f} from public, anon, authenticated, service_role;`)));
-check("M4 every inserted link must be a completed answer of this pilot with a stored hash",
+check("M4 every inserted link must be a completed answer of this pilot with a stored hash, to a question not retired (proved on a real database by the DB suite)",
   /before insert on public\.pilot_action_evidence/.test(MIG) &&
   /pq\.pilot_id = new\.pilot_id[\s\S]*a\.status = 'completed'[\s\S]*r\.raw_response_sha256 is not null/.test(MIG) &&
+  /pq\.retired_at is not null[\s\S]*pilot_action_evidence_question_retired/.test(MIG) &&
   /foreign key \(attempt_id, project_id\)\s+references public\.protocol_attempts \(id, project_id\)/.test(MIG));
 const FNS = [
   "save_pilot_action(uuid, uuid, integer, uuid, text, text, text, text, text, text, jsonb, uuid)",
   "review_pilot_action(uuid, uuid, integer, uuid, boolean)",
   "withdraw_pilot_action(uuid, uuid, uuid, text)",
   "save_pilot_report_artifact(uuid, uuid, text, jsonb, jsonb, text, jsonb, timestamptz)",
+  "share_pilot_report_artifact(uuid, uuid, uuid, boolean)",
 ];
 check("M5 the functions are executable by service_role only",
   FNS.every((f) => ["public", "anon", "authenticated"].every((r) => MIG.includes(`revoke all on function public.${f} from ${r};`)) &&
     MIG.includes(`grant execute on function public.${f} to service_role;`)));
 const defs = [...MIG.matchAll(/create or replace function public\.([a-z_]+)\(([\s\S]*?)\n\$\$;/g)];
 check("M6 every function pins its search_path, and the three writers are security definer",
-  defs.length === 6 && defs.every((d) => /set search_path = public, pg_temp/.test(d[2])) &&
-  ["save_pilot_action", "review_pilot_action", "withdraw_pilot_action", "save_pilot_report_artifact"].every((n) =>
+  defs.length === 7 && defs.every((d) => /set search_path = public, pg_temp/.test(d[2])) &&
+  ["save_pilot_action", "review_pilot_action", "withdraw_pilot_action", "save_pilot_report_artifact", "share_pilot_report_artifact"].every((n) =>
     defs.some((d) => d[1] === n && /security definer/.test(d[2]))));
 const saveAction = defs.find((d) => d[1] === "save_pilot_action")?.[2] ?? "";
 check("M7 save_pilot_action refuses before it writes: every refusal comes before the first insert",
@@ -494,10 +713,29 @@ check("M11 the block runs after every evidence check and before the revision is 
   NEW_SAVE.indexOf("'EVIDENCE_MISMATCH'") < blockStart && blockEnd < NEW_SAVE.indexOf("select coalesce(max(pra.revision), 0) + 1 into v_revision"));
 check("M12 nothing from the account stack, and no other existing function redefined",
   !/workspace_|account_session|_q2p_|_s1_/.test(MIG) && defs.map((d) => d[1]).sort().join(",") ===
-    "pilot_action_evidence_check,pilot_actions_append_only,review_pilot_action,save_pilot_action,save_pilot_report_artifact,withdraw_pilot_action");
-check("M13 a review and a withdrawal take the pilot lock a report save takes, so they never interleave",
-  ["review_pilot_action", "withdraw_pilot_action"].every((n) => /from public\.pilots where id = p_pilot_id for share/.test(defs.find((d) => d[1] === n)?.[2] ?? "")) &&
+    "pilot_action_evidence_check,pilot_actions_append_only,review_pilot_action,save_pilot_action,save_pilot_report_artifact,share_pilot_report_artifact,withdraw_pilot_action");
+check("M13 a review and a withdrawal take the pilot row for update, as a save does, so two of them (or one and a save or share) never interleave",
+  ["review_pilot_action", "withdraw_pilot_action"].every((n) => /from public\.pilots where id = p_pilot_id for update/.test(defs.find((d) => d[1] === n)?.[2] ?? "")) &&
   /for update/.test(saveAction));
+const shareBody = (sql: string) => {
+  const st = sql.indexOf("create or replace function public.share_pilot_report_artifact(");
+  return sql.slice(st, sql.indexOf("\n$$;", st) + 4);
+};
+const NEW_SHARE = shareBody(MIG);
+const sBlockStart = NEW_SHARE.indexOf("  -- D-057 begin");
+const sBlockEnd = NEW_SHARE.indexOf("  -- D-057 end\n");
+const shareWithout = sBlockStart > 0 && sBlockEnd > sBlockStart ? NEW_SHARE.slice(0, sBlockStart) + NEW_SHARE.slice(sBlockEnd + "  -- D-057 end\n".length + 1) : "";
+check("M14 share_pilot_report_artifact is 20261119120000's body byte for byte apart from the marked D-057 block",
+  shareWithout === shareBody(OLD), `${shareWithout.length} vs ${shareBody(OLD).length}`);
+const sBlock = sBlockStart > 0 ? NEW_SHARE.slice(sBlockStart, sBlockEnd) : "";
+check("M15 the share block refuses ACTIONS_STALE when a listed version is not current, reviewed and live, or a reviewed action is missing, after the newest-revision check",
+  sBlock.includes("'ACTIONS_STALE'") && /event = 'withdrawn'/.test(sBlock) && /event = 'reviewed'/.test(sBlock) && /max\(pav2\.version_number\)/.test(sBlock) &&
+  /v_art\.manifest -> 'actionVersions'/.test(sBlock) && NEW_SHARE.indexOf("'NOT_LATEST'") < sBlockStart &&
+  sBlockEnd < NEW_SHARE.indexOf("'ACKNOWLEDGEMENT_REQUIRED'"));
+check("M16 the save block compares what the payload shows of each action with the stored version and its links, except in a blocked revision",
+  block.includes("'ACTIONS_CONTENT_MISMATCH'") && /p_integrity_status <> 'blocked'/.test(block) &&
+  ["title", "observation", "suggestedAction", "whyItMightMatter", "alternativeExplanations", "openQuestions"].every((k) => block.includes(`(a ->> '${k}')`)) &&
+  /pilot_action_evidence pae/.test(block) && /jsonb_typeof\(a -> 'evidence'\) is distinct from 'array'/.test(block));
 
 /* ---------------------------------------------------------------- D */
 
@@ -507,9 +745,17 @@ check("D2 the status and the runbook describe suggested actions",
   /## 34\. /.test(read("docs/CURRENT_STATUS.md")) && /D-057/.test(read("docs/PILOT_RUNBOOK.md")));
 check("D3 test:pilot-actions is registered", /"test:pilot-actions": "tsx scripts\/test-pilot-actions\.ts"/.test(read("package.json")));
 
-console.log(`\n${total - failures}/${total} checks passed.`);
-if (failures > 0) {
-  console.error("Pilot actions FAILED.");
-  process.exit(1);
-}
-console.log("Pilot actions PASSED.");
+// The K checks are asynchronous; the summary waits for them, and a run with
+// fewer checks than this suite holds fails rather than passing quietly.
+void kDone.then(() => {
+  console.log(`\n${total - failures}/${total} checks passed.`);
+  if (total < 91) {
+    console.error(`Pilot actions FAILED: only ${total} checks ran.`);
+    process.exit(1);
+  }
+  if (failures > 0) {
+    console.error("Pilot actions FAILED.");
+    process.exit(1);
+  }
+  console.log("Pilot actions PASSED.");
+});

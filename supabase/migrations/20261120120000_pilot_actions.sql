@@ -27,9 +27,18 @@
 --      D-057 begin/end; otherwise byte for byte 20261119120000's body): the
 --      manifest lists the action versions the payload shows; each must be its
 --      action's latest version, reviewed, of an action of this pilot that is
---      not withdrawn, and every such action must be listed. A revision with
---      any action is never saved as integrity_passed, so the founder's
---      preview and acknowledgement path is always used.
+--      not withdrawn, and every such action must be listed. Unless the
+--      revision is blocked (which can never be shared), what the payload
+--      shows of each action, its six fields and its links, must equal the
+--      stored version and its stored links. A revision with any action is
+--      never saved as integrity_passed, so the founder's preview and
+--      acknowledgement path is always used.
+--   7. `share_pilot_report_artifact` is redefined with one added block (marked
+--      D-057 begin/end; otherwise byte for byte 20261119120000's body): a
+--      revision whose listed actions are no longer exactly the reviewed,
+--      current actions of the pilot (one withdrawn, edited or reviewed since
+--      the build) is refused as ACTIONS_STALE, so a withdrawn or superseded
+--      action can never reach the customer.
 --
 -- Nothing here calls a provider or a model, sends anything, or writes an
 -- attempt, receipt, probe row, protocol, job or report. No existing row is
@@ -40,8 +49,8 @@
 --
 -- Rollback / forward recovery (the web app first, then the database):
 --   1. Roll the web app back. Report builds stop listing actions.
---   2. Restore save_pilot_report_artifact from 20261119120000 (re-run its
---      section 3), then:
+--   2. Restore save_pilot_report_artifact and share_pilot_report_artifact
+--      from 20261119120000 (re-run its sections 3 and 4), then:
 --      drop function if exists public.withdraw_pilot_action(uuid, uuid, uuid, text);
 --      drop function if exists public.review_pilot_action(uuid, uuid, integer, uuid, boolean);
 --      drop function if exists public.save_pilot_action(uuid, uuid, integer, uuid, text, text, text, text, text, text, jsonb, uuid);
@@ -223,8 +232,8 @@ create trigger pilot_action_events_append_only
   for each row execute function public.pilot_actions_append_only();
 
 -- The evidence an action rests on: a completed attempt of one of this
--- pilot's measurements, with a stored response hash. Checked for every row,
--- whoever inserts it.
+-- pilot's measurements, with a stored response hash, to a question that is
+-- not retired. Checked for every row, whoever inserts it.
 create or replace function public.pilot_action_evidence_check()
 returns trigger
 language plpgsql
@@ -244,6 +253,17 @@ begin
        and r.raw_response_sha256 is not null
   ) then
     raise exception using errcode = 'P0001', message = 'pilot_action_evidence_is_not_a_pilot_answer';
+  end if;
+  if exists (
+    select 1
+      from public.protocol_attempts a
+      join public.pilot_question_protocols pqp on pqp.protocol_id = a.protocol_id
+      join public.pilot_questions pq on pq.id = pqp.pilot_question_id
+     where a.id = new.attempt_id
+       and pq.pilot_id = new.pilot_id
+       and pq.retired_at is not null
+  ) then
+    raise exception using errcode = 'P0001', message = 'pilot_action_evidence_question_retired';
   end if;
   return new;
 end;
@@ -486,8 +506,11 @@ begin
     raise exception using errcode = '22023', message = 'invalid_review_pilot_action_args';
   end if;
 
-  -- The lock a report save takes for update: a review and a save never interleave.
-  select * into v_pilot from public.pilots where id = p_pilot_id for share;
+  -- The pilot row, for update: a review never interleaves with another review
+  -- or withdrawal (the second waits and then answers ALREADY_REVIEWED rather
+  -- than failing on the unique index), with an action or report save, or with
+  -- a share, which takes it for share.
+  select * into v_pilot from public.pilots where id = p_pilot_id for update;
   if not found then
     return query select 'PILOT_NOT_FOUND'::text;
     return;
@@ -562,7 +585,9 @@ begin
     raise exception using errcode = '22023', message = 'invalid_withdraw_pilot_action_args';
   end if;
 
-  select * into v_pilot from public.pilots where id = p_pilot_id for share;
+  -- For update, as a review: never interleaves with another withdrawal, a
+  -- review, a save or a share.
+  select * into v_pilot from public.pilots where id = p_pilot_id for update;
   if not found then
     return query select 'PILOT_NOT_FOUND'::text;
     return;
@@ -766,7 +791,8 @@ begin
         where jsonb_typeof(e) <> 'string' or (e #>> '{}') !~ v_uuid)
      or exists (
        select 1 from jsonb_array_elements(coalesce(p_payload -> 'actions', '[]'::jsonb)) a
-        where jsonb_typeof(a) <> 'object' or jsonb_typeof(a -> 'versionId') is distinct from 'string')
+        where jsonb_typeof(a) <> 'object' or jsonb_typeof(a -> 'versionId') is distinct from 'string'
+           or jsonb_typeof(a -> 'evidence') is distinct from 'array')
      or (select count(*) from jsonb_array_elements(coalesce(p_manifest -> 'actionVersions', '[]'::jsonb)))
         <> (select count(distinct e #>> '{}') from jsonb_array_elements(coalesce(p_manifest -> 'actionVersions', '[]'::jsonb)) e)
      or (select count(*) from jsonb_array_elements(coalesce(p_payload -> 'actions', '[]'::jsonb)))
@@ -819,6 +845,34 @@ begin
     return query select 'ACTIONS_INCOMPLETE'::text, null::uuid, null::integer;
     return;
   end if;
+
+  -- What the payload shows of each action is the stored version: its six
+  -- fields, and its links (answer and source) as a set. Not checked for a
+  -- blocked revision, which can never be shared or served and lists an
+  -- action whose links failed so the founder's preview shows why.
+  if p_integrity_status <> 'blocked' and exists (
+    select 1
+      from jsonb_array_elements(coalesce(p_payload -> 'actions', '[]'::jsonb)) a
+      join public.pilot_action_versions pav
+        on pav.id = (a ->> 'versionId')::uuid and pav.pilot_id = p_pilot_id
+     where (a ->> 'title') is distinct from pav.title
+        or (a ->> 'observation') is distinct from pav.observation
+        or (a ->> 'suggestedAction') is distinct from pav.suggested_action
+        or (a ->> 'whyItMightMatter') is distinct from pav.why_it_might_matter
+        or (a ->> 'alternativeExplanations') is distinct from pav.alternative_explanations
+        or (a ->> 'openQuestions') is distinct from pav.open_questions
+        or array(
+             select coalesce(ev ->> 'attemptId', '') || '|' || coalesce(ev ->> 'sourceUrl', '')
+               from jsonb_array_elements(a -> 'evidence') ev
+              order by 1)
+           is distinct from array(
+             select pae.attempt_id::text || '|' || coalesce(pae.source_url, '')
+               from public.pilot_action_evidence pae
+              where pae.action_version_id = pav.id
+              order by 1)) then
+    return query select 'ACTIONS_CONTENT_MISMATCH'::text, null::uuid, null::integer;
+    return;
+  end if;
   -- D-057 end
 
   select coalesce(max(pra.revision), 0) + 1 into v_revision
@@ -845,3 +899,115 @@ revoke all on function public.save_pilot_report_artifact(uuid, uuid, text, jsonb
 revoke all on function public.save_pilot_report_artifact(uuid, uuid, text, jsonb, jsonb, text, jsonb, timestamptz) from anon;
 revoke all on function public.save_pilot_report_artifact(uuid, uuid, text, jsonb, jsonb, text, jsonb, timestamptz) from authenticated;
 grant execute on function public.save_pilot_report_artifact(uuid, uuid, text, jsonb, jsonb, text, jsonb, timestamptz) to service_role;
+
+-- ---------------------------------------------------------------------
+-- 7. share_pilot_report_artifact, redefined: 20261119120000's body, byte for
+--    byte, with the D-057 block added after the newest-revision check.
+-- ---------------------------------------------------------------------
+
+create or replace function public.share_pilot_report_artifact(
+  p_artifact_id               uuid,
+  p_pilot_id                  uuid,
+  p_shared_by                 uuid,
+  p_acknowledge_needs_review  boolean
+)
+returns table (outcome text, public_token text)
+language plpgsql
+security definer
+volatile
+set search_path = public, pg_temp
+as $$
+declare
+  v_art public.pilot_report_artifacts%rowtype;
+begin
+  if p_artifact_id is null or p_pilot_id is null or p_shared_by is null or p_acknowledge_needs_review is null then
+    raise exception using errcode = '22023', message = 'invalid_share_pilot_report_args';
+  end if;
+
+  -- The same lock a save takes, so "latest" cannot change underneath.
+  perform 1 from public.pilots where id = p_pilot_id for share;
+
+  select * into v_art
+    from public.pilot_report_artifacts pra
+   where pra.id = p_artifact_id and pra.pilot_id = p_pilot_id
+   for update;
+  if not found then
+    return query select 'NOT_FOUND'::text, null::text;
+    return;
+  end if;
+
+  if v_art.shared_at is not null then
+    return query select 'ALREADY_SHARED'::text, v_art.public_token;
+    return;
+  end if;
+
+  if v_art.integrity_status = 'blocked' then
+    return query select 'BLOCKED'::text, null::text;
+    return;
+  end if;
+
+  if exists (
+    select 1 from public.pilot_report_artifacts pra
+     where pra.pilot_id = p_pilot_id and pra.revision > v_art.revision) then
+    return query select 'NOT_LATEST'::text, null::text;
+    return;
+  end if;
+
+  -- D-057 begin: suggested actions. The revision's listed action versions
+  -- (none when the manifest has no list) must still be exactly the pilot's
+  -- reviewed, current actions: each its action's latest version, reviewed,
+  -- not withdrawn, and none missing. An action withdrawn, edited or reviewed
+  -- after the build makes the revision stale, so a withdrawn or superseded
+  -- action never reaches the customer. The pilot row is held for share above,
+  -- and a review, withdrawal or action save takes it for update, so none can
+  -- change the actions while this runs.
+  if exists (
+       select 1
+         from jsonb_array_elements_text(coalesce(v_art.manifest -> 'actionVersions', '[]'::jsonb)) e(version_id)
+         left join public.pilot_action_versions pav
+           on pav.id = e.version_id::uuid and pav.pilot_id = p_pilot_id
+        where pav.id is null
+           or pav.version_number <> (
+                select max(pav2.version_number) from public.pilot_action_versions pav2 where pav2.action_id = pav.action_id)
+           or not exists (
+                select 1 from public.pilot_action_events ev where ev.action_version_id = pav.id and ev.event = 'reviewed')
+           or exists (
+                select 1 from public.pilot_action_events ev where ev.action_id = pav.action_id and ev.event = 'withdrawn'))
+     or exists (
+       select 1
+         from public.pilot_action_versions pav
+        where pav.pilot_id = p_pilot_id
+          and pav.version_number = (
+                select max(pav2.version_number) from public.pilot_action_versions pav2 where pav2.action_id = pav.action_id)
+          and exists (
+                select 1 from public.pilot_action_events ev where ev.action_version_id = pav.id and ev.event = 'reviewed')
+          and not exists (
+                select 1 from public.pilot_action_events ev where ev.action_id = pav.action_id and ev.event = 'withdrawn')
+          and not exists (
+                select 1 from jsonb_array_elements_text(coalesce(v_art.manifest -> 'actionVersions', '[]'::jsonb)) e(version_id)
+                 where e.version_id::uuid = pav.id)) then
+    return query select 'ACTIONS_STALE'::text, null::text;
+    return;
+  end if;
+  -- D-057 end
+
+  if v_art.integrity_status = 'needs_review' and not p_acknowledge_needs_review then
+    return query select 'ACKNOWLEDGEMENT_REQUIRED'::text, null::text;
+    return;
+  end if;
+
+  update public.pilot_report_artifacts pra
+     set reviewed_by = p_shared_by,
+         reviewed_at = now(),
+         shared_at = now(),
+         needs_review_acknowledged = (v_art.integrity_status = 'needs_review')
+   where pra.id = v_art.id;
+
+  return query select 'SHARED'::text, v_art.public_token;
+end;
+$$;
+
+revoke all on function public.share_pilot_report_artifact(uuid, uuid, uuid, boolean) from public;
+revoke all on function public.share_pilot_report_artifact(uuid, uuid, uuid, boolean) from anon;
+revoke all on function public.share_pilot_report_artifact(uuid, uuid, uuid, boolean) from authenticated;
+grant execute on function public.share_pilot_report_artifact(uuid, uuid, uuid, boolean) to service_role;

@@ -21,6 +21,7 @@ import { UUID_PATTERN, type Issues, type Parsed } from "@/lib/pilots/validate";
 import { FORBIDDEN_W1_PHRASES } from "@/lib/site-diagnostic/copy";
 
 export {
+  EDIT_PILOT_ACTION_NOTE,
   MAX_ACTION_EVIDENCE,
   MIN_ACTION_EVIDENCE,
   PILOT_ACTION_STATUS_WORDS,
@@ -28,6 +29,8 @@ export {
   REVIEW_PILOT_ACTION_PROMPT,
   REVIEW_PILOT_ACTION_REFUSAL,
   SAVE_PILOT_ACTION_REFUSAL,
+  STALE_REVISION_WORDS,
+  WITHDRAW_PILOT_ACTION_PROMPT,
   WITHDRAW_PILOT_ACTION_REFUSAL,
 } from "@/lib/pilots/action-copy";
 
@@ -65,7 +68,12 @@ export const METHODOLOGY_19_PHRASES: readonly string[] = [
   "no competitor offers",
 ];
 
-/** Causal or promise wording an action may not use: it is a hypothesis to test, not a prediction. */
+/**
+ * Causal or promise wording an action may not use: it is a hypothesis to
+ * test, not a prediction. Matched as whole phrases; the patterns below catch
+ * the hedged and inflected forms ("will likely improve", "is expected to
+ * increase", "guaranteed", "causes").
+ */
 export const PILOT_ACTION_PROMISE_PHRASES: readonly string[] = [
   "will improve",
   "will increase",
@@ -89,30 +97,88 @@ export const PILOT_ACTION_PROMISE_PHRASES: readonly string[] = [
   "boost your visibility",
   "rank higher",
   "rank first",
-  "proven to",
-  "certain to",
-  "sure to",
 ];
 
-const normalise = (text: string) =>
-  text
-    .toLowerCase()
-    .replace(/[‘’ʼ]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/\s+/g, " ");
+/** D-057 (engineer) — a modal or hedge, then up to three words, then a change verb. */
+const MODALS = [
+  "will", "would", "should", "could", "likely to", "expected to", "going to", "set to", "bound to", "sure to",
+  "certain to", "proven to", "is likely", "is expected",
+];
+const CHANGE_VERBS = [
+  "improve", "increase", "boost", "raise", "grow", "lift", "get", "make", "appear", "rank", "be cited",
+  "be recommended", "be mentioned", "show up", "win",
+];
+const CAUSAL = [
+  "cause", "causes", "caused", "causing", "led to", "leads to", "lead to", "result in", "results in", "resulted in",
+  "resulting in", "because of", "due to", "drives", "drove", "driven by",
+];
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const words = (list: readonly string[]) => list.map((w) => escape(w).replace(/ /g, " ")).join("|");
+const B = "(?<![a-z0-9])";
+const E = "(?![a-z0-9])";
+
+/** Named patterns: the label shown to the writer, and the expression on the normalised text. */
+const LINT_PATTERNS: readonly { label: string; re: RegExp }[] = [
+  { label: "a prediction (a modal followed by a change)", re: new RegExp(`${B}(?:${words(MODALS)})(?: [a-z0-9'-]+){0,3}? (?:${words(CHANGE_VERBS)})${E}`, "g") },
+  { label: "a claim of cause", re: new RegExp(`${B}(?:${words(CAUSAL)})${E}`, "g") },
+  { label: "a statement that buyers cannot find you", re: new RegExp(`${B}(?:cannot|can not|can't|cant) find you${E}`, "g") },
+  { label: "a guarantee", re: new RegExp(`${B}guarante[a-z]*`, "g") },
+  { label: "a promise to ensure", re: new RegExp(`${B}ensur(?:e|es|ed|ing)${E}`, "g") },
+];
 
 /**
- * The phrases an action text uses that it may not: METHODOLOGY §19, the
- * causal and promise wording above, and the repository's claim-language list
- * (FORBIDDEN_W1_PHRASES). A phrase matches at a word start, so "guarantee"
- * also catches "guaranteed" and "ensure" catches "ensures".
+ * Common Cyrillic and Greek letters that look like Latin ones, lower case
+ * (the text is lower-cased first), folded so a look-alike cannot hide a
+ * phrase ("cаused" with a Cyrillic "а").
+ */
+const HOMOGLYPHS: Record<string, string> = {
+  "а": "a", "в": "b", "е": "e", "ё": "e", "к": "k", "м": "m", "н": "h", "о": "o", "р": "p", "с": "c", "т": "t",
+  "у": "y", "х": "x", "і": "i", "ї": "i", "ј": "j", "ѕ": "s", "ԁ": "d", "ԛ": "q", "ԝ": "w", "һ": "h", "ӏ": "l",
+  "α": "a", "β": "b", "ε": "e", "η": "n", "ι": "i", "κ": "k", "ν": "v", "ο": "o", "ρ": "p", "τ": "t", "υ": "u",
+  "χ": "x", "ϲ": "c", "ϳ": "j", "ѵ": "v",
+};
+
+/**
+ * The text the lint reads, D-057 (engineer): Unicode NFKC, lower case,
+ * format characters (category Cf: soft hyphen, zero-width characters, the
+ * byte-order mark) removed or, in the second reading, turned into spaces,
+ * look-alike letters folded to Latin, typographic quotes made plain, and
+ * whitespace collapsed. Both readings are linted, so "guar­antee"
+ * (removed) and "will​improve" (spaced) are both caught.
+ */
+export function normaliseForLint(text: string, formatCharacters: "remove" | "space"): string {
+  return text
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/\p{Cf}/gu, formatCharacters === "remove" ? "" : " ")
+    .replace(/[Ͱ-ϿЀ-ԯ]/g, (ch) => HOMOGLYPHS[ch] ?? ch)
+    .replace(/[‘’ʼ`´]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * The wording an action text uses that it may not: METHODOLOGY §19, the
+ * causal and promise wording above, the repository's claim-language list
+ * (FORBIDDEN_W1_PHRASES), and the patterns. Phrases match as whole words on
+ * both sides, so "censured" is not "ensure", "Make sure to keep" is not a
+ * prediction and "Use proven tools" is not "proven to". Returns each hit
+ * once: the phrase, or the words a pattern matched.
  */
 export function lintPilotActionText(text: string): string[] {
-  const t = normalise(text);
+  const hits = new Set<string>();
   const phrases = [...new Set([...METHODOLOGY_19_PHRASES, ...PILOT_ACTION_PROMISE_PHRASES, ...FORBIDDEN_W1_PHRASES])];
-  return phrases.filter((phrase) => new RegExp(`(^|[^a-z0-9])${escape(phrase)}`).test(t));
+  for (const reading of [normaliseForLint(text, "remove"), normaliseForLint(text, "space")]) {
+    for (const phrase of phrases) {
+      if (new RegExp(`${B}${escape(phrase)}${E}`).test(reading)) hits.add(phrase);
+    }
+    for (const pattern of LINT_PATTERNS) {
+      for (const m of reading.matchAll(pattern.re)) hits.add(m[0]);
+    }
+  }
+  return [...hits];
 }
 
 /** Every field's lint hits, by field. Empty when the action may be saved. */
@@ -251,4 +317,17 @@ export function reportableActionVersions(
     if (s.status === "reviewed" && s.latest && s.reviewedAt) out.push({ actionId, versionId: s.latest.id, reviewedAt: s.reviewedAt });
   }
   return out;
+}
+
+/**
+ * Whether a saved revision's listed action versions are still exactly the
+ * pilot's reviewed, current ones (D-057). False once an action listed in it
+ * was edited or withdrawn, or another action was reviewed since the build:
+ * such a revision cannot be shared (share_pilot_report_artifact refuses it as
+ * ACTIONS_STALE), and the console says so.
+ */
+export function revisionActionsCurrent(listedVersionIds: readonly string[], currentVersionIds: readonly string[]): boolean {
+  const listed = new Set(listedVersionIds);
+  const current = new Set(currentVersionIds);
+  return listed.size === current.size && [...listed].every((id) => current.has(id));
 }

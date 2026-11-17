@@ -14,7 +14,19 @@
  *   R  save_pilot_report_artifact (redefined): the listed versions must be
  *      reviewed, latest and not withdrawn; a reviewed action cannot be left
  *      out; a revision with an action is never integrity_passed; the
- *      payload and the manifest list the same versions;
+ *      payload and the manifest list the same versions; another pilot's
+ *      version is refused;
+ *   C  what the payload shows of an action must be the stored version and
+ *      its stored links, except in a blocked revision;
+ *   S  share_pilot_report_artifact (redefined): a revision whose actions
+ *      were edited, withdrawn or joined by a newly reviewed one is refused
+ *      as ACTIONS_STALE; one whose actions are unchanged is shared, and the
+ *      customer read shows them;
+ *   Q  an answer to a retired question: save_pilot_action refuses it, and
+ *      the trigger refuses it even for the database owner;
+ *   K  two reviews, or two withdrawals, at once on two real sessions: one
+ *      records the event, the other answers that it is already done, and
+ *      neither fails;
  *   G  the guards: no update or delete on any of the four tables, and a
  *      link to anything but a completed answer of this pilot is refused
  *      even for the database owner;
@@ -25,6 +37,7 @@
  * migration applied (scripts/run-p2-workspace-db-local.sh). Opt-in: SKIP
  * (exit 2) without ZYPACT_P2_DB_CONTAINER. No network.
  */
+import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 
 import { db, lit, makeChecker, requireContainer, row } from "./lib/workspace-db";
@@ -151,16 +164,53 @@ interface Manifest {
   actionVersions?: string[];
 }
 
-function saveReport(pilotId: string, projectId: string, manifest: Manifest, status: string, reasons: string[], payloadVersions?: string[]): string[] {
+/**
+ * What a report payload shows of a stored action version, as the builder
+ * writes it: the six fields and the links (attempt id and source URL), read
+ * here from the stored rows. A version that does not exist gets no content.
+ */
+function payloadAction(versionId: string): Record<string, unknown> {
+  const out = admin(
+    `select json_build_object('versionId', v.id, 'title', v.title, 'observation', v.observation, 'suggestedAction', v.suggested_action, 'whyItMightMatter', v.why_it_might_matter, 'alternativeExplanations', v.alternative_explanations, 'openQuestions', v.open_questions, 'evidence', coalesce((select json_agg(json_build_object('attemptId', e.attempt_id, 'sourceUrl', e.source_url) order by e.position) from public.pilot_action_evidence e where e.action_version_id = v.id), '[]'::json))::text from public.pilot_action_versions v where v.id = ${lit(versionId)}::uuid;`
+  );
+  return out ? (JSON.parse(out) as Record<string, unknown>) : { versionId, evidence: [] };
+}
+
+function saveReport(
+  pilotId: string,
+  projectId: string,
+  manifest: Manifest,
+  status: string,
+  reasons: string[],
+  payloadVersions?: string[],
+  shape: (a: Record<string, unknown>) => Record<string, unknown> = (a) => a
+): string[] {
   const payload: Record<string, unknown> = { pilotId, projectId };
   const versions = payloadVersions ?? manifest.actionVersions;
-  if (versions) payload.actions = versions.map((versionId) => ({ versionId }));
+  if (versions) payload.actions = versions.map((versionId) => shape(payloadAction(versionId)));
   return row(psql(
     `select outcome, coalesce(artifact_id::text, '') from public.save_pilot_report_artifact(${lit(pilotId)}::uuid, ${lit(FOUNDER)}::uuid, '# Pilot report', ${lit(JSON.stringify(payload))}::jsonb, ${lit(JSON.stringify(manifest))}::jsonb, ${lit(status)}, ${lit(JSON.stringify(reasons))}::jsonb, now());`
   ));
 }
 
 const REVIEW_REASON = ["The report includes 1 suggested action written by the team."];
+
+const share = (artifactId: string, pilotId: string) =>
+  row(psql(`select outcome || '|' || coalesce(public_token, '') from public.share_pilot_report_artifact(${lit(artifactId)}::uuid, ${lit(pilotId)}::uuid, ${lit(FOUNDER)}::uuid, true);`));
+
+/** One psql session run concurrently with others (the synchronous helper cannot overlap two). */
+function psqlAsync(sql: string): Promise<{ code: number; out: string; err: string }> {
+  return new Promise((resolve) => {
+    const child = spawn("docker", ["exec", "-i", CONTAINER, "psql", "-U", "supabase_admin", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-qtA"]);
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (d) => (out += String(d)));
+    child.stderr.on("data", (d) => (err += String(d)));
+    child.on("close", (code) => resolve({ code: code ?? 1, out: out.trim(), err }));
+    child.stdin.end(`set role service_role;\n${sql}`);
+  });
+}
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function main(): Promise<void> {
   console.log("test-pilot-actions-db");
@@ -267,6 +317,103 @@ async function main(): Promise<void> {
     saved === 30 && saveAction(pilotB, [{ attemptId: doneB, sourceUrl: null }])[0] === "LIMIT_REACHED");
   const firstB = admin(`select id from public.pilot_actions where pilot_id = ${lit(pilotB)}::uuid order by created_at limit 1;`);
   check("L2 a withdrawn action frees its place", withdraw(pilotB, firstB) === "WITHDRAWN" && saveAction(pilotB, [{ attemptId: doneB, sourceUrl: null }])[0] === "SAVED");
+
+  /* C, S: a fresh pilot ------------------------------------------------- */
+  quiesce();
+  const [, pilotC, projectC] = createPilot("pa-c.example");
+  const [, , protoC1, jobC1] = addQuestion(pilotC, question(5));
+  const doneC = completeOneAttempt(jobC1, projectC);
+  quiesce();
+  const baseC: Manifest = { protocols: [protoC1], attempts: [{ id: doneC, protocolId: protoC1, rawResponseSha256: shaOf(doneC) }] };
+  const [, xAction, x1] = saveAction(pilotC, [{ attemptId: doneC, sourceUrl: null }], { title: "Action X" });
+  review(pilotC, xAction, 1);
+  check("C1 a payload that shows other wording than the stored, reviewed version is refused, and nothing is stored",
+    saveReport(pilotC, projectC, { ...baseC, actionVersions: [x1] }, "needs_review", REVIEW_REASON, undefined,
+      (a) => ({ ...a, title: "This fix will guarantee you rank first" }))[0] === "ACTIONS_CONTENT_MISMATCH" &&
+    saveReport(pilotC, projectC, { ...baseC, actionVersions: [x1] }, "needs_review", REVIEW_REASON, undefined,
+      (a) => ({ ...a, suggestedAction: `${String(a.suggestedAction)} Guaranteed.` }))[0] === "ACTIONS_CONTENT_MISMATCH" &&
+    admin(`select count(*) from public.pilot_report_artifacts where pilot_id = ${lit(pilotC)}::uuid;`) === "0");
+  check("C2 a payload that shows other links is refused: none, another answer, or another spelling of a source",
+    saveReport(pilotC, projectC, { ...baseC, actionVersions: [x1] }, "needs_review", REVIEW_REASON, undefined, (a) => ({ ...a, evidence: [] }))[0] === "ACTIONS_CONTENT_MISMATCH" &&
+    saveReport(pilotC, projectC, { ...baseC, actionVersions: [x1] }, "needs_review", REVIEW_REASON, undefined,
+      (a) => ({ ...a, evidence: [{ attemptId: done, sourceUrl: null }] }))[0] === "ACTIONS_CONTENT_MISMATCH" &&
+    saveReport(pilotC, projectC, { ...baseC, actionVersions: [x1] }, "needs_review", REVIEW_REASON, undefined,
+      (a) => ({ ...a, evidence: [{ attemptId: doneC, sourceUrl: "https://WWW.G2.com/x" }] }))[0] === "ACTIONS_CONTENT_MISMATCH");
+  check("C3 a payload without an evidence list raises",
+    fails(`select * from public.save_pilot_report_artifact(${lit(pilotC)}::uuid, ${lit(FOUNDER)}::uuid, '# r', ${lit(JSON.stringify({ pilotId: pilotC, projectId: projectC, actions: [{ ...payloadAction(x1), evidence: undefined }] }))}::jsonb, ${lit(JSON.stringify({ ...baseC, actionVersions: [x1] }))}::jsonb, 'needs_review', '["x"]'::jsonb, now());`)?.includes("invalid_save_pilot_report_args") === true);
+  const [cb, cbArt] = saveReport(pilotC, projectC, { ...baseC, actionVersions: [x1] }, "blocked", ["Suggested action 1: it names a source that is not among the sources of question 1."], undefined,
+    (a) => ({ ...a, evidence: [] }));
+  check("C4 a blocked revision may show an action whose links failed (so the preview shows why), and it can never be shared",
+    cb === "SAVED" && share(cbArt, pilotC)[0] === "BLOCKED");
+  const [r1Out, r1] = saveReport(pilotC, projectC, { ...baseC, actionVersions: [x1] }, "needs_review", REVIEW_REASON);
+  check("C5 the payload the builder writes, the stored wording and links, saves", r1Out === "SAVED");
+
+  const [eOut, , x2] = saveAction(pilotC, [{ attemptId: doneC, sourceUrl: null }], { actionId: xAction, expected: 1, title: "Action X, edited" });
+  check("S1 after an edit (a new draft) the revision built with the earlier version cannot be shared, and stays unshared",
+    eOut === "SAVED" && share(r1, pilotC)[0] === "ACTIONS_STALE" &&
+    admin(`select (shared_at is null)::text from public.pilot_report_artifacts where id = ${lit(r1)}::uuid;`) === "true");
+  check("S2 reviewing the edit does not make the old revision current", review(pilotC, xAction, 2) === "REVIEWED" && share(r1, pilotC)[0] === "ACTIONS_STALE");
+  const [r2Out, r2] = saveReport(pilotC, projectC, { ...baseC, actionVersions: [x2] }, "needs_review", REVIEW_REASON);
+  check("S3 after a withdrawal the revision showing the action cannot be shared",
+    r2Out === "SAVED" && withdraw(pilotC, xAction) === "WITHDRAWN" && share(r2, pilotC)[0] === "ACTIONS_STALE");
+  const [, yAction, y1] = saveAction(pilotC, [{ attemptId: doneC, sourceUrl: null }], { title: "Action Y" });
+  review(pilotC, yAction, 1);
+  const [r3Out, r3] = saveReport(pilotC, projectC, { ...baseC, actionVersions: [y1] }, "needs_review", REVIEW_REASON);
+  const [, zAction] = saveAction(pilotC, [{ attemptId: doneC, sourceUrl: null }], { title: "Action Z" });
+  check("S4 an action reviewed after the build makes the revision stale too: it would leave a reviewed action out",
+    r3Out === "SAVED" && review(pilotC, zAction, 1) === "REVIEWED" && share(r3, pilotC)[0] === "ACTIONS_STALE");
+  const z1 = admin(`select id from public.pilot_action_versions where action_id = ${lit(zAction)}::uuid and version_number = 1;`);
+  const [r4Out, r4] = saveReport(pilotC, projectC, { ...baseC, actionVersions: [y1, z1] }, "needs_review", ["The report includes 2 suggested actions written by the team."]);
+  const [shared, token] = share(r4, pilotC);
+  check("S5 with nothing changed since the build the revision is shared, and the customer read shows exactly its actions",
+    r4Out === "SAVED" && shared === "SHARED" &&
+    psql(`select (select string_agg(a ->> 'versionId', ',' order by a ->> 'versionId') from jsonb_array_elements(payload -> 'actions') a) from public.read_shared_pilot_report(${lit(token)});`) ===
+      [y1, z1].sort().join(","));
+  const wReason = "The answers no longer support it, so it is withdrawn.";
+  check("S6 a shared revision keeps what it showed after a later withdrawal, and is not shared again",
+    psql(`select outcome from public.withdraw_pilot_action(${lit(pilotC)}::uuid, ${lit(yAction)}::uuid, ${lit(FOUNDER)}::uuid, ${lit(wReason)});`) === "WITHDRAWN" &&
+    share(r4, pilotC)[0] === "ALREADY_SHARED");
+
+  const aRevisions = admin(`select count(*) from public.pilot_report_artifacts where pilot_id = ${lit(pilotA)}::uuid;`);
+  check("R8 another pilot's reviewed, current version listed in this pilot's report is refused, and nothing is stored",
+    saveReport(pilotA, projectA, { ...base, actionVersions: [z1] }, "needs_review", REVIEW_REASON)[0] === "ACTION_NOT_REVIEWED" &&
+    admin(`select count(*) from public.pilot_report_artifacts where pilot_id = ${lit(pilotA)}::uuid;`) === aRevisions);
+
+  /* Q: a retired question ---------------------------------------------- */
+  quiesce();
+  const [, pilotD, projectD] = createPilot("pa-d.example");
+  const [, qD1, , jobD1] = addQuestion(pilotD, question(6));
+  const doneD = completeOneAttempt(jobD1, projectD);
+  quiesce();
+  const [okD, , vD] = saveAction(pilotD, [{ attemptId: doneD, sourceUrl: null }], { title: "Action on a question later retired" });
+  // Test setup: the question is retired after its answer completed, as an
+  // abandoned measurement would be (scripts/test-pilot-questions-db.ts P15).
+  admin(`update public.pilot_questions set retired_at = now(), retired_by = ${lit(FOUNDER)}::uuid, retire_reason = 'The measurement cannot go on.' where id = ${lit(qD1)}::uuid;`);
+  check("Q1 an answer to a retired question is refused by save_pilot_action, and nothing is stored",
+    okD === "SAVED" && saveAction(pilotD, [{ attemptId: doneD, sourceUrl: null }])[0] === "QUESTION_RETIRED" && counts(pilotD) === "1/1/1/0");
+  check("Q2 the trigger refuses a link to a retired question's answer even for the database owner",
+    fails(`insert into public.pilot_action_evidence (action_version_id, pilot_id, project_id, position, attempt_id) values (${lit(vD)}::uuid, ${lit(pilotD)}::uuid, ${lit(projectD)}::uuid, 9, ${lit(doneD)}::uuid);`, "supabase_admin")?.includes("pilot_action_evidence_question_retired") === true);
+
+  /* K: two at once ------------------------------------------------------- */
+  const [, kAction] = saveAction(pilotC, [{ attemptId: doneC, sourceUrl: null }], { title: "Reviewed twice at once" });
+  const reviewSql = `select outcome from public.review_pilot_action(${lit(pilotC)}::uuid, ${lit(kAction)}::uuid, 1, ${lit(FOUNDER)}::uuid, true);`;
+  const firstReview = psqlAsync(`begin;\n${reviewSql}\nselect pg_sleep(1.5);\ncommit;`);
+  await sleep(400);
+  const secondReview = psqlAsync(reviewSql);
+  const [rv1, rv2] = await Promise.all([firstReview, secondReview]);
+  check("K1 two reviews at once: one records it, the other waits and answers already reviewed, and neither fails",
+    rv1.code === 0 && rv2.code === 0 && rv1.out.split("\n")[0] === "REVIEWED" && rv2.out === "ALREADY_REVIEWED" &&
+    admin(`select count(*) from public.pilot_action_events where action_id = ${lit(kAction)}::uuid and event = 'reviewed';`) === "1",
+    `${rv1.code}:${rv1.out}:${rv1.err.slice(0, 120)} | ${rv2.code}:${rv2.out}:${rv2.err.slice(0, 120)}`);
+  const withdrawSql = `select outcome from public.withdraw_pilot_action(${lit(pilotC)}::uuid, ${lit(kAction)}::uuid, ${lit(FOUNDER)}::uuid, 'Withdrawn twice at once in a test.');`;
+  const firstWithdraw = psqlAsync(`begin;\n${withdrawSql}\nselect pg_sleep(1.5);\ncommit;`);
+  await sleep(400);
+  const secondWithdraw = psqlAsync(withdrawSql);
+  const [wd1, wd2] = await Promise.all([firstWithdraw, secondWithdraw]);
+  check("K2 two withdrawals at once: one records it, the other waits and answers already withdrawn, and neither fails",
+    wd1.code === 0 && wd2.code === 0 && wd1.out.split("\n")[0] === "WITHDRAWN" && wd2.out === "ALREADY_WITHDRAWN" &&
+    admin(`select count(*) from public.pilot_action_events where action_id = ${lit(kAction)}::uuid and event = 'withdrawn';`) === "1",
+    `${wd1.code}:${wd1.out}:${wd1.err.slice(0, 120)} | ${wd2.code}:${wd2.out}:${wd2.err.slice(0, 120)}`);
 
   /* G --------------------------------------------------------------- */
   for (const t of ["pilot_actions", "pilot_action_versions", "pilot_action_evidence", "pilot_action_events"]) {

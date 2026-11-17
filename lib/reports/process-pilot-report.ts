@@ -27,7 +27,8 @@ export type SavePilotReportOutcome =
   | "EVIDENCE_INCOMPLETE"
   | "MEASUREMENT_IN_PROGRESS"
   | "ACTION_NOT_REVIEWED"
-  | "ACTIONS_INCOMPLETE";
+  | "ACTIONS_INCOMPLETE"
+  | "ACTIONS_CONTENT_MISMATCH";
 
 export interface BuildPilotReportResult {
   outcome: SavePilotReportOutcome;
@@ -106,7 +107,9 @@ export type SharePilotReportOutcome =
   | "NOT_FOUND"
   | "BLOCKED"
   | "ACKNOWLEDGEMENT_REQUIRED"
-  | "NOT_LATEST";
+  | "NOT_LATEST"
+  // D-057 — an action changed since the revision was built.
+  | "ACTIONS_STALE";
 
 export async function sharePilotReport(
   client: SupabaseClient,
@@ -134,6 +137,14 @@ export interface PilotReportRevisionRow {
   integrityReasons: string[];
   sharedAt: string | null;
   publicToken: string | null;
+  /** D-057 — the action versions the revision lists (its manifest), to tell a stale revision. */
+  actionVersionIds: string[];
+}
+
+/** The action versions a stored manifest lists; none when it has no list (revisions before D-057). */
+export function manifestActionVersionIds(manifest: unknown): string[] {
+  const list = manifest && typeof manifest === "object" ? (manifest as { actionVersions?: unknown }).actionVersions : undefined;
+  return Array.isArray(list) ? list.filter((v): v is string => typeof v === "string") : [];
 }
 
 /** The founder's list of a pilot's report revisions, newest first. The link is shown only once shared. */
@@ -144,7 +155,7 @@ export async function listPilotReportRevisions(
 ): Promise<PilotReportRevisionRow[]> {
   const { data, error } = await client
     .from("pilot_report_artifacts")
-    .select("id,revision,generated_at,integrity_status,integrity_reasons,shared_at,public_token")
+    .select("id,revision,generated_at,integrity_status,integrity_reasons,shared_at,public_token,manifest")
     .eq("pilot_id", pilotId)
     .order("revision", { ascending: false })
     .limit(limit);
@@ -157,6 +168,7 @@ export async function listPilotReportRevisions(
     integrityReasons: Array.isArray(r.integrity_reasons) ? r.integrity_reasons.map(String) : [],
     sharedAt: r.shared_at ? String(r.shared_at) : null,
     publicToken: r.shared_at && r.public_token ? String(r.public_token) : null,
+    actionVersionIds: manifestActionVersionIds(r.manifest),
   }));
 }
 
@@ -195,6 +207,8 @@ export interface PilotReportRevision {
   integrityReasons: string[];
   sharedAt: string | null;
   isLatest: boolean;
+  /** D-057 — the action versions the revision lists, to tell a stale revision. */
+  actionVersionIds: string[];
 }
 
 /**
@@ -210,7 +224,7 @@ export async function readPilotReportRevision(
 ): Promise<PilotReportRevision | null> {
   const { data, error } = await client
     .from("pilot_report_artifacts")
-    .select("id,revision,payload,generated_at,integrity_status,integrity_reasons,shared_at")
+    .select("id,revision,payload,generated_at,integrity_status,integrity_reasons,shared_at,manifest")
     .eq("id", artifactId)
     .eq("pilot_id", pilotId)
     .maybeSingle();
@@ -233,5 +247,6 @@ export async function readPilotReportRevision(
     integrityReasons: Array.isArray(r.integrity_reasons) ? r.integrity_reasons.map(String) : [],
     sharedAt: r.shared_at ? String(r.shared_at) : null,
     isLatest: (newer ?? []).length === 0,
+    actionVersionIds: manifestActionVersionIds(r.manifest),
   };
 }

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { requireFounderForRoute } from "@/lib/auth/founder";
 import { SAVE_PILOT_ACTION_REFUSAL, parseSavePilotAction } from "@/lib/pilots/action-rules";
-import { savePilotAction, verifyActionEvidence } from "@/lib/pilots/action-store";
+import { savePilotActionChecked } from "@/lib/pilots/action-store";
 import { UUID_PATTERN } from "@/lib/pilots/validate";
 import { getReportServiceClient } from "@/lib/reports/service-client";
 
@@ -16,7 +16,8 @@ export const dynamic = "force-dynamic";
  * measured or spent. The wording lint runs here and again at every report
  * build; every linked answer must be one of this pilot's completed answers
  * (checked here and by the database), and every named source must be among
- * that answer's own sources (checked here and at every build).
+ * that answer's own sources (checked here and at every build), and is stored
+ * as the URL that answer's extraction produced.
  */
 export async function POST(request: Request, { params }: { params: Promise<{ pilotId: string }> }): Promise<NextResponse> {
   if (process.env.SNAPSHOT_APPROVAL_ENABLED !== "true") {
@@ -45,12 +46,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ pil
     );
   }
 
+  // The links are checked against this pilot's answers and their own
+  // sources, and each named source is stored as the URL that answer's
+  // extraction produced, before the database is called (savePilotActionChecked).
   const client = getReportServiceClient();
-  const checked = await verifyActionEvidence(client, pilotId, parsed.value.evidence);
-  const result =
-    checked === "OK"
-      ? await savePilotAction(client, { pilotId, writtenBy: guard.user.id, fields: parsed.value })
-      : { outcome: checked, actionId: null, versionId: null, versionNumber: null };
+  const result = await savePilotActionChecked(client, { pilotId, writtenBy: guard.user.id, fields: parsed.value });
 
   console.info(
     JSON.stringify({

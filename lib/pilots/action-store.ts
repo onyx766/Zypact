@@ -60,6 +60,14 @@ export async function savePilotAction(
   };
 }
 
+/**
+ * A unique violation on the one-review or one-withdrawal index means another
+ * request recorded the same event first. The database serialises both on the
+ * pilot row, so this is a backstop: the answer is the one a second request
+ * would get, never an error.
+ */
+const isUniqueViolation = (error: unknown) => (error as { code?: unknown } | null)?.code === "23505";
+
 export async function reviewPilotAction(
   client: SupabaseClient,
   input: { pilotId: string; actionId: string; versionNumber: number; reviewedBy: string; confirmed: boolean }
@@ -71,7 +79,10 @@ export async function reviewPilotAction(
     p_reviewed_by: input.reviewedBy,
     p_confirmed: input.confirmed,
   });
-  if (error) throw error;
+  if (error) {
+    if (isUniqueViolation(error)) return "ALREADY_REVIEWED";
+    throw error;
+  }
   return String(one(data)?.outcome ?? "");
 }
 
@@ -85,7 +96,10 @@ export async function withdrawPilotAction(
     p_withdrawn_by: input.withdrawnBy,
     p_reason: input.reason,
   });
-  if (error) throw error;
+  if (error) {
+    if (isUniqueViolation(error)) return "ALREADY_WITHDRAWN";
+    throw error;
+  }
   return String(one(data)?.outcome ?? "");
 }
 
@@ -221,42 +235,105 @@ export async function loadEvidenceChoices(
   return choices;
 }
 
+export type VerifyActionEvidenceOutcome = "OK" | "EVIDENCE_OUTSIDE_PILOT" | "EVIDENCE_NOT_AN_ANSWER" | "SOURCE_NOT_IN_ANSWER";
+
 /**
  * Before a save: every linked answer is one of this pilot's, and every named
  * source is among that answer's own sources. The database checks the answer
  * again; only this check can see the source.
+ *
+ * On OK it returns the links to store, each named source replaced by the URL
+ * the answer's own extraction produced (D-057, engineer): a posted spelling
+ * that normalises to it ("WWW.G2.com/…#top") is stored as the extracted URL,
+ * never as posted, so the database's one-link-per-source rule holds on the
+ * real URL and the console shows the URL the report shows.
  */
 export async function verifyActionEvidence(
   client: SupabaseClient,
   pilotId: string,
   links: { attemptId: string; sourceUrl: string | null }[]
-): Promise<"OK" | "EVIDENCE_OUTSIDE_PILOT" | "EVIDENCE_NOT_AN_ANSWER" | "SOURCE_NOT_IN_ANSWER"> {
+): Promise<{ outcome: VerifyActionEvidenceOutcome; links: { attemptId: string; sourceUrl: string | null }[] }> {
+  const refuse = (outcome: VerifyActionEvidenceOutcome) => ({ outcome, links: [] });
   const slots = await pilotSlots(client, pilotId);
   const answers = await answersOf(client, slots.map((s) => s.protocolId));
   const byId = new Map(answers.map((a) => [a.attemptId, a]));
   for (const link of links) {
-    if (!byId.has(link.attemptId)) return "EVIDENCE_OUTSIDE_PILOT";
+    if (!byId.has(link.attemptId)) return refuse("EVIDENCE_OUTSIDE_PILOT");
   }
   const named = links.filter((l) => l.sourceUrl !== null);
-  if (named.length === 0) return "OK";
   const stored = await storedAnswers(
     client,
     named.map((l) => byId.get(l.attemptId)!.probeRunId).filter((id): id is string => typeof id === "string")
   );
-  for (const link of named) {
-    const a = byId.get(link.attemptId)!;
-    const r = a.probeRunId ? stored.get(a.probeRunId) : undefined;
-    if (a.status !== "completed" || !r) return "EVIDENCE_NOT_AN_ANSWER";
-    const sources = extractProviderSources(
-      typeof r.raw_response === "string" ? r.raw_response : null,
-      typeof r.raw_response_sha256 === "string" ? r.raw_response_sha256 : null
-    );
-    const wanted = normalizeSourceUrl(link.sourceUrl)?.url ?? link.sourceUrl;
-    if (sources.status !== "ok" || ![...sources.cited, ...sources.retrievedOnly].some((s) => s.url === wanted)) {
-      return "SOURCE_NOT_IN_ANSWER";
+  const out: { attemptId: string; sourceUrl: string | null }[] = [];
+  const seen = new Set<string>();
+  for (const link of links) {
+    let sourceUrl: string | null = null;
+    if (link.sourceUrl !== null) {
+      const a = byId.get(link.attemptId)!;
+      const r = a.probeRunId ? stored.get(a.probeRunId) : undefined;
+      if (a.status !== "completed" || !r) return refuse("EVIDENCE_NOT_AN_ANSWER");
+      const sources = extractProviderSources(
+        typeof r.raw_response === "string" ? r.raw_response : null,
+        typeof r.raw_response_sha256 === "string" ? r.raw_response_sha256 : null
+      );
+      const wanted = normalizeSourceUrl(link.sourceUrl)?.url ?? link.sourceUrl;
+      const hit = sources.status === "ok" ? [...sources.cited, ...sources.retrievedOnly].find((x) => x.url === wanted) : undefined;
+      if (!hit) return refuse("SOURCE_NOT_IN_ANSWER");
+      sourceUrl = hit.url;
+    }
+    // Two spellings of one source collapse to one link.
+    const key = `${link.attemptId}|${sourceUrl ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ attemptId: link.attemptId, sourceUrl });
+  }
+  return { outcome: "OK", links: out };
+}
+
+/**
+ * The save the route makes: the links are checked and canonicalised first,
+ * and the database is called only when they pass, with the links as checked.
+ */
+export async function savePilotActionChecked(
+  client: SupabaseClient,
+  input: { pilotId: string; writtenBy: string; fields: SavePilotActionFields }
+): Promise<{ outcome: string; actionId: string | null; versionId: string | null; versionNumber: number | null }> {
+  const checked = await verifyActionEvidence(client, input.pilotId, input.fields.evidence);
+  if (checked.outcome !== "OK") return { outcome: checked.outcome, actionId: null, versionId: null, versionNumber: null };
+  return savePilotAction(client, { ...input, fields: { ...input.fields, evidence: checked.links } });
+}
+
+/**
+ * The answer text of a stored provider response, for the founder's console
+ * only: a Sonar answer's message content, or a Responses-shaped body's
+ * output text. Null when the body yields none. Callers show it only after
+ * the body re-hashes to its recorded fingerprint.
+ */
+export function storedAnswerText(raw: string | null): string | null {
+  if (raw === null) return null;
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!json || typeof json !== "object") return null;
+  const body = json as Record<string, unknown>;
+  let text = "";
+  if (Array.isArray(body.choices)) {
+    const content = (body.choices[0] as { message?: { content?: unknown } } | undefined)?.message?.content;
+    text = typeof content === "string" ? content : "";
+  } else if (body.object === "response" && Array.isArray(body.output)) {
+    for (const item of body.output as Array<{ type?: unknown; content?: unknown }>) {
+      if (item?.type !== "message" || !Array.isArray(item.content)) continue;
+      for (const part of item.content as Array<{ type?: unknown; text?: unknown }>) {
+        if (part?.type === "output_text" && typeof part.text === "string") text += (text ? "\n" : "") + part.text;
+      }
     }
   }
-  return "OK";
+  const trimmed = text.trim();
+  return trimmed.length === 0 ? null : trimmed;
 }
 
 /* ---------------------------------------------------------------- reads */
@@ -309,6 +386,16 @@ async function evidenceOf(client: SupabaseClient, versionIds: string[]): Promise
   return out;
 }
 
+/** The version ids a report built now would list: each action's latest, reviewed, not withdrawn. */
+export async function currentReportableVersionIds(client: SupabaseClient, pilotId: string): Promise<string[]> {
+  const rows = await actionRows(client, pilotId);
+  return reportableActionVersions(
+    rows.actions.map((a) => String(a.id)),
+    rows.versions.map(versionRow),
+    rows.events.map(eventRow)
+  ).map((c) => c.versionId);
+}
+
 /** Each action's latest version, when reviewed and not withdrawn, oldest action first: what a report shows. */
 export async function readReportableActions(client: SupabaseClient, pilotId: string): Promise<PilotReportActionInput[]> {
   const rows = await actionRows(client, pilotId);
@@ -349,7 +436,20 @@ export interface PilotActionAdminRow {
   openQuestions: string;
   writtenAt: string;
   withdrawReason: string | null;
-  evidence: { attemptId: string; sourceUrl: string | null; words: string }[];
+  evidence: PilotActionAdminEvidence[];
+}
+
+export interface PilotActionAdminEvidence {
+  attemptId: string;
+  sourceUrl: string | null;
+  words: string;
+  /**
+   * The stored answer's text, for the founder to read before a review; null
+   * when the stored response does not re-hash to its recorded fingerprint
+   * or yields no text (then `answerNote` says which).
+   */
+  answerText: string | null;
+  answerNote: string | null;
 }
 
 /** The founder's list: every action with its latest version, status and links in words. */
@@ -365,6 +465,24 @@ export async function listPilotActionsForAdmin(client: SupabaseClient, pilotId: 
   const answers = await answersOf(client, slots.map((s) => s.protocolId));
   const answerById = new Map(answers.map((a) => [a.attemptId, a]));
   const slotByProtocol = new Map(slots.map((s) => [s.protocolId, s]));
+  const linkedRuns = [...new Set(
+    [...evidence.values()].flat()
+      .map((link) => answerById.get(link.attemptId)?.probeRunId)
+      .filter((id): id is string => typeof id === "string")
+  )];
+  const stored = await storedAnswers(client, linkedRuns);
+  const answerOf = (attemptId: string): { answerText: string | null; answerNote: string | null } => {
+    const a = answerById.get(attemptId);
+    const r = a?.probeRunId ? stored.get(a.probeRunId) : undefined;
+    if (!r) return { answerText: null, answerNote: "No stored answer." };
+    const raw = typeof r.raw_response === "string" ? r.raw_response : null;
+    const check = extractProviderSources(raw, typeof r.raw_response_sha256 === "string" ? r.raw_response_sha256 : null);
+    if (check.status === "no_raw_response" || check.status === "hash_missing" || check.status === "hash_mismatch") {
+      return { answerText: null, answerNote: "The stored answer could not be checked against its recorded fingerprint." };
+    }
+    const text = storedAnswerText(raw);
+    return text ? { answerText: text, answerNote: null } : { answerText: null, answerNote: "The stored answer has no readable text." };
+  };
   return latest.map(({ id, s }) => {
     const v = rows.versions.find((r) => String(r.id) === s.latest!.id)!;
     const withdrawn = rows.events.find((e) => String(e.action_id) === id && e.event === "withdrawn");
@@ -388,7 +506,7 @@ export async function listPilotActionsForAdmin(client: SupabaseClient, pilotId: 
           a && slot
             ? `Question ${slot.ordinal}, ${ENGINE_LABEL[slot.engine] ?? "Unknown engine"} answer ${a.answerNumber}`
             : "An answer that is no longer one of this pilot's";
-        return { ...link, words: link.sourceUrl ? `${words}; source ${link.sourceUrl}` : words };
+        return { ...link, words: link.sourceUrl ? `${words}; source ${link.sourceUrl}` : words, ...answerOf(link.attemptId) };
       }),
     };
   });

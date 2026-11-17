@@ -204,6 +204,43 @@ export interface PilotEvidenceEntry {
   rawResponseSha256: string | null;
 }
 
+/**
+ * D-057 — one stored answer a suggested action rests on, re-checked at this
+ * build: a completed answer of this pilot whose stored response re-hashes to
+ * its recorded SHA-256, and, when a source is named, that source re-found in
+ * the answer's own extracted sources.
+ */
+export interface PilotReportActionEvidence {
+  attemptId: string;
+  pilotQuestionId: string;
+  /** The question's ordinal. */
+  ordinal: number;
+  engine: PilotEngineKey;
+  /** The answer's run number in that question's report. */
+  answerNumber: number;
+  rawResponseSha256: string;
+  sourceUrl: string | null;
+  sourceDomain: string | null;
+  /** Whether the answer cites the source (true) or the engine only returned it (false); null without a source. */
+  sourceCited: boolean | null;
+}
+
+/** D-057 — a suggested action written by the Zypact team: its latest reviewed version. */
+export interface PilotReportAction {
+  actionId: string;
+  versionId: string;
+  versionNumber: number;
+  title: string;
+  observation: string;
+  suggestedAction: string;
+  whyItMightMatter: string;
+  alternativeExplanations: string;
+  openQuestions: string;
+  /** The day the team reviewed this version (YYYY-MM-DD). */
+  reviewedOn: string;
+  evidence: PilotReportActionEvidence[];
+}
+
 export interface PilotReportPayload {
   reportVersion: typeof PILOT_REPORT_VERSION;
   generatedAt: string;
@@ -224,12 +261,19 @@ export interface PilotReportPayload {
   /** METHODOLOGY §16 gate 12. */
   causalLimit: string;
   methodNotes: string[];
+  /**
+   * D-057 — the team's reviewed suggested actions. Absent on revisions built
+   * before D-057, which had none.
+   */
+  actions?: PilotReportAction[];
 }
 
 /** What the database checks the payload against before saving it. */
 export interface PilotReportManifest {
   protocols: string[];
   attempts: { id: string; protocolId: string; rawResponseSha256: string | null }[];
+  /** D-057 — the action versions the payload shows; the database checks each is its action's latest reviewed one. */
+  actionVersions: string[];
 }
 
 export function isPilotReportPayload(value: unknown): value is PilotReportPayload {
@@ -241,6 +285,7 @@ export function isPilotReportPayload(value: unknown): value is PilotReportPayloa
     if (typeof c[key] !== "object" || c[key] === null) return false;
   }
   if (typeof c.dependenceNote !== "string" || typeof c.causalLimit !== "string") return false;
+  if (c.actions !== undefined && !Array.isArray(c.actions)) return false;
   return ["engines", "conditions", "questions", "brand", "competitors", "sources", "evidenceIndex", "limitations", "methodNotes"].every(
     (key) => Array.isArray(c[key])
   );

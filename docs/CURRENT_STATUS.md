@@ -2151,3 +2151,54 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 | `scripts/test-worker-execution-options.ts` | 56 passed, 0 failed |
 | Offline worker suites: `test:m5-a-worker-loop` 52, `test:m5-a-recovery` 18, `test:m5-a-real-probe-fencing` 18, `test:m5-a-conflict-identity` 62, `test:m5-a-failure-matrix` 58, `test:m5-a-abort-and-cancel` 23, `test:m5-a-throttling` 28, `test:m5-a-lifecycle` 34, `test:m5-tk-r` 120, `test:m5-phase3d-bounds` 62, `test:m5-b3-max-runtime` 189, `test:m5-phase3d-evidence` 131, `test:m5-2-adapter` 359, `test:cost-recording` 59, `test:perplexity-agent-adapter` 158, `test:worker-precheck-closure` 171, `test:worker-paid-execution-gate` 69, `test:worker-image-provenance` 89, `test:report-pass` 38, `test:m5-0056-schema` 71, `test:m5-0059-schema` 165, `test:m5-0060-schema` 266, `test:m5-0083-schema` 30 | all pass |
 | `ZYPACT_LEVEL2_LOCAL=1 npm run test:snapshot-worker-postgres-level2` | `LEVEL2_RESULT=PASS`, 886 PASS and 0 FAIL on `postgres:16-alpine` with all 91 migrations applied (the local runner then exits 1 from its known cleanup trap, §30) |
+
+## 34. Suggested actions in the pilot report (D-057) — branch `feat/pilot-actions`, stacked on the combined report, not applied anywhere, not deployed
+
+- **Base:** `feat/pilot-report` at `0ebadf0` (PR #125). Section numbers 33 and 34 are used on two open branches (ChatGPT in the worker uses 33); they are renumbered when both merge.
+- **What it adds** (D-053 item 4):
+  - **Migration** `20261120120000_pilot_actions.sql`:
+    - four append-only tables (`pilot_actions`, `pilot_action_versions`, `pilot_action_evidence`, `pilot_action_events`), with a guard trigger on each and the evidence trigger;
+    - `save_pilot_action`, `review_pilot_action`, `withdraw_pilot_action`;
+    - `save_pilot_report_artifact` redefined with one marked block: listed action versions must be reviewed, latest and not withdrawn; a reviewed action cannot be left out; a revision with an action is never `integrity_passed`; unless the revision is blocked, what the payload shows of each action must equal the stored version and its links (`ACTIONS_CONTENT_MISMATCH`);
+    - `share_pilot_report_artifact` redefined with one marked block: a revision whose actions changed since the build is refused (`ACTIONS_STALE`).
+  - **Rules and copy:** `lib/pilots/action-rules.ts` (validation, the wording lint, which version is reportable) and `lib/pilots/action-copy.ts` (import-free, for the console's client code).
+  - **The store:** `lib/pilots/action-store.ts` (save, review, withdraw, the founder's list, the reportable versions, the evidence picker, and the source check before a save).
+  - **The builder:** `lib/reports/build-pilot-actions.ts`, called by `buildPilotReport`. It re-checks every link at every build. `runOrdinalsByAttemptId` is exported from `build-protocol-report.ts`, so an action's "answer N" is the report's own run number.
+  - **The report:** a "Suggested actions" section in the shared presentation model, on the page and in the Markdown, with the fixed D-057 note.
+  - **Console:** four founder routes under `/api/internal/pilots/[pilotId]/actions` (save, evidence choices, review, withdraw), and the Suggested actions panel on the pilot page (`app/admin/pilots/pilot-action-forms.tsx`), whose evidence picker offers only an answer's own sources.
+  - **No provider or model call, no email, no worker, spend or claim change.**
+- **Independent review of `813bedb` (2026-11-17):** eight findings, all fixed (D-057, *Independent review*):
+  - a withdrawn or superseded action could be shared → `ACTIONS_STALE`, and the console marks the revision out of date;
+  - the lint was evaded by hedges, inflections, causal verbs, invisible characters and look-alike letters → normalised text, whole-word phrases, modal and causal patterns;
+  - the database checked only an action's identity → its content and links too (`ACTIONS_CONTENT_MISMATCH`);
+  - the evidence trigger did not refuse a retired question → it does;
+  - a posted source URL was stored as posted → the answer's own extracted URL is stored;
+  - two simultaneous reviews or withdrawals ended in a 500 → serialised on the pilot row, and the second answers "already done";
+  - the review prompt claimed more than the console showed → the stored answer is shown under each link; the customer note no longer names a step that does not exist;
+  - tests that proved less than they claimed → the store runs for real against a fake client (K), and the DB suite covers each gap (C, S, Q, K, R8).
+- **Not established:**
+  - no browser walk-through of the panel or the picker;
+  - no report built from real pilot evidence;
+  - no Level 2 run with this migration. It changes no worker path.
+  - `test-pilot-questions-db` P22 (retiring at most 5 questions) failed once in a full run on 2026-11-17 and passed on two re-runs of the same code. It depends on lease lapses in `abandon()`, so it can be intermittent; it is not touched by this branch.
+- **Open:** D-057 *Open for the founder*:
+  - the *(engineer)* rules;
+  - fingerprints in an appendix;
+  - a second reviewer.
+- **Inventory on this branch:** 93 migrations, 223 files matching `scripts/test-*.ts`, 131 `test:*` and 4 `verify:*` commands.
+- **Commands and local results (2026-11-17, after the review's fixes):**
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | pass |
+| `npm run build:verify` | pass; the four routes and the pilot page are built (`next-env.d.ts` restored afterwards) |
+| `npm run test:pilot-actions` | 91/91 (68 before the review's fixes) |
+| `npm run test:pilot-report` | 93/93 |
+| `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | P1 45/45, P2 71/71, E1 74/74, Q4 52/52, pilot step 1 60/60, pilot questions 69/69, pilot report 39/39, pilot actions 53/53 (37 before), all 93 migrations applied. A first full run had pilot questions at 68/69 (P22, see *Not established*); two later runs passed it. |
+| `npm run test:pilot-questions` | pass |
+| `npm run test:pilot-step1` | pass |
+| `npm run test:protocol-report` | pass |
+| `npm run test:source-insights` | pass |
+| `npm run test:prod-preflight` | pass (the version, four tables and five functions added to the absence checks) |
+| `npm run test:paid-execution-guards` | 143/143 |
+| `npm run test:founder-baseline-control`, `npm run test:worker-start` | pass, 41/41 |

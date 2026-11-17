@@ -8,6 +8,7 @@
  * (METHODOLOGY §10, §11); the one portfolio line is a count beside them,
  * never a score, and nothing is combined across engines (D-053 item 3).
  */
+import { buildPilotActions, type PilotReportActionInput } from "@/lib/reports/build-pilot-actions";
 import { buildProtocolReport } from "@/lib/reports/build-protocol-report";
 import type { BuildProtocolReportInput, ProtocolReportPayload } from "@/lib/reports/protocol-report-types";
 import { DEPENDENCE_LIMITATION, surfaceLimitation } from "@/lib/reports/surface-limitations";
@@ -102,6 +103,8 @@ export interface PilotReportInput {
     status: "active" | "closed";
   };
   questions: PilotReportQuestionInput[];
+  /** D-057 — each action's latest reviewed version, oldest action first. */
+  actions?: PilotReportActionInput[];
   now?: Date;
 }
 
@@ -319,7 +322,7 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
   const ordered = [...input.questions].sort((a, b) => a.ordinal - b.ordinal);
   const questions: PilotReportQuestion[] = [];
   const evidenceIndex: PilotEvidenceEntry[] = [];
-  const manifest: PilotReportManifest = { protocols: [], attempts: [] };
+  const manifest: PilotReportManifest = { protocols: [], attempts: [], actionVersions: [] };
   const brandRows = new Map<PilotEngineKey, PilotBrandRow[]>();
   const measuredByEngine = new Map<PilotEngineKey, { ordinal: number; report: ProtocolReportPayload }[]>();
 
@@ -473,6 +476,23 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
     buildSources(engine, measuredByEngine.get(engine) ?? [], pilot.normalizedDomain)
   );
 
+  // D-057 — the team's reviewed suggested actions, every link re-checked
+  // against the evidence this report is built from.
+  const builtActions = buildPilotActions(
+    input.actions ?? [],
+    ordered.flatMap((q) =>
+      q.slots.map((slot) => ({
+        pilotQuestionId: q.pilotQuestionId,
+        ordinal: q.ordinal,
+        retired: q.retiredAt !== null,
+        engine: slot.engine,
+        evidence: slot.evidence,
+      }))
+    )
+  );
+  structural.push(...builtActions.structural);
+  manifest.actionVersions = builtActions.versionIds;
+
   const methodNotes = [
     `Each question's figures come from its own approved protocol and its own answers. The table rows are the question sections' figures, repeated.`,
     `Labels follow rule ${PILOT_LABEL_RULE}: with at least ${MIN_READABLE_FOR_LABEL} readable answers, "named in every answer", "named in no answer" or "named in some answers"; with fewer, "not enough answers". The counts are always shown beside the label.`,
@@ -501,6 +521,7 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
     dependenceNote: DEPENDENCE_LIMITATION,
     causalLimit: PILOT_CAUSAL_LIMIT,
     methodNotes,
+    actions: builtActions.actions,
   };
 
   return { payload, manifest, structural: dedupe(structural) };

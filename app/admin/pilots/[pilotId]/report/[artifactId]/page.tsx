@@ -3,6 +3,8 @@ import { notFound } from "next/navigation";
 
 import { PilotReportView } from "@/components/report/pilot-report-view";
 import { requireFounderForPage } from "@/lib/auth/founder";
+import { revisionActionsCurrent, STALE_REVISION_WORDS } from "@/lib/pilots/action-rules";
+import { currentReportableVersionIds } from "@/lib/pilots/action-store";
 import { loadPilot } from "@/lib/pilots/reads";
 import { UUID_PATTERN } from "@/lib/pilots/validate";
 import { INTEGRITY_WORDS } from "@/lib/reports/pilot-report-copy";
@@ -21,7 +23,8 @@ export const revalidate = 0;
  * It renders the stored payload with the same view the customer's page uses
  * (components/report/pilot-report-view.tsx), labelled as a preview, so the
  * founder reads exactly what the customer will see. Share is offered only
- * here, only for the newest revision, and never for a blocked one; the
+ * here, only for the newest revision, never for a blocked one, and never
+ * for one whose suggested actions changed since it was built (D-057); the
  * database refuses the same cases again (share_pilot_report_artifact).
  */
 export default async function PilotReportPreviewPage({
@@ -39,7 +42,12 @@ export default async function PilotReportPreviewPage({
   const revision = await readPilotReportRevision(client, pilotId, artifactId);
   if (!revision || !isPilotReportPayload(revision.payload)) notFound();
 
-  const canShare = revision.isLatest && revision.sharedAt === null && revision.integrityStatus !== "blocked";
+  // D-057 — a revision whose listed actions are no longer the pilot's reviewed,
+  // current ones is out of date; the database refuses it too (ACTIONS_STALE).
+  const stale =
+    revision.sharedAt === null &&
+    !revisionActionsCurrent(revision.actionVersionIds, await currentReportableVersionIds(client, pilotId));
+  const canShare = revision.isLatest && revision.sharedAt === null && revision.integrityStatus !== "blocked" && !stale;
 
   return (
     <AdminShell
@@ -95,7 +103,9 @@ export default async function PilotReportPreviewPage({
               ? "This revision has been shared. Its link is on the pilot page."
               : revision.integrityStatus === "blocked"
                 ? "This revision failed its checks and can never be shared."
-                : "A newer revision exists. Only the newest revision can be shared."}
+                : !revision.isLatest
+                  ? "A newer revision exists. Only the newest revision can be shared."
+                  : STALE_REVISION_WORDS}
           </p>
         )}
       </div>

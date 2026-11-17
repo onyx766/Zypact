@@ -1046,3 +1046,83 @@ Each item below departed from a document that governed before this approval: V1_
   - a recommended action without linked evidence;
   - AI cost for one pilot above 85 USD;
   - offer copy outside item 8.
+
+## D-054 — Pilot questions: one pilot holds all of a customer's approved questions in one project
+
+- **Date:** 2026-11-17
+- **Status:** Built on branch `feat/pilot-questions`, stacked on `feat/pilot-mode-phase1`, as the first build step D-053 lists. Rules marked *(engineer)* are **proposed for founder confirmation**. Migration `20261118120000_pilot_questions.sql` is **not applied to any Supabase project**, and nothing is deployed.
+- **Builds on:**
+  - D-032 (the 5-run plan);
+  - D-051 (Pilot Mode rules);
+  - D-052 (a Run names its job, the provider-failure retry, who supplied the question);
+  - D-053 (the $1,500 pilot);
+  - 0081 (founder-created requests).
+- **Problem:** before this, one snapshot request held one question in its own project. A 15-question pilot would have been 15 projects, 15 report links and 15 domain locks.
+- **Decision:**
+  1. **A pilot is its own record, not a request** *(engineer)*. Three reasons:
+     - after a request's scan, the report pass builds that request's one-question report, and could email it when `SNAPSHOT_AUTO_DELIVERY_ENABLED` is `true`;
+     - saving that report moves the request to `report_ready`, which lifts the active-domain rule while the pilot is still running;
+     - the first question would be handled differently from the other fourteen.
+
+     The report pass reads requests only, so a pilot's measurements are never reported or sent by it.
+  2. **`pilots`** holds:
+     - the company and website, normalized exactly as a request's;
+     - how the team confirmed the customer controls the website (D-051, required);
+     - the question limit (1 to 20, 15 by default, D-053);
+     - the 90-day window: `ends_on` is `starts_on` + 90 by constraint (D-053);
+     - the status, `active` or `closed`, with who closed it, when and why.
+
+     `create_pilot` creates the pilot and its one project, whose company and domain the worker names in its prompts. It takes the same per-website lock as a request. It refuses a website with a request in progress (0081's status set) or another open pilot; one open pilot per website is also a unique index. A repeated press replays; the same key with another body is a conflict.
+  3. **`add_pilot_question`** adds one question in one transaction:
+     - it checks the question: trimmed, 10-300 characters, the request form's rule;
+     - it records who supplied it, customer or Zypact (D-052 item 4, required);
+     - it records the customer's written approval as a reference and a date, both required *(engineer)*;
+     - it then runs exactly the approval sequence of `approve_and_launch_snapshot_baseline`: question, version, M4 approval, a protocol with the identical Perplexity plan (5 runs, run cap 7, retry cap 2, 2 USD), protocol approval and the queue. `test:pilot-questions` S15 checks this against the SQL, and the database test compares the stored rows column by column.
+
+     It refuses:
+     - a closed pilot, or one past its end date;
+     - a pilot at its limit;
+     - the same question twice in one pilot;
+     - a hash that is not the SHA-256 of the exact text. The application computes the hash, and this function re-checks it in SQL *(engineer)*. That departs from 0047's rule that only the application computes it, for this path only.
+
+     Replay and conflict work as for `create_pilot`. Nothing runs: the founder presses Run per question.
+  4. **The per-engine slot** (`pilot_question_protocols`) allows only Perplexity's baseline. ChatGPT gets a slot in the pull request that wires it (D-053 item 3), and a pilot retest gets one in the retest step. The pilot page shows ChatGPT as "Not measured", never as zero.
+  5. **A Run for a pilot question.** Pilot step 1's `request_protocol_job_run` is redefined with two changes only:
+     - the console start `admin_pilot_run` is accepted;
+     - a job of a pilot that is closed or past its end date is refused (`PILOT_CLOSED`) *(engineer)*, so that rule is enforced by the database, not only the page.
+
+     `test:pilot-questions` S13 checks that the body is otherwise step 1's, byte for byte. The claim, admission, reservation and the worker are unchanged.
+  6. **`close_pilot`** records who closed the pilot and why, and changes no job *(engineer)*: a queued job may hold a reserved retry, and ending it could strand that reservation. The Run gate in item 5 is what stops a closed pilot from spending.
+  7. **Retry.** A pilot question that stopped at the provider is retried through `retry_failed_protocol_job` (D-052), unchanged. The route refuses a closed or ended pilot first. The retry itself reserves but does not spend; the Run that follows is refused by the database for a closed pilot.
+  8. **Console.** **Pilots** in the founder console holds:
+     - a list of pilots, and a page per pilot;
+     - per question: its text, who supplied it, the approval reference and date, and the Perplexity status with completed and failed runs;
+     - Run and Retry per question;
+     - adding a question, and closing the pilot.
+
+     Pilot jobs are left out of the founder-experiments list. No route logs a company name, a website address, a question, an approval reference, a note or a reason. Pilot creation logs the normalized domain, as request creation does.
+- **Not in this step:**
+  - the combined pilot report (the next step);
+  - recommended actions;
+  - ChatGPT;
+  - a pilot retest and its Outcome Card recipients;
+  - the customer login;
+  - a per-question results preview for the team.
+- **Open:**
+  - **A live pilot does not yet block a new public request for its website** *(engineer)*. The request functions are untouched, so a request can be created for a pilot's website, and its measurement would sit in a separate project. Either a redefinition of the two request-creation functions or a console check would close it.
+  - **Intent type.** Every pilot question version is stored with intent `shortlist`, as a request's is. Questions about alternatives or purchase decisions are not distinguished.
+  - **Release position.** The migration depends only on 0047-0081 and step 1. It goes directly after step 1, wherever the founder places step 1 (D-052).
+  - **D-037.** The held 0084/0085 plan must also cover the redefined `request_protocol_job_run`.
+  - **Interventions on pilot baselines.** The intervention console lists every baseline, so a pilot question's baseline can already be chosen for an intervention. Its Outcome Card would have no recipient, because a pilot has no request. This belongs to the pilot retest step.
+- **Tests:**
+  - `npm run test:pilot-questions` (87, offline): the memory mirrors, the real worker loop on the memory adapter, static contracts and both parity checks, the routes, the pages and the copy;
+  - `scripts/test-pilot-questions-db.ts` (47, disposable Supabase Postgres, run by `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db`);
+  - updated: `test:pilot-step1` S8, `test:founder-baseline-control` and `test:prod-preflight`;
+  - results in `CURRENT_STATUS.md` §31.
+- **Recovery:** in the migration's header. Roll the web app back first, then restore step 1's `request_protocol_job_run` and CHECK, then drop the three functions and three tables. Every project, version, protocol, job and attempt a pilot created is an ordinary row and is kept.
+- **Revisit trigger:**
+  - a pilot with more than 20 questions or another plan;
+  - a second engine's slot;
+  - a Run path that does not go through `request_protocol_job_run`;
+  - a pilot measurement reported or sent outside the combined pilot report;
+  - a closed pilot that spends.

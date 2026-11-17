@@ -6,6 +6,14 @@ import type {
   ClaimRequestedProtocolExecutionJobResult,
   CloseFailedSnapshotRequestInput,
   CloseFailedSnapshotRequestOutcome,
+  AddPilotQuestionInput,
+  AddPilotQuestionOutcome,
+  AddPilotQuestionResult,
+  ClosePilotInput,
+  ClosePilotOutcome,
+  CreatePilotInput,
+  CreatePilotOutcome,
+  CreatePilotResult,
   ProtocolJobRunVia,
   QuestionProvenanceChoice,
   RequestProtocolJobRunInput,
@@ -231,7 +239,80 @@ interface MemoryStore {
   protocolJobRunRequests: Map<string, MemoryRunRequest>;
   /** D-052 — mirrors snapshot_request_closures, keyed by request id. */
   snapshotRequestClosures: Map<string, MemoryRequestClosure>;
+  /** D-054 — mirror pilots, pilot_questions and pilot_question_protocols. */
+  pilots: Map<string, MemoryPilot>;
+  pilotQuestions: Map<string, MemoryPilotQuestion>;
+  pilotQuestionProtocols: Map<string, MemoryPilotQuestionProtocol>;
 }
+
+/** D-054 — mirrors pilots (20261118120000). */
+interface MemoryPilot {
+  id: string;
+  projectId: string;
+  companyName: string;
+  websiteUrl: string;
+  normalizedDomain: string;
+  siteControlNote: string;
+  questionLimit: number;
+  startsOn: string;
+  endsOn: string;
+  status: "active" | "closed";
+  createdBy: string;
+  idempotencyKey: string;
+  requestFingerprint: string;
+  closedBy: string | null;
+  closedAt: string | null;
+  closeReason: string | null;
+}
+
+/** D-054 — mirrors pilot_questions (20261118120000). */
+interface MemoryPilotQuestion {
+  id: string;
+  pilotId: string;
+  projectId: string;
+  ordinal: number;
+  buyerQuestionVersionId: string;
+  promptHash: string;
+  questionProvenance: QuestionProvenanceChoice;
+  customerApprovalRef: string;
+  customerApprovedOn: string;
+  addedBy: string;
+  idempotencyKey: string;
+  requestFingerprint: string;
+}
+
+/** D-054 — mirrors pilot_question_protocols (20261118120000). */
+interface MemoryPilotQuestionProtocol {
+  id: string;
+  pilotQuestionId: string;
+  projectId: string;
+  engine: "perplexity_sonar";
+  phase: "baseline";
+  protocolId: string;
+}
+
+/** D-054 — the SQL's md5(concat_ws(chr(31), ...)) request fingerprint. */
+function pilotFingerprint(parts: string[]): string {
+  return createHash("md5").update(parts.join("\x1f"), "utf8").digest("hex");
+}
+
+/** The database's current_date (UTC on Supabase), as YYYY-MM-DD. */
+function currentDateUtc(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** YYYY-MM-DD plus whole days, as the SQL's date + integer. */
+function addDays(day: string, days: number): string {
+  const d = new Date(`${day}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** 0081's in-flight request statuses: a request in one of them measures its website. */
+const LIVE_REQUEST_STATUSES = new Set([
+  "pending_verification", "verified", "pending_approval", "approved",
+  "queued", "running", "quality_review", "needs_founder_review",
+]);
 
 /** D-052 — mirrors protocol_job_run_requests (20261114120000). */
 interface MemoryRunRequest {
@@ -346,6 +427,9 @@ function getStore(): MemoryStore {
       alertTransitionSeqCounter: 0,
       protocolJobRunRequests: new Map(),
       snapshotRequestClosures: new Map(),
+      pilots: new Map(),
+      pilotQuestions: new Map(),
+      pilotQuestionProtocols: new Map(),
     };
   }
   return g[globalKey]!;
@@ -1010,6 +1094,238 @@ export const memoryAdapter: DbAdapter = {
         updatedAt: now,
       });
     }
+    return "CLOSED";
+  },
+
+  async createPilot(input: CreatePilotInput): Promise<CreatePilotResult> {
+    const store = getStore();
+    const note = input.siteControlNote?.trim() ?? "";
+    const company = input.companyName ?? "";
+    const domain = input.normalizedDomain ?? "";
+    if (
+      !input.createdBy || !input.idempotencyKey
+      || company !== company.trim() || company.length < 2 || company.length > 120
+      || !input.websiteUrl || input.websiteUrl.length > 2048
+      || domain !== domain.toLowerCase() || !/^[a-z0-9.-]+$/.test(domain) || domain.length < 3 || domain.length > 253
+      || note.length < 10 || note.length > 2000
+      || !Number.isInteger(input.questionLimit) || input.questionLimit < 1 || input.questionLimit > 20
+      || !/^\d{4}-\d{2}-\d{2}$/.test(input.startsOn ?? "")
+    ) {
+      throw new Error("invalid_create_pilot_args");
+    }
+    const fingerprint = pilotFingerprint([
+      input.createdBy, company, input.websiteUrl, domain, note, String(input.questionLimit), input.startsOn,
+    ]);
+    const existing = [...store.pilots.values()].find((p) => p.idempotencyKey === input.idempotencyKey);
+    if (existing) {
+      return existing.requestFingerprint === fingerprint
+        ? { outcome: "ALREADY_CREATED", pilotId: existing.id, projectId: existing.projectId }
+        : { outcome: "IDEMPOTENCY_KEY_CONFLICT", pilotId: null, projectId: null };
+    }
+    if ([...store.snapshotRequests.values()].some((r) => r.normalizedDomain === domain && LIVE_REQUEST_STATUSES.has(r.status))) {
+      return { outcome: "DOMAIN_HAS_LIVE_REQUEST", pilotId: null, projectId: null };
+    }
+    if ([...store.pilots.values()].some((p) => p.normalizedDomain === domain && p.status === "active")) {
+      return { outcome: "DOMAIN_HAS_LIVE_PILOT", pilotId: null, projectId: null };
+    }
+    const project: Project = {
+      id: randomUUID(),
+      userId: null,
+      companyName: company,
+      domain,
+      category: null,
+      createdAt: nowIso(),
+    };
+    store.projects.set(project.id, project);
+    const pilot: MemoryPilot = {
+      id: randomUUID(),
+      projectId: project.id,
+      companyName: company,
+      websiteUrl: input.websiteUrl,
+      normalizedDomain: domain,
+      siteControlNote: note,
+      questionLimit: input.questionLimit,
+      startsOn: input.startsOn,
+      endsOn: addDays(input.startsOn, 90),
+      status: "active",
+      createdBy: input.createdBy,
+      idempotencyKey: input.idempotencyKey,
+      requestFingerprint: fingerprint,
+      closedBy: null,
+      closedAt: null,
+      closeReason: null,
+    };
+    store.pilots.set(pilot.id, pilot);
+    return { outcome: "CREATED", pilotId: pilot.id, projectId: project.id };
+  },
+
+  async addPilotQuestion(input: AddPilotQuestionInput): Promise<AddPilotQuestionResult> {
+    const store = getStore();
+    const text = input.questionText ?? "";
+    const ref = input.customerApprovalRef?.trim() ?? "";
+    if (
+      !input.pilotId || !input.addedBy || !input.idempotencyKey
+      || text !== text.trim() || text.length < 10 || text.length > 300
+      || !/^[0-9a-f]{64}$/.test(input.promptHash ?? "")
+      || ref.length < 3 || ref.length > 300
+      || !/^\d{4}-\d{2}-\d{2}$/.test(input.customerApprovedOn ?? "") || input.customerApprovedOn > currentDateUtc()
+    ) {
+      throw new Error("invalid_add_pilot_question_args");
+    }
+    if (input.questionProvenance !== "customer_supplied" && input.questionProvenance !== "founder_supplied") {
+      throw new Error("question_provenance_required");
+    }
+    const none = { pilotQuestionId: null, protocolId: null, jobId: null };
+    const pilot = store.pilots.get(input.pilotId);
+    if (!pilot) return { outcome: "PILOT_NOT_FOUND", ...none };
+    const fingerprint = pilotFingerprint([
+      input.addedBy, text, input.promptHash, input.questionProvenance, ref, input.customerApprovedOn,
+    ]);
+    const questions = [...store.pilotQuestions.values()].filter((q) => q.pilotId === pilot.id);
+    const replayed = questions.find((q) => q.idempotencyKey === input.idempotencyKey);
+    if (replayed) {
+      if (replayed.requestFingerprint !== fingerprint) return { outcome: "IDEMPOTENCY_KEY_CONFLICT", ...none };
+      const slot = [...store.pilotQuestionProtocols.values()].find(
+        (s) => s.pilotQuestionId === replayed.id && s.engine === "perplexity_sonar" && s.phase === "baseline"
+      )!;
+      const replayJob = [...store.protocolExecutionJobs.values()].find((j) => j.protocolId === slot.protocolId)!;
+      return { outcome: "ALREADY_ADDED", pilotQuestionId: replayed.id, protocolId: slot.protocolId, jobId: replayJob.id };
+    }
+    if (pilot.status !== "active") return { outcome: "PILOT_CLOSED", ...none };
+    if (currentDateUtc() > pilot.endsOn) return { outcome: "PILOT_ENDED", ...none };
+    if (createHash("sha256").update(text, "utf8").digest("hex") !== input.promptHash) {
+      return { outcome: "HASH_MISMATCH", ...none };
+    }
+    if (questions.some((q) => q.promptHash === input.promptHash)) return { outcome: "DUPLICATE_QUESTION", ...none };
+    if (questions.length >= pilot.questionLimit) return { outcome: "LIMIT_REACHED", ...none };
+
+    const projectId = pilot.projectId;
+    const now = nowIso();
+    const question: BuyerQuestion = { id: randomUUID(), projectId, createdAt: now };
+    store.buyerQuestions.set(question.id, question);
+    const version: BuyerQuestionVersion = {
+      id: randomUUID(),
+      buyerQuestionId: question.id,
+      projectId,
+      versionNumber: 1,
+      promptText: text,
+      promptHash: input.promptHash,
+      intentType: "shortlist",
+      commercialValue: 3,
+      winnability: 3,
+      priority: 13,
+      rationale:
+        input.questionProvenance === "customer_supplied"
+          ? "Buyer question written by the customer, approved by the customer in writing, and entered by the founder in the admin console for a managed pilot; not independently scored."
+          : "Buyer question recommended or drafted by Zypact, approved by the customer in writing, and entered by the founder in the admin console for a managed pilot; not independently scored.",
+      provenance: input.questionProvenance,
+      approvedBy: input.addedBy,
+      approvedAt: now,
+      createdAt: now,
+    };
+    store.buyerQuestionVersions.set(version.id, version);
+    // The same plan approveAndLaunchSnapshotBaseline writes (the parity is
+    // checked by test:pilot-questions, and by the database test against SQL).
+    const protocol: Protocol = {
+      id: randomUUID(),
+      projectId,
+      buyerQuestionVersionId: version.id,
+      baselineProtocolId: null,
+      provider: "perplexity_sonar",
+      surface: "answer",
+      modelConfig: { model: "sonar" },
+      plannedBaselineRuns: 5,
+      plannedRetestRuns: 0,
+      paraphrasePlan: [{ text, hash: input.promptHash }],
+      unitOfAnalysis: "buyer_question_version",
+      primaryMetric: "presence_rate",
+      minimumUsefulChange: null,
+      samplePlanningMethod: "fixed_operator_default_pending_pilot_calibration",
+      samplePlanningAssumptions: {},
+      runCap: 7,
+      spendCapUsd: 2,
+      timeWindowSeconds: 86400,
+      rateLimitPerHour: 10,
+      concurrencyLimit: 1,
+      retryCap: 2,
+      observationWindowRule: {},
+      analyzerVersion: 1,
+      entityResolutionVersion: 2,
+      methodologyVersion: "1.1",
+      status: "approved",
+      approvedBy: input.addedBy,
+      approvedAt: now,
+      detectableChangeAtPlan: smallestDetectableChange(5, 5),
+      createdAt: now,
+      updatedAt: now,
+    };
+    store.protocols.set(protocol.id, protocol);
+    const datasetBatch: DatasetBatch = {
+      id: randomUUID(),
+      projectId,
+      datasetSourceType: "manual_scan",
+      snapshotRequestId: null,
+      backfillKey: null,
+      note: null,
+      createdAt: now,
+    };
+    store.datasetBatches.set(datasetBatch.id, datasetBatch);
+    const job: ProtocolExecutionJob = {
+      id: randomUUID(),
+      projectId,
+      protocolId: protocol.id,
+      status: "queued",
+      workerId: null,
+      claimToken: null,
+      leaseExpiresAt: null,
+      attemptCount: 0,
+      maxAttempts: 3,
+      needsReviewReason: null,
+      failureReason: null,
+      datasetBatchId: datasetBatch.id,
+      nextBaselineOrdinal: 1,
+      currentAttemptId: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    store.protocolExecutionJobs.set(job.id, job);
+    const pilotQuestion: MemoryPilotQuestion = {
+      id: randomUUID(),
+      pilotId: pilot.id,
+      projectId,
+      ordinal: questions.length + 1,
+      buyerQuestionVersionId: version.id,
+      promptHash: input.promptHash,
+      questionProvenance: input.questionProvenance,
+      customerApprovalRef: ref,
+      customerApprovedOn: input.customerApprovedOn,
+      addedBy: input.addedBy,
+      idempotencyKey: input.idempotencyKey,
+      requestFingerprint: fingerprint,
+    };
+    store.pilotQuestions.set(pilotQuestion.id, pilotQuestion);
+    const slot: MemoryPilotQuestionProtocol = {
+      id: randomUUID(),
+      pilotQuestionId: pilotQuestion.id,
+      projectId,
+      engine: "perplexity_sonar",
+      phase: "baseline",
+      protocolId: protocol.id,
+    };
+    store.pilotQuestionProtocols.set(slot.id, slot);
+    return { outcome: "ADDED", pilotQuestionId: pilotQuestion.id, protocolId: protocol.id, jobId: job.id };
+  },
+
+  async closePilot(input: ClosePilotInput): Promise<ClosePilotOutcome> {
+    const store = getStore();
+    const reason = input.reason?.trim() ?? "";
+    if (!input.pilotId || !input.closedBy || reason.length < 10 || reason.length > 2000) {
+      throw new Error("invalid_close_pilot_args");
+    }
+    const pilot = store.pilots.get(input.pilotId);
+    if (!pilot) return "PILOT_NOT_FOUND";
+    if (pilot.status === "closed") return "ALREADY_CLOSED";
+    store.pilots.set(pilot.id, { ...pilot, status: "closed", closedBy: input.closedBy, closedAt: nowIso(), closeReason: reason });
     return "CLOSED";
   },
 
@@ -3889,6 +4205,7 @@ export const memoryAdapter: DbAdapter = {
     const store = getStore();
     const vias: readonly ProtocolJobRunVia[] = [
       "admin_run_pipeline", "admin_run_retest", "admin_founder_baseline", "operator_cli",
+      "admin_pilot_run",
     ];
     if (
       !input.jobId || !input.projectId || !vias.includes(input.via)
@@ -3925,6 +4242,16 @@ export const memoryAdapter: DbAdapter = {
     const job = store.protocolExecutionJobs.get(input.jobId);
     if (!job || job.projectId !== input.projectId) {
       return { outcome: "JOB_NOT_FOUND", requestId: null, expiresAt: null };
+    }
+    // D-054 — as the SQL: a pilot's job runs only while its pilot is open
+    // and inside its window.
+    const pilotSlot = [...store.pilotQuestionProtocols.values()].find((s) => s.protocolId === job.protocolId);
+    if (pilotSlot) {
+      const pilotQuestion = store.pilotQuestions.get(pilotSlot.pilotQuestionId);
+      const pilot = pilotQuestion ? store.pilots.get(pilotQuestion.pilotId) : undefined;
+      if (pilot && (pilot.status !== "active" || currentDateUtc() > pilot.endsOn)) {
+        return { outcome: "PILOT_CLOSED", requestId: null, expiresAt: null };
+      }
     }
     const leased = job.status === "claimed" || job.status === "running";
     const leaseLapsed = job.leaseExpiresAt !== null && new Date(job.leaseExpiresAt).getTime() < nowMs;

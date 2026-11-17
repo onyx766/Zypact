@@ -2,6 +2,7 @@ import { getDb } from "@/lib/db";
 import { requireFounderForPage } from "@/lib/auth/founder";
 import { FOUNDER_ADMIN_PATH } from "@/lib/auth/safe-next-path";
 import { getReportServiceClient } from "@/lib/reports/service-client";
+import { pilotProtocolIds } from "@/lib/pilots/reads";
 import { loadPipelineRowStates } from "@/lib/reports/pipeline-row-state";
 import { AdminShell, type AdminHealth } from "../admin-shell";
 import { NewAuditPanel } from "./new-audit-panel";
@@ -99,6 +100,10 @@ async function loadFounderBaselines(): Promise<FounderBaselineRow[]> {
       .map((row: Record<string, any>) => row.protocol_id)
       .filter((value: unknown): value is string => typeof value === "string")
   );
+
+  // D-054 — a pilot question's protocol has no request either, but it is
+  // not a founder experiment: it is run from its pilot's page.
+  for (const protocolId of await pilotProtocolIds(client)) attachedIds.add(protocolId);
 
   const candidateJobs = (jobs ?? []).filter(
     (row: Record<string, any>) =>

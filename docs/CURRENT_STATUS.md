@@ -1974,3 +1974,37 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 | `npm run test:founder-baseline-control`, `npm run test:scan-page` | pass, 52/52 |
 | The CI jobs this PR triggers: `test:m0-worker-execution-gate`, `test:m5-tk-r`, `test:m5-phase3d-bounds`, `test:m5-b3-max-runtime`, `test:m5-phase3d-evidence`, `test:m5-0059-schema`, `test:m5-0060-schema`, `test:m5-2-adapter`, `test:m0-worker-hosting-contract`, `test:q2p-schema`, `test:q2p2-schema`, `test:s1-schema`, `test:prod-preflight` | all pass |
 | Every `test:*` command (128) | 105 exit 0. Of the other 23: 10 legacy smoke tests need a configured database and fail the same way on `main`; 3 opt-in runtime tests skip; 9 fail identically on `main` at `c0bc011` (`seo`, `m7-0071-schema`, `m7-0073-schema`, `0080-report-ready`, `pdf`, `pg9-harness-offline`, `snapshot-send-idempotency`, `q2p1-scope`, `q2p2-scope`); `bqi-wording` fails only its P-04 change-scope check, which lists every path outside the BQI pull request and passes on `main`. |
+
+## 31. Pilot questions (D-054) — branch `feat/pilot-questions`, stacked on step 1, not applied anywhere, not deployed
+
+- **What it adds:** one pilot holds all of a customer's approved questions in one project. Before this, each question needed its own request, project and report.
+  - Migration `20261118120000_pilot_questions.sql` adds:
+    - three tables: `pilots`, `pilot_questions` and `pilot_question_protocols`, the per-engine slot, which allows Perplexity's baseline only;
+    - `create_pilot`, `add_pilot_question` and `close_pilot`;
+    - step 1's `request_protocol_job_run`, redefined to accept `admin_pilot_run` and to refuse a Run for a closed or ended pilot.
+  - Each added question gets the same Perplexity plan and caps as an audit, through the same approval sequence.
+  - **Pilots** in the founder console: create a pilot, add approved questions, Run and Retry per question, close the pilot. ChatGPT shows as "Not measured".
+  - No report, no email, no provider call, no worker change.
+- **Not established:**
+  - **No browser walk-through** of the pilot pages against a running stack. The routes and pages are checked statically and by `build:verify` only.
+  - **A pilot's measurements are not visible in any report yet.** The combined pilot report is the next step.
+  - **No Level 2 run with this migration.** The worker's claim path is unchanged, and the requested claim is exercised in the database test.
+- **Open:** D-054 *Open*:
+  - a live pilot does not block a public request for its website;
+  - every question is stored with intent `shortlist`;
+  - the release position;
+  - D-037 coverage of the redefined function;
+  - interventions on pilot baselines.
+- **Inventory on this branch:** 91 migrations, 219 files matching `scripts/test-*.ts`, 129 `test:*` and 4 `verify:*` commands.
+- **Commands and local results (2026-11-17):**
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | pass |
+| `npm run build:verify` | pass; the five routes and two pages are built (`next-env.d.ts` restored afterwards) |
+| `npm run test:pilot-questions` | 87/87 |
+| `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | P1 45/45, P2 71/71, E1 74/74, Q4 52/52, pilot step 1 60/60, pilot questions 47/47 (all 91 migrations applied) |
+| `npm run test:pilot-step1` | 75/75 (S8 now checks the release order after Q4, since this migration is newer) |
+| `npm run test:prod-preflight` | 18/18 (the version, three tables and three functions added to the absence checks) |
+| `npm run test:founder-baseline-control` | pass, with a new check that pilot protocols are left out of the founder experiments |
+| `npm run test:worker-start` | 41/41 |

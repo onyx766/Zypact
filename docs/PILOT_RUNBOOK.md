@@ -160,6 +160,29 @@ For each proposed question:
 
 Model-generated questions are suggestions until approved.
 
+### 8.1 Adding a pilot's questions (D-054)
+
+A managed pilot holds all of one customer's questions in one project, on **Pilots** in the founder console. Do not create one request per question.
+
+1. Create the pilot:
+   - the company and its website;
+   - how you confirmed the customer controls the website;
+   - the question limit (15 by default, 20 at most);
+   - the start date. The pilot ends 90 days later.
+
+   A website with an audit in progress, or with an open pilot, cannot start one.
+2. Add each question only after the customer has approved it in writing. For each one, record:
+   - the exact text;
+   - who supplied it, the customer or Zypact;
+   - where the written approval is kept;
+   - the date of that approval.
+
+   Adding a question queues its Perplexity measurement with the same plan and caps as an audit: 5 runs, a run cap of 7, a retry cap of 2 and $2.
+3. Press **Run** for one question at a time, after the paid-execution switch and the daily ceiling are set. A run that failed at the provider is retried from the pilot page, then run again.
+4. Close the pilot when it ends, or the customer stops. Closing changes no measurement and keeps all evidence. The database then refuses any further Run, and it also refuses a Run for a pilot past its end date.
+
+ChatGPT shows as "Not measured" until it is wired (D-053 item 3). A pilot's results are not yet reported or sent: the combined pilot report is the next step.
+
 ## 9. Protocol and budget approval
 
 Before execution, document:

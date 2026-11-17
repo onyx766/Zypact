@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import {
   ChartColumn,
+  ClipboardList,
   FileText,
   FlaskConical,
   Globe,
@@ -18,7 +19,7 @@ import "./admin.css";
  * that says plainly it does not exist.
  */
 
-export type AdminNavKey = "requests" | "interventions" | "diagnostics";
+export type AdminNavKey = "requests" | "pilots" | "interventions" | "diagnostics";
 
 interface NavEntry {
   key: string;
@@ -33,6 +34,12 @@ const NAV: NavEntry[] = [
     label: "Snapshot requests",
     href: "/admin/snapshot-requests",
     icon: <ScrollText size={17} strokeWidth={1.8} />,
+  },
+  {
+    key: "pilots",
+    label: "Pilots",
+    href: "/admin/pilots",
+    icon: <ClipboardList size={17} strokeWidth={1.8} />,
   },
   {
     key: "interventions",

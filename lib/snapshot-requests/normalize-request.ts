@@ -73,7 +73,7 @@ function websiteError(message: string): SnapshotRequestValidationError {
   });
 }
 
-function normalizeWebsite(raw: string): {
+export function normalizeWebsite(raw: string): {
   websiteUrl: string;
   normalizedDomain: string;
 } {

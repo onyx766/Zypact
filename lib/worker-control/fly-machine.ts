@@ -109,7 +109,7 @@ export const RUN_REQUEST_TTL_SECONDS = 120;
 export interface WorkerRunTarget {
   jobId: string;
   projectId: string;
-  via: "admin_run_pipeline" | "admin_run_retest" | "admin_founder_baseline";
+  via: "admin_run_pipeline" | "admin_run_retest" | "admin_founder_baseline" | "admin_pilot_run";
   /** The signed-in founder's user id. */
   requestedBy: string;
 }
@@ -144,6 +144,12 @@ const RUN_REQUEST_REFUSAL_TEXT: Record<Exclude<RequestProtocolJobRunOutcome, "RE
     "This job's worker stopped too many times, so the job is now marked abandoned. Close the request from its page.",
   JOB_NOT_RUNNABLE:
     "This job is not waiting to run. It may have finished, failed or be held for review. Refresh the page.",
+  PILOT_CLOSED:
+    "This pilot is closed or past its end date, so its questions are no longer measured.",
+  PILOT_NOT_STARTED:
+    "This pilot has not started yet. Its questions can be run from its start date.",
+  PILOT_QUESTION_RETIRED:
+    "This pilot question was retired, so it is no longer measured.",
 };
 
 /**

@@ -1701,7 +1701,9 @@ export type ProtocolJobRunVia =
   | "admin_run_pipeline"
   | "admin_run_retest"
   | "admin_founder_baseline"
-  | "operator_cli";
+  | "operator_cli"
+  /** D-054 — a Run for one pilot question, from the pilot page. */
+  | "admin_pilot_run";
 
 export interface RequestProtocolJobRunInput {
   jobId: string;
@@ -1720,7 +1722,13 @@ export type RequestProtocolJobRunOutcome =
   | "JOB_LOCKED"
   | "JOB_NOT_FOUND"
   | "JOB_ATTEMPTS_EXHAUSTED"
-  | "JOB_NOT_RUNNABLE";
+  | "JOB_NOT_RUNNABLE"
+  /** D-054 — the job measures a pilot that is closed or past its end date. */
+  | "PILOT_CLOSED"
+  /** D-054 — the job measures a pilot whose start date has not come. */
+  | "PILOT_NOT_STARTED"
+  /** D-054 — the job measures a retired pilot question. */
+  | "PILOT_QUESTION_RETIRED";
 
 export interface RequestProtocolJobRunResult {
   outcome: RequestProtocolJobRunOutcome;
@@ -1735,7 +1743,9 @@ export type ClaimRequestedProtocolExecutionJobOutcome =
   | "NO_RUN_REQUEST"
   | "JOB_NOT_FOUND"
   | "JOB_NOT_ELIGIBLE"
-  | "JOB_LOCKED";
+  | "JOB_LOCKED"
+  /** D-054 — the job measures a pilot that is closed, outside its dates, or a retired question. */
+  | "PILOT_CLOSED";
 
 export interface ClaimRequestedProtocolExecutionJobResult {
   outcome: ClaimRequestedProtocolExecutionJobOutcome;
@@ -1771,7 +1781,9 @@ export type RetryFailedProtocolJobOutcome =
   | "NOT_A_PROVIDER_FAILURE"
   | "RUN_CAP_INSUFFICIENT_FOR_REMAINING_PLAN"
   /** The key was already used for a different failed run. */
-  | "IDEMPOTENCY_KEY_CONFLICT";
+  | "IDEMPOTENCY_KEY_CONFLICT"
+  /** D-054 — the job measures a pilot that is closed, outside its dates, or a retired question. */
+  | "PILOT_CLOSED";
 
 export interface RetryFailedProtocolJobResult {
   outcome: RetryFailedProtocolJobOutcome;
@@ -1779,6 +1791,119 @@ export interface RetryFailedProtocolJobResult {
   denialCode: string | null;
   newAttemptId: string | null;
 }
+
+/**
+ * D-054 — a managed pilot (migration 20261118120000): one project holding
+ * up to 20 approved buyer questions, each measured by its own protocol and
+ * job. The website is normalized exactly as a request's before the call.
+ */
+export interface CreatePilotInput {
+  /** The signed-in founder's user id. */
+  createdBy: string;
+  companyName: string;
+  websiteUrl: string;
+  normalizedDomain: string;
+  /** D-051 — how the team confirmed the customer controls the website. */
+  siteControlNote: string;
+  /** D-053 — 15 by default, 20 at most. */
+  questionLimit: number;
+  /** YYYY-MM-DD. The pilot ends 90 days later (D-053). */
+  startsOn: string;
+  idempotencyKey: string;
+}
+
+export type CreatePilotOutcome =
+  | "CREATED"
+  | "ALREADY_CREATED"
+  | "IDEMPOTENCY_KEY_CONFLICT"
+  | "DOMAIN_HAS_LIVE_REQUEST"
+  | "DOMAIN_HAS_LIVE_PILOT"
+  /** The start date is before yesterday or more than 60 days ahead. */
+  | "START_DATE_OUT_OF_RANGE";
+
+export interface CreatePilotResult {
+  outcome: CreatePilotOutcome;
+  pilotId: string | null;
+  projectId: string | null;
+}
+
+/** D-054 — adds one customer-approved question to a pilot and queues its measurement. */
+export interface AddPilotQuestionInput {
+  pilotId: string;
+  /** The signed-in founder's user id. */
+  addedBy: string;
+  /** Trimmed, 10-300 characters, exactly as the request form accepts a question. */
+  questionText: string;
+  /** SHA-256 of `questionText`; the database re-checks it. */
+  promptHash: string;
+  questionProvenance: QuestionProvenanceChoice;
+  /** D-051 — where the customer's written approval is kept. */
+  customerApprovalRef: string;
+  /** YYYY-MM-DD, not in the future. */
+  customerApprovedOn: string;
+  idempotencyKey: string;
+}
+
+export type AddPilotQuestionOutcome =
+  | "ADDED"
+  | "ALREADY_ADDED"
+  | "IDEMPOTENCY_KEY_CONFLICT"
+  | "PILOT_NOT_FOUND"
+  | "PILOT_CLOSED"
+  | "PILOT_ENDED"
+  | "HASH_MISMATCH"
+  | "DUPLICATE_QUESTION"
+  | "LIMIT_REACHED";
+
+export interface AddPilotQuestionResult {
+  outcome: AddPilotQuestionOutcome;
+  pilotQuestionId: string | null;
+  protocolId: string | null;
+  jobId: string | null;
+}
+
+/** D-054 — closes a pilot. No job is changed; a Run for it is refused. */
+export interface ClosePilotInput {
+  pilotId: string;
+  /** The signed-in founder's user id. */
+  closedBy: string;
+  reason: string;
+}
+
+export type ClosePilotOutcome =
+  | "CLOSED"
+  | "ALREADY_CLOSED"
+  | "PILOT_NOT_FOUND"
+  /** A measurement of the pilot holds a live lease or a pending run request. */
+  | "PILOT_JOB_ACTIVE";
+
+/**
+ * D-054 — retires a pilot question whose measurement can no longer finish.
+ * Its rows and evidence are kept; it stops counting toward the limit, its
+ * text may be added again, and it can no longer be run or retried.
+ */
+export interface RetirePilotQuestionInput {
+  pilotId: string;
+  pilotQuestionId: string;
+  /** The signed-in founder's user id. */
+  retiredBy: string;
+  reason: string;
+}
+
+export type RetirePilotQuestionOutcome =
+  | "RETIRED"
+  | "ALREADY_RETIRED"
+  | "PILOT_NOT_FOUND"
+  | "QUESTION_NOT_FOUND"
+  | "PILOT_CLOSED"
+  /** Its measurement holds a live lease or a pending run request. */
+  | "QUESTION_JOB_ACTIVE"
+  /** Its measurement is not stopped (failed or abandoned). */
+  | "QUESTION_NOT_STOPPED"
+  /** It stopped at the provider and can still be retried. */
+  | "QUESTION_RETRYABLE"
+  /** The pilot already has 5 retired questions. */
+  | "RETIRE_LIMIT_REACHED";
 
 /** D-052 — closes an approved request whose job ended in failure. */
 export interface CloseFailedSnapshotRequestInput {
@@ -2839,6 +2964,14 @@ export interface DbAdapter {
   closeFailedSnapshotRequest(
     input: CloseFailedSnapshotRequestInput
   ): Promise<CloseFailedSnapshotRequestOutcome>;
+  /** D-054 — creates a managed pilot and its project. */
+  createPilot(input: CreatePilotInput): Promise<CreatePilotResult>;
+  /** D-054 — adds an approved question to a pilot and queues its measurement. */
+  addPilotQuestion(input: AddPilotQuestionInput): Promise<AddPilotQuestionResult>;
+  /** D-054 — closes a pilot. */
+  closePilot(input: ClosePilotInput): Promise<ClosePilotOutcome>;
+  /** D-054 — retires a pilot question whose measurement can no longer finish. */
+  retirePilotQuestion(input: RetirePilotQuestionInput): Promise<RetirePilotQuestionOutcome>;
   reserveSnapshotRequestProject(
     requestId: string
   ): Promise<SnapshotRequest | null>;

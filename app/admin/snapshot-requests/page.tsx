@@ -2,6 +2,7 @@ import { getDb } from "@/lib/db";
 import { requireFounderForPage } from "@/lib/auth/founder";
 import { FOUNDER_ADMIN_PATH } from "@/lib/auth/safe-next-path";
 import { getReportServiceClient } from "@/lib/reports/service-client";
+import { pilotProtocolIds } from "@/lib/pilots/reads";
 import { loadPipelineRowStates } from "@/lib/reports/pipeline-row-state";
 import { AdminShell, type AdminHealth } from "../admin-shell";
 import { NewAuditPanel } from "./new-audit-panel";
@@ -75,13 +76,23 @@ function summarizeHealth(rows: RequestRow[]): AdminHealth {
 async function loadFounderBaselines(): Promise<FounderBaselineRow[]> {
   const client = getReportServiceClient();
 
+  // D-054 — a pilot question's protocol has no request either, but it is
+  // not a founder experiment: it is run from its pilot's page. It is left
+  // out in the query itself, before the 20-row limit, so a pilot's 15-20
+  // jobs never push founder experiments off this list.
+  const pilotIds = [...(await pilotProtocolIds(client))];
+  let jobsQuery = client
+    .from("protocol_execution_jobs")
+    .select(
+      "id,project_id,protocol_id,status,attempt_count,max_attempts,next_baseline_ordinal,created_at"
+    );
+  if (pilotIds.length > 0) {
+    jobsQuery = jobsQuery.not("protocol_id", "in", `(${pilotIds.join(",")})`);
+  }
+
   const [{ data: jobs, error: jobsError }, { data: attached, error: attachedError }] =
     await Promise.all([
-      client
-        .from("protocol_execution_jobs")
-        .select(
-          "id,project_id,protocol_id,status,attempt_count,max_attempts,next_baseline_ordinal,created_at"
-        )
+      jobsQuery
         .order("created_at", { ascending: false })
         .limit(20),
       client
@@ -99,6 +110,8 @@ async function loadFounderBaselines(): Promise<FounderBaselineRow[]> {
       .map((row: Record<string, any>) => row.protocol_id)
       .filter((value: unknown): value is string => typeof value === "string")
   );
+
+  for (const protocolId of pilotIds) attachedIds.add(protocolId);
 
   const candidateJobs = (jobs ?? []).filter(
     (row: Record<string, any>) =>

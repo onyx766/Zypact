@@ -650,9 +650,11 @@ async function main(): Promise<void> {
     const expectedFly = [
       "app/api/internal/founder-baselines/[jobId]/run/route.ts",
       "app/api/internal/interventions/[interventionId]/run-retest/route.ts",
+      // D-054 — a pilot question's Run, founder-guarded like the others.
+      "app/api/internal/pilots/[pilotId]/questions/[pilotQuestionId]/run/route.ts",
       "app/api/internal/snapshot-requests/[requestId]/run-pipeline/route.ts",
     ];
-    check("exactly the three founder routes can start the worker", JSON.stringify(fly) === JSON.stringify(expectedFly), fly.join(", "));
+    check("exactly the four founder routes can start the worker", JSON.stringify(fly) === JSON.stringify(expectedFly), fly.join(", "));
     for (const f of fly) {
       const src = fs.readFileSync(path.join(root, f), "utf8");
       // Three reviewed guard shapes. Whichever it is, it must come before

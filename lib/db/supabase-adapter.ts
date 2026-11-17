@@ -9,6 +9,16 @@ import type {
   ClaimRequestedProtocolExecutionJobResult,
   CloseFailedSnapshotRequestInput,
   CloseFailedSnapshotRequestOutcome,
+  AddPilotQuestionInput,
+  AddPilotQuestionOutcome,
+  AddPilotQuestionResult,
+  ClosePilotInput,
+  ClosePilotOutcome,
+  RetirePilotQuestionInput,
+  RetirePilotQuestionOutcome,
+  CreatePilotInput,
+  CreatePilotOutcome,
+  CreatePilotResult,
   QuestionProvenanceChoice,
   RequestProtocolJobRunInput,
   RequestProtocolJobRunOutcome,
@@ -2094,6 +2104,110 @@ export const supabaseAdapter: DbAdapter = {
     return outcome;
   },
 
+  async createPilot(input: CreatePilotInput): Promise<CreatePilotResult> {
+    const { data, error } = await getClient().rpc("create_pilot", {
+      p_created_by: input.createdBy,
+      p_company_name: input.companyName,
+      p_website_url: input.websiteUrl,
+      p_normalized_domain: input.normalizedDomain,
+      p_site_control_note: input.siteControlNote,
+      p_question_limit: input.questionLimit,
+      p_starts_on: input.startsOn,
+      p_idempotency_key: input.idempotencyKey,
+    });
+    if (error) throw error;
+    const REJECT = "createPilot: the RPC reply did not satisfy the closed D-054 contract.";
+    const rows = Array.isArray(data) ? data : data === null || data === undefined ? [] : [data];
+    if (rows.length !== 1) throw new Error(REJECT);
+    const reply = rows[0] as Record<string, unknown>;
+    const OUTCOMES: readonly CreatePilotOutcome[] = [
+      "CREATED", "ALREADY_CREATED", "IDEMPOTENCY_KEY_CONFLICT", "DOMAIN_HAS_LIVE_REQUEST", "DOMAIN_HAS_LIVE_PILOT",
+      "START_DATE_OUT_OF_RANGE",
+    ];
+    const outcome = reply.outcome;
+    if (typeof outcome !== "string" || !OUTCOMES.includes(outcome as CreatePilotOutcome)) throw new Error(REJECT);
+    const created = outcome === "CREATED" || outcome === "ALREADY_CREATED";
+    const pilotId = reply.pilot_id ?? null;
+    const projectId = reply.project_id ?? null;
+    if (created !== (typeof pilotId === "string" && typeof projectId === "string")) throw new Error(REJECT);
+    return {
+      outcome: outcome as CreatePilotOutcome,
+      pilotId: created ? (pilotId as string) : null,
+      projectId: created ? (projectId as string) : null,
+    };
+  },
+
+  async addPilotQuestion(input: AddPilotQuestionInput): Promise<AddPilotQuestionResult> {
+    const { data, error } = await getClient().rpc("add_pilot_question", {
+      p_pilot_id: input.pilotId,
+      p_added_by: input.addedBy,
+      p_question_text: input.questionText,
+      p_prompt_hash: input.promptHash,
+      p_question_provenance: input.questionProvenance,
+      p_customer_approval_ref: input.customerApprovalRef,
+      p_customer_approved_on: input.customerApprovedOn,
+      p_idempotency_key: input.idempotencyKey,
+    });
+    if (error) throw error;
+    const REJECT = "addPilotQuestion: the RPC reply did not satisfy the closed D-054 contract.";
+    const rows = Array.isArray(data) ? data : data === null || data === undefined ? [] : [data];
+    if (rows.length !== 1) throw new Error(REJECT);
+    const reply = rows[0] as Record<string, unknown>;
+    const OUTCOMES: readonly AddPilotQuestionOutcome[] = [
+      "ADDED", "ALREADY_ADDED", "IDEMPOTENCY_KEY_CONFLICT", "PILOT_NOT_FOUND", "PILOT_CLOSED",
+      "PILOT_ENDED", "HASH_MISMATCH", "DUPLICATE_QUESTION", "LIMIT_REACHED",
+    ];
+    const outcome = reply.outcome;
+    if (typeof outcome !== "string" || !OUTCOMES.includes(outcome as AddPilotQuestionOutcome)) throw new Error(REJECT);
+    const added = outcome === "ADDED" || outcome === "ALREADY_ADDED";
+    const ids = [reply.pilot_question_id, reply.protocol_id, reply.job_id];
+    if (added !== ids.every((v) => typeof v === "string")) throw new Error(REJECT);
+    return {
+      outcome: outcome as AddPilotQuestionOutcome,
+      pilotQuestionId: added ? (ids[0] as string) : null,
+      protocolId: added ? (ids[1] as string) : null,
+      jobId: added ? (ids[2] as string) : null,
+    };
+  },
+
+  async closePilot(input: ClosePilotInput): Promise<ClosePilotOutcome> {
+    const { data, error } = await getClient().rpc("close_pilot", {
+      p_pilot_id: input.pilotId,
+      p_closed_by: input.closedBy,
+      p_reason: input.reason,
+    });
+    if (error) throw error;
+    const row = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | null | undefined;
+    const outcome = row?.outcome;
+    if (
+      outcome !== "CLOSED" && outcome !== "ALREADY_CLOSED" && outcome !== "PILOT_NOT_FOUND"
+      && outcome !== "PILOT_JOB_ACTIVE"
+    ) {
+      throw new Error("closePilot: the RPC reply did not satisfy the closed D-054 contract.");
+    }
+    return outcome;
+  },
+
+  async retirePilotQuestion(input: RetirePilotQuestionInput): Promise<RetirePilotQuestionOutcome> {
+    const { data, error } = await getClient().rpc("retire_pilot_question", {
+      p_pilot_id: input.pilotId,
+      p_pilot_question_id: input.pilotQuestionId,
+      p_retired_by: input.retiredBy,
+      p_reason: input.reason,
+    });
+    if (error) throw error;
+    const rows = Array.isArray(data) ? data : data === null || data === undefined ? [] : [data];
+    const OUTCOMES: readonly RetirePilotQuestionOutcome[] = [
+      "RETIRED", "ALREADY_RETIRED", "PILOT_NOT_FOUND", "QUESTION_NOT_FOUND", "PILOT_CLOSED",
+      "QUESTION_JOB_ACTIVE", "QUESTION_NOT_STOPPED", "QUESTION_RETRYABLE", "RETIRE_LIMIT_REACHED",
+    ];
+    const outcome = rows.length === 1 ? (rows[0] as Record<string, unknown>).outcome : undefined;
+    if (typeof outcome !== "string" || !OUTCOMES.includes(outcome as RetirePilotQuestionOutcome)) {
+      throw new Error("retirePilotQuestion: the RPC reply did not satisfy the closed D-054 contract.");
+    }
+    return outcome as RetirePilotQuestionOutcome;
+  },
+
   async reserveSnapshotRequestProject(
     requestId: string
   ): Promise<SnapshotRequest | null> {
@@ -3590,7 +3704,8 @@ export const supabaseAdapter: DbAdapter = {
     const outcome = reply.outcome;
     const OUTCOMES: readonly RequestProtocolJobRunOutcome[] = [
       "REQUESTED", "ALREADY_REQUESTED", "ANOTHER_RUN_PENDING", "WORKER_BUSY", "JOB_LOCKED",
-      "JOB_NOT_FOUND", "JOB_ATTEMPTS_EXHAUSTED", "JOB_NOT_RUNNABLE",
+      "JOB_NOT_FOUND", "JOB_ATTEMPTS_EXHAUSTED", "JOB_NOT_RUNNABLE", "PILOT_CLOSED",
+      "PILOT_NOT_STARTED", "PILOT_QUESTION_RETIRED",
     ];
     if (typeof outcome !== "string" || !OUTCOMES.includes(outcome as RequestProtocolJobRunOutcome)) {
       throw new Error(REJECT);
@@ -3657,6 +3772,7 @@ export const supabaseAdapter: DbAdapter = {
       && outcome !== "JOB_NOT_FOUND"
       && outcome !== "JOB_NOT_ELIGIBLE"
       && outcome !== "JOB_LOCKED"
+      && outcome !== "PILOT_CLOSED"
     ) {
       throw new Error(REJECT);
     }
@@ -3714,7 +3830,7 @@ export const supabaseAdapter: DbAdapter = {
       "APPROVED", "DENIED", "JOB_NOT_FOUND", "JOB_NOT_FAILED", "JOB_NOT_RETRYABLE",
       "REQUEST_NOT_OPEN", "SOURCE_ATTEMPT_NOT_OWNED_BY_JOB", "SOURCE_ATTEMPT_NOT_RETRYABLE",
       "AMBIGUOUS_CALL_PRESENT", "NOT_A_PROVIDER_FAILURE", "RUN_CAP_INSUFFICIENT_FOR_REMAINING_PLAN",
-      "IDEMPOTENCY_KEY_CONFLICT",
+      "IDEMPOTENCY_KEY_CONFLICT", "PILOT_CLOSED",
     ];
     const outcome = reply.outcome;
     if (typeof outcome !== "string" || !OUTCOMES.includes(outcome as RetryFailedProtocolJobOutcome)) {

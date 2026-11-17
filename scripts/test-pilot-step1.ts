@@ -396,8 +396,11 @@ async function main(): Promise<void> {
   const FILE = "20261114120000_pilot_step1_operator_controls.sql";
   const versions = readdirSync(DIR).filter((f) => f.endsWith(".sql")).map((f) => parseMigrationName(f)).filter((r) => r.ok);
   const parsed = parseMigrationName(FILE);
-  check("S8 the migration name is valid and is the newest", parsed.ok && parsed.kind === "timestamp"
-    && Math.max(...versions.map((r) => (r.ok ? r.version : 0))) === (parsed.ok ? parsed.version : -1));
+  // D-054's pilot-questions migration follows this one, so the check is the
+  // release order D-052 states: after Q4 (20261113120000).
+  check("S8 the migration name is valid and follows Q4, as D-052's release order states", parsed.ok && parsed.kind === "timestamp"
+    && (parsed.ok ? parsed.version : -1) > 20261113120000
+    && versions.some((r) => r.ok && r.version === 20261113120000));
   const sql = read(path.join(DIR, FILE));
   const code = sql.replace(/--[^\n]*/g, "");
   const defined = [...code.matchAll(/create\s+or\s+replace\s+function\s+public\.([a-z_0-9]+)/gi)].map((m) => m[1]).sort();

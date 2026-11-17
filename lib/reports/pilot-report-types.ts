@@ -32,10 +32,42 @@ export type PilotQuestionMeasurementState =
   | "not_started"
   | "stopped";
 
+/**
+ * The pilot's own count of a question's attempts on one engine, by stored
+ * attempt status (0047): every attempt lands in exactly one bucket, or is
+ * counted as `unrecognised`, which makes the counts not reconcile.
+ */
+export interface PilotAttemptCounts {
+  planned: number;
+  attempted: number;
+  completed: number;
+  /** failed, timed_out or cancelled. */
+  failed: number;
+  /** Excluded after review. */
+  excludedByReview: number;
+  /** Completed with no readable result. */
+  noReadableResult: number;
+  /** reserved or in_progress: still being collected. Never counted as failed. */
+  inProgress: number;
+  /** A status this report does not know. */
+  unrecognised: number;
+  reconciles: boolean;
+}
+
+/** When a question's attempts on one engine were made (protocol_attempts.reserved_at / terminalized_at). */
+export interface PilotExecutionWindow {
+  firstOn: string | null;
+  lastOn: string | null;
+}
+
 export interface PilotReportQuestionEngine {
   engine: PilotEngineKey;
   protocolId: string;
   state: PilotQuestionMeasurementState;
+  counts: PilotAttemptCounts;
+  execution: PilotExecutionWindow;
+  /** How each answer was obtained (probe_runs.probe_mode), deduplicated. */
+  answerModes: string[];
   /** The question's own report, exactly as `buildProtocolReport` built it. */
   report: ProtocolReportPayload;
 }
@@ -55,10 +87,41 @@ export interface PilotReportQuestion {
 export interface PilotReportEngineSummary {
   engine: PilotEngineKey;
   label: string;
+  /** True when any question of the pilot has a protocol on this engine. */
   measured: boolean;
-  /** Present only for a measured engine. */
-  questionsMeasured: number;
+  /** Questions that are not retired. */
+  questionsLive: number;
+  /** Live questions with at least one readable answer on this engine. */
+  questionsWithReadableAnswer: number;
+  /** Live questions on this engine with no attempt yet. */
+  questionsNotStarted: number;
+  questionsRetired: number;
   note: string;
+}
+
+/**
+ * METHODOLOGY §4 and §16 gate 5, per measured engine: the provider, surface,
+ * model and answer mode, the dates, and the method versions. A value is
+ * listed once when every question agrees; when questions differ, each value
+ * is listed with its questions and the report needs review.
+ */
+export interface PilotEngineConditions {
+  engine: PilotEngineKey;
+  /** METHODOLOGY §4's required sentence for this engine, verbatim. */
+  surfaceLimitation: string;
+  provider: PilotConditionValue[];
+  surface: PilotConditionValue[];
+  model: PilotConditionValue[];
+  answerMode: PilotConditionValue[];
+  methodologyVersion: PilotConditionValue[];
+  analyzerVersion: PilotConditionValue[];
+  executedFrom: string | null;
+  executedTo: string | null;
+}
+
+export interface PilotConditionValue {
+  value: string;
+  ordinals: number[];
 }
 
 export interface PilotBrandRow {
@@ -66,15 +129,13 @@ export interface PilotBrandRow {
   pilotQuestionId: string;
   retired: boolean;
   state: PilotQuestionMeasurementState;
-  numerator: number;
-  denominator: number;
-  planned: number;
-  attempted: number;
-  failed: number;
-  excluded: number;
+  /** Null for a retired question: it shows its attempt counts only. */
+  numerator: number | null;
+  denominator: number | null;
+  counts: PilotAttemptCounts;
   intervalLow: number | null;
   intervalHigh: number | null;
-  label: PilotQuestionLabel;
+  label: PilotQuestionLabel | null;
 }
 
 /** METHODOLOGY §10's descriptive labels, under a disclosed, versioned threshold. */
@@ -151,12 +212,17 @@ export interface PilotReportPayload {
   subject: PilotReportSubject;
   window: { startsOn: string; endsOn: string; status: "active" | "closed" };
   engines: PilotReportEngineSummary[];
+  conditions: PilotEngineConditions[];
   questions: PilotReportQuestion[];
   brand: PilotEngineBrandSection[];
   competitors: PilotEngineCompetitorSection[];
   sources: PilotEngineSourceSection[];
   evidenceIndex: PilotEvidenceEntry[];
   limitations: string[];
+  /** METHODOLOGY §7, shown wherever a range is shown. */
+  dependenceNote: string;
+  /** METHODOLOGY §16 gate 12. */
+  causalLimit: string;
   methodNotes: string[];
 }
 
@@ -174,7 +240,8 @@ export function isPilotReportPayload(value: unknown): value is PilotReportPayloa
   for (const key of ["subject", "window"]) {
     if (typeof c[key] !== "object" || c[key] === null) return false;
   }
-  return ["engines", "questions", "brand", "competitors", "sources", "evidenceIndex", "limitations", "methodNotes"].every(
+  if (typeof c.dependenceNote !== "string" || typeof c.causalLimit !== "string") return false;
+  return ["engines", "conditions", "questions", "brand", "competitors", "sources", "evidenceIndex", "limitations", "methodNotes"].every(
     (key) => Array.isArray(c[key])
   );
 }

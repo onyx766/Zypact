@@ -446,9 +446,12 @@ export function BuildPilotReportButton({ pilotId }: { pilotId: string }) {
 }
 
 /**
- * D-055 — the founder's review and share of the latest revision. A revision
- * that needs review is shared only after an explicit confirmation; a blocked
- * revision has no Share button and the database refuses it anyway.
+ * D-055 — the founder's share of the latest revision, offered only on the
+ * revision's preview page (app/admin/pilots/[pilotId]/report/[artifactId]),
+ * below the revision rendered exactly as the customer will see it. The
+ * confirmation says the founder has read this revision; a revision that
+ * needs review also sends the acknowledgement the database requires. A
+ * blocked revision has no Share button and the database refuses it anyway.
  */
 export function SharePilotReportButton({
   pilotId,
@@ -485,7 +488,7 @@ export function SharePilotReportButton({
   return (
     <div className="zpa-actions">
       <button type="button" className="zpa-btn zpa-btn-sm" onClick={share} disabled={busy}>
-        {needsReview ? "Reviewed: share" : "Share"}
+        {needsReview ? "I have read it and every reason: share" : "I have read it: share"}
       </button>
       {message ? <p className="zpa-action-note">{message}</p> : null}
     </div>

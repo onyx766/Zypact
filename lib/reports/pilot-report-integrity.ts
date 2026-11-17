@@ -6,7 +6,16 @@
  * go through the same `evaluateReportIntegrity` a one-question report uses.
  * The builder's structural findings are added: an unfinished or
  * unreconciled question needs review, evidence outside the pilot blocks.
- * A retired question is reported as retired and does not hold the report.
+ *
+ * A retired question shows only its attempt counts, but every answer it did
+ * collect still passes the same evidence and hash checks. Only the checks
+ * that need a collected answer to mean anything (a reservation and a hash
+ * per counted answer) are skipped for a retired question that collected
+ * none, because they are false by construction there.
+ *
+ * The text checks read every string the page shows (the shared presentation
+ * model) as well as the Markdown, so a phrase cannot reach the customer
+ * through the page alone (METHODOLOGY §16 gates 11 and 14).
  */
 import {
   evaluateReportIntegrity,
@@ -27,11 +36,15 @@ export interface PilotQuestionSignals {
   ordinal: number;
   engine: PilotEngineKey;
   retired: boolean;
+  /** Completed attempts of this question on this engine. */
+  completedAttempts: number;
   signals: ProtocolIntegritySignals;
 }
 
 export function evaluatePilotReportIntegrity(input: {
   markdown: string;
+  /** Every string the client page renders (presentationStrings). */
+  pageText: string[];
   structural: PilotStructuralReason[];
   questionSignals: PilotQuestionSignals[];
 }): ReportIntegrityResult {
@@ -39,7 +52,7 @@ export function evaluatePilotReportIntegrity(input: {
   const reasons: string[] = [];
 
   const body = evaluateReportIntegrity({
-    markdown: input.markdown,
+    markdown: `${input.markdown}\n${input.pageText.join("\n")}`,
     hasApprovedProtocol: true,
     hasApprovedSamplePlan: true,
     hasPaidCallReservation: true,
@@ -51,8 +64,11 @@ export function evaluatePilotReportIntegrity(input: {
   }
 
   for (const q of [...input.questionSignals].sort((a, b) => a.ordinal - b.ordinal)) {
-    if (q.retired) continue;
-    const result = evaluateReportIntegrity({ markdown: "", ...q.signals });
+    const nothingCollected = q.retired && q.completedAttempts === 0;
+    const signals = nothingCollected
+      ? { ...q.signals, hasPaidCallReservation: true, hasCompleteEvidenceHashes: true }
+      : q.signals;
+    const result = evaluateReportIntegrity({ markdown: "", ...signals });
     if (result.status === "integrity_passed") continue;
     status = worse(status, result.status);
     reasons.push(...result.reasons.map((r) => `Question ${q.ordinal} (${engineLabel(q.engine)}): ${r}`));

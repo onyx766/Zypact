@@ -22,7 +22,6 @@ import {
   ClosePilotButton,
   QuestionControls,
   RetireQuestionButton,
-  SharePilotReportButton,
 } from "../pilot-forms";
 
 export const dynamic = "force-dynamic";
@@ -44,7 +43,6 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
   const { pilot, questions } = loaded;
   // D-055 — the combined report's revisions, newest first.
   const revisions = await listPilotReportRevisions(client, pilot.id);
-  const latest = revisions[0] ?? null;
   const siteUrl = publicSiteUrl();
   const today = todayUtc();
   const over = pilotIsOver(pilot.status, pilot.endsOn, today);
@@ -178,8 +176,9 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
             <h2 className="zpa-title">Pilot report</h2>
             <p className="zpa-muted">
               One report for all of this pilot&apos;s questions, built from the stored answers. Building spends nothing and
-              shares nothing. Share the newest revision once you have reviewed it; the customer receives only the private
-              link you send them.
+              shares nothing, and is refused while a measurement is still running. Open a revision to read it exactly as the
+              customer will; the newest one can be shared from there. The customer receives only the private link you send
+              them.
             </p>
           </div>
           {questions.length > 0 ? <BuildPilotReportButton pilotId={pilot.id} /> : null}
@@ -193,7 +192,7 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
                 <th>Revision</th>
                 <th>Built</th>
                 <th>Checks</th>
-                <th>Link</th>
+                <th>Read and share</th>
               </tr>
             </thead>
             <tbody>
@@ -212,6 +211,9 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
                     ) : null}
                   </td>
                   <td>
+                    <p>
+                      <Link href={`/admin/pilots/${pilot.id}/report/${r.id}`}>Read revision {r.revision}</Link>
+                    </p>
                     {r.publicToken ? (
                       <p>
                         <a href={`/pilot-report/${r.publicToken}`} target="_blank" rel="noopener noreferrer">
@@ -220,15 +222,13 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
                         <br />
                         <span className="zpa-muted">Shared {r.sharedAt?.slice(0, 10)}</span>
                       </p>
-                    ) : latest && r.id === latest.id && r.integrityStatus !== "blocked" ? (
-                      <SharePilotReportButton
-                        pilotId={pilot.id}
-                        artifactId={r.id}
-                        needsReview={r.integrityStatus === "needs_review"}
-                      />
                     ) : (
                       <span className="zpa-muted">
-                        {r.integrityStatus === "blocked" ? "Cannot be shared" : "Not shared (a newer revision exists)"}
+                        {r.integrityStatus === "blocked"
+                          ? "Cannot be shared"
+                          : r.id === revisions[0]?.id
+                            ? "Not shared: read it to share it"
+                            : "Not shared (a newer revision exists)"}
                       </span>
                     )}
                   </td>

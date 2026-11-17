@@ -4,6 +4,7 @@ import { requireFounderForRoute } from "@/lib/auth/founder";
 import { UUID_PATTERN } from "@/lib/pilots/validate";
 import { BUILD_PILOT_REPORT_REFUSAL } from "@/lib/reports/pilot-report-copy";
 import { buildAndSavePilotReport } from "@/lib/reports/process-pilot-report";
+import { pilotMeasurementInProgress } from "@/lib/reports/read-pilot-evidence";
 import { getReportServiceClient } from "@/lib/reports/service-client";
 
 export const runtime = "nodejs";
@@ -14,7 +15,9 @@ export const maxDuration = 60;
  * POST /api/internal/pilots/:pilotId/report — D-055: builds a new revision
  * of the pilot's combined report from stored evidence and saves it. No
  * provider or model call, no email, nothing shared: sharing is a separate,
- * reviewed step.
+ * reviewed step. Refused while any of the pilot's measurements is still
+ * running, so a report never reads answers that are still being written;
+ * save_pilot_report_artifact refuses it again in the database.
  */
 export async function POST(
   _request: Request,
@@ -32,7 +35,25 @@ export async function POST(
     return NextResponse.json({ ok: false, error: "invalid_pilot_id" }, { status: 400 });
   }
 
-  const result = await buildAndSavePilotReport(getReportServiceClient(), pilotId, guard.user.id);
+  const client = getReportServiceClient();
+  if (await pilotMeasurementInProgress(client, pilotId)) {
+    console.info(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        level: "info",
+        event: "pilot_report_build",
+        actorUserId: guard.user.id,
+        pilotId,
+        outcome: "MEASUREMENT_IN_PROGRESS",
+      })
+    );
+    return NextResponse.json(
+      { ok: false, outcome: "MEASUREMENT_IN_PROGRESS", error: BUILD_PILOT_REPORT_REFUSAL.MEASUREMENT_IN_PROGRESS },
+      { status: 409 }
+    );
+  }
+
+  const result = await buildAndSavePilotReport(client, pilotId, guard.user.id);
 
   console.info(
     JSON.stringify({

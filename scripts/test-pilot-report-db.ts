@@ -3,8 +3,11 @@
  * Pilot report artifacts on a real PostgreSQL
  * (20261119120000_pilot_report_artifacts.sql, D-055):
  *
+ *   P  save_pilot_report_artifact refuses while a measurement is running
+ *      (a pending run request, a reserved attempt) and stores nothing;
  *   S  save_pilot_report_artifact: a manifest naming exactly the pilot's
- *      protocols and attempts saves revision 1, then 2; another pilot's
+ *      protocols and attempts saves revision 1, then 2, one of them a
+ *      completed answer with a real stored response hash; another pilot's
  *      protocol, a missing protocol or attempt, an attempt under the wrong
  *      protocol, a wrong hash, a payload for another pilot or project, and
  *      an unpaired integrity status are refused and store nothing;
@@ -17,8 +20,9 @@
  *      well-formed token, and whether a newer one has been shared;
  *   X  privileges.
  *
- * The one attempt is produced through the worker's own RPCs (a provider
- * failure), never by writing evidence rows. Runs against a DISPOSABLE
+ * The attempts are produced through the worker's own RPCs (a provider
+ * failure, a completed answer, a reserved attempt), never by writing
+ * evidence rows. Runs against a DISPOSABLE
  * Supabase Postgres with every migration applied
  * (scripts/run-p2-workspace-db-local.sh). Opt-in: SKIP (exit 2) without
  * ZYPACT_P2_DB_CONTAINER. No network.
@@ -77,6 +81,58 @@ function failOneAttempt(jobId: string, projectId: string): string {
   return attempt;
 }
 
+const CONTENT = JSON.stringify({
+  product_mentioned: true,
+  product_position: "primary",
+  competitors_mentioned: [{ name: "Acme", position: 1, context: "listed first" }],
+  sources_cited: [{ source: "acme-reviews.com", type: "review_site" }],
+  answer_summary: "Acme is recommended as the top choice.",
+  cited_as_source: false,
+  client_source_count: 0,
+  platforms_referenced: [],
+  negative_claim_detected: false,
+});
+
+/** Drives one slot to a completed answer exactly as the worker does (scripts/test-m5-0060-runtime-contract.ts); returns the attempt. */
+function completeOneAttempt(jobId: string, projectId: string): string {
+  const [req] = row(psql(`select outcome from public.request_protocol_job_run(${lit(jobId)}::uuid, ${lit(projectId)}::uuid, 'admin_pilot_run', ${lit(FOUNDER)}::uuid, 120);`));
+  if (req !== "REQUESTED") return "";
+  const [out, , token] = row(psql(`select outcome, coalesce((job).id::text, ''), coalesce(claim_token::text, '') from public.claim_requested_protocol_execution_job(${lit(WORKER)}, 300);`));
+  if (out !== "CLAIMED") return "";
+  const ordinal = admin(`select next_baseline_ordinal from public.protocol_execution_jobs where id = ${lit(jobId)}::uuid;`);
+  const [, attempt] = row(psql(
+    `select status, (attempt).id from public.admit_and_reserve_attempt_for_job(${lit(jobId)}::uuid, ${lit(token)}::uuid, ${lit(projectId)}::uuid, 'baseline', ${lit(`${jobId}:baseline:${ordinal}`)}, 0.02, 0.02, null);`
+  ));
+  psql(`select 1 from public.create_probe_run_and_start_attempt_for_job(${lit(jobId)}::uuid, ${lit(token)}::uuid, ${lit(projectId)}::uuid, ${lit(attempt)}::uuid, 'perplexity', 'simulated');`);
+  const probeRun = admin(`select probe_run_id from public.protocol_attempts where id = ${lit(attempt)}::uuid;`);
+  const pcall = admin(`select id from public.protocol_external_calls where protocol_attempt_id = ${lit(attempt)}::uuid and call_kind = 'perplexity';`);
+  const acall = admin(`select id from public.protocol_external_calls where protocol_attempt_id = ${lit(attempt)}::uuid and call_kind = 'analysis';`);
+  const preq = `{"q":"${attempt}"}`;
+  const answer = `{"choices":[{"message":{"content":"Acme is the top choice for ${attempt}."}}]}`;
+  const areq = `analysis request for ${attempt}`;
+  const content = `analysis content for ${attempt}`;
+  psql(`select 1 from public.mark_external_call_sent_for_job(${lit(jobId)}::uuid, ${lit(token)}::uuid, ${lit(projectId)}::uuid, ${lit(pcall)}::uuid, ${lit(probeRun)}::uuid, 'perplexity', ${lit(preq)}, ${lit(sha(preq))});`);
+  psql(`select 1 from public.record_provider_call_receipt_for_job(${lit(jobId)}::uuid, ${lit(token)}::uuid, ${lit(projectId)}::uuid, ${lit(pcall)}::uuid, ${lit(probeRun)}::uuid, 'success', 200, ${lit(`req-${pcall}`)}, ${lit(sha(answer))}, 500, null, null, ${lit(answer)});`);
+  psql(`select 1 from public.mark_external_call_sent_for_job(${lit(jobId)}::uuid, ${lit(token)}::uuid, ${lit(projectId)}::uuid, ${lit(acall)}::uuid, ${lit(probeRun)}::uuid, 'analysis', ${lit(areq)}, ${lit(sha(areq))});`);
+  psql(`select 1 from public.record_analysis_call_receipt_for_job(${lit(jobId)}::uuid, ${lit(token)}::uuid, ${lit(projectId)}::uuid, ${lit(acall)}::uuid, ${lit(probeRun)}::uuid, 'success', 'anthropic', 'claude-fixture', false, ${lit(sha(areq))}, ${lit(sha(content))}, 400, null, null, ${lit(content)}, ${lit(areq)});`);
+  psql(`select 1 from public.persist_probe_result_for_job(${lit(jobId)}::uuid, ${lit(token)}::uuid, ${lit(projectId)}::uuid, ${lit(CONTENT)}::jsonb);`);
+  psql(`select 1 from public.reconcile_attempt_for_job(${lit(jobId)}::uuid, ${lit(token)}::uuid, ${lit(projectId)}::uuid, ${lit(attempt)}::uuid, 'completed', null);`);
+  return attempt;
+}
+
+/** Leaves one attempt reserved on a claimed job, as a worker mid-run does; returns the attempt. */
+function reserveOneAttempt(jobId: string, projectId: string): string {
+  const [req] = row(psql(`select outcome from public.request_protocol_job_run(${lit(jobId)}::uuid, ${lit(projectId)}::uuid, 'admin_pilot_run', ${lit(FOUNDER)}::uuid, 120);`));
+  if (req !== "REQUESTED") return "";
+  const [out, , token] = row(psql(`select outcome, coalesce((job).id::text, ''), coalesce(claim_token::text, '') from public.claim_requested_protocol_execution_job(${lit(WORKER)}, 300);`));
+  if (out !== "CLAIMED") return "";
+  const ordinal = admin(`select next_baseline_ordinal from public.protocol_execution_jobs where id = ${lit(jobId)}::uuid;`);
+  const [, attempt] = row(psql(
+    `select status, (attempt).id from public.admit_and_reserve_attempt_for_job(${lit(jobId)}::uuid, ${lit(token)}::uuid, ${lit(projectId)}::uuid, 'baseline', ${lit(`${jobId}:baseline:${ordinal}`)}, 0.02, 0.02, null);`
+  ));
+  return attempt;
+}
+
 interface Manifest {
   protocols: string[];
   attempts: { id: string; protocolId: string; rawResponseSha256: string | null }[];
@@ -102,34 +158,68 @@ async function main(): Promise<void> {
 
   const [outA, pilotA, projectA] = createPilot("pr-a.example");
   const [, , protoA1, jobA1] = addQuestion(pilotA, question(1));
-  const [, , protoA2] = addQuestion(pilotA, question(2));
+  const [, , protoA2, jobA2] = addQuestion(pilotA, question(2));
   const [, pilotB, projectB] = createPilot("pr-b.example");
   const [, , protoB1] = addQuestion(pilotB, question(3));
   const attempt = failOneAttempt(jobA1, projectA);
   quiesce();
-  check("setup: two pilots, three questions, one attempt recorded through the worker's own functions",
-    outA === "CREATED" && protoA1 !== "" && protoA2 !== "" && protoB1 !== "" && attempt !== "");
+  const done = completeOneAttempt(jobA2, projectA);
+  quiesce();
+  check("setup: two pilots, three questions, a failed and a completed attempt recorded through the worker's own functions",
+    outA === "CREATED" && protoA1 !== "" && protoA2 !== "" && protoB1 !== "" && attempt !== "" && done !== "" &&
+    admin(`select status from public.protocol_attempts where id = ${lit(done)}::uuid;`) === "completed");
 
-  const storedSha = admin(`select coalesce(r.raw_response_sha256, '') from public.protocol_attempts a left join public.probe_results r on r.probe_run_id = a.probe_run_id where a.id = ${lit(attempt)}::uuid;`);
-  const attemptSha = storedSha === "" ? null : storedSha;
+  const shaOf = (id: string) => {
+    const v = admin(`select coalesce(r.raw_response_sha256, '') from public.protocol_attempts a left join public.probe_results r on r.probe_run_id = a.probe_run_id where a.id = ${lit(id)}::uuid;`);
+    return v === "" ? null : v;
+  };
+  const attemptSha = shaOf(attempt);
+  const doneSha = shaOf(done);
+  check("setup: the completed answer has a real stored response hash; the provider failure has none",
+    attemptSha === null && typeof doneSha === "string" && /^[0-9a-f]{64}$/.test(doneSha));
   const payloadA = { pilotId: pilotA, projectId: projectA };
-  const good: Manifest = { protocols: [protoA1, protoA2], attempts: [{ id: attempt, protocolId: protoA1, rawResponseSha256: attemptSha }] };
+  const good: Manifest = {
+    protocols: [protoA1, protoA2],
+    attempts: [
+      { id: attempt, protocolId: protoA1, rawResponseSha256: attemptSha },
+      { id: done, protocolId: protoA2, rawResponseSha256: doneSha },
+    ],
+  };
+
+  /* P --------------------------------------------------------------- */
+  const [reqP] = row(psql(`select outcome from public.request_protocol_job_run(${lit(jobA2)}::uuid, ${lit(projectA)}::uuid, 'admin_pilot_run', ${lit(FOUNDER)}::uuid, 120);`));
+  check("P1 while a Run is requested for one of the pilot's jobs, the save is refused and nothing is stored",
+    reqP === "REQUESTED" && save(pilotA, payloadA, good)[0] === "MEASUREMENT_IN_PROGRESS" && count(pilotA) === "0");
+  quiesce();
+  const [, pilotC, projectC] = createPilot("pr-c.example");
+  const [, , protoC1, jobC1] = addQuestion(pilotC, question(4));
+  const reserved = reserveOneAttempt(jobC1, projectC);
+  quiesce();
+  check("P2 an attempt still reserved, even with its lease gone, refuses the save, and nothing is stored",
+    reserved !== "" && admin(`select status from public.protocol_attempts where id = ${lit(reserved)}::uuid;`) === "reserved" &&
+    save(pilotC, { pilotId: pilotC, projectId: projectC }, { protocols: [protoC1], attempts: [{ id: reserved, protocolId: protoC1, rawResponseSha256: null }] })[0] === "MEASUREMENT_IN_PROGRESS" &&
+    count(pilotC) === "0");
 
   /* S --------------------------------------------------------------- */
   const [s1, art1, rev1] = save(pilotA, payloadA, good);
-  check("S1 a manifest naming exactly the pilot's protocols and attempts saves revision 1", s1 === "SAVED" && rev1 === "1" && art1 !== "");
+  check("S1 a manifest naming exactly the pilot's protocols and attempts, with the completed answer's real stored hash, saves revision 1",
+    s1 === "SAVED" && rev1 === "1" && art1 !== "");
   check("S2 the revision carries a content hash and a 64-character link token",
     admin(`select (content_sha256 ~ '^[0-9a-f]{64}$' and public_token ~ '^[0-9a-f]{64}$' and shared_at is null)::text from public.pilot_report_artifacts where id = ${lit(art1)}::uuid;`) === "true");
   const [s2, art2, rev2] = save(pilotA, payloadA, good);
   check("S3 a second build is a new revision; the first is untouched", s2 === "SAVED" && rev2 === "2" && art2 !== art1 && count(pilotA) === "2");
   check("S4 another pilot's protocol is refused, and nothing is stored",
     save(pilotA, payloadA, { ...good, protocols: [protoA1, protoA2, protoB1] })[0] === "EVIDENCE_OUTSIDE_PILOT" && count(pilotA) === "2");
-  check("S5 a pilot protocol left out is refused", save(pilotA, payloadA, { ...good, protocols: [protoA1], attempts: good.attempts })[0] === "EVIDENCE_INCOMPLETE");
+  check("S5 a pilot protocol left out is refused", save(pilotA, payloadA, { ...good, protocols: [protoA1], attempts: [good.attempts[0]] })[0] === "EVIDENCE_INCOMPLETE");
   check("S6 an attempt left out is refused, so a failed attempt cannot be hidden", save(pilotA, payloadA, { ...good, attempts: [] })[0] === "EVIDENCE_INCOMPLETE");
   check("S7 an attempt listed under another of the pilot's protocols is refused",
-    save(pilotA, payloadA, { ...good, attempts: [{ ...good.attempts[0], protocolId: protoA2 }] })[0] === "EVIDENCE_OUTSIDE_PILOT");
-  check("S8 a response hash that is not the stored one is refused",
-    save(pilotA, payloadA, { ...good, attempts: [{ ...good.attempts[0], rawResponseSha256: sha("not the response") }] })[0] === "EVIDENCE_MISMATCH");
+    save(pilotA, payloadA, { ...good, attempts: [{ ...good.attempts[0], protocolId: protoA2 }, good.attempts[1]] })[0] === "EVIDENCE_OUTSIDE_PILOT");
+  check("S8 a hash listed for an attempt that stored none is refused",
+    save(pilotA, payloadA, { ...good, attempts: [{ ...good.attempts[0], rawResponseSha256: sha("not the response") }, good.attempts[1]] })[0] === "EVIDENCE_MISMATCH");
+  check("S8b a completed answer listed with a hash that is not its stored one is refused",
+    save(pilotA, payloadA, { ...good, attempts: [good.attempts[0], { ...good.attempts[1], rawResponseSha256: sha("another answer") }] })[0] === "EVIDENCE_MISMATCH");
+  check("S8c a completed answer listed with no hash is refused",
+    save(pilotA, payloadA, { ...good, attempts: [good.attempts[0], { ...good.attempts[1], rawResponseSha256: null }] })[0] === "EVIDENCE_MISMATCH");
   check("S9 a payload naming another project is refused", save(pilotA, { pilotId: pilotA, projectId: projectB }, good)[0] === "EVIDENCE_OUTSIDE_PILOT");
   check("S10 a payload naming another pilot is an invalid call",
     fails(`select * from public.save_pilot_report_artifact(${lit(pilotA)}::uuid, ${lit(FOUNDER)}::uuid, '# r', ${lit(JSON.stringify({ pilotId: pilotB, projectId: projectA }))}::jsonb, ${lit(JSON.stringify(good))}::jsonb, 'integrity_passed', '[]'::jsonb, now());`)?.includes("invalid_save_pilot_report_args") === true);

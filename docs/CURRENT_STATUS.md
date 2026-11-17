@@ -2038,12 +2038,22 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
   - **A pure builder, integrity rule and Markdown** in `lib/reports/build-pilot-report.ts`, `pilot-report-integrity.ts` and `render-pilot-report-markdown.ts`.
   - **The reader** `lib/reports/read-pilot-evidence.ts`, and `readPilotProtocolEvidence` in `read-protocol-evidence.ts`.
   - **Build and share** in `lib/reports/process-pilot-report.ts`, with two founder routes under `/api/internal/pilots/[pilotId]/report`.
-  - **The admin section** on the pilot page, and the customer page `/pilot-report/[secureToken]`.
+  - **The admin section** on the pilot page, the founder's preview of each revision (`/admin/pilots/[pilotId]/report/[artifactId]`, the only place Share is offered), and the customer page `/pilot-report/[secureToken]`.
+  - **One presentation model**, `lib/reports/pilot-report-presentation.ts`, rendered by both the page and the Markdown.
   - **No provider or model call, no email, no change to any existing function.**
+- **Independent review of 6d08ab5 (2026-11-17):** seven findings, all fixed on this branch (D-055 items 10 to 15):
+  1. the required wording was missing from the page;
+  2. "share" could happen without the founder seeing the revision;
+  3. answers still being collected counted as failed, and the reconciliation check could not fire;
+  4. the page and the Markdown differed, source counts had no denominator, and the hero overstated;
+  5. retired questions skipped the evidence checks and still showed rates;
+  6. a race was reported as a hash mismatch;
+  7. three tests did not prove what they claimed.
 - **Not established:**
   - no browser walk-through;
   - no report built from real pilot evidence;
-  - no Level 2 run with this migration. It changes no worker path; CI's Level 2 job applies it on a pull request into `main`.
+  - no Level 2 run with this migration. It changes no worker path; CI's Level 2 job applies it on a pull request into `main`;
+  - no test races a Run against a save on two real database sessions. The ordering rests on the pilot-row lock, which is checked statically (M12).
 - **Open:** D-055 *Open for the founder*:
   - the total line;
   - whether the first report waits for recommended actions;
@@ -2054,9 +2064,9 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 | Command | Result |
 |---|---|
 | `npm run typecheck` | pass |
-| `npm run build:verify` | pass; the two routes and the page are built (`next-env.d.ts` restored afterwards) |
-| `npm run test:pilot-report` | 59/59 |
-| `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | P1 45/45, P2 71/71, E1 74/74, Q4 52/52, pilot step 1 60/60, pilot questions 69/69, pilot report 34/34 (all 92 migrations applied) |
+| `npm run build:verify` | pass; the two routes, the preview and the customer page are built (`next-env.d.ts` restored afterwards) |
+| `npm run test:pilot-report` | 93/93 (59 before the review's fixes) |
+| `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | P1 45/45, P2 71/71, E1 74/74, Q4 52/52, pilot step 1 60/60, pilot questions 69/69, pilot report 39/39 (34 before the review's fixes; all 92 migrations applied) |
 | `npm run test:pilot-questions` | 128/128. S1 now checks that pilot questions directly follow step 1, not that it is the newest migration. |
 | `npm run test:pilot-step1` | 75/75 |
 | `npm run test:protocol-report` | pass |

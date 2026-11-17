@@ -196,17 +196,20 @@ ChatGPT shows as "Not measured" until it is wired (D-053 item 3). A pilot's resu
 
 The pilot page's **Pilot report** section builds one report for all of the pilot's questions from the stored answers. Building spends nothing, calls no AI provider or model, and shares nothing.
 
-1. Press **Build report** once the questions have finished. Each press saves a new revision; earlier ones are kept.
-2. Read the revision's check result:
+1. Press **Build report** once the questions have finished. Building is refused while any measurement of the pilot is still running or waiting to run; wait until it finishes. Each build saves a new revision; earlier ones are kept.
+2. Press **Read revision N** to open the revision exactly as the customer will see it, labelled as a preview. Read all of it. Then read its check result:
    - **Passed its checks**: every live question finished, and every answer's evidence is complete.
    - **Needs review**: the reasons are listed, for example a question that has not finished or has incomplete evidence. Fix what you can (finish, retry or retire the question) and build again. If the report is still right to send, share it after reading every reason; the console asks you to confirm.
    - **Blocked**: it can never be shared. Tell the engineer.
-3. Press **Share** on the newest revision. Only the newest can be shared, and a shared revision can never change. The console then shows the private link; send it to the customer yourself. Nothing is emailed.
+3. Share from the preview, below the revision you have just read. Only the newest revision can be shared, and a shared revision can never change. The pilot page then shows the private link; send it to the customer yourself. Nothing is emailed.
 4. Build and share again when the pilot changes, for example after the retest. The customer's older link keeps working and says that a newer revision has been shared.
 
 What the report says and does not say:
 - Each question's result is its own: how often the company was named in that question's readable answers, the likely range, and every failed or excluded attempt.
 - One total line adds up readable answers over the finished questions. It is a count of answers, not a rate or a score for the company.
+- Each engine has a "how it was measured" section: the required directional sentence, the model, how the answers were obtained, the dates, and the method versions.
+- A retired question shows its attempt counts only, with no rate.
+- Answers still being collected are counted as such, never as failed.
 - Other brands and source types are shown per question, with totals across questions labelled as such.
 - ChatGPT reads "not measured in this pilot yet" until it is connected (D-053 item 3).
 - Recommended actions are not in the report yet (phase 3).

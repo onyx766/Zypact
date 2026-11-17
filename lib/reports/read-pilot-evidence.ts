@@ -76,6 +76,44 @@ export async function readPilotReportInput(
     for (const j of (data ?? []) as Array<Record<string, unknown>>) jobStatus.set(String(j.protocol_id), String(j.status));
   }
 
+  // METHODOLOGY §4: when each slot's answers were collected, and how
+  // (probe_runs.probe_mode), read from the attempts' own rows.
+  const execution = new Map<string, { first: string | null; last: string | null }>();
+  const modesByProtocol = new Map<string, Set<string>>();
+  if (protocolIds.length > 0) {
+    const { data: attemptRows, error: aError } = await client
+      .from("protocol_attempts")
+      .select("protocol_id,reserved_at,terminalized_at,probe_run_id")
+      .in("protocol_id", protocolIds);
+    if (aError) throw aError;
+    const probeRunToProtocol = new Map<string, string>();
+    for (const a of (attemptRows ?? []) as Array<Record<string, unknown>>) {
+      const protocolId = String(a.protocol_id);
+      const start = typeof a.reserved_at === "string" ? a.reserved_at.slice(0, 10) : null;
+      const end = typeof a.terminalized_at === "string" ? a.terminalized_at.slice(0, 10) : start;
+      const w = execution.get(protocolId) ?? { first: null, last: null };
+      if (start && (!w.first || start < w.first)) w.first = start;
+      if (end && (!w.last || end > w.last)) w.last = end;
+      execution.set(protocolId, w);
+      if (typeof a.probe_run_id === "string") probeRunToProtocol.set(a.probe_run_id, protocolId);
+    }
+    const probeRunIds = [...probeRunToProtocol.keys()];
+    if (probeRunIds.length > 0) {
+      const { data: runRows, error: rError } = await client
+        .from("probe_runs")
+        .select("id,probe_mode")
+        .in("id", probeRunIds);
+      if (rError) throw rError;
+      for (const r of (runRows ?? []) as Array<Record<string, unknown>>) {
+        const protocolId = probeRunToProtocol.get(String(r.id));
+        if (!protocolId) continue;
+        const set = modesByProtocol.get(protocolId) ?? new Set<string>();
+        set.add(typeof r.probe_mode === "string" && r.probe_mode ? r.probe_mode : "unrecorded");
+        modesByProtocol.set(protocolId, set);
+      }
+    }
+  }
+
   const subject = {
     companyName: measuredBrand,
     websiteUrl: String(p.website_url),
@@ -93,7 +131,15 @@ export async function readPilotReportInput(
       if (!ENGINES.has(engine)) continue;
       const protocolId = String(s.protocol_id);
       const evidence = await readPilotProtocolEvidence(client, protocolId, projectId, subject);
-      slots.push({ engine: engine as PilotEngineKey, protocolId, jobStatus: jobStatus.get(protocolId) ?? null, evidence });
+      const window = execution.get(protocolId) ?? { first: null, last: null };
+      slots.push({
+        engine: engine as PilotEngineKey,
+        protocolId,
+        jobStatus: jobStatus.get(protocolId) ?? null,
+        evidence,
+        execution: { firstOn: window.first, lastOn: window.last },
+        answerModes: [...(modesByProtocol.get(protocolId) ?? [])].sort(),
+      });
     }
     questions.push({
       pilotQuestionId: String(q.id),
@@ -118,4 +164,68 @@ export async function readPilotReportInput(
     },
     questions,
   };
+}
+
+/**
+ * D-055 — whether any of the pilot's measurements is still running: a job of
+ * one of its protocols, or of a retest of one, holding a live lease or a
+ * pending run request, or an attempt still reserved or in progress. A report
+ * built then would read answers that are still being written, so the build
+ * is refused; save_pilot_report_artifact refuses it again in the database.
+ */
+export async function pilotMeasurementInProgress(client: SupabaseClient, pilotId: string): Promise<boolean> {
+  const { data: qRows, error: qError } = await client.from("pilot_questions").select("id").eq("pilot_id", pilotId);
+  if (qError) throw qError;
+  const questionIds = ((qRows ?? []) as Array<Record<string, unknown>>).map((q) => String(q.id));
+  if (questionIds.length === 0) return false;
+
+  const { data: slotRows, error: sError } = await client
+    .from("pilot_question_protocols")
+    .select("protocol_id")
+    .in("pilot_question_id", questionIds);
+  if (sError) throw sError;
+  const baseIds = ((slotRows ?? []) as Array<Record<string, unknown>>).map((r) => String(r.protocol_id));
+  if (baseIds.length === 0) return false;
+
+  const { data: retestRows, error: rError } = await client.from("protocols").select("id").in("baseline_protocol_id", baseIds);
+  if (rError) throw rError;
+  const protocolIds = [...baseIds, ...((retestRows ?? []) as Array<Record<string, unknown>>).map((r) => String(r.id))];
+
+  const { data: attempts, error: aError } = await client
+    .from("protocol_attempts")
+    .select("id")
+    .in("protocol_id", protocolIds)
+    .in("status", ["reserved", "in_progress"])
+    .limit(1);
+  if (aError) throw aError;
+  if ((attempts ?? []).length > 0) return true;
+
+  const nowIso = new Date().toISOString();
+  const { data: jobs, error: jError } = await client
+    .from("protocol_execution_jobs")
+    .select("id,status,lease_expires_at")
+    .in("protocol_id", protocolIds);
+  if (jError) throw jError;
+  const jobRows = (jobs ?? []) as Array<Record<string, unknown>>;
+  if (
+    jobRows.some(
+      (j) =>
+        (j.status === "claimed" || j.status === "running") &&
+        typeof j.lease_expires_at === "string" &&
+        Date.parse(j.lease_expires_at) > Date.now()
+    )
+  ) {
+    return true;
+  }
+  const jobIds = jobRows.map((j) => String(j.id));
+  if (jobIds.length === 0) return false;
+  const { data: requests, error: reqError } = await client
+    .from("protocol_job_run_requests")
+    .select("id")
+    .in("job_id", jobIds)
+    .eq("status", "pending")
+    .gt("expires_at", nowIso)
+    .limit(1);
+  if (reqError) throw reqError;
+  return (requests ?? []).length > 0;
 }

@@ -14,11 +14,14 @@
 --      new revision. Before it is shared, only the review and share fields
 --      can be written, once; after it is shared, nothing can change. No row
 --      can be deleted (`pilot_report_artifacts_guard`).
---   2. `save_pilot_report_artifact`: stores a revision only when its
---      manifest names exactly the pilot's protocols, including those of
---      retired questions, and every attempt of them, each attempt belongs to
---      the protocol it is listed under, and each listed response hash
---      matches the stored one. Otherwise it stores nothing and answers
+--   2. `save_pilot_report_artifact`: stores a revision only when none of the
+--      pilot's measurements is still running (no live lease or pending run
+--      request on a job of its protocols or their retests, and no attempt
+--      still reserved or in progress), its manifest names exactly the
+--      pilot's protocols, including those of retired questions, and every
+--      attempt of them, each attempt belongs to the protocol it is listed
+--      under, and each listed response hash matches the stored one.
+--      Otherwise it stores nothing and answers MEASUREMENT_IN_PROGRESS,
 --      EVIDENCE_OUTSIDE_PILOT, EVIDENCE_INCOMPLETE or EVIDENCE_MISMATCH.
 --   3. `share_pilot_report_artifact`: refuses a `blocked` revision, a
 --      `needs_review` revision without the founder's explicit
@@ -223,6 +226,38 @@ begin
 
   if (p_payload ->> 'projectId') is distinct from v_pilot.project_id::text then
     return query select 'EVIDENCE_OUTSIDE_PILOT'::text, null::uuid, null::integer;
+    return;
+  end if;
+
+  -- A measurement still running: answers may still be written, so the
+  -- report would read a moving target. Checked before the evidence, so a
+  -- build that raced a run is refused for what it is. The pilot row lock
+  -- above is the one request_protocol_job_run takes for share, so no new Run
+  -- can be requested for this pilot while the save runs.
+  if exists (
+    select 1
+      from public.pilot_questions pq
+      join public.pilot_question_protocols pqp on pqp.pilot_question_id = pq.id
+      join public.protocols pr
+        on pr.id = pqp.protocol_id or pr.baseline_protocol_id = pqp.protocol_id
+      left join public.protocol_execution_jobs j on j.protocol_id = pr.id
+     where pq.pilot_id = p_pilot_id
+       and (
+         (j.status in ('claimed', 'running') and j.lease_expires_at > now())
+         or exists (
+           select 1
+             from public.protocol_job_run_requests r
+            where r.job_id = j.id
+              and r.status = 'pending'
+              and r.expires_at > now())
+         or exists (
+           select 1
+             from public.protocol_attempts a
+            where a.protocol_id = pr.id
+              and a.status in ('reserved', 'in_progress'))
+       )
+  ) then
+    return query select 'MEASUREMENT_IN_PROGRESS'::text, null::uuid, null::integer;
     return;
   end if;
 

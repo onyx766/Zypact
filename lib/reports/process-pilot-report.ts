@@ -12,8 +12,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ReportIntegrityStatus } from "@/lib/export/report-integrity";
 import { buildPilotReport } from "@/lib/reports/build-pilot-report";
 import { evaluatePilotReportIntegrity, type PilotQuestionSignals } from "@/lib/reports/pilot-report-integrity";
+import { presentationStrings, presentPilotReport } from "@/lib/reports/pilot-report-presentation";
 import { readIntegritySignals } from "@/lib/reports/protocol-integrity-signals";
 import { readPilotReportInput } from "@/lib/reports/read-pilot-evidence";
+import { ProtocolEvidenceError } from "@/lib/reports/read-protocol-evidence";
 import { renderPilotReportMarkdown } from "@/lib/reports/render-pilot-report-markdown";
 
 export type SavePilotReportOutcome =
@@ -21,7 +23,8 @@ export type SavePilotReportOutcome =
   | "PILOT_NOT_FOUND"
   | "EVIDENCE_OUTSIDE_PILOT"
   | "EVIDENCE_MISMATCH"
-  | "EVIDENCE_INCOMPLETE";
+  | "EVIDENCE_INCOMPLETE"
+  | "MEASUREMENT_IN_PROGRESS";
 
 export interface BuildPilotReportResult {
   outcome: SavePilotReportOutcome;
@@ -37,11 +40,23 @@ export async function buildAndSavePilotReport(
   createdBy: string,
   now: () => Date = () => new Date()
 ): Promise<BuildPilotReportResult> {
-  const input = await readPilotReportInput(client, pilotId);
+  let input: Awaited<ReturnType<typeof readPilotReportInput>>;
+  try {
+    input = await readPilotReportInput(client, pilotId);
+  } catch (error) {
+    // The reader refuses a protocol or question outside the pilot's project
+    // before any of its evidence is read; nothing is built or saved.
+    if (error instanceof ProtocolEvidenceError) {
+      return { outcome: "EVIDENCE_OUTSIDE_PILOT", artifactId: null, revision: null, integrityStatus: null, integrityReasons: [] };
+    }
+    throw error;
+  }
   if (!input) return { outcome: "PILOT_NOT_FOUND", artifactId: null, revision: null, integrityStatus: null, integrityReasons: [] };
 
   const built = buildPilotReport({ ...input, now: now() });
   const markdown = renderPilotReportMarkdown(built.payload);
+  // Every string the client page renders, from the same presentation model.
+  const pageText = presentationStrings(presentPilotReport(built.payload));
 
   const questionSignals: PilotQuestionSignals[] = [];
   for (const q of built.payload.questions) {
@@ -50,11 +65,12 @@ export async function buildAndSavePilotReport(
         ordinal: q.ordinal,
         engine: m.engine,
         retired: q.retired,
+        completedAttempts: m.counts.completed,
         signals: await readIntegritySignals(client, m.report),
       });
     }
   }
-  const integrity = evaluatePilotReportIntegrity({ markdown, structural: built.structural, questionSignals });
+  const integrity = evaluatePilotReportIntegrity({ markdown, pageText, structural: built.structural, questionSignals });
 
   const { data, error } = await client.rpc("save_pilot_report_artifact", {
     p_pilot_id: pilotId,
@@ -161,5 +177,55 @@ export async function readSharedPilotReport(
     generatedAt: String(row.generated_at),
     sharedAt: String(row.shared_at),
     newerSharedRevision: row.newer_shared_revision === true,
+  };
+}
+
+export interface PilotReportRevision {
+  id: string;
+  revision: number;
+  payload: unknown;
+  generatedAt: string;
+  integrityStatus: ReportIntegrityStatus;
+  integrityReasons: string[];
+  sharedAt: string | null;
+  isLatest: boolean;
+}
+
+/**
+ * The founder's preview read: one saved revision of this pilot, shared or
+ * not, blocked included, by its id. The stored payload is the one the
+ * customer page renders once the revision is shared, so the founder reviews
+ * exactly what the customer will see. Used only behind the founder guard.
+ */
+export async function readPilotReportRevision(
+  client: SupabaseClient,
+  pilotId: string,
+  artifactId: string
+): Promise<PilotReportRevision | null> {
+  const { data, error } = await client
+    .from("pilot_report_artifacts")
+    .select("id,revision,payload,generated_at,integrity_status,integrity_reasons,shared_at")
+    .eq("id", artifactId)
+    .eq("pilot_id", pilotId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  const r = data as Record<string, unknown>;
+  const { data: newer, error: newerError } = await client
+    .from("pilot_report_artifacts")
+    .select("id")
+    .eq("pilot_id", pilotId)
+    .gt("revision", Number(r.revision))
+    .limit(1);
+  if (newerError) throw newerError;
+  return {
+    id: String(r.id),
+    revision: Number(r.revision),
+    payload: r.payload,
+    generatedAt: String(r.generated_at),
+    integrityStatus: String(r.integrity_status) as ReportIntegrityStatus,
+    integrityReasons: Array.isArray(r.integrity_reasons) ? r.integrity_reasons.map(String) : [],
+    sharedAt: r.shared_at ? String(r.shared_at) : null,
+    isLatest: (newer ?? []).length === 0,
   };
 }

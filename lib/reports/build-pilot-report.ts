@@ -10,11 +10,16 @@
  */
 import { buildProtocolReport } from "@/lib/reports/build-protocol-report";
 import type { BuildProtocolReportInput, ProtocolReportPayload } from "@/lib/reports/protocol-report-types";
+import { DEPENDENCE_LIMITATION, surfaceLimitation } from "@/lib/reports/surface-limitations";
 import {
   PILOT_COMPETITOR_RULE,
   PILOT_LABEL_RULE,
   PILOT_REPORT_VERSION,
+  type PilotAttemptCounts,
   type PilotBrandRow,
+  type PilotConditionValue,
+  type PilotEngineConditions,
+  type PilotExecutionWindow,
   type PilotCompetitorRow,
   type PilotEngineBrandSection,
   type PilotEngineCompetitorSection,
@@ -28,6 +33,7 @@ import {
   type PilotReportManifest,
   type PilotReportPayload,
   type PilotReportQuestion,
+  type PilotReportQuestionEngine,
   type PilotSourceRow,
 } from "@/lib/reports/pilot-report-types";
 import { categorizeDomain, SOURCE_CATEGORY_LABEL, SOURCE_TYPE_LIST_VERSION, type SourceCategory } from "@/lib/source-insights/source-types";
@@ -53,12 +59,26 @@ export const PILOT_LIMITATIONS: readonly string[] = [
   "Zypact has not opened the cited pages. What they say has not been checked.",
 ];
 
+/** METHODOLOGY §16 gate 12: the causal-limit footer every pilot report carries. */
+export const PILOT_CAUSAL_LIMIT =
+  "Observational only: this report records what the engines answered. It does not show that any answer led to a sale being won or missed, or that any change on your side produced a difference in the answers.";
+
+/** Probe modes that are answers bought from the provider (0013 and later). */
+export const LIVE_ANSWER_MODES: ReadonlySet<string> = new Set(["live_perplexity", "live_openai_chatgpt"]);
+
+const IN_PROGRESS_STATUSES = new Set(["reserved", "in_progress"]);
+const FAILED_STATUSES = new Set(["failed", "timed_out", "cancelled"]);
+
 export interface PilotReportSlotInput {
   engine: PilotEngineKey;
   protocolId: string;
   /** The protocol job's status, or null when no job exists. */
   jobStatus: string | null;
   evidence: BuildProtocolReportInput;
+  /** First and last attempt dates (YYYY-MM-DD), from the attempts' own timestamps. */
+  execution: PilotExecutionWindow;
+  /** probe_runs.probe_mode of the slot's attempts, deduplicated. */
+  answerModes: string[];
 }
 
 export interface PilotReportQuestionInput {
@@ -97,6 +117,47 @@ export interface BuiltPilotReport {
   manifest: PilotReportManifest;
   /** Reasons found in the shape of the evidence itself; per-question integrity signals are added by the caller. */
   structural: PilotStructuralReason[];
+}
+
+/**
+ * The pilot's own attempt accounting, by stored status. Unlike a one-question
+ * report, a pilot report reads attempts that may still be collecting, so
+ * reserved and in-progress attempts are their own bucket and never "failed".
+ */
+export function countAttempts(evidence: BuildProtocolReportInput, report: ProtocolReportPayload): PilotAttemptCounts {
+  let completed = 0;
+  let failed = 0;
+  let excludedByReview = 0;
+  let inProgress = 0;
+  let unrecognised = 0;
+  for (const a of evidence.attempts) {
+    if (a.status === "completed") completed += 1;
+    else if (FAILED_STATUSES.has(a.status)) failed += 1;
+    else if (a.status === "excluded") excludedByReview += 1;
+    else if (IN_PROGRESS_STATUSES.has(a.status)) inProgress += 1;
+    else unrecognised += 1;
+  }
+  const attempted = evidence.attempts.length;
+  const noReadableResult = report.reconciliation.excludedNoResult;
+  const reconciles =
+    unrecognised === 0 &&
+    completed + failed + excludedByReview + inProgress === attempted &&
+    report.reconciliation.attempted === attempted &&
+    report.reconciliation.completed === completed &&
+    noReadableResult >= 0 &&
+    noReadableResult <= completed &&
+    report.observation.denominator === completed - noReadableResult;
+  return {
+    planned: report.reconciliation.planned,
+    attempted,
+    completed,
+    failed,
+    excludedByReview,
+    noReadableResult,
+    inProgress,
+    unrecognised,
+    reconciles,
+  };
 }
 
 function measurementState(jobStatus: string | null, attempted: number): PilotQuestionMeasurementState {
@@ -224,9 +285,9 @@ function buildSources(
 function portfolioLine(rows: PilotBrandRow[]): PilotPortfolioLine | null {
   const live = rows.filter((r) => !r.retired);
   if (live.length === 0) return null;
-  const included = live.filter((r) => r.state === "measured" && r.denominator > 0);
+  const included = live.filter((r) => r.state === "measured" && (r.denominator ?? 0) > 0);
   const leftOut = rows.filter((r) => !included.includes(r)).map((r) => r.ordinal);
-  const rates = included.map((r) => r.numerator / r.denominator);
+  const rates = included.map((r) => (r.numerator ?? 0) / (r.denominator ?? 1));
   const pct = (v: number) => `${Math.round(v * 100)}%`;
   const heterogeneity =
     included.length === 0
@@ -237,8 +298,8 @@ function portfolioLine(rows: PilotBrandRow[]): PilotPortfolioLine | null {
   return {
     includedOrdinals: included.map((r) => r.ordinal),
     leftOutOrdinals: leftOut,
-    numerator: included.reduce((s, r) => s + r.numerator, 0),
-    denominator: included.reduce((s, r) => s + r.denominator, 0),
+    numerator: included.reduce((s, r) => s + (r.numerator ?? 0), 0),
+    denominator: included.reduce((s, r) => s + (r.denominator ?? 0), 0),
     weighting: "equal_per_readable_run",
     heterogeneity,
   };
@@ -296,8 +357,17 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
         now,
       });
       text = text || report.question.text;
-      const state = measurementState(slot.jobStatus, report.reconciliation.attempted);
-      measurements.push({ engine: slot.engine, protocolId: slot.protocolId, state, report });
+      const counts = countAttempts(ev, report);
+      const state = measurementState(slot.jobStatus, counts.attempted);
+      measurements.push({
+        engine: slot.engine,
+        protocolId: slot.protocolId,
+        state,
+        counts,
+        execution: slot.execution,
+        answerModes: [...new Set(slot.answerModes)].sort(),
+        report,
+      });
 
       if (!retired && state !== "measured") {
         structural.push({
@@ -308,29 +378,33 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
               : `Question ${q.ordinal}: the ${engineLabel(slot.engine)} measurement has not finished.`,
         });
       }
-      if (!report.reconciliation.accountedFor) {
+      if (counts.inProgress > 0) {
+        structural.push({
+          status: "needs_review",
+          reason: `Question ${q.ordinal}: ${counts.inProgress} ${engineLabel(slot.engine)} answer${counts.inProgress === 1 ? " is" : "s are"} still being collected.`,
+        });
+      }
+      if (!counts.reconciles) {
         structural.push({
           status: "needs_review",
           reason: `Question ${q.ordinal}: its ${engineLabel(slot.engine)} attempt counts do not reconcile.`,
         });
       }
 
-      const { observation: o, reconciliation: r } = report;
+      const { observation: o } = report;
       const rows = brandRows.get(slot.engine) ?? [];
+      // A retired question shows its attempt counts only: no rate, range or label.
       rows.push({
         ordinal: q.ordinal,
         pilotQuestionId: q.pilotQuestionId,
         retired,
         state,
-        numerator: o.numerator,
-        denominator: o.denominator,
-        planned: r.planned,
-        attempted: r.attempted,
-        failed: r.failed,
-        excluded: r.excludedByReview + r.excludedNoResult,
-        intervalLow: o.interval?.low ?? null,
-        intervalHigh: o.interval?.high ?? null,
-        label: questionLabel(o.numerator, o.denominator),
+        numerator: retired ? null : o.numerator,
+        denominator: retired ? null : o.denominator,
+        counts,
+        intervalLow: retired ? null : o.interval?.low ?? null,
+        intervalHigh: retired ? null : o.interval?.high ?? null,
+        label: retired ? null : questionLabel(o.numerator, o.denominator),
       });
       brandRows.set(slot.engine, rows);
 
@@ -370,17 +444,26 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
   }
 
   const engines: PilotReportEngineSummary[] = PILOT_ENGINE_ORDER.map(({ key, label }) => {
-    const measuredQuestions = questions.filter((q) => !q.retired && q.measurements.some((m) => m.engine === key)).length;
+    const withSlot = questions.filter((q) => q.measurements.some((m) => m.engine === key));
+    const live = withSlot.filter((q) => !q.retired);
+    const slotOf = (q: PilotReportQuestion) => q.measurements.find((m) => m.engine === key)!;
+    const withReadable = live.filter((q) => slotOf(q).report.observation.denominator > 0).length;
+    const notStarted = live.filter((q) => slotOf(q).counts.attempted === 0).length;
+    const retiredCount = withSlot.length - live.length;
     return {
       engine: key,
       label,
-      measured: measuredQuestions > 0,
-      questionsMeasured: measuredQuestions,
-      note: measuredQuestions > 0 ? `${measuredQuestions} question${measuredQuestions === 1 ? "" : "s"} measured.` : ENGINE_NOT_MEASURED_NOTE,
+      measured: withSlot.length > 0,
+      questionsLive: live.length,
+      questionsWithReadableAnswer: withReadable,
+      questionsNotStarted: notStarted,
+      questionsRetired: retiredCount,
+      note: withSlot.length > 0 ? engineNote(live.length, withReadable, notStarted, retiredCount) : ENGINE_NOT_MEASURED_NOTE,
     };
   });
 
   const measuredEngines = engines.filter((e) => e.measured).map((e) => e.engine);
+  const conditions = measuredEngines.map((engine) => buildConditions(engine, questions, structural));
   const brand: PilotEngineBrandSection[] = measuredEngines.map((engine) => {
     const rows = brandRows.get(engine) ?? [];
     return { engine, rows, portfolio: portfolioLine(rows) };
@@ -397,6 +480,7 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
     `Competitor names are grouped across questions by rule ${PILOT_COMPETITOR_RULE}: the same name apart from spacing and capital letters. Names were read from each answer by an analysis model, so different spellings of one company can appear separately. These are totals across questions, not results for any one question.`,
     `Source types come from the fixed list ${SOURCE_TYPE_LIST_VERSION}. A run counts once per type, whatever the number of pages of that type it cited.`,
     "Failed and excluded answers stay in each question's own count of attempts. They are never counted as an answer that did not name the brand.",
+    "A retired question's measurement could not finish. It shows its attempt counts only, with no rate, range or reading, and it is left out of every total.",
   ];
 
   const payload: PilotReportPayload = {
@@ -407,12 +491,15 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
     subject,
     window: { startsOn: pilot.startsOn, endsOn: pilot.endsOn, status: pilot.status },
     engines,
+    conditions,
     questions,
     brand,
     competitors,
     sources,
     evidenceIndex,
     limitations: [...PILOT_LIMITATIONS],
+    dependenceNote: DEPENDENCE_LIMITATION,
+    causalLimit: PILOT_CAUSAL_LIMIT,
     methodNotes,
   };
 
@@ -427,6 +514,92 @@ function dedupe(reasons: PilotStructuralReason[]): PilotStructuralReason[] {
     seen.add(key);
     return true;
   });
+}
+
+function engineNote(live: number, withReadable: number, notStarted: number, retired: number): string {
+  const parts = [`${withReadable} of ${live} question${live === 1 ? "" : "s"} with at least one readable answer`];
+  if (notStarted > 0) parts.push(`${notStarted} not started`);
+  if (retired > 0) parts.push(`${retired} retired`);
+  return `${parts.join("; ")}.`;
+}
+
+function collect(values: { value: string; ordinal: number }[]): PilotConditionValue[] {
+  const byValue = new Map<string, Set<number>>();
+  for (const { value, ordinal } of values) {
+    const set = byValue.get(value) ?? new Set<number>();
+    set.add(ordinal);
+    byValue.set(value, set);
+  }
+  return [...byValue.entries()]
+    .map(([value, ordinals]) => ({ value, ordinals: [...ordinals].sort((a, b) => a - b) }))
+    .sort((a, b) => a.ordinals[0] - b.ordinals[0] || a.value.localeCompare(b.value));
+}
+
+/** METHODOLOGY §4 / §16 gate 5 for one engine, across every question measured on it (retired ones included). */
+function buildConditions(
+  engine: PilotEngineKey,
+  questions: PilotReportQuestion[],
+  structural: PilotStructuralReason[]
+): PilotEngineConditions {
+  const slots = questions.flatMap((q) =>
+    q.measurements.filter((m) => m.engine === engine).map((m) => ({ ordinal: q.ordinal, m }))
+  );
+  const pick = (f: (m: PilotReportQuestionEngine) => string) => collect(slots.map(({ ordinal, m }) => ({ value: f(m), ordinal })));
+  const provider = pick((m) => m.report.protocol.provider);
+  const surface = pick((m) => m.report.protocol.surface);
+  const model = pick((m) => m.report.protocol.model);
+  const methodologyVersion = pick((m) => m.report.protocol.methodologyVersion);
+  const analyzerVersion = pick((m) => (m.report.protocol.analyzerVersion === null ? "" : String(m.report.protocol.analyzerVersion)));
+  const answerMode = collect(slots.flatMap(({ ordinal, m }) => m.answerModes.map((value) => ({ value, ordinal }))));
+  const label = engineLabel(engine);
+
+  for (const [name, values] of [
+    ["provider", provider],
+    ["surface", surface],
+    ["model", model],
+    ["methodology version", methodologyVersion],
+    ["analysis version", analyzerVersion],
+    ["answer mode", answerMode],
+  ] as const) {
+    if (values.length > 1) {
+      structural.push({
+        status: "needs_review",
+        reason: `${label} questions were not all measured under the same ${name}.`,
+      });
+    }
+  }
+  if (answerMode.some((v) => !LIVE_ANSWER_MODES.has(v.value))) {
+    structural.push({
+      status: "needs_review",
+      reason: `Some ${label} answers were not live answers from the provider.`,
+    });
+  }
+  const answered = slots.filter(({ m }) => m.counts.completed > 0);
+  if (answered.some(({ m }) => m.answerModes.length === 0)) {
+    structural.push({ status: "needs_review", reason: `Some ${label} answers have no recorded answer mode.` });
+  }
+  if (analyzerVersion.some((v) => v.value === "") && answered.length > 0) {
+    structural.push({ status: "needs_review", reason: `Some ${label} answers have no recorded analysis version.` });
+  }
+
+  const firsts = slots.map(({ m }) => m.execution.firstOn).filter((d): d is string => !!d).sort();
+  const lasts = slots.map(({ m }) => m.execution.lastOn).filter((d): d is string => !!d).sort();
+  if (answered.length > 0 && (firsts.length === 0 || lasts.length === 0)) {
+    structural.push({ status: "needs_review", reason: `The ${label} answers have no recorded dates.` });
+  }
+
+  return {
+    engine,
+    surfaceLimitation: surfaceLimitation(provider[0]?.value ?? engine),
+    provider,
+    surface,
+    model,
+    answerMode,
+    methodologyVersion,
+    analyzerVersion,
+    executedFrom: firsts[0] ?? null,
+    executedTo: lasts[lasts.length - 1] ?? null,
+  };
 }
 
 export function engineLabel(engine: PilotEngineKey): string {

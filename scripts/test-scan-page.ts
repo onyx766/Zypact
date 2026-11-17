@@ -58,7 +58,10 @@ function main(): void {
 
   // ------------------------------------------------------------ Metadata
   const { metadata } = require("@/app/scan/page");
-  check("title is unchanged", metadata.title === "Request a Zypact V1 demo");
+  check(
+    "title is unchanged, and absolute so the root template does not add Zypact twice",
+    (metadata.title as { absolute?: string } | undefined)?.absolute === "Request a Zypact V1 demo"
+  );
   check(
     "description is unchanged",
     metadata.description ===

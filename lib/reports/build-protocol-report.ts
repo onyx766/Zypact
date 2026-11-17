@@ -127,8 +127,10 @@ function identityTokens(name: string): Set<string> {
  * The surface frequently names the client inside its own list of options —
  * an answer to "best alternatives" reasonably includes the brand being asked
  * about. Listing the client under "other brands named" would tell a reader
- * they compete with themselves, so a self-match is dropped from that section
- * only. The run's raw evidence is untouched.
+ * they compete with themselves, so a self-match is dropped wherever the
+ * report lists other brands: the per-run lists and the summary built from
+ * them. Whether the client was named is reported separately, as the run's
+ * brand presence. The run's raw evidence is untouched.
  */
 function isSameBrand(candidate: string, company: string): boolean {
   const a = identityTokens(candidate);
@@ -144,17 +146,34 @@ function isSameBrand(candidate: string, company: string): boolean {
 }
 
 /**
- * Attempts are ordered by their baseline ordinal when they have one. Retries
- * carry no ordinal of their own, so they sort after the planned runs rather
- * than being interleaved into positions they never occupied.
+ * Attempts are ordered by their baseline ordinal when they have one; an
+ * attempt without one sorts after the planned runs. A retry keeps the slot
+ * of the run it retried (D-025), so within a slot attempts are ordered by
+ * how many retries deep they are: the failed run, then its retry, then the
+ * retry of that retry. Only then does the id break a tie.
  */
 function orderAttempts(
   attempts: BuildProtocolReportInput["attempts"]
 ): BuildProtocolReportInput["attempts"] {
+  const byId = new Map(attempts.map((a) => [a.id, a]));
+  const depth = (attempt: (typeof attempts)[number]): number => {
+    let d = 0;
+    let parent = attempt.retryOfAttemptId;
+    const seen = new Set<string>([attempt.id]);
+    while (parent && byId.has(parent) && !seen.has(parent)) {
+      seen.add(parent);
+      d += 1;
+      parent = byId.get(parent)!.retryOfAttemptId;
+    }
+    return d;
+  };
   return [...attempts].sort((a, b) => {
     const ao = a.baselineOrdinal ?? Number.MAX_SAFE_INTEGER;
     const bo = b.baselineOrdinal ?? Number.MAX_SAFE_INTEGER;
     if (ao !== bo) return ao - bo;
+    const ad = depth(a);
+    const bd = depth(b);
+    if (ad !== bd) return ad - bd;
     return a.id.localeCompare(b.id);
   });
 }
@@ -194,7 +213,9 @@ export function buildProtocolReport(
           ? result.clientMentioned ?? null
           : null,
         position: result?.clientPosition ?? null,
-        competitors: result?.competitorsMentioned ?? [],
+        competitors: (result?.competitorsMentioned ?? []).filter(
+          (name) => !isSameBrand(name, input.subject.companyName)
+        ),
         citedSourceCount: countSources(
           result?.sourcesCited ?? []
         ),

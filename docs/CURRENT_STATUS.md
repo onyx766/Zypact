@@ -886,7 +886,9 @@ and the Perplexity leg never reads it.
    oldest eligible job globally, so a start intended for one request can claim
    another. `claim_protocol_execution_job_by_id` (0059) exists and
    `runWorkerLoop` never calls it — a wired-but-unused safety barrier. Latent
-   while only one job is ever queued.
+   while only one job is ever queued. **Fixed on branch `feat/pilot-mode-phase1`
+   by D-052 (§30), not yet deployed:** each start names its job, and the live
+   worker claims that job or nothing.
 3. **`blocked` is unreachable on the V1 path.** `reportExposesLegacyVerdictAsTruth`
    is four regexes matching legacy `won/partial/lost` aggregates;
    `renderProtocolShortReportMarkdown` emits none of them. The practical states
@@ -1894,3 +1896,64 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 | `npm run test:q4-activation` | 42/42 |
 | `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | P1 45/45, P2 71/71, E1 74/74, Q4 52/52 (all 89 migrations applied) |
 | `npm run test:prod-preflight` | pass (Q4's version, 2 tables, 3 functions and `_q4_` listed) |
+
+## 30. Pilot Mode (D-051, D-052) — decision recorded; step 1 on branch `feat/pilot-mode-phase1`, not applied anywhere, not deployed
+
+- **Decision (D-051, 2026-11-14):**
+  - the team may run paid pilot measurements, and the self-test retest, under today's controls with a worker daily ceiling the founder confirms (10 USD proposed);
+  - Perplexity only;
+  - Pilot Mode rules: a results-only login comes before customer spend authorisation, the team confirms website ownership, written approvals are kept, one login per customer;
+  - each production step is authorised when it comes.
+
+  Still open: pilot terms, a named security reviewer, and the ChatGPT confirmation test.
+- **The assessment, in brief:** no rebuild is needed. The founder-operated engine and the customer account area both exist and are not connected: nothing calls `assign_project_to_workspace`, and no session-checked read of reports or Outcome Cards exists. The work, in order:
+  1. **Before the first paid pilot:** step 1, below.
+  2. **The customer login:**
+     - enable the account area: the P1, P2, E1 and Q4 applies, SMTP, Auth settings, the HMAC secret, purges, the security, privacy and wording reviews, and a browser test;
+     - a Pilot plan;
+     - a team view of workspaces, with the project link;
+     - results in the login;
+     - link withdrawal.
+  3. **Before the first pilot retest:**
+     - a confounder log (§18.5 item 7);
+     - recorded customer approvals and card reviewer;
+     - the Outcome Card's threshold note and email copy.
+  4. **Before subscriptions:** measuring customer-approved questions, exact answers in the login, colleague logins.
+- **What step 1 adds (D-052):**
+  - run requests, with the requested claim in the live worker (§18.5 item 2);
+  - a founder retry of a run that failed at the provider;
+  - closing a failed request;
+  - who wrote the question, recorded at approval;
+  - the per-run brand-self exclusion, customer wording for a run that ended without an answer, and a retry listed after the run it retried;
+  - provenance shown in words;
+  - page titles;
+  - the Run confirmation from the protocol's plan;
+  - the retest copy;
+  - the preflight rows for the new migration.
+- **Production steps waiting for authorisation, in order:**
+  1. Apply `20261114120000` at the position the founder chooses (D-052, release order: after 0083, renamed below `20261102132000`, or after Q4), with the read-only preflight re-baselined for that position (`PROD_PREFLIGHT_SPEC.md`).
+  2. Redeploy the worker from the same commit (`WORKER_DEPLOY_RUNBOOK.md` §6, with an empty queue). This also brings D-036's 7 slots and 900 seconds into effect (§18.5 item 8). The worker goes before the web app: started by the old console, it finds no run request and stops (D-052, deploy order). Confirm the machine runs the new image (the `gitSha` its start event reports, `WORKER_DEPLOY_RUNBOOK.md` §6) before step 3. A rollback runs in the reverse order.
+  3. Deploy the web app.
+  4. Set the paid-execution switch and `ZYPACT_DAILY_SPEND_CEILING_USD` (the figure the founder confirms; 10 USD proposed) on both the web host and the worker. Their deployed values are not known from the repository.
+  5. Run the self-test retest (`SELF_TEST_PERPLEXITY_CONTENT_CHANGE.md` §5 and §7). Carry its confounder note outside the card (§4, option 1) unless the confounder log ships first.
+- **Not established here:**
+  - anything about production: the migration ledger, the worker's configuration, the switches;
+  - two founder sessions racing on a real stack beyond the advisory lock (no Level 2 case);
+  - the report page's legacy branch, which still says "AI visibility snapshot" for legacy artifacts. That branch is frozen by the runbook and its tests, so it is left for the wording review.
+- **Inventory on this branch:** 90 migrations, 217 files matching `scripts/test-*.ts`, 128 `test:*` and 4 `verify:*` commands.
+- **Commands and local results (2026-11-14):**
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | pass |
+| `npm run build:verify` | pass (`next-env.d.ts` restored afterwards) |
+| `npm run test:pilot-step1` | 75/75 |
+| `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | P1 45/45, P2 71/71, E1 74/74, Q4 52/52, pilot step 1 60/60 (all 90 migrations applied) |
+| `ZYPACT_LEVEL2_LOCAL=1 npm run test:snapshot-worker-postgres-level2` | `LEVEL2_RESULT=PASS`, 886 PASS and 0 FAIL on `postgres:16-alpine`, with the new migration applied. The local runner then exits 1 from its cleanup trap under `set -e` when it has no shim directory (a bug in `scripts/run-snapshot-worker-postgres-level2-local.sh`, not changed here); CI runs the harness directly. |
+| `npm run test:protocol-report` | 114 checks pass (100 on `main`) |
+| `npm run test:prod-preflight` | 18/18 |
+| `npm run test:worker-start` | 41/41 |
+| `npm run test:paid-execution-guards` | 142/142 |
+| `npm run test:founder-baseline-control`, `npm run test:scan-page` | pass, 52/52 |
+| The CI jobs this PR triggers: `test:m0-worker-execution-gate`, `test:m5-tk-r`, `test:m5-phase3d-bounds`, `test:m5-b3-max-runtime`, `test:m5-phase3d-evidence`, `test:m5-0059-schema`, `test:m5-0060-schema`, `test:m5-2-adapter`, `test:m0-worker-hosting-contract`, `test:q2p-schema`, `test:q2p2-schema`, `test:s1-schema`, `test:prod-preflight` | all pass |
+| Every `test:*` command (128) | 105 exit 0. Of the other 23: 10 legacy smoke tests need a configured database and fail the same way on `main`; 3 opt-in runtime tests skip; 9 fail identically on `main` at `c0bc011` (`seo`, `m7-0071-schema`, `m7-0073-schema`, `0080-report-ready`, `pdf`, `pg9-harness-offline`, `snapshot-send-idempotency`, `q2p1-scope`, `q2p2-scope`); `bqi-wording` fails only its P-04 change-scope check, which lists every path outside the BQI pull request and passes on `main`. |

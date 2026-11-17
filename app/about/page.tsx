@@ -4,7 +4,9 @@ import { SiteHeader } from "@/components/marketing/site-header";
 import { canonicalUrl } from "@/lib/seo/site";
 
 export const metadata: Metadata = {
-  title: "About Zypact | AI Answer Change Measurement for B2B SaaS",
+  // Absolute: the title already names Zypact, so the root "%s — Zypact"
+  // template must not add it a second time.
+  title: { absolute: "About Zypact | AI Answer Change Measurement for B2B SaaS" },
   description:
     "Learn why Zypact helps B2B SaaS teams examine Perplexity Sonar answers before and after one documented content or positioning change.",
   alternates: { canonical: "/about" },

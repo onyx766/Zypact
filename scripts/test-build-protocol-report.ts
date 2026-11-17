@@ -402,6 +402,24 @@ console.log("\nthe client is not listed as its own competitor");
   check("keeps genuine competitors", names.includes("Plausible") && names.includes("Matomo"));
   check("drops only the self-match", names.length === 2);
 
+  // The per-run "Other brands named" column read the unfiltered list, so the
+  // client could still appear there as its own competitor (D-051 step 1).
+  const runNames = payload.runs[0]?.competitors ?? [];
+  check("the per-run list drops the client's own brand", !runNames.includes("Fathom"));
+  check(
+    "the per-run list keeps genuine competitors in order",
+    runNames.join("|") === "Plausible|Matomo"
+  );
+  check(
+    "the client's presence is still reported on the run",
+    payload.runs[0]?.brandPresent === true
+  );
+  const markdown = renderProtocolReportMarkdown(payload);
+  check(
+    "the markdown projection's per-run cell drops the client too",
+    markdown.includes("Plausible, Matomo") && !markdown.includes("Plausible, Fathom")
+  );
+
   // A generic token must not swallow unrelated brands.
   const generic = buildProtocolReport(
     input({
@@ -729,6 +747,71 @@ console.log("\nboth stored bodies pass the integrity gate");
     "the delivery revision covers both bodies",
     worker.includes("snapshotReportArtifactRevision(markdown, shortMarkdown)")
   );
+}
+
+console.log("\nthe question's provenance is shown as words, not as a stored code");
+{
+  // The report used to print "provenance customer_supplied" to the reader
+  // (D-051 step 1). Every client view takes its label from one helper.
+  const markdown = renderProtocolReportMarkdown(buildProtocolReport(input()));
+  check(
+    "the markdown projection names the provenance in words",
+    markdown.includes("provenance: supplied by the requester")
+  );
+  check(
+    "the markdown projection never prints the stored code",
+    !markdown.includes("customer_supplied")
+  );
+  const founderMarkdown = renderProtocolReportMarkdown(
+    buildProtocolReport(
+      input({ question: { ...input().question, provenance: "founder_supplied" } })
+    )
+  );
+  check(
+    "a founder-supplied question is labelled as supplied by Zypact",
+    founderMarkdown.includes("provenance: supplied by Zypact")
+  );
+  for (const file of [
+    "components/report/protocol-report-view.tsx",
+    "components/report/outcome-card-view.tsx",
+  ]) {
+    const source = readFileSync(path.join(process.cwd(), file), "utf8");
+    check(
+      `${file} renders provenance through questionProvenanceLabel`,
+      source.includes("questionProvenanceLabel(question.provenance)") &&
+        !/\{question\.provenance\}/.test(source)
+    );
+  }
+}
+
+console.log("\na failed run and its retry share a slot (D-052)");
+{
+  // The retry keeps its source's slot (D-025). Ids are chosen so that a
+  // plain id sort would list the retry first.
+  const payload = buildProtocolReport(
+    input({
+      attempts: [
+        attempt({ id: "zz-root", baselineOrdinal: 2, status: "failed", terminationReason: "provider_error" }),
+        attempt({ id: "aa-retry", baselineOrdinal: 2, probeRunId: "p2", retryOfAttemptId: "zz-root" }),
+        attempt({ id: "mm-one", baselineOrdinal: 1, probeRunId: "p1" }),
+      ],
+      results: [
+        result({ probeRunId: "p1", clientMentioned: true }),
+        result({ probeRunId: "p2", clientMentioned: false }),
+      ],
+    })
+  );
+  check(
+    "the failed run is listed before its retry, whatever their ids",
+    payload.runs.map((r) => `${r.ordinal}:${r.status}`).join(",") === "1:completed,2:failed,2:completed"
+  );
+  const rows = renderProtocolReportMarkdown(payload).split("\n");
+  const cells = (prefix: string) =>
+    (rows.find((l) => l.startsWith(prefix)) ?? "").split("|").map((c) => c.trim());
+  check("the failed run's sources cell is empty, never its retry's", cells("| 2 | failed")[6] === "—");
+  check("the failed run lists no competitors, rather than 'none' for an answer it never had", cells("| 2 | failed")[5] === "—");
+  check("the retry's sources cell still reads its own slot", cells("| 2 (retry of 2) |")[6] === "unavailable");
+  check("the reconciliation still counts the failed run", payload.reconciliation.failed === 1 && payload.reconciliation.retried === 1);
 }
 
 console.log(

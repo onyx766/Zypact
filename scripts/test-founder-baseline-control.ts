@@ -52,7 +52,7 @@ check(
 check(
   "route requires stopped worker before start",
   route.includes('workerState !== "stopped"') &&
-    route.includes('startWorkerMachine()')
+    route.includes('startWorkerMachine({')
 );
 check(
   "panel exposes the approved caps and exact identifiers",

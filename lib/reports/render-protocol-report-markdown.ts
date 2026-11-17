@@ -13,6 +13,7 @@ import type {
   ProtocolReportPayload,
   ProtocolReportSourceInsights,
 } from "@/lib/reports/protocol-report-types";
+import { questionProvenanceLabel } from "@/lib/reports/question-provenance";
 import { SOURCE_CATEGORY_LABEL } from "@/lib/source-insights/source-types";
 
 function percent(value: number): string {
@@ -32,9 +33,15 @@ function runList(ordinals: number[]): string {
   return ordinals.length > 0 ? ordinals.join(", ") : "—";
 }
 
-/** Per-run source cell: provider counts when available, else the stored count. */
-function sourcesCell(payload: ProtocolReportPayload, ordinal: number, legacyCount: number): string {
-  if (!payload.sourceInsights) return String(legacyCount);
+/**
+ * Per-run source cell: provider counts when available, else the stored count.
+ * Insights exist for readable runs only, keyed by slot, so a failed run that
+ * shares its slot with its retry is never given the retry's sources.
+ */
+function sourcesCell(payload: ProtocolReportPayload, row: ProtocolReportPayload["runs"][number]): string {
+  if (!payload.sourceInsights) return String(row.citedSourceCount);
+  if (row.status !== "completed" || row.brandPresent === null) return "—";
+  const ordinal = row.ordinal;
   const run = payload.sourceInsights.runs.find((r) => r.ordinal === ordinal);
   if (!run) return "—";
   if (run.status !== "ok") return "unavailable";
@@ -103,7 +110,7 @@ export function renderProtocolReportMarkdown(
   lines.push("> " + question.text.split("\n").join("\n> "));
   lines.push("");
   lines.push(
-    `Question version ${question.versionNumber} · intent ${question.intentType} · provenance ${question.provenance}`
+    `Question version ${question.versionNumber} · intent ${question.intentType} · provenance: ${questionProvenanceLabel(question.provenance)}`
   );
   lines.push(`Prompt hash: \`${question.hash}\``);
   lines.push("");
@@ -160,10 +167,12 @@ export function renderProtocolReportMarkdown(
       `| ${label} | ${cell(status)} | ${presenceLabel(
         run.brandPresent
       )} | ${cell(run.position ?? "—")} | ${
-        run.competitors.length > 0
-          ? cell(run.competitors.join(", "))
-          : "none"
-      } | ${sourcesCell(payload, run.ordinal, run.citedSourceCount)} | ${
+        run.status !== "completed" || run.brandPresent === null
+          ? "—"
+          : run.competitors.length > 0
+            ? cell(run.competitors.join(", "))
+            : "none"
+      } | ${sourcesCell(payload, run)} | ${
         run.evidenceHash ? `\`${run.evidenceHash.slice(0, 16)}…\`` : "—"
       } |`
     );

@@ -2,6 +2,17 @@ import { randomUUID, createHash } from "node:crypto";
 import { createPublicReportToken } from "@/lib/snapshot-requests/public-report-token";
 import { smallestDetectableChange } from "@/lib/reports/compare-protocols";
 import type {
+  CancelProtocolJobRunRequestOutcome,
+  ClaimRequestedProtocolExecutionJobResult,
+  CloseFailedSnapshotRequestInput,
+  CloseFailedSnapshotRequestOutcome,
+  ProtocolJobRunVia,
+  QuestionProvenanceChoice,
+  RequestProtocolJobRunInput,
+  RequestProtocolJobRunResult,
+  RetryFailedProtocolJobInput,
+  RetryFailedProtocolJobOutcome,
+  RetryFailedProtocolJobResult,
   AdmitAndReserveAttemptInput,
   AdmitAndReserveAttemptResult,
   AnalysisLlmCall,
@@ -216,6 +227,36 @@ interface MemoryStore {
   protocolExecutionJobAlertDeliveries: Map<string, MemoryAlertDelivery>;
   protocolExecutionJobAlertDeliveryAttempts: Map<string, MemoryAlertDeliveryAttempt>;
   alertTransitionSeqCounter: number;
+  /** D-052 — mirrors protocol_job_run_requests. */
+  protocolJobRunRequests: Map<string, MemoryRunRequest>;
+  /** D-052 — mirrors snapshot_request_closures, keyed by request id. */
+  snapshotRequestClosures: Map<string, MemoryRequestClosure>;
+}
+
+/** D-052 — mirrors protocol_job_run_requests (20261114120000). */
+interface MemoryRunRequest {
+  id: string;
+  jobId: string;
+  projectId: string;
+  requestedVia: ProtocolJobRunVia;
+  requestedBy: string | null;
+  requestedAt: string;
+  expiresAt: string;
+  status: "pending" | "consumed" | "expired" | "cancelled" | "refused";
+  resolvedAt: string | null;
+  consumedByWorker: string | null;
+  refusalCode: "JOB_NOT_FOUND" | "JOB_NOT_ELIGIBLE" | "JOB_LOCKED" | null;
+}
+
+/** D-052 — mirrors snapshot_request_closures (20261114120000). */
+interface MemoryRequestClosure {
+  id: string;
+  snapshotRequestId: string;
+  jobId: string;
+  jobStatus: "failed" | "abandoned_exhausted";
+  closedBy: string;
+  reason: string;
+  closedAt: string;
 }
 
 /** D-028 — mirrors protocol_execution_job_alerts. Immutable once inserted. */
@@ -303,6 +344,8 @@ function getStore(): MemoryStore {
       protocolExecutionJobAlertDeliveries: new Map(),
       protocolExecutionJobAlertDeliveryAttempts: new Map(),
       alertTransitionSeqCounter: 0,
+      protocolJobRunRequests: new Map(),
+      snapshotRequestClosures: new Map(),
     };
   }
   return g[globalKey]!;
@@ -922,6 +965,54 @@ export const memoryAdapter: DbAdapter = {
     return { ...updated };
   },
 
+  /** D-052 — mirrors close_failed_snapshot_request, branch for branch. */
+  async closeFailedSnapshotRequest(
+    input: CloseFailedSnapshotRequestInput
+  ): Promise<CloseFailedSnapshotRequestOutcome> {
+    const store = getStore();
+    const reason = input.reason?.trim() ?? "";
+    if (!input.requestId || !input.closedBy || reason.length < 10 || reason.length > 2000) {
+      throw new Error("invalid_close_failed_snapshot_request_args");
+    }
+    const request = store.snapshotRequests.get(input.requestId);
+    if (!request) return "REQUEST_NOT_FOUND";
+    if (store.snapshotRequestClosures.has(input.requestId)) return "ALREADY_CLOSED";
+    if (request.status !== "approved" || !request.protocolId) return "REQUEST_NOT_CLOSABLE";
+    const job = [...store.protocolExecutionJobs.values()].find((j) => j.protocolId === request.protocolId);
+    if (!job || (job.status !== "failed" && job.status !== "abandoned_exhausted")) {
+      return "JOB_NOT_ENDED_IN_FAILURE";
+    }
+    if (memorySnapshotReportArtifacts.has(input.requestId)) return "REPORT_PRESENT";
+    const now = nowIso();
+    store.snapshotRequestClosures.set(input.requestId, {
+      id: randomUUID(),
+      snapshotRequestId: input.requestId,
+      jobId: job.id,
+      jobStatus: job.status,
+      closedBy: input.closedBy,
+      reason,
+      closedAt: now,
+    });
+    store.snapshotRequests.set(input.requestId, {
+      ...request,
+      status: "failed",
+      progressStage: null,
+      progressUpdatedAt: null,
+      updatedAt: now,
+    });
+    // As the SQL: an abandoned job is ended with its request.
+    if (job.status === "abandoned_exhausted") {
+      store.protocolExecutionJobs.set(job.id, {
+        ...job,
+        status: "failed",
+        failureReason: "request_closed",
+        needsReviewReason: null,
+        updatedAt: now,
+      });
+    }
+    return "CLOSED";
+  },
+
   async rejectSnapshotRequest(
     requestId: string
   ): Promise<SnapshotRequest | null> {
@@ -1328,7 +1419,8 @@ export const memoryAdapter: DbAdapter = {
     requestId: string,
     approvedBy: string,
     competitors: string[],
-    promptHash: string
+    promptHash: string,
+    questionProvenance?: QuestionProvenanceChoice | null
   ): Promise<SnapshotRequest | null> {
     const store = getStore();
     const request = store.snapshotRequests.get(requestId);
@@ -1343,6 +1435,27 @@ export const memoryAdapter: DbAdapter = {
 
     if (request.status !== "pending_approval") {
       return null;
+    }
+
+    // D-052 — who wrote the question, exactly as the SQL decides it.
+    let provenance: QuestionProvenanceChoice;
+    let rationale: string;
+    if (request.origin === "founder") {
+      if (questionProvenance !== "customer_supplied" && questionProvenance !== "founder_supplied") {
+        throw new Error("question_provenance_required");
+      }
+      provenance = questionProvenance;
+      rationale =
+        questionProvenance === "customer_supplied"
+          ? "Buyer question written by the customer and entered by the founder in the admin console; not independently scored."
+          : "Buyer question recommended or drafted by Zypact and entered by the founder in the admin console; not independently scored.";
+    } else {
+      if (questionProvenance != null && questionProvenance !== "customer_supplied") {
+        throw new Error("question_provenance_not_allowed_for_public_form");
+      }
+      provenance = "customer_supplied";
+      rationale =
+        "Buyer question supplied directly by the requester via the public demo-request form; not independently scored.";
     }
 
     // Mirrors `_normalize_snapshot_competitors` — identical to
@@ -1413,9 +1526,8 @@ export const memoryAdapter: DbAdapter = {
       commercialValue: 3,
       winnability: 3,
       priority: 13,
-      rationale:
-        "Buyer question supplied directly by the requester via the public demo-request form; not independently scored.",
-      provenance: "customer_supplied",
+      rationale,
+      provenance,
       approvedBy,
       approvedAt: now,
       createdAt: now,
@@ -1434,7 +1546,9 @@ export const memoryAdapter: DbAdapter = {
       // keeping two attempts of retry headroom above the plan.
       plannedBaselineRuns: 5,
       plannedRetestRuns: 0,
-      paraphrasePlan: [],
+      // As the SQL writes it (0063, kept by 0069): the one approved question
+      // and its hash, so every planned run sends the identical question.
+      paraphrasePlan: [{ text: request.buyerCategory, hash: promptHash }],
       unitOfAnalysis: "buyer_question_version",
       primaryMetric: "presence_rate",
       minimumUsefulChange: null,
@@ -3766,6 +3880,311 @@ export const memoryAdapter: DbAdapter = {
     };
     store.protocolExecutionJobs.set(claimed.id, claimed);
     return { outcome: "CLAIMED", job: { ...claimed }, claimToken };
+  },
+
+  /** D-052 — mirrors request_protocol_job_run, branch for branch. */
+  async requestProtocolJobRun(
+    input: RequestProtocolJobRunInput
+  ): Promise<RequestProtocolJobRunResult> {
+    const store = getStore();
+    const vias: readonly ProtocolJobRunVia[] = [
+      "admin_run_pipeline", "admin_run_retest", "admin_founder_baseline", "operator_cli",
+    ];
+    if (
+      !input.jobId || !input.projectId || !vias.includes(input.via)
+      || (input.via !== "operator_cli" && !input.requestedBy)
+      || !Number.isInteger(input.ttlSeconds) || input.ttlSeconds < 30 || input.ttlSeconds > 600
+    ) {
+      throw new Error("invalid_request_protocol_job_run_args");
+    }
+    const nowMs = Date.now();
+    for (const [id, r] of store.protocolJobRunRequests) {
+      if (r.status === "pending" && new Date(r.expiresAt).getTime() <= nowMs) {
+        store.protocolJobRunRequests.set(id, { ...r, status: "expired", resolvedAt: nowIso() });
+      }
+    }
+    const pending = [...store.protocolJobRunRequests.values()].find((r) => r.status === "pending");
+    if (pending) {
+      if (pending.jobId !== input.jobId || pending.projectId !== input.projectId) {
+        return { outcome: "ANOTHER_RUN_PENDING", requestId: null, expiresAt: null };
+      }
+      // As the SQL: a repeated press keeps the request alive for a full TTL.
+      const refreshed = new Date(
+        Math.max(new Date(pending.expiresAt).getTime(), nowMs + input.ttlSeconds * 1000)
+      ).toISOString();
+      store.protocolJobRunRequests.set(pending.id, { ...pending, expiresAt: refreshed });
+      return { outcome: "ALREADY_REQUESTED", requestId: pending.id, expiresAt: refreshed };
+    }
+    const busy = [...store.protocolExecutionJobs.values()].some(
+      (j) =>
+        (j.status === "claimed" || j.status === "running") &&
+        j.leaseExpiresAt !== null &&
+        new Date(j.leaseExpiresAt).getTime() > nowMs
+    );
+    if (busy) return { outcome: "WORKER_BUSY", requestId: null, expiresAt: null };
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) {
+      return { outcome: "JOB_NOT_FOUND", requestId: null, expiresAt: null };
+    }
+    const leased = job.status === "claimed" || job.status === "running";
+    const leaseLapsed = job.leaseExpiresAt !== null && new Date(job.leaseExpiresAt).getTime() < nowMs;
+    if (leased && leaseLapsed && job.attemptCount >= job.maxAttempts) {
+      store.protocolExecutionJobs.set(job.id, { ...job, status: "abandoned_exhausted", updatedAt: nowIso() });
+      recordAlertEvent(store, {
+        projectId: job.projectId,
+        jobId: job.id,
+        eventType: "abandoned_exhausted",
+        reasonCode: "attempts_exhausted",
+        sourceAttemptId: null,
+        sourceExternalCallId: null,
+      });
+      return { outcome: "JOB_ATTEMPTS_EXHAUSTED", requestId: null, expiresAt: null };
+    }
+    if (!(job.status === "queued" || (leased && leaseLapsed && job.attemptCount < job.maxAttempts))) {
+      return { outcome: "JOB_NOT_RUNNABLE", requestId: null, expiresAt: null };
+    }
+    const row: MemoryRunRequest = {
+      id: randomUUID(),
+      jobId: input.jobId,
+      projectId: input.projectId,
+      requestedVia: input.via,
+      requestedBy: input.requestedBy,
+      requestedAt: nowIso(),
+      expiresAt: new Date(nowMs + input.ttlSeconds * 1000).toISOString(),
+      status: "pending",
+      resolvedAt: null,
+      consumedByWorker: null,
+      refusalCode: null,
+    };
+    store.protocolJobRunRequests.set(row.id, row);
+    return { outcome: "REQUESTED", requestId: row.id, expiresAt: row.expiresAt };
+  },
+
+  async cancelProtocolJobRunRequest(
+    requestId: string
+  ): Promise<CancelProtocolJobRunRequestOutcome> {
+    const store = getStore();
+    if (!requestId) throw new Error("invalid_cancel_protocol_job_run_request_args");
+    const row = store.protocolJobRunRequests.get(requestId);
+    if (!row || row.status !== "pending") return "NOT_PENDING";
+    store.protocolJobRunRequests.set(requestId, { ...row, status: "cancelled", resolvedAt: nowIso() });
+    return "CANCELLED";
+  },
+
+  /**
+   * D-052 — mirrors claim_requested_protocol_execution_job: the global
+   * claim's sweep, then the one pending request's job or nothing. As in
+   * the 0059 mirror, JOB_LOCKED is not simulated; it is proved against a
+   * real PostgreSQL.
+   */
+  async claimRequestedProtocolExecutionJob(
+    input: ClaimProtocolExecutionJobInput
+  ): Promise<ClaimRequestedProtocolExecutionJobResult> {
+    const store = getStore();
+    if (!input.workerId.trim() || input.leaseSeconds <= 0) {
+      throw new Error("invalid_claim_protocol_execution_job_args");
+    }
+    const nowMs = Date.now();
+    for (const [id, j] of store.protocolExecutionJobs) {
+      if (
+        (j.status === "claimed" || j.status === "running") &&
+        j.leaseExpiresAt !== null &&
+        new Date(j.leaseExpiresAt).getTime() < nowMs &&
+        j.attemptCount >= j.maxAttempts
+      ) {
+        store.protocolExecutionJobs.set(id, { ...j, status: "abandoned_exhausted", updatedAt: nowIso() });
+        recordAlertEvent(store, {
+          projectId: j.projectId,
+          jobId: id,
+          eventType: "abandoned_exhausted",
+          reasonCode: "attempts_exhausted",
+          sourceAttemptId: null,
+          sourceExternalCallId: null,
+        });
+      }
+    }
+    const request = [...store.protocolJobRunRequests.values()].find((r) => r.status === "pending");
+    if (!request) return { outcome: "NO_RUN_REQUEST", job: null, claimToken: null };
+    if (new Date(request.expiresAt).getTime() <= nowMs) {
+      store.protocolJobRunRequests.set(request.id, { ...request, status: "expired", resolvedAt: nowIso() });
+      return { outcome: "NO_RUN_REQUEST", job: null, claimToken: null };
+    }
+    const refuse = (code: "JOB_NOT_FOUND" | "JOB_NOT_ELIGIBLE"): ClaimRequestedProtocolExecutionJobResult => {
+      store.protocolJobRunRequests.set(request.id, {
+        ...request, status: "refused", resolvedAt: nowIso(), refusalCode: code,
+      });
+      return { outcome: code, job: null, claimToken: null };
+    };
+    const job = store.protocolExecutionJobs.get(request.jobId);
+    if (!job || job.projectId !== request.projectId) return refuse("JOB_NOT_FOUND");
+    const eligible =
+      job.status === "queued" ||
+      ((job.status === "claimed" || job.status === "running") &&
+        job.leaseExpiresAt !== null &&
+        new Date(job.leaseExpiresAt).getTime() < nowMs &&
+        job.attemptCount < job.maxAttempts);
+    if (!eligible) return refuse("JOB_NOT_ELIGIBLE");
+    const claimToken = randomUUID();
+    const claimed: ProtocolExecutionJob = {
+      ...job,
+      status: "claimed",
+      workerId: input.workerId,
+      claimToken,
+      leaseExpiresAt: new Date(nowMs + input.leaseSeconds * 1000).toISOString(),
+      attemptCount: job.attemptCount + 1,
+      updatedAt: nowIso(),
+    };
+    store.protocolExecutionJobs.set(claimed.id, claimed);
+    store.protocolJobRunRequests.set(request.id, {
+      ...request, status: "consumed", resolvedAt: nowIso(), consumedByWorker: input.workerId,
+    });
+    return { outcome: "CLAIMED", job: { ...claimed }, claimToken };
+  },
+
+  /** D-052 — mirrors retry_failed_protocol_job, branch for branch. */
+  async retryFailedProtocolJob(
+    input: RetryFailedProtocolJobInput
+  ): Promise<RetryFailedProtocolJobResult> {
+    const store = getStore();
+    const reason = input.reason?.trim() ?? "";
+    if (
+      !input.jobId || !input.projectId || !input.actor
+      || reason.length < 10 || reason.length > 2000
+      || !input.sourceAttemptId
+      || !input.idempotencyKey?.trim() || input.idempotencyKey.length > 200
+    ) {
+      throw new Error("invalid_retry_failed_protocol_job_args");
+    }
+    const key = `failed-job-retry:${input.idempotencyKey}`;
+    const none = (outcome: RetryFailedProtocolJobOutcome): RetryFailedProtocolJobResult => ({
+      outcome, denialCode: null, newAttemptId: null,
+    });
+
+    const job = store.protocolExecutionJobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId) return none("JOB_NOT_FOUND");
+
+    const recorded = [...store.protocolOperatorActions.values()].find(
+      (a) => a.projectId === input.projectId && a.jobId === input.jobId && a.idempotencyKey === key
+    );
+    if (recorded) {
+      // As the SQL: the replay is answered by authorizeOperatorRetry, whose
+      // fingerprint makes the same key for a different run a conflict.
+      const sourceCalls = [...store.protocolExternalCalls.values()].filter(
+        (c) => c.protocolAttemptId === input.sourceAttemptId && c.generation === 1
+      );
+      const replay = await memoryAdapter.authorizeOperatorRetry({
+        jobId: input.jobId,
+        projectId: input.projectId,
+        actor: input.actor,
+        reason,
+        action: "retry_full_attempt",
+        sourceAttemptId: input.sourceAttemptId,
+        reservedCostUsd: sourceCalls.find((c) => c.callKind === "analysis")?.reservedCostUsd ?? 0,
+        idempotencyKey: key,
+        sourceExternalCallId: null,
+        perplexityReservedCostUsd: sourceCalls.find((c) => c.callKind === "perplexity")?.reservedCostUsd ?? 0,
+      });
+      if (replay.status === "APPROVED") {
+        return { outcome: "APPROVED", denialCode: null, newAttemptId: replay.newAttempt?.id ?? recorded.newAttemptId };
+      }
+      if (replay.status === "DENIED") {
+        return { outcome: "DENIED", denialCode: replay.denialCode, newAttemptId: null };
+      }
+      return { outcome: "IDEMPOTENCY_KEY_CONFLICT", denialCode: null, newAttemptId: null };
+    }
+
+    if (job.status !== "failed") return none("JOB_NOT_FAILED");
+    if (job.currentAttemptId !== null || job.failureReason !== "provider_error") {
+      return none("JOB_NOT_RETRYABLE");
+    }
+    const request = [...store.snapshotRequests.values()].find((r) => r.protocolId === job.protocolId);
+    if (request && request.status !== "approved") return none("REQUEST_NOT_OPEN");
+
+    const source = store.protocolAttempts.get(input.sourceAttemptId);
+    if (!source || source.projectId !== input.projectId || source.jobId !== input.jobId) {
+      return none("SOURCE_ATTEMPT_NOT_OWNED_BY_JOB");
+    }
+    const attempts = [...store.protocolAttempts.values()];
+    if (
+      source.status !== "failed"
+      || source.terminalizedAt === null
+      || source.baselineOrdinal !== job.nextBaselineOrdinal
+      || attempts.some((a) => a.retryOfAttemptId === source.id)
+      || attempts.some(
+        (a) => a.jobId === input.jobId && a.baselineOrdinal === source.baselineOrdinal && a.status === "completed"
+      )
+    ) {
+      return none("SOURCE_ATTEMPT_NOT_RETRYABLE");
+    }
+
+    const calls = [...store.protocolExternalCalls.values()].filter((c) => c.protocolAttemptId === source.id);
+    const hasReceipt = (callId: string) =>
+      [...store.providerCallReceipts.values()].some((r) => r.externalCallId === callId)
+      || [...store.analysisCallReceipts.values()].some((r) => r.externalCallId === callId);
+    if (
+      calls.some(
+        (c) => c.status === "reserved" || c.status === "in_progress" || (c.requestSentAt !== null && !hasReceipt(c.id))
+      )
+    ) {
+      return none("AMBIGUOUS_CALL_PRESENT");
+    }
+    const perplexity = calls.find((c) => c.callKind === "perplexity" && c.generation === 1);
+    const analysis = calls.find((c) => c.callKind === "analysis" && c.generation === 1);
+    if (
+      !perplexity
+      || perplexity.status !== "failed"
+      || ![...store.providerCallReceipts.values()].some((r) => r.externalCallId === perplexity.id)
+      || !analysis
+    ) {
+      return none("NOT_A_PROVIDER_FAILURE");
+    }
+
+    const protocol = store.protocols.get(job.protocolId);
+    if (!protocol) return none("JOB_NOT_FOUND");
+    const consumed = attempts.filter((a) => a.protocolId === job.protocolId && a.status !== "cancelled").length;
+    if (consumed + 1 + Math.max(protocol.plannedBaselineRuns - job.nextBaselineOrdinal, 0) > protocol.runCap) {
+      return none("RUN_CAP_INSUFFICIENT_FOR_REMAINING_PLAN");
+    }
+
+    store.protocolExecutionJobs.set(job.id, {
+      ...job,
+      status: "needs_review",
+      needsReviewReason: "operator_retry_of_failed_job",
+      updatedAt: nowIso(),
+    });
+    const result = await memoryAdapter.authorizeOperatorRetry({
+      jobId: input.jobId,
+      projectId: input.projectId,
+      actor: input.actor,
+      reason,
+      action: "retry_full_attempt",
+      sourceAttemptId: source.id,
+      reservedCostUsd: analysis.reservedCostUsd,
+      idempotencyKey: key,
+      sourceExternalCallId: null,
+      perplexityReservedCostUsd: perplexity.reservedCostUsd,
+    });
+    const after = store.protocolExecutionJobs.get(job.id)!;
+    if (result.status === "APPROVED") {
+      store.protocolExecutionJobs.set(job.id, {
+        ...after,
+        attemptCount: 0,
+        workerId: null,
+        claimToken: null,
+        leaseExpiresAt: null,
+        failureReason: null,
+        updatedAt: nowIso(),
+      });
+      return { outcome: "APPROVED", denialCode: null, newAttemptId: result.newAttempt?.id ?? null };
+    }
+    store.protocolExecutionJobs.set(job.id, {
+      ...after,
+      status: "failed",
+      needsReviewReason: null,
+      failureReason: job.failureReason,
+      updatedAt: nowIso(),
+    });
+    return { outcome: "DENIED", denialCode: result.denialCode, newAttemptId: null };
   },
 
   /**

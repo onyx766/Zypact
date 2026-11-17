@@ -15,9 +15,9 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export const metadata: Metadata = {
-  title: "Private AI visibility snapshot — Zypact",
+  title: "Private AI answer snapshot",
   description:
-    "A private AI visibility snapshot prepared by Zypact.",
+    "A private AI answer snapshot prepared by Zypact.",
   robots: {
     index: false,
     follow: false,

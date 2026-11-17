@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export const metadata: Metadata = {
-  title: "Private Outcome Card — Zypact",
+  title: "Private Outcome Card",
   description: "A private registered-retest Outcome Card prepared by Zypact.",
   robots: {
     index: false,

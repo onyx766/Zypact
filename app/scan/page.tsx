@@ -22,7 +22,9 @@ import { ThemeRoot } from "@/components/theme-root";
 import { ScanForm } from "./scan-form";
 
 export const metadata: Metadata = {
-  title: "Request a Zypact V1 demo",
+  // Absolute: the title already names Zypact, so the root "%s — Zypact"
+  // template must not add it a second time.
+  title: { absolute: "Request a Zypact V1 demo" },
   description:
     "Request access to Zypact's controlled, automated buyer-question diagnostic and registered retest on Perplexity Sonar.",
   alternates: {

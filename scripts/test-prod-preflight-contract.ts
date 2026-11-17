@@ -56,13 +56,26 @@ assert("PF-10 every timestamped migration on disk is checked as not yet recorded
 assert("PF-11 the held and reserved four-digit versions are checked as not recorded",
   ["0081", "0082", "0083", "0084", "0085"].every((v) => pending.includes(`'${v}'`)));
 
+// A definition may span lines ("create or replace function\n  public.x("),
+// so whitespace between the words is matched, not a single space.
+const FUNCTION_DEF = /create\s+(?:or\s+replace\s+)?function\s+public\.([a-z_0-9]+)/gi;
+// A function a four-digit migration already defines exists in production, so
+// a timestamped migration that redefines it is checked by a pinned pre-state,
+// never by absence.
+const existingFunctions = new Set<string>();
+for (const f of files.filter((name) => /^\d{4}_/.test(name))) {
+  for (const m of readFileSync(path.join(DIR, f), "utf8").matchAll(FUNCTION_DEF)) existingFunctions.add(m[1]);
+}
 const tables = new Set<string>();
 const functions = new Set<string>();
+const redefined = new Set<string>();
 for (const f of timestamped) {
   const sql = readFileSync(path.join(DIR, f), "utf8");
   for (const m of sql.matchAll(/^create table (?:if not exists )?public\.([a-z_0-9]+)/gim)) tables.add(m[1]);
-  for (const m of sql.matchAll(/create (?:or replace )?function public\.([a-z_0-9]+)/gi)) {
-    if (!m[1].startsWith("_")) functions.add(m[1]);
+  for (const m of sql.matchAll(FUNCTION_DEF)) {
+    if (m[1].startsWith("_")) continue;
+    if (existingFunctions.has(m[1])) redefined.add(m[1]);
+    else functions.add(m[1]);
   }
 }
 const listedTables = SQL.match(/q2p_s1_tables\(name\) as \(values([\s\S]*?)\),\nq2p_s1_functions/)?.[1] ?? "";
@@ -72,6 +85,12 @@ const unlistedFunctions = [...functions].filter((fn) => !listedFunctions.include
 assert(`PF-12 every table a timestamped migration creates is checked for absence (${tables.size})`, unlistedTables.length === 0, unlistedTables.join(","));
 assert(`PF-13 every public function a timestamped migration creates is checked for absence (${functions.size})`, unlistedFunctions.length === 0, unlistedFunctions.join(","));
 assert("PF-14 the table count in P4.1's label matches the list", SQL.includes(`none of the ${tables.size} Q2''/S1 tables exists`));
+const unpinned = [...redefined].filter((fn) =>
+  !new RegExp(`to_regprocedure\\('public\\.${fn}\\(`).test(SQL) || !new RegExp(`'[^']*${fn}[^']*md5[^']*'`).test(SQL));
+assert(`PF-16 every existing function a timestamped migration redefines has a pinned md5 pre-state (${redefined.size})`,
+  unpinned.length === 0, unpinned.join(","));
+assert("PF-17 no redefined function is listed for absence, which would fail on production",
+  [...redefined].every((fn) => !listedFunctions.includes(`'${fn}'`)));
 const helperPrefixes = new Set([...timestamped].flatMap((f) =>
   [...readFileSync(path.join(DIR, f), "utf8").matchAll(/create (?:or replace )?function public\.(_[a-z0-9]+_)/gi)].map((m) => m[1])));
 const uncovered = [...helperPrefixes].filter((p) => !SQL.includes(`'\\${p.slice(0, -1)}\\_%'`));
@@ -82,6 +101,8 @@ const reserved = readFileSync("scripts/sql/sv1-apply-reserved-migration.sql", "u
 const preDef = reserved.match(/'742c0e1d[0-9a-f]+',\s*'([0-9a-f]{32})'/)?.[1];
 assert("PF-20 the 0083 pre-state hash equals the reserved procedure's pinned pre_def", Boolean(preDef) && SQL.includes(`= '${preDef}'`), preDef ?? "not found");
 assert("PF-21 the expected tail is production's 0081 alias", SQL.includes("= '20260924023646'"));
+assert("PF-22 the 0069 pre-state of approve_and_launch_snapshot_baseline is pinned (computed on a disposable stack with every migration before 20261114120000)",
+  SQL.includes("= '710dfb5cb84ce09a94040ebb84086025'"));
 
 /* Wiring -------------------------------------------------------------- */
 const spec = readFileSync("docs/PROD_PREFLIGHT_SPEC.md", "utf8");

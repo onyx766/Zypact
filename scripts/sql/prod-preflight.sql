@@ -30,7 +30,8 @@ q2p_s1_tables(name) as (values
   ('workspace_brand_profiles'), ('workspace_question_drafts'), ('workspace_question_draft_versions'),
   ('workspace_actions'), ('workspace_action_versions'),
   ('workspace_plan_assignments'), ('workspace_usage_events'), ('paid_measurement_switch_events'),
-  ('workspace_question_approvals'), ('workspace_active_question_events')
+  ('workspace_question_approvals'), ('workspace_active_question_events'),
+  ('protocol_job_run_requests'), ('snapshot_request_closures')
 ),
 q2p_s1_functions(name) as (values
   ('create_workspace_with_owner'), ('assign_project_to_workspace'), ('add_workspace_member'),
@@ -43,10 +44,16 @@ q2p_s1_functions(name) as (values
   ('create_workspace_action'), ('revise_workspace_action'), ('list_workspace_actions'),
   ('assign_workspace_plan'), ('set_paid_measurement_switch'), ('reserve_measurement_run'),
   ('settle_measurement_run'), ('get_workspace_usage'),
-  ('approve_question_draft'), ('archive_active_question'), ('list_active_questions')
+  ('approve_question_draft'), ('archive_active_question'), ('list_active_questions'),
+  ('request_protocol_job_run'), ('cancel_protocol_job_run_request'), ('claim_requested_protocol_execution_job'),
+  ('retry_failed_protocol_job'), ('close_failed_snapshot_request')
 ),
 reconcile as (
   select to_regprocedure('public.reconcile_attempt_for_job(uuid,uuid,uuid,uuid,text,text)') as oid
+),
+launch as (
+  select to_regprocedure('public.approve_and_launch_snapshot_baseline(uuid,uuid,jsonb,text)') as oid,
+         to_regprocedure('public.approve_and_launch_snapshot_baseline(uuid,uuid,jsonb,text,text)') as oid5
 ),
 checks(id, label, pass, observed) as (
   -- P1 target identity --------------------------------------------------
@@ -78,14 +85,14 @@ checks(id, label, pass, observed) as (
   union all
   select 'P2.4', 'no held, reserved or pending version is recorded',
          not exists (select 1 from ledger where version in
-           ('0081', '0082', '0083', '0084', '0085', '20261102132000', '20261103173000', '20261109120000', '20261110120000', '20261111120000', '20261112120000', '20261113120000')),
+           ('0081', '0082', '0083', '0084', '0085', '20261102132000', '20261103173000', '20261109120000', '20261110120000', '20261111120000', '20261112120000', '20261113120000', '20261114120000')),
          (select coalesce(string_agg(version, ',' order by version), 'none') from ledger where version in
-           ('0081', '0082', '0083', '0084', '0085', '20261102132000', '20261103173000', '20261109120000', '20261110120000', '20261111120000', '20261112120000', '20261113120000'))
+           ('0081', '0082', '0083', '0084', '0085', '20261102132000', '20261103173000', '20261109120000', '20261110120000', '20261111120000', '20261112120000', '20261113120000', '20261114120000'))
   union all
   select 'P2.5', 'ledger has exactly 81 rows (no unknown version)',
          (select count(*) from ledger) = 81, (select count(*)::text from ledger)
 
-  -- P3 0083 pre-state ------------------------------------------------------
+  -- P3 pre-states: 0083, and the function pilot step 1 redefines ----------
   union all
   select 'P3.1', 'reconcile_attempt_for_job is exactly as 0050 left it (md5 of its definition)',
          (select coalesce(md5(pg_get_functiondef(oid)), 'missing') from reconcile) = 'baaf43cc539611ec78fef9762c168a53',
@@ -97,14 +104,21 @@ checks(id, label, pass, observed) as (
                  and not has_function_privilege('authenticated', oid, 'execute')
                  and has_function_privilege('service_role', oid, 'execute') from reconcile),
          null
+  union all
+  select 'P3.3', 'approve_and_launch_snapshot_baseline is exactly as 0069 left it (md5 of its definition)',
+         (select coalesce(md5(pg_get_functiondef(oid)), 'missing') from launch) = '710dfb5cb84ce09a94040ebb84086025',
+         (select coalesce(md5(pg_get_functiondef(oid)), 'missing') from launch)
+  union all
+  select 'P3.4', 'the five-argument approve_and_launch_snapshot_baseline does not exist yet',
+         (select oid5 is null from launch), null
 
   -- P4 nothing from Q2'-1, Q2'-2 or S1 exists yet --------------------------
   union all
-  select 'P4.1', 'none of the 35 Q2''/S1 tables exists',
+  select 'P4.1', 'none of the 37 Q2''/S1 tables exists',
          (select count(*) from q2p_s1_tables t where to_regclass('public.' || t.name) is not null) = 0,
          (select coalesce(string_agg(t.name, ','), 'none') from q2p_s1_tables t where to_regclass('public.' || t.name) is not null)
   union all
-  select 'P4.2', 'none of the Q2''/S1/P1/P2/E1/Q4 functions exists, nor any _q2p_, _q2p2_, _s1_, _p1_, _p2_, _e1_ or _q4_ helper',
+  select 'P4.2', 'none of the Q2''/S1/P1/P2/E1/Q4/pilot step-1 functions exists, nor any _q2p_, _q2p2_, _s1_, _p1_, _p2_, _e1_ or _q4_ helper',
          (select count(*) from pg_proc p where p.pronamespace = 'public'::regnamespace
             and (p.proname in (select name from q2p_s1_functions)
                  or p.proname like '\_q2p\_%' or p.proname like '\_q2p2\_%' or p.proname like '\_s1\_%' or p.proname like '\_p1\_%' or p.proname like '\_p2\_%' or p.proname like '\_e1\_%' or p.proname like '\_q4\_%')) = 0,

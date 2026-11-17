@@ -1,3 +1,4 @@
+import type { QuestionProvenance } from "@/lib/buyer-questions/types";
 export interface Project {
   id: string;
   userId: string | null;
@@ -1691,6 +1692,118 @@ export interface ClaimProtocolExecutionJobByIdResult {
 }
 
 /**
+ * D-052 — a run request names the one job the next worker start may claim
+ * (migration 20261114120000). The console writes it just before it starts
+ * the machine; the worker's requested claim consumes it. At most one is
+ * pending at any time.
+ */
+export type ProtocolJobRunVia =
+  | "admin_run_pipeline"
+  | "admin_run_retest"
+  | "admin_founder_baseline"
+  | "operator_cli";
+
+export interface RequestProtocolJobRunInput {
+  jobId: string;
+  projectId: string;
+  via: ProtocolJobRunVia;
+  /** The founder who pressed Run. Null only for the operator CLI. */
+  requestedBy: string | null;
+  ttlSeconds: number;
+}
+
+export type RequestProtocolJobRunOutcome =
+  | "REQUESTED"
+  | "ALREADY_REQUESTED"
+  | "ANOTHER_RUN_PENDING"
+  | "WORKER_BUSY"
+  | "JOB_LOCKED"
+  | "JOB_NOT_FOUND"
+  | "JOB_ATTEMPTS_EXHAUSTED"
+  | "JOB_NOT_RUNNABLE";
+
+export interface RequestProtocolJobRunResult {
+  outcome: RequestProtocolJobRunOutcome;
+  requestId: string | null;
+  expiresAt: string | null;
+}
+
+export type CancelProtocolJobRunRequestOutcome = "CANCELLED" | "NOT_PENDING";
+
+export type ClaimRequestedProtocolExecutionJobOutcome =
+  | "CLAIMED"
+  | "NO_RUN_REQUEST"
+  | "JOB_NOT_FOUND"
+  | "JOB_NOT_ELIGIBLE"
+  | "JOB_LOCKED";
+
+export interface ClaimRequestedProtocolExecutionJobResult {
+  outcome: ClaimRequestedProtocolExecutionJobOutcome;
+  job: ProtocolExecutionJob | null;
+  claimToken: string | null;
+}
+
+/**
+ * D-052 — a founder retry of a run that failed at the provider. The
+ * reservation is the failed run's own recorded amounts; the caller never
+ * supplies a cost.
+ */
+export interface RetryFailedProtocolJobInput {
+  jobId: string;
+  projectId: string;
+  /** The signed-in founder's user id. */
+  actor: string;
+  reason: string;
+  sourceAttemptId: string;
+  idempotencyKey: string;
+}
+
+export type RetryFailedProtocolJobOutcome =
+  | "APPROVED"
+  | "DENIED"
+  | "JOB_NOT_FOUND"
+  | "JOB_NOT_FAILED"
+  | "JOB_NOT_RETRYABLE"
+  | "REQUEST_NOT_OPEN"
+  | "SOURCE_ATTEMPT_NOT_OWNED_BY_JOB"
+  | "SOURCE_ATTEMPT_NOT_RETRYABLE"
+  | "AMBIGUOUS_CALL_PRESENT"
+  | "NOT_A_PROVIDER_FAILURE"
+  | "RUN_CAP_INSUFFICIENT_FOR_REMAINING_PLAN"
+  /** The key was already used for a different failed run. */
+  | "IDEMPOTENCY_KEY_CONFLICT";
+
+export interface RetryFailedProtocolJobResult {
+  outcome: RetryFailedProtocolJobOutcome;
+  /** The admission core's refusal code when the outcome is DENIED. */
+  denialCode: string | null;
+  newAttemptId: string | null;
+}
+
+/** D-052 — closes an approved request whose job ended in failure. */
+export interface CloseFailedSnapshotRequestInput {
+  requestId: string;
+  /** The signed-in founder's user id. */
+  closedBy: string;
+  reason: string;
+}
+
+export type CloseFailedSnapshotRequestOutcome =
+  | "CLOSED"
+  | "ALREADY_CLOSED"
+  | "REQUEST_NOT_FOUND"
+  | "REQUEST_NOT_CLOSABLE"
+  | "JOB_NOT_ENDED_IN_FAILURE"
+  | "REPORT_PRESENT";
+
+/**
+ * D-052 — who wrote a founder-created request's question, chosen at
+ * approval. A public-form question is always `customer_supplied`. The same
+ * two codes Q1 defines (lib/buyer-questions/types.ts).
+ */
+export type QuestionProvenanceChoice = QuestionProvenance;
+
+/**
  * D-031 — the post-claim verification barrier. Read-only, and answered with
  * one closed label: a verifier that returned rows or identifiers would become
  * a way to read tenant state through an outcome string.
@@ -2714,8 +2827,18 @@ export interface DbAdapter {
     requestId: string,
     approvedBy: string,
     competitors: string[],
-    promptHash: string
+    promptHash: string,
+    /**
+     * D-052 — required for a founder-created request (who wrote the
+     * question); omitted for a public-form request, which is always
+     * `customer_supplied`.
+     */
+    questionProvenance?: QuestionProvenanceChoice | null
   ): Promise<SnapshotRequest | null>;
+  /** D-052 — closes an approved request whose job ended in failure. */
+  closeFailedSnapshotRequest(
+    input: CloseFailedSnapshotRequestInput
+  ): Promise<CloseFailedSnapshotRequestOutcome>;
   reserveSnapshotRequestProject(
     requestId: string
   ): Promise<SnapshotRequest | null>;
@@ -3020,6 +3143,25 @@ export interface DbAdapter {
   claimProtocolExecutionJobById(
     input: ClaimProtocolExecutionJobByIdInput
   ): Promise<ClaimProtocolExecutionJobByIdResult>;
+  /** D-052 — records the one job the next worker start may claim. */
+  requestProtocolJobRun(
+    input: RequestProtocolJobRunInput
+  ): Promise<RequestProtocolJobRunResult>;
+  /** D-052 — withdraws a pending run request whose machine start failed. */
+  cancelProtocolJobRunRequest(
+    requestId: string
+  ): Promise<CancelProtocolJobRunRequestOutcome>;
+  /**
+   * D-052 — claims the job named by the pending run request, or nothing.
+   * Never a different job.
+   */
+  claimRequestedProtocolExecutionJob(
+    input: ClaimProtocolExecutionJobInput
+  ): Promise<ClaimRequestedProtocolExecutionJobResult>;
+  /** D-052 — a founder retry of a run that failed at the provider. */
+  retryFailedProtocolJob(
+    input: RetryFailedProtocolJobInput
+  ): Promise<RetryFailedProtocolJobResult>;
   /**
    * D-031 — reads the WHOLE history of one claimed job and answers with a
    * single closed label. Never mutates, and never reports what it saw.

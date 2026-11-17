@@ -45,12 +45,14 @@ psql -X -q -v ON_ERROR_STOP=1 "<connection string>" -f scripts/sql/prod-prefligh
 | P2.1 | PASS | The ledger holds 0001 to 0080, each once. |
 | P2.2 | PASS | The ledger holds the 0081 alias `20260924023646`. |
 | P2.3 | PASS | The ledger tail is `20260924023646`. |
-| P2.4 | PASS | None of 0081 to 0085, `20261102132000`, `20261103173000`, `20261109120000`, `20261110120000`, `20261111120000`, `20261112120000` or `20261113120000` is recorded. |
+| P2.4 | PASS | None of 0081 to 0085, `20261102132000`, `20261103173000`, `20261109120000`, `20261110120000`, `20261111120000`, `20261112120000`, `20261113120000` or `20261114120000` is recorded. |
 | P2.5 | PASS | Exactly 81 ledger rows: no version anyone added outside the procedures. |
 | P3.1 | PASS | `reconcile_attempt_for_job` is exactly as 0050 left it (md5 `baaf43cc539611ec78fef9762c168a53`, the reserved procedure's pinned pre-state). |
 | P3.2 | PASS | Only `service_role` may execute it. |
-| P4.1 | PASS | None of the 35 Q2′-1, Q2′-2, S1, P1, P2, E1 or Q4 tables exists. |
-| P4.2 | PASS | None of their public functions or `_q2p_`, `_q2p2_`, `_s1_`, `_p1_`, `_p2_`, `_e1_` or `_q4_` helpers exists. |
+| P3.3 | PASS | `approve_and_launch_snapshot_baseline(uuid, uuid, jsonb, text)` is exactly as 0069 left it (md5 `710dfb5cb84ce09a94040ebb84086025`, computed on a disposable stack with every migration before `20261114120000` applied). Pilot step 1 (D-052) redefines it. |
+| P3.4 | PASS | Its five-argument version does not exist yet. |
+| P4.1 | PASS | None of the 37 Q2′-1, Q2′-2, S1, P1, P2, E1, Q4 or pilot step-1 tables exists. |
+| P4.2 | PASS | None of their new public functions or `_q2p_`, `_q2p2_`, `_s1_`, `_p1_`, `_p2_`, `_e1_` or `_q4_` helpers exists. A function they redefine is checked by its pinned pre-state instead (P3.3). |
 | P4.3 | PASS | `projects`, `buyer_question_versions` and `snapshot_requests`, which Q2′ references, exist. |
 | P5.1 | PASS | `anon`, `authenticated` and `service_role` exist. |
 | P5.2 | PASS | `service_role` has BYPASSRLS. |
@@ -83,6 +85,8 @@ The procedures are the D-041 texts. The repository holds their rehearsal copies,
 | 4. S1 | named file | `new_version=20261109120000`, `new_name=s1_account_sessions`, `expected_prev=20261103173000` |
 
 `expected_prev` stays `20260924023646` after 0083, because `0083` sorts below it.
+
+**Pilot step 1 (D-052, `20261114120000`) is not in this sequence yet.** Its position is the founder's choice when its apply is authorised: after 0083 and renamed below `20261102132000` (then Q2′-1's `expected_prev` becomes its version), or after Q4. Before it is applied, this preflight is re-baselined for that position: P2.3's expected tail, P2.4's list and the absence checks for whatever has been applied by then. P3.3 pins the approval function's pre-state either way.
 
 **This preflight is valid only before step 1.** Once 0083 is applied it fails by design, so do not re-run it as a post-check. After each step, confirm that the ledger tail and that step's objects are as expected.
 

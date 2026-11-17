@@ -10,8 +10,30 @@
  */
 
 import {
-  __setPaidExecutionGateForTests, isWorkerStartConfigured, readWorkerState, startWorkerMachine,
+  __setPaidExecutionGateForTests, __setRunRequestsForTests, isWorkerStartConfigured, readWorkerState,
+  startWorkerMachine,
 } from "@/lib/worker-control/fly-machine";
+
+/**
+ * D-052 — every start now names its job through a run request. These checks
+ * are about the paid gate and Fly, so the run request always succeeds here;
+ * scripts/test-pilot-step1.ts covers the run request itself.
+ */
+const START_TARGET = {
+  jobId: "00000000-0000-4000-8000-0000000000aa",
+  projectId: "00000000-0000-4000-8000-0000000000bb",
+  via: "admin_run_pipeline" as const,
+  requestedBy: "00000000-0000-4000-8000-0000000000cc",
+};
+__setRunRequestsForTests({
+  request: async () => ({
+    outcome: "REQUESTED",
+    requestId: "00000000-0000-4000-8000-0000000000dd",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  }),
+  cancel: async () => "CANCELLED",
+});
+
 
 let checks = 0;
 const failures: string[] = [];
@@ -66,7 +88,7 @@ async function main(): Promise<void> {
     assert(`configuration is incomplete without ${missing}`, !isWorkerStartConfigured());
 
     stubFetch(200, "{}");
-    const result = await startWorkerMachine();
+    const result = await startWorkerMachine(START_TARGET);
     assert(`a start without ${missing} is refused`,
       !result.ok && result.code === "not_configured",
       JSON.stringify(result));
@@ -89,14 +111,14 @@ async function main(): Promise<void> {
     ok: false, code: "paid_execution_disabled", detail: "off",
   }));
   stubFetch(200, JSON.stringify({ previous_state: "stopped" }));
-  const gated = await startWorkerMachine();
+  const gated = await startWorkerMachine(START_TARGET);
   assert("a refusing gate is a refusal", !gated.ok && gated.code === "paid_execution_blocked",
     JSON.stringify(gated));
   assert("and Fly is never contacted", captured.length === 0, `${captured.length} call(s)`);
 
   __setPaidExecutionGateForTests(async () => { throw new Error("ledger down"); });
   stubFetch(200, JSON.stringify({ previous_state: "stopped" }));
-  const thrown = await startWorkerMachine();
+  const thrown = await startWorkerMachine(START_TARGET);
   assert("a gate that throws is a refusal, never a pass",
     !thrown.ok && thrown.code === "paid_execution_blocked" && captured.length === 0,
     JSON.stringify(thrown));
@@ -107,7 +129,7 @@ async function main(): Promise<void> {
 
   // ── 2. A successful start, and where it was sent ────────────────────────
   stubFetch(200, JSON.stringify({ previous_state: "stopped", migrated: false }));
-  const started = await startWorkerMachine();
+  const started = await startWorkerMachine(START_TARGET);
   assert("a 200 is a start", started.ok, JSON.stringify(started));
   assert("a machine that was stopped is not reported as already running",
     started.ok && !started.alreadyRunning);
@@ -125,19 +147,19 @@ async function main(): Promise<void> {
   // and exits, so a caller told "started" would be waiting for work that the
   // running process will never pick up.
   stubFetch(200, JSON.stringify({ previous_state: "started" }));
-  const again = await startWorkerMachine();
+  const again = await startWorkerMachine(START_TARGET);
   assert("a machine already started reports alreadyRunning",
     again.ok && again.alreadyRunning, JSON.stringify(again));
 
   stubFetch(200, JSON.stringify({ previous_state: "starting" }));
-  const starting = await startWorkerMachine();
+  const starting = await startWorkerMachine(START_TARGET);
   assert("a machine already starting reports alreadyRunning",
     starting.ok && starting.alreadyRunning, JSON.stringify(starting));
 
   // A 2xx whose body cannot be read is still a start. Refusing here would
   // leave a running machine that the console believes is stopped.
   stubFetch(200, "not json at all");
-  const opaque = await startWorkerMachine();
+  const opaque = await startWorkerMachine(START_TARGET);
   assert("a 2xx with an unreadable body is still a start", opaque.ok, JSON.stringify(opaque));
 
   // ── 3. Every refusal is distinguishable, and none of them leak ──────────
@@ -151,7 +173,7 @@ async function main(): Promise<void> {
 
   for (const { status, code } of REFUSALS) {
     stubFetch(status, `{"error":"fly said ${status}"}`);
-    const refused = await startWorkerMachine();
+    const refused = await startWorkerMachine(START_TARGET);
     assert(`HTTP ${status} is refused as ${code}`,
       !refused.ok && refused.code === code, JSON.stringify(refused));
     assert(`HTTP ${status} never reports a start`, !refused.ok);
@@ -162,7 +184,7 @@ async function main(): Promise<void> {
   // them under any status.
   for (const status of [401, 404, 500]) {
     stubFetch(status, JSON.stringify({ error: "denied", token: TOKEN }));
-    const refused = await startWorkerMachine();
+    const refused = await startWorkerMachine(START_TARGET);
     const detail = refused.ok ? "" : refused.detail;
     assert(`the token is absent from the HTTP ${status} detail`,
       !detail.includes(TOKEN), detail);
@@ -171,7 +193,7 @@ async function main(): Promise<void> {
   // A transport failure is a refusal, not a crash: the admin route turns
   // this into a message, and an exception would become a 500 with no cause.
   globalThis.fetch = (async () => { throw new Error("network down"); }) as typeof fetch;
-  const unreachable = await startWorkerMachine();
+  const unreachable = await startWorkerMachine(START_TARGET);
   assert("an unreachable Fly is a refusal, not a throw",
     !unreachable.ok && unreachable.code === "fly_error", JSON.stringify(unreachable));
 

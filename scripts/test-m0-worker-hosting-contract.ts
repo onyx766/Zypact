@@ -302,6 +302,8 @@ function code(src: string, comment: string): string[] {
     ['WORKER_HEALTH_HOST', '0.0.0.0'],
     ['WORKER_HEALTH_PORT', '8080'],
     ['WORKER_GRACE_MS', '10000'],
+    // D-056: the ChatGPT engine is off, stated explicitly, in every file.
+    ['WORKER_CHATGPT_ENABLED', 'false'],
   ] as const;
   assert("[env] exists", lines.includes("[env]"));
   for (const [k, v] of ENV) {

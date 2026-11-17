@@ -59,6 +59,10 @@ kill_timeout = 30
   WORKER_HEALTH_HOST = "0.0.0.0"
   WORKER_HEALTH_PORT = "8080"
   WORKER_GRACE_MS = "10000"
+  # D-056 — the ChatGPT engine stays off. Turning it on is its own founder-
+  # authorised step after phase B's migration; with it off the adapter is
+  # never loaded and an openai_chatgpt protocol is refused before admission.
+  WORKER_CHATGPT_ENABLED = "false"
 
 # It probes /readyz, not /healthz. Both answer 200 while the worker is
 # inert, but they diverge once execution is enabled: /healthz reports that

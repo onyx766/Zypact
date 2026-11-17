@@ -590,5 +590,5 @@ These need reading the answers or fetching third-party pages, and they are left 
 4. ~~Authorise the confirmation run~~: authorised on 2026-11-17, on the half-price flex tier, under a $12 cap. The founder added OpenAI credit the same day.
 5. **Say whether the Starter-month cost fits the plan's price**, if all 240 runs go to this engine. On the standard tier it is about $35–38; on flex it is projected at about $24–31, and the confirmation run measures it.
 6. ~~Approve the model for measurement~~: approved on 2026-11-17 after the confirmation run passed; `CHATGPT_APPROVED_SETTING_VERSION` names the `v4` version.
-7. **After the confirmation run, judge whether flex's speed and capacity refusals suit the worker.** The worker's time limits are decided when the engine is wired.
-8. **Wire the adapter into the worker.** That is a separate step behind the paid-measurement switch, and for this model it also needs the longer worker time limits described above.
+7. **Judge whether flex's speed and capacity refusals suit the worker.** D-056 proposes the time limits (a 290 s ChatGPT call deadline; lease 330 s, readiness 240 s, runtime 2,400 s) and treats a flex refusal as a failed attempt the founder retries. These are founder decisions, not yet taken.
+8. **Wire the adapter into the worker.** Phase A is built (D-056, branch `feat/chatgpt-worker`): the worker can run this setting behind `WORKER_CHATGPT_ENABLED`, which is off everywhere and refused at startup until phase B's migration. Phase B (the schema) and phase C (each production step) remain.

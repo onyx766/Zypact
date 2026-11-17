@@ -5,6 +5,7 @@
  * (scripts/test-chatgpt-adapter.ts). The runner is
  * scripts/benchmark-chatgpt-models.ts.
  */
+import { isFlexResourceUnavailable } from "@/lib/probes/openai-flex";
 import type { ChatGptSetting } from "@/lib/probes/chatgpt";
 import type { ChatGptUsage, CostEstimate } from "@/lib/probes/chatgpt-pricing";
 
@@ -217,16 +218,8 @@ export function wasFlexRequest(record: { requestBody?: string | null }): boolean
  * an ordinary rate limit included ("Rate limit reached ..."), and keeps the
  * unknown-cost rule.
  */
-export function isFlexResourceUnavailable(httpStatus: number | null, body: string | null): boolean {
-  if (httpStatus !== 429 || !body) return false;
-  try {
-    const e = (JSON.parse(body) as { error?: { type?: unknown; code?: unknown; message?: unknown } } | null)?.error;
-    const words = [e?.type, e?.code, e?.message].filter((x): x is string => typeof x === "string").join(" ");
-    return /resource[\s_-]*unavailable/i.test(words);
-  } catch {
-    return false;
-  }
-}
+// D-056 — moved to lib/probes/openai-flex.ts so the worker can use it; re-exported here unchanged.
+export { isFlexResourceUnavailable };
 
 /** The fields that say whether a call was refused unprocessed. A record from before 2026-11-17 may lack requestBody's flex field; it is then no flex request. */
 type RefusalFields = Pick<BenchmarkRecord, "usage" | "httpStatus" | "responseBody"> & { requestBody?: string | null };

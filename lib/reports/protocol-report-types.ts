@@ -140,7 +140,8 @@ export interface ProviderSourceRef {
 export interface ProtocolReportRunSources {
   ordinal: number;
   status: ProviderSourceStatus;
-  responseFormat: "chat_completions" | "agent_response" | null;
+  /** D-056 — `openai_responses` for the ChatGPT engine (rule openai-responses-sources/1). */
+  responseFormat: "chat_completions" | "agent_response" | "openai_responses" | null;
   /** Sources the answer text points to with a numbered reference. */
   cited: ProviderSourceRef[];
   /** Sources the provider returned that the answer does not point to. */

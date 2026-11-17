@@ -1280,3 +1280,101 @@ Each item below departed from a document that governed before this approval: V1_
   - a Run path that does not go through `request_protocol_job_run`;
   - a pilot measurement reported or sent outside the combined pilot report;
   - a closed pilot that spends.
+
+## D-056 — ChatGPT in the worker, phase A: the engine behind a switch that stays off
+
+- **Date:** 2026-11-17
+- **Status:** Built on branch `feat/chatgpt-worker`, stacked on PR #121 (X1). The switch is **off** in every Fly configuration. The values marked *(founder)* are proposed and are set nowhere. There is no migration, nothing is deployed, and no provider was called: every test uses a fake fetch.
+- **Builds on:**
+  - D-050 (the adapter; `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05` approved for measurement on 2026-11-17);
+  - D-052 (named runs and the founder's Retry);
+  - D-053 item 3 (ChatGPT measures nothing for a pilot until wired and its deploy is authorised);
+  - D-044 (the source rule);
+  - D-029, D-030, D-034 and D-036 (worker bounds);
+  - D-037 (the daily ceiling).
+- **Decision, as built *(engineer)*:**
+  1. **One provider profile per engine** (`lib/protocol-worker/provider-profile.ts`). It holds the runner, the `probe_runs.platform` label, the probe mode, the provider leg's deadline, the reservation, the cost reader, the answer reader and the failure label.
+     - The Perplexity profile is exactly what the worker did before: the same values, the MEASURED cost from `usage.cost.total_cost`, and the same answer reader. Sonar and Agent behaviour is unchanged, and every existing worker test passes unmodified.
+  2. **The switch.**
+     - `WORKER_CHATGPT_ENABLED` is on only when it is exactly `"true"`; absent or any other value is off. Every Fly file states `"false"`.
+     - **Off:**
+       - the adapter is never loaded;
+       - an `openai_chatgpt` protocol is closed before admission as `PROVIDER_ADAPTER_NOT_ENABLED`, with nothing reserved and nothing sent;
+       - no ChatGPT variable is read.
+     - **On, the worker requires:**
+       - `OPENAI_PROBE_API_KEY` (the measurement project's key, never the analysis key);
+       - `WORKER_CHATGPT_TIMEOUT_MS`, the ChatGPT leg's own deadline, with the analysis leg keeping `WORKER_PROVIDER_TIMEOUT_MS`;
+       - that deadline plus the grace must fit inside the lease;
+       - the claim budget becomes the longer provider leg plus the analysis leg plus grace, and must fit the runtime ceiling;
+       - `WORKER_READY_STALE_MS` must exceed the heartbeat interval (lease/3), because during a long call the heartbeat is the only database contact.
+     - When on, `scripts/run-protocol-worker.ts` imports `lib/protocol-worker/chatgpt-engine.ts` dynamically, inside the live branch. That file is the only worker module that imports the adapter.
+     - The engine pins the approved setting on every call. A protocol must name exactly that setting in `model_config` (`model` and `setting_version`), or it is refused before admission as `PROVIDER_MODEL_NOT_APPROVED`.
+  3. **Fail-closed until phase B.**
+     - The database cannot yet record a ChatGPT attempt honestly:
+       - `probe_runs` and `probe_results` accept no `live_openai_chatgpt` probe mode;
+       - `persist_probe_result_for_job` writes platform `'perplexity'` for every result (0054).
+     - So `CHATGPT_WORKER_SCHEMA_READY` is `false`, and a live worker refuses to start with the switch on. Turning it on early can neither fail after a reservation nor record a ChatGPT answer under Perplexity's name. Phase B flips this in the same pull request as its migration.
+  4. **Money.**
+     - Admission reserves the setting's worst case at standard rates, `worstCaseRunUsd`, $0.54, for the ChatGPT leg.
+     - A successful answer records its cost ESTIMATED from the usage in the exact body stored as the receipt. The price is the requested model's row in the dated table, at the tier the body names (on flex, an upper bound).
+     - A 2xx answer refused for its tier or model was billed. It is a provider error that keeps its whole body and its estimated cost.
+     - The price-table version behind each estimate is not stored, because the ledger has no column for it.
+  5. **Flex capacity refusal** (HTTP 429 "resource unavailable", which OpenAI does not charge):
+     - one fetch;
+     - a `provider_error` receipt keeping the refusal body, with no cost, counted at the reservation;
+     - the attempt and the job close as `provider_error`, with the termination label `flex_capacity_unavailable`;
+     - nothing is resent automatically. The founder's Retry (D-052) accepts it, because it keys on `failure_reason = 'provider_error'`. The reservation is never released.
+     - The rule `isFlexResourceUnavailable` moved from the benchmark into `lib/probes/openai-flex.ts`, and the benchmark imports it from there.
+  6. **Timeout.** The ChatGPT leg is aborted at its own deadline. As for Perplexity, an aborted call is an unknown outcome: the receipt says so, and the job goes to review. It is never resent.
+  7. **Sources: rule `openai-responses-sources/1`**, chosen by the protocol's provider, never guessed from the body.
+     - Only a `completed` body is read.
+     - Cited: each `url_citation` annotation, numbered in order, with its title.
+     - Retrieved: each `web_search_call.action.sources[].url`.
+     - An unusable citation is an unmatched marker.
+     - URL identity removes exactly the query parameter `utm_source=openai` and nothing else. In the 60 stored confirmation-run bodies, 573 of 821 cited URLs carry it. Matched as received, 763 of 821 are found among their run's sources; with the parameter removed, all 821 are. The URL as received stays in the stored body.
+     - Without the provider, a ChatGPT body has the Agent API's shape and would have been read as "ok" with no sources. `build-protocol-report.ts` now passes the provider.
+     - Perplexity bodies read exactly as before.
+  8. **Labels.** The ChatGPT surface limitation is the validity note's sentence, verbatim. The measurement fingerprint knows the Responses endpoint as an adapter constant, with the same caveat as Perplexity's.
+- **For the founder, before the switch is turned on (recommended, not set) *(founder)*:**
+  1. **ChatGPT call timeout: 290 s.** A timeout is an unknown, possibly billed outcome that goes to review. The slowest confirmation-run call took 145 s.
+  2. **Lease 330 s, readiness window 240 s, runtime ceiling 2,400 s.** Other legs stay at 45 s. A slow call must not outlive the lease. This reopens D-029, D-030, D-034 and D-036, whose revisit triggers name a changed timeout or runtime.
+  3. **ChatGPT protocol caps: `run_cap` 7, `retry_cap` 2, `spend_cap_usd` 4.** At the current $2 cap only 3 attempts of $0.56 fit, so a 5-run plan could never finish. This touches D-032 and D-051 item 1, and D-037's trigger: a ChatGPT call's cost is bounded only by an assumed worst case.
+  4. **Daily ceiling: 10 USD for the first supervised ChatGPT day, then 20 USD.**
+     - The ceiling counts every ChatGPT run at its $0.56 reservation, against about $0.09 actually spent.
+     - At 10 USD about 3 questions fit in a rolling day, and Perplexity starts share that room.
+     - At 20 USD a 15-question baseline takes about 3 days.
+  5. **Flex refusals:** a failed attempt plus a manual Retry, as built. Automatic retries only once refusal rates are known.
+  6. **Approve the source rule `openai-responses-sources/1`**, as D-044 was approved for Perplexity.
+- **Phase B (not built):**
+  - a migration:
+    - the probe-mode value;
+    - a provider-aware `persist_probe_result_for_job`;
+    - the live-baseline index by provider in place of 0073's;
+    - the pilot engine CHECK;
+    - `add_pilot_question_engine`;
+    - retiring both engines;
+  - the memory-adapter mirror;
+  - the readers that treat an unknown probe mode as simulated (`coerceProbeMode`, `isLive`);
+  - an engine parameter in the pilot reads and routes;
+  - a database test.
+
+  It flips `CHATGPT_WORKER_SCHEMA_READY`.
+- **Phase C:** each production step authorised on its own. They are the migration; the worker redeploy with the new bounds and the switch still off; the key; the switch; then the first supervised run.
+- **Canon to update when the switch is turned on:** `V1_SCOPE.md`, `METHODOLOGY.md` §4, `PILOT_RUNBOOK.md`, and the repository `CLAUDE.md` line "Initial live surface", which needs the user's OK. None is edited in phase A.
+- **Known and not decided:**
+  - a retest on both engines conflicts with 0079's one retest per intervention;
+  - `provider_model` stays empty until phase B.
+- **Tests:**
+  - **New:** `npm run test:chatgpt-worker` (102). It covers routing and refusals, the switch and its bounds, the full slot on the memory ledger, a crash after the receipt replayed without a second send, the flex 429, a timeout, the wrong tier or model, the Perplexity path with the engine on, the source rule and its parity with the adapter's readers, the labels and the import boundaries.
+  - **Updated:**
+    - `test:chatgpt-adapter` (W1 now expects `PROVIDER_ADAPTER_NOT_ENABLED`; B2, B5 and B6 cover the engine boundary);
+    - `test:source-insights` (E7b, E7c);
+    - `test:paid-execution-guards` (no web entry point reaches the engine);
+    - `test:m0-worker-hosting-contract` (the switch line in every Fly file).
+- **Recovery:** revert the branch. With the switch off nothing reaches ChatGPT, and phase A writes no data of its own.
+- **Revisit trigger:**
+  - a ChatGPT call without a reservation;
+  - the switch on before phase B's migration;
+  - an `openai_chatgpt` protocol run under a setting it does not name;
+  - an automatic resend of a flex refusal;
+  - a ChatGPT body read under another provider's source rule.

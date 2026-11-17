@@ -13,7 +13,10 @@ import type {
   ProtocolReportSourceInsights,
   ProviderSourceStatus,
 } from "@/lib/reports/protocol-report-types";
-import { PROVIDER_SOURCES_RULE_VERSION } from "@/lib/source-insights/extract-provider-sources";
+import {
+  OPENAI_RESPONSES_SOURCES_RULE_VERSION,
+  PROVIDER_SOURCES_RULE_VERSION,
+} from "@/lib/source-insights/extract-provider-sources";
 import {
   SOURCE_TYPE_LIST_VERSION,
   categorizeDomain,
@@ -44,8 +47,15 @@ function plural(n: number, word: string): string {
 
 export function buildSourceInsights(
   runs: ProtocolReportRunSources[],
-  subjectDomain: string
+  subjectDomain: string,
+  // D-056 — the rule the runs were read under (sourcesRuleVersionForProvider).
+  // Absent: every caller before D-056, which read under provider-sources/1.
+  extractionVersion: string = PROVIDER_SOURCES_RULE_VERSION
 ): ProtocolReportSourceInsights {
+  // The ChatGPT engine marks citations as links on the answer text, not as
+  // numbered references, and the notes say so.
+  const linked = extractionVersion === OPENAI_RESPONSES_SOURCES_RULE_VERSION;
+  const reference = linked ? "linked citation" : "numbered reference";
   const usable = runs.filter((run) => run.status === "ok");
 
   const byDomain = new Map<
@@ -101,7 +111,7 @@ export function buildSourceInsights(
 
   const notes = [
     SOURCE_DEFINITION_NOTE,
-    `Read from each run's stored provider response under rule ${PROVIDER_SOURCES_RULE_VERSION}, after checking it against its recorded hash. Nothing was requested again.`,
+    `Read from each run's stored provider response under rule ${extractionVersion}, after checking it against its recorded hash. Nothing was requested again.`,
     NOT_READ_NOTE,
     NO_CAUSAL_SOURCE_NOTE,
     `Types come from a fixed list of known domains (${SOURCE_TYPE_LIST_VERSION}); other domains are shown as unclassified. “Your site” means ${subjectDomain} and its subdomains.`,
@@ -120,14 +130,14 @@ export function buildSourceInsights(
   ).length;
   if (unmarked > 0) {
     notes.push(
-      `In ${plural(unmarked, "run")} the answer had no numbered references, so none of its returned sources could be confirmed as cited.`
+      `In ${plural(unmarked, "run")} the answer had no ${reference}s, so none of its returned sources could be confirmed as cited.`
     );
   }
 
   const unmatched = usable.reduce((sum, run) => sum + run.unmatchedMarkers.length, 0);
   if (unmatched > 0) {
     notes.push(
-      `${plural(unmatched, "numbered reference")} matched no returned source and ${unmatched === 1 ? "was" : "were"} not turned into a source.`
+      `${plural(unmatched, reference)} ${linked ? "had no usable link" : "matched no returned source"} and ${unmatched === 1 ? "was" : "were"} not turned into a source.`
     );
   }
 
@@ -138,7 +148,7 @@ export function buildSourceInsights(
   }
 
   return {
-    extractionVersion: PROVIDER_SOURCES_RULE_VERSION,
+    extractionVersion,
     sourceTypeListVersion: SOURCE_TYPE_LIST_VERSION,
     readableRuns: runs.length,
     runsWithSourceEvidence: usable.length,

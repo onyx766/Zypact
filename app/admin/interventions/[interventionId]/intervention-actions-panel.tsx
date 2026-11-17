@@ -291,14 +291,14 @@ export function InterventionActionsPanel({
                 label="Queue retest run" busyLabel="Queueing…" icon={<Rocket size={16} />}
                 path={`${base}/queue-retest`} disabled={off}
                 confirmText={
-                  "Queue the retest run?\n\nThis commits paid provider calls. Nothing runs while the worker is " +
-                  "stopped, but the job waits in the queue: the next time the worker starts, for any reason, it runs.\n\n" +
+                  "Queue the retest run?\n\nThis commits paid provider calls. Nothing runs yet: the job waits " +
+                  "until you press Run retest now, which starts the worker for this job only.\n\n" +
                   "Until the first attempt lands you can still abandon the intervention, which cancels the job. " +
                   "After that, abandonment is refused and the retest must finish."
                 }
               />
               <p className="text-xs text-muted-foreground">
-                Commits spend: the job runs the next time the worker starts.
+                Commits spend: the job runs when you press Run retest now.
               </p>
             </>
           ) : null}
@@ -309,8 +309,8 @@ export function InterventionActionsPanel({
             </p>
           ) : null}
           {/*
-            A queued job runs only when the worker is started, and the worker
-            stops again after one job. Without this the queue is visible and
+            A queued job runs only when the worker is started for it (D-052),
+            and the worker stops again after one job. Without this the queue is visible and
             unreachable from the console, which is how a retest sat at
             "queued · 0 attempts" with nothing in the product able to move it.
           */}
@@ -319,9 +319,9 @@ export function InterventionActionsPanel({
               label="Run retest now" busyLabel="Starting…" icon={<Rocket size={16} />}
               path={`${base}/run-retest`} disabled={off}
               confirmText={
-                "Start the worker to run this retest?\n\nIt makes the paid provider calls the queued job " +
-                "describes, then stops. One start runs one job.\n\n" +
-                "The result appears here when it finishes, usually a few minutes."
+                "Start the worker to run this retest?\n\nIt runs only this retest: it makes the paid provider " +
+                "calls the queued job describes, then stops. One start runs one job.\n\n" +
+                "The result appears here when it finishes. Five runs usually take about 2 minutes."
               }
             />
           ) : null}

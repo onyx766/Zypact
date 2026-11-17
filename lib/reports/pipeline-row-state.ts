@@ -21,6 +21,13 @@ export interface PipelineRowState {
   integrityStatus: string | null;
   publicToken: string | null;
   delivered: boolean;
+  /**
+   * D-052 — the protocol's own frozen plan and caps, so the Run
+   * confirmation states what this press can spend instead of a constant.
+   */
+  plannedRuns: number | null;
+  runCap: number | null;
+  spendCapUsd: number | null;
 }
 
 const EMPTY: PipelineRowState = {
@@ -29,6 +36,9 @@ const EMPTY: PipelineRowState = {
   integrityStatus: null,
   publicToken: null,
   delivered: false,
+  plannedRuns: null,
+  runCap: null,
+  spendCapUsd: null,
 };
 
 const LEASED = new Set(["claimed", "running"]);
@@ -80,11 +90,34 @@ export async function loadPipelineRowStates(
       });
     }
 
+    const { data: protocols } = await client
+      .from("protocols")
+      .select("id,planned_baseline_runs,run_cap,spend_cap_usd")
+      .in("id", protocolIds);
+
+    const planById = new Map<string, Record<string, any>>();
+    for (const row of (protocols ?? []) as Record<string, any>[]) {
+      planById.set(row.id, row);
+    }
+
+    // numeric columns arrive as numbers or as numeric strings.
+    const num = (value: unknown): number | null =>
+      typeof value === "number" && Number.isFinite(value)
+        ? value
+        : typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))
+          ? Number(value)
+          : null;
+
     for (const request of requests) {
       if (request.protocolId) {
         const latest = latestByProtocol.get(request.protocolId);
         states[request.id].jobStatus = latest?.status ?? null;
         states[request.id].stale = latest?.stale ?? false;
+
+        const plan = planById.get(request.protocolId);
+        states[request.id].plannedRuns = num(plan?.planned_baseline_runs);
+        states[request.id].runCap = num(plan?.run_cap);
+        states[request.id].spendCapUsd = num(plan?.spend_cap_usd);
       }
     }
   }

@@ -24,6 +24,8 @@ import type {
   ProtocolReportRun,
   ProtocolReportSourceInsights,
 } from "@/lib/reports/protocol-report-types";
+import { questionProvenanceLabel } from "@/lib/reports/question-provenance";
+import { runEndLabel } from "@/lib/reports/run-end-label";
 import { SOURCE_CATEGORY_LABEL } from "@/lib/source-insights/source-types";
 import { CopyHashButton } from "./copy-hash-button";
 
@@ -151,6 +153,10 @@ function sourcesLabel(
   run: ProtocolReportRun
 ): string {
   if (!insights) return String(run.citedSourceCount);
+  // Source insights are built from readable runs only, keyed by slot. A
+  // failed run shares its slot with its retry, so it is never given the
+  // retry's sources: it had no answer, so it has none.
+  if (run.status !== "completed" || run.brandPresent === null) return "—";
   const entry = insights.runs.find((r) => r.ordinal === run.ordinal);
   if (!entry) return "—";
   if (entry.status !== "ok") return "Unavailable";
@@ -234,11 +240,17 @@ function SourcesSection({
 function RunRow({
   run,
   insights,
+  retried,
 }: {
   run: ProtocolReportRun;
   insights: ProtocolReportSourceInsights | undefined;
+  /** D-052 — a later run in the same slot retried this one. */
+  retried: boolean;
 }) {
   const brand = presence(run.brandPresent);
+  // Words, never the stored termination code (D-052).
+  const endLabel = runEndLabel(run.status, run.terminationReason);
+  const readable = run.status === "completed" && run.brandPresent !== null;
 
   return (
     <tr>
@@ -255,8 +267,11 @@ function RunRow({
           <span className={`zpr-dot tone-${statusTone(run.status)}`} />
           <span>
             {sentenceCase(run.status)}
-            {run.terminationReason ? (
-              <span className="zpr-cell-sub">{run.terminationReason}</span>
+            {endLabel ? (
+              <span className="zpr-cell-sub">
+                {endLabel}
+                {retried ? " · retried" : ""}
+              </span>
             ) : null}
           </span>
         </span>
@@ -267,7 +282,11 @@ function RunRow({
         </span>
       </td>
       <td>
-        {run.competitors.length > 0 ? run.competitors.join(", ") : "None"}
+        {readable
+          ? run.competitors.length > 0
+            ? run.competitors.join(", ")
+            : "None"
+          : "—"}
       </td>
       <td>{sourcesLabel(insights, run)}</td>
       <td
@@ -391,8 +410,8 @@ export function ProtocolReportView({
             <p className="zpr-question-sub">
               Every figure on this page describes this question and nothing
               else. Version {question.versionNumber}, intent{" "}
-              {question.intentType}, provenance{" "}
-              <strong>{question.provenance}</strong>.
+              {question.intentType}, provenance:{" "}
+              <strong>{questionProvenanceLabel(question.provenance)}</strong>.
             </p>
           </div>
 
@@ -497,6 +516,9 @@ export function ProtocolReportView({
                       key={`${run.ordinal}-${index}`}
                       run={run}
                       insights={payload.sourceInsights}
+                      retried={payload.runs.some(
+                        (other) => other !== run && other.retryOfOrdinal === run.ordinal
+                      )}
                     />
                   ))
                 )}

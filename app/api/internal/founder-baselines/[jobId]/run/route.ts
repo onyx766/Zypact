@@ -4,6 +4,7 @@ import { requireFounderForRoute } from "@/lib/auth/founder";
 import { getReportServiceClient } from "@/lib/reports/service-client";
 import {
   readWorkerState,
+  startFailureHttpStatus,
   startWorkerMachine,
 } from "@/lib/worker-control/fly-machine";
 
@@ -165,15 +166,23 @@ export async function POST(
     );
   }
 
-  const start = await startWorkerMachine();
+  // D-052 — the start names this job; the worker claims it or nothing.
+  const start = await startWorkerMachine({
+    jobId,
+    projectId: jobRow.project_id,
+    via: "admin_founder_baseline",
+    requestedBy: guard.user.id,
+  });
   if (!start.ok) {
     return NextResponse.json(
       { ok: false, error: start.code, detail: start.detail },
-      { status: start.code === "not_configured" || start.code === "paid_execution_blocked" ? 503 : 502 }
+      { status: startFailureHttpStatus(start.code) }
     );
   }
 
   if (start.alreadyRunning) {
+    // The running process was not started for this job. startWorkerMachine
+    // has already withdrawn the request this press recorded.
     return NextResponse.json(
       {
         ok: false,

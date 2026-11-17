@@ -24,6 +24,43 @@ import {
  * puts mail in someone's inbox, and it asks for confirmation first.
  */
 
+/**
+ * D-052 — why a measurement stopped, in words. Unknown codes are shown as
+ * they are rather than hidden.
+ */
+function stopReason(failureReason: string | null, status: string): string {
+  if (status === "abandoned_exhausted") {
+    return "the worker stopped too many times before finishing";
+  }
+  switch (failureReason) {
+    case "provider_error":
+      return "the AI provider returned an error or no readable reply";
+    case "empty_provider_answer":
+      return "the AI provider's answer arrived empty";
+    case "run_cap_exceeded":
+      return "the measurement used every run its cap allows";
+    case "spend_cap_exceeded":
+      return "the measurement reached its spending cap";
+    case "retry_cap_exceeded":
+      return "the run used every retry its cap allows";
+    default:
+      return failureReason
+        ? `it stopped with "${failureReason.replace(/_/g, " ")}"`
+        : "no reason was recorded";
+  }
+}
+
+/** D-052 — why Retry is not offered for this stop. */
+function whyNotRetryable(failureReason: string | null, status: string): string {
+  if (status === "abandoned_exhausted") {
+    return "A measurement the worker abandoned can only be closed here.";
+  }
+  if (failureReason === "run_cap_exceeded" || failureReason === "spend_cap_exceeded" || failureReason === "retry_cap_exceeded") {
+    return "The measurement has used up its limits, so no further run is possible.";
+  }
+  return "Only a run that failed at the AI provider can be retried here. In any other failure an answer was already paid for, and a retry would throw it away.";
+}
+
 function Badge({ status }: { status: string | null }) {
   if (!status) {
     return <span className="text-sm text-muted-foreground">Not classified</span>;
@@ -56,17 +93,36 @@ export function ReviewPanel({
   const job = state.job;
   const artifact = state.artifact;
 
+  // D-052 — one key per retry: a double click, or a click after a lost
+  // response, replays the same retry instead of asking for a second one. A
+  // fresh key is taken once the database has answered, so a later failure
+  // is never answered with this one.
+  const [retryKey, setRetryKey] = useState(() => crypto.randomUUID());
+
   const jobNeedsReview = job?.status === "needs_review";
+  const jobStopped =
+    (job?.status === "failed" || job?.status === "abandoned_exhausted") &&
+    state.requestStatus === "approved" &&
+    state.closure === null;
+  const retryable = job?.status === "failed" && job.failureReason === "provider_error";
   const isBlocked = artifact?.integrityStatus === "blocked";
   const alreadyDelivered = Boolean(artifact?.deliveredAt);
   const noteTooShort = note.trim().length < 10;
 
   async function post(payload: Record<string, unknown>, label: string) {
+    return postTo("review", payload, label);
+  }
+
+  async function postTo(
+    endpoint: "review" | "retry-measurement" | "close",
+    payload: Record<string, unknown>,
+    label: string
+  ) {
     setBusy(label);
     setMessage(null);
     try {
       const response = await fetch(
-        `/api/internal/snapshot-requests/${requestId}/review`,
+        `/api/internal/snapshot-requests/${requestId}/${endpoint}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -74,6 +130,9 @@ export function ReviewPanel({
         }
       );
       const data = await response.json();
+      // The database answered (approved or refused): the next retry is a new
+      // decision. Only a lost response keeps the key, so a resend replays.
+      if (endpoint === "retry-measurement") setRetryKey(crypto.randomUUID());
 
       if (!response.ok || data.ok === false) {
         setMessage({
@@ -84,11 +143,13 @@ export function ReviewPanel({
         setMessage({
           kind: "ok",
           text:
-            data.outcome === "delivered"
-              ? "Report delivered."
-              : data.outcome
-                ? `Done: ${String(data.outcome).replace(/_/g, " ")}.`
-                : "Done.",
+            typeof data.detail === "string" && endpoint !== "review"
+              ? data.detail
+              : data.outcome === "delivered"
+                ? "Report delivered."
+                : data.outcome
+                  ? `Done: ${String(data.outcome).replace(/_/g, " ")}.`
+                  : "Done.",
         });
         setNote("");
         router.refresh();
@@ -144,6 +205,17 @@ export function ReviewPanel({
                     Held: <code className={ui.code}>{job.needsReviewReason}</code>
                   </p>
                 ) : null}
+                {job.status === "failed" || job.status === "abandoned_exhausted" ? (
+                  <p className="mt-2 text-destructive">
+                    Stopped: {stopReason(job.failureReason, job.status)}.
+                  </p>
+                ) : null}
+                {state.closure ? (
+                  <p className="mt-2 text-muted-foreground">
+                    Request closed {state.closure.closedAt.slice(0, 10)}:{" "}
+                    {state.closure.reason}
+                  </p>
+                ) : null}
                 {job.priorNeedsReviewReason ? (
                   <p className="mt-2 text-muted-foreground">
                     Previously held:{" "}
@@ -181,7 +253,8 @@ export function ReviewPanel({
             <ul className="mt-2 space-y-1.5 text-sm text-foreground">
               {state.attempts.map((attempt, index) => (
                 <li key={index}>
-                  Run {attempt.ordinal ?? "—"}:{" "}
+                  Run {attempt.ordinal ?? "—"}
+                  {attempt.retryOfOrdinal !== null ? " (retry)" : ""}:{" "}
                   <code className={ui.code}>{attempt.status}</code>
                   {attempt.terminationReason ? (
                     <span className="text-muted-foreground [overflow-wrap:anywhere]">
@@ -278,6 +351,73 @@ export function ReviewPanel({
               className={cn(ui.btnDanger, busy && "cursor-wait")}
             >
               {busy === "fail" ? "Failing…" : "Close as failed"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ------------------------------------- D-052: a stopped measurement */}
+      {jobStopped && job ? (
+        <div className={cn("mt-4 rounded-xl border p-4", toneClass.danger)}>
+          <strong className="text-sm font-semibold">This measurement stopped</strong>
+          <p className="mb-3 mt-1.5 text-[13px] text-foreground">
+            It stopped
+            {job.nextBaselineOrdinal !== null && state.plannedRuns !== null
+              ? ` at run ${job.nextBaselineOrdinal} of ${state.plannedRuns}`
+              : ""}{" "}
+            because {stopReason(job.failureReason, job.status)}. Every run so far,
+            including the failed one, stays in the record.{" "}
+            {retryable
+              ? "You can retry the failed run, or close the request."
+              : whyNotRetryable(job.failureReason, job.status)}
+          </p>
+
+          <textarea
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            placeholder="Why retry or close? (required, min 10 characters)"
+            rows={3}
+            className={cn(ui.input, "mb-3")}
+          />
+
+          <div className="flex flex-wrap gap-2.5">
+            {retryable ? (
+              <button
+                type="button"
+                disabled={busy !== null || noteTooShort}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      `Retry run ${job.nextBaselineOrdinal ?? ""}?\n\n` +
+                        "This reserves one paid run now (two provider calls), inside this measurement's run, retry and spending caps. " +
+                        "The failed run stays in the record. Then press Run scan on the requests list to continue the measurement."
+                    )
+                  ) {
+                    postTo("retry-measurement", { note, idempotencyKey: retryKey }, "retry");
+                  }
+                }}
+                className={cn(ui.btnPrimary, busy && "cursor-wait")}
+              >
+                {busy === "retry" ? "Reserving…" : "Retry the failed run"}
+              </button>
+            ) : null}
+
+            <button
+              type="button"
+              disabled={busy !== null || noteTooShort}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    "Close this request?\n\n" +
+                      "Its evidence is kept, no more runs can happen, and the website can be audited again. Nothing is sent to the requester."
+                  )
+                ) {
+                  postTo("close", { note }, "close");
+                }
+              }}
+              className={cn(ui.btnDanger, busy && "cursor-wait")}
+            >
+              {busy === "close" ? "Closing…" : "Close the request"}
             </button>
           </div>
         </div>

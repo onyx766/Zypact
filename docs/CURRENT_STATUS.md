@@ -886,7 +886,9 @@ and the Perplexity leg never reads it.
    oldest eligible job globally, so a start intended for one request can claim
    another. `claim_protocol_execution_job_by_id` (0059) exists and
    `runWorkerLoop` never calls it — a wired-but-unused safety barrier. Latent
-   while only one job is ever queued.
+   while only one job is ever queued. **Fixed on branch `feat/pilot-mode-phase1`
+   by D-052 (§30), not yet deployed:** each start names its job, and the live
+   worker claims that job or nothing.
 3. **`blocked` is unreachable on the V1 path.** `reportExposesLegacyVerdictAsTruth`
    is four regexes matching legacy `won/partial/lost` aggregates;
    `renderProtocolShortReportMarkdown` emits none of them. The practical states
@@ -1933,3 +1935,131 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 | `npm run test:measurement-compatibility` | 89/89 |
 | `npm run test:s1-accounts` | 74/74 |
 | `npm run typecheck`, `npm run build:verify` | pass |
+
+## 30. Pilot Mode (D-051, D-052, D-053) — decisions recorded; step 1 on branch `feat/pilot-mode-phase1`, not applied anywhere, not deployed
+
+- **Decision (D-051, 2026-11-14):**
+  - the team may run paid pilot measurements, and the self-test retest, under today's controls with a worker daily ceiling the founder confirms (10 USD proposed);
+  - Perplexity only;
+  - Pilot Mode rules: a results-only login comes before customer spend authorisation, the team confirms website ownership, written approvals are kept, one login per customer;
+  - each production step is authorised when it comes.
+
+  Still open: pilot terms, a named security reviewer, and the ChatGPT confirmation test.
+- **Decision (D-053, 2026-11-16 and 2026-11-17):**
+  - a 1,500 USD pilot with both engines;
+  - 15 questions (20 at most), 5 answers per question per engine, a retest of up to 5 questions on both engines, 90 days;
+  - recommended actions written by the team, each linked to its evidence;
+  - the 60-point retest limit in the pilot terms;
+  - a 10 USD daily ceiling;
+  - ChatGPT on OpenAI's flex tier;
+  - the offer's wording.
+
+  ChatGPT measures nothing for a pilot until it is confirmed, approved, wired and deployed. Still open: the security reviewer.
+
+  Not built for the pilot:
+  - one project holding all the questions;
+  - the combined pilot report;
+  - recommended actions;
+  - ChatGPT in the worker;
+  - the customer login.
+- **The assessment, in brief:** no rebuild is needed. The founder-operated engine and the customer account area both exist and are not connected: nothing calls `assign_project_to_workspace`, and no session-checked read of reports or Outcome Cards exists. The work, in order:
+  1. **Before the first paid pilot:** step 1, below.
+  2. **The customer login:**
+     - enable the account area: the P1, P2, E1 and Q4 applies, SMTP, Auth settings, the HMAC secret, purges, the security, privacy and wording reviews, and a browser test;
+     - a Pilot plan;
+     - a team view of workspaces, with the project link;
+     - results in the login;
+     - link withdrawal.
+  3. **Before the first pilot retest:**
+     - a confounder log (§18.5 item 7);
+     - recorded customer approvals and card reviewer;
+     - the Outcome Card's threshold note and email copy.
+  4. **Before subscriptions:** measuring customer-approved questions, exact answers in the login, colleague logins.
+- **What step 1 adds (D-052):**
+  - run requests, with the requested claim in the live worker (§18.5 item 2);
+  - a founder retry of a run that failed at the provider;
+  - closing a failed request;
+  - who wrote the question, recorded at approval;
+  - the per-run brand-self exclusion, customer wording for a run that ended without an answer, and a retry listed after the run it retried;
+  - provenance shown in words;
+  - page titles;
+  - the Run confirmation from the protocol's plan;
+  - the retest copy;
+  - the preflight rows for the new migration.
+- **Production steps waiting for authorisation, in order:**
+  1. Apply `20261114120000` at the position the founder chooses (D-052, release order: after 0083, renamed below `20261102132000`, or after Q4), with the read-only preflight re-baselined for that position (`PROD_PREFLIGHT_SPEC.md`).
+  2. Redeploy the worker from the same commit (`WORKER_DEPLOY_RUNBOOK.md` §6, with an empty queue). This also brings D-036's 7 slots and 900 seconds into effect (§18.5 item 8). The worker goes before the web app: started by the old console, it finds no run request and stops (D-052, deploy order). Confirm the machine runs the new image (the `gitSha` its start event reports, `WORKER_DEPLOY_RUNBOOK.md` §6) before step 3. A rollback runs in the reverse order.
+  3. Deploy the web app.
+  4. Set the paid-execution switch and `ZYPACT_DAILY_SPEND_CEILING_USD` (the figure the founder confirms; 10 USD proposed) on both the web host and the worker. Their deployed values are not known from the repository.
+  5. Run the self-test retest (`SELF_TEST_PERPLEXITY_CONTENT_CHANGE.md` §5 and §7). Carry its confounder note outside the card (§4, option 1) unless the confounder log ships first.
+- **Not established here:**
+  - anything about production: the migration ledger, the worker's configuration, the switches;
+  - two founder sessions racing on a real stack beyond the advisory lock (no Level 2 case);
+  - the report page's legacy branch, which still says "AI visibility snapshot" for legacy artifacts. That branch is frozen by the runbook and its tests, so it is left for the wording review.
+- **Inventory on this branch:** 90 migrations, 217 files matching `scripts/test-*.ts`, 128 `test:*` and 4 `verify:*` commands.
+- **Commands and local results (2026-11-14):**
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | pass |
+| `npm run build:verify` | pass (`next-env.d.ts` restored afterwards) |
+| `npm run test:pilot-step1` | 75/75 |
+| `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | P1 45/45, P2 71/71, E1 74/74, Q4 52/52, pilot step 1 60/60 (all 90 migrations applied) |
+| `ZYPACT_LEVEL2_LOCAL=1 npm run test:snapshot-worker-postgres-level2` | `LEVEL2_RESULT=PASS`, 886 PASS and 0 FAIL on `postgres:16-alpine`, with the new migration applied. The local runner then exits 1 from its cleanup trap under `set -e` when it has no shim directory (a bug in `scripts/run-snapshot-worker-postgres-level2-local.sh`, not changed here); CI runs the harness directly. |
+| `npm run test:protocol-report` | 114 checks pass (100 on `main`) |
+| `npm run test:prod-preflight` | 18/18 |
+| `npm run test:worker-start` | 41/41 |
+| `npm run test:paid-execution-guards` | 142/142 |
+| `npm run test:founder-baseline-control`, `npm run test:scan-page` | pass, 52/52 |
+| The CI jobs this PR triggers: `test:m0-worker-execution-gate`, `test:m5-tk-r`, `test:m5-phase3d-bounds`, `test:m5-b3-max-runtime`, `test:m5-phase3d-evidence`, `test:m5-0059-schema`, `test:m5-0060-schema`, `test:m5-2-adapter`, `test:m0-worker-hosting-contract`, `test:q2p-schema`, `test:q2p2-schema`, `test:s1-schema`, `test:prod-preflight` | all pass |
+| Every `test:*` command (128) | 105 exit 0. Of the other 23: 10 legacy smoke tests need a configured database and fail the same way on `main`; 3 opt-in runtime tests skip; 9 fail identically on `main` at `c0bc011` (`seo`, `m7-0071-schema`, `m7-0073-schema`, `0080-report-ready`, `pdf`, `pg9-harness-offline`, `snapshot-send-idempotency`, `q2p1-scope`, `q2p2-scope`); `bqi-wording` fails only its P-04 change-scope check, which lists every path outside the BQI pull request and passes on `main`. |
+
+## 31. Pilot questions (D-054) — branch `feat/pilot-questions`, stacked on step 1, not applied anywhere, not deployed
+
+- **What it adds:** one pilot holds all of a customer's approved questions in one project. Before this, each question needed its own request, project and report.
+  - Migration `20261118120000_pilot_questions.sql` adds:
+    - three tables: `pilots`, `pilot_questions` and `pilot_question_protocols`, the per-engine slot, which allows Perplexity's baseline only;
+    - `create_pilot` (start date between yesterday and 60 days ahead), `add_pilot_question`, `close_pilot` (refused while a measurement is running or about to start) and `retire_pilot_question`;
+    - three step 1 functions redefined, each byte for byte apart from its pilot block:
+      - `request_protocol_job_run` accepts `admin_pilot_run` and refuses a Run for a closed, ended or not-started pilot or a retired question, under a `FOR SHARE` lock on the pilot;
+      - `claim_requested_protocol_execution_job` refuses the same states at the claim, a second barrier;
+      - `retry_failed_protocol_job` refuses them before anything is reserved.
+
+      Each covers a pilot baseline and any retest of it.
+  - Each added question gets the same Perplexity plan and caps as an audit, through the same approval sequence.
+  - **Pilots** in the founder console: create a pilot, add approved questions, Run, Retry or Retire per question, close the pilot. ChatGPT shows as "Not measured".
+  - No report, no email, no provider call. The worker's only change is to treat a claim refused for a closed pilot like step 1's other claim refusals.
+- **Review (2026-11-17):** an independent read-only review of the first version found six defects, none of which spent without approval or exceeded a cap. All six are fixed on this branch and tested (D-054 item 11):
+  1. a pending or running Run could spend after a close;
+  2. a retest bypassed the closed-pilot block;
+  3. there was no start-date bound and no check before the start;
+  4. a question whose measurement could not go on could never be measured again;
+  5. the founder-experiments list could lose founder baselines;
+  6. a database test did not prove the protocol key.
+- **Not established:**
+  - **No browser walk-through** of the pilot pages against a running stack. The routes and pages are checked statically and by `build:verify` only.
+  - **A pilot's measurements are not visible in any report yet.** The combined pilot report is the next step.
+  - **No concurrency test.** The Run/close interleaving rests on the pilot row lock, which the static tests check; no test races two sessions.
+- **Open:** D-054 *Open*:
+  - a live pilot does not block a public request for its website;
+  - every question is stored with intent `shortlist`;
+  - the release position;
+  - D-037 coverage of the three redefined functions;
+  - Outcome Card recipients for interventions on pilot baselines;
+  - the older claims (0054, 0059) do not check pilots, and only the requested claim is live;
+  - a retry reserved just before a close keeps its reservation.
+- **Inventory on this branch:** 91 migrations, 219 files matching `scripts/test-*.ts`, 129 `test:*` and 4 `verify:*` commands.
+- **Commands and local results (2026-11-17, after the review's fixes):**
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | pass |
+| `npm run build:verify` | pass; the six routes and two pages are built (`next-env.d.ts` restored afterwards) |
+| `npm run test:pilot-questions` | 128/128 (87 before the review's fixes) |
+| `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | P1 45/45, P2 71/71, E1 74/74, Q4 52/52, pilot step 1 60/60, pilot questions 69/69 (all 91 migrations applied) |
+| `npm run test:pilot-step1` | 75/75 (S8 now checks the release order after Q4, since this migration is newer) |
+| `npm run test:prod-preflight` | 18/18 (the version, three tables and four functions added to the absence checks) |
+| `npm run test:founder-baseline-control` | pass, with a check that pilot protocols are left out of the founder experiments |
+| `npm run test:worker-start` | 41/41 |
+| `npm run test:paid-execution-guards` | 143/143. Its founder-route inventory now names the pilot Run route as the fourth route that can start the worker, and checks it is founder-guarded before the start. The first version of this branch failed that check: the route was added without updating the inventory. |
+| `ZYPACT_LEVEL2_LOCAL=1 npm run test:snapshot-worker-postgres-level2` | `LEVEL2_RESULT=PASS`, 886 PASS and 0 FAIL on `postgres:16-alpine`, with all 91 migrations applied, including this one. The local runner then exits 1 from its known cleanup trap (§30). CI's Level 2 job runs only for pull requests into `main`, so it does not run on this stacked branch. |

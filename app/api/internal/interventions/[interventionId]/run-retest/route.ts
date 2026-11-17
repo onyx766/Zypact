@@ -5,7 +5,7 @@ import { readIntervention } from "@/lib/interventions/intervention-actions";
 import { readRetestProgress } from "@/lib/interventions/retest-actions";
 import { invalidId, type RouteContext } from "@/lib/interventions/route-handlers";
 import { UUID_PATTERN } from "@/lib/interventions/validate";
-import { startWorkerMachine } from "@/lib/worker-control/fly-machine";
+import { startFailureHttpStatus, startWorkerMachine } from "@/lib/worker-control/fly-machine";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -74,11 +74,41 @@ export async function POST(_request: Request, context: RouteContext) {
     );
   }
 
-  const start = await startWorkerMachine();
+  const jobId = retest?.job?.id ?? null;
+  if (!jobId) {
+    return NextResponse.json(
+      {
+        ok: false, error: "no_queued_job",
+        message: "There is no retest job to run. Queue the retest run first.",
+      },
+      { status: 409 }
+    );
+  }
+
+  // D-052 — the start names this intervention's own retest job; the worker
+  // claims it or nothing.
+  const start = await startWorkerMachine({
+    jobId,
+    projectId: intervention.projectId,
+    via: "admin_run_retest",
+    requestedBy: guard.user.id,
+  });
   if (!start.ok) {
     return NextResponse.json(
       { ok: false, error: start.code, message: start.detail },
-      { status: start.code === "not_configured" || start.code === "paid_execution_blocked" ? 503 : 502 }
+      { status: startFailureHttpStatus(start.code) }
+    );
+  }
+
+  if (start.alreadyRunning && start.runRequestWithdrawn) {
+    return NextResponse.json(
+      {
+        ok: false, error: "worker_already_running",
+        message:
+          "The worker is still running from an earlier start, so nothing new was started. "
+          + "Press Run retest now again once it has stopped, usually within a minute.",
+      },
+      { status: 409 }
     );
   }
 
@@ -88,7 +118,7 @@ export async function POST(_request: Request, context: RouteContext) {
       level: "info",
       event: start.alreadyRunning ? "retest_worker_already_running" : "retest_worker_started",
       interventionId,
-      jobId: retest?.job?.id ?? null,
+      jobId,
       actor: guard.user.id,
     })
   );
@@ -99,8 +129,8 @@ export async function POST(_request: Request, context: RouteContext) {
       started: true,
       alreadyRunning: start.alreadyRunning,
       message: start.alreadyRunning
-        ? "The worker was already running. It finishes its current job, then stops; start it again to run this retest."
-        : "The worker is starting. It runs this retest, then stops — usually a few minutes.",
+        ? "The worker was already starting and takes this retest when it is ready, or has already taken it."
+        : "The worker is starting. It runs only this retest, then stops. Five runs usually take about 2 minutes.",
     },
     { status: 202 }
   );

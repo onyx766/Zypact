@@ -34,12 +34,24 @@ export interface ReviewState {
     reviewNote: string | null;
     reviewedAt: string | null;
     attemptCount: number | null;
+    /** D-052 — why a `failed` job stopped, and the slot it stopped at. */
+    failureReason: string | null;
+    nextBaselineOrdinal: number | null;
   } | null;
+  /** D-052 — the protocol's planned runs, for "run k of N". */
+  plannedRuns: number | null;
   attempts: {
     ordinal: number | null;
     status: string;
     terminationReason: string | null;
+    /** D-052 — a retried run names the run it retried. */
+    retryOfOrdinal: number | null;
   }[];
+  /** D-052 — set once the founder closed this request after a failure. */
+  closure: {
+    closedAt: string;
+    reason: string;
+  } | null;
   artifact: {
     id: string;
     integrityStatus: string | null;
@@ -65,12 +77,13 @@ export async function loadReviewState(
 
   let job: ReviewState["job"] = null;
   let attempts: ReviewState["attempts"] = [];
+  let plannedRuns: number | null = null;
 
   if (protocolId) {
     const { data: jobRow } = await client
       .from("protocol_execution_jobs")
       .select(
-        "id,status,needs_review_reason,prior_needs_review_reason,review_resolution,review_note,reviewed_at,attempt_count"
+        "id,status,needs_review_reason,prior_needs_review_reason,review_resolution,review_note,reviewed_at,attempt_count,failure_reason,next_baseline_ordinal"
       )
       .eq("protocol_id", protocolId)
       .order("created_at", { ascending: false })
@@ -88,19 +101,36 @@ export async function loadReviewState(
         reviewNote: j.review_note ?? null,
         reviewedAt: j.reviewed_at ?? null,
         attemptCount: j.attempt_count ?? null,
+        failureReason: j.failure_reason ?? null,
+        nextBaselineOrdinal: typeof j.next_baseline_ordinal === "number" ? j.next_baseline_ordinal : null,
       };
     }
 
+    const { data: protocolRow } = await client
+      .from("protocols")
+      .select("planned_baseline_runs")
+      .eq("id", protocolId)
+      .maybeSingle();
+    const planned = (protocolRow as Record<string, any> | null)?.planned_baseline_runs;
+    plannedRuns = typeof planned === "number" ? planned : null;
+
     const { data: attemptRows } = await client
       .from("protocol_attempts")
-      .select("baseline_ordinal,status,termination_reason")
+      .select("id,baseline_ordinal,status,termination_reason,retry_of_attempt_id")
       .eq("protocol_id", protocolId)
       .order("created_at", { ascending: true });
 
-    attempts = (attemptRows ?? []).map((row: Record<string, any>) => ({
+    const rows = (attemptRows ?? []) as Record<string, any>[];
+    const ordinalById = new Map<string, number | null>(
+      rows.map((row) => [row.id as string, (row.baseline_ordinal ?? null) as number | null])
+    );
+    attempts = rows.map((row) => ({
       ordinal: row.baseline_ordinal ?? null,
       status: row.status,
       terminationReason: row.termination_reason ?? null,
+      retryOfOrdinal: row.retry_of_attempt_id
+        ? ordinalById.get(row.retry_of_attempt_id) ?? null
+        : null,
     }));
   }
 
@@ -114,11 +144,20 @@ export async function loadReviewState(
 
   const a = (artifactRow ?? null) as Record<string, any> | null;
 
+  const { data: closureRow } = await client
+    .from("snapshot_request_closures")
+    .select("closed_at,reason")
+    .eq("snapshot_request_id", requestId)
+    .maybeSingle();
+  const c = (closureRow ?? null) as Record<string, any> | null;
+
   return {
     requestStatus: req?.status ?? null,
     protocolId,
     job,
+    plannedRuns,
     attempts,
+    closure: c ? { closedAt: c.closed_at, reason: c.reason } : null,
     artifact: a
       ? {
           id: a.id,

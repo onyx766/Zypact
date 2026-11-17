@@ -52,7 +52,7 @@ check(
 check(
   "route requires stopped worker before start",
   route.includes('workerState !== "stopped"') &&
-    route.includes('startWorkerMachine()')
+    route.includes('startWorkerMachine({')
 );
 check(
   "panel exposes the approved caps and exact identifiers",
@@ -70,6 +70,10 @@ check(
   page.includes("loadFounderBaselines") &&
     page.includes("attachedIds") &&
     page.includes("<FounderBaselinePanel rows={founderBaselines} />")
+);
+check(
+  "admin page leaves pilot protocols out of the founder experiments (D-054)",
+  page.includes("pilotProtocolIds(client)") && page.includes("attachedIds.add(protocolId)")
 );
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);

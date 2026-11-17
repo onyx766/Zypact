@@ -111,6 +111,16 @@ export interface WorkerOptions {
    * claimed a job, whatever its outcome, and never claims again.
    */
   exitAfterClaimedJob: boolean;
+  /**
+   * D-052 — which claim the loop calls. `requested` claims only the job a
+   * Run named (claim_requested_protocol_execution_job), and with
+   * `exitAfterClaimedJob` stops at once when no request is pending or the
+   * named job cannot be claimed. `global` (or absent) is the oldest
+   * claimable job of any project (claim_protocol_execution_job), kept for
+   * the M5 harnesses. The live runner (scripts/run-protocol-worker.ts)
+   * always sets `requested`, and scripts/test-pilot-step1.ts holds it to it.
+   */
+  claimScope?: "requested" | "global";
   /** B2 — per-provider-call ceiling in ms, applied separately to each leg. */
   providerTimeoutMs: number;
   /**
@@ -162,7 +172,13 @@ export type IterationOutcome =
    * PR-1 — the paid-execution gate refused before a claim. Nothing was
    * claimed, reserved or sent; `detail` is the gate's closed refusal code.
    */
-  | "paid_execution_refused";
+  | "paid_execution_refused"
+  /**
+   * D-052 — the pending run request named a job that could not be claimed
+   * (not found, not eligible, or locked). Nothing was claimed; `detail` is
+   * the claim's closed outcome.
+   */
+  | "run_request_refused";
 
 export interface IterationResult {
   outcome: IterationOutcome;

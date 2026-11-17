@@ -49,8 +49,30 @@ import {
 } from "@/lib/worker-control/paid-execution-gate";
 import {
   __setPaidExecutionGateForTests,
+  __setRunRequestsForTests,
   startWorkerMachine,
 } from "@/lib/worker-control/fly-machine";
+
+/**
+ * D-052 — every start now names its job through a run request. These checks
+ * are about the paid gate and Fly, so the run request always succeeds here;
+ * scripts/test-pilot-step1.ts covers the run request itself.
+ */
+const START_TARGET = {
+  jobId: "00000000-0000-4000-8000-0000000000aa",
+  projectId: "00000000-0000-4000-8000-0000000000bb",
+  via: "admin_run_pipeline" as const,
+  requestedBy: "00000000-0000-4000-8000-0000000000cc",
+};
+__setRunRequestsForTests({
+  request: async () => ({
+    outcome: "REQUESTED",
+    requestId: "00000000-0000-4000-8000-0000000000dd",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  }),
+  cancel: async () => "CANCELLED",
+});
+
 import { legacyPipelineRefusal } from "@/lib/auth/route-helpers";
 import { callModel } from "@/lib/llm/call-model";
 
@@ -356,7 +378,7 @@ async function main(): Promise<void> {
   __setPaidExecutionGateForTests(null);
   {
     flyCalls = 0;
-    const r = await startWorkerMachine();
+    const r = await startWorkerMachine(START_TARGET);
     check("default gate, nothing configured → blocked, Fly not contacted",
       !r.ok && r.code === "paid_execution_blocked" && flyCalls === 0, JSON.stringify(r));
   }
@@ -366,12 +388,12 @@ async function main(): Promise<void> {
     process.env.NEXT_PUBLIC_SUPABASE_URL = "http://127.0.0.1:9";
     process.env.SUPABASE_SERVICE_ROLE_KEY = "test-only";
     flyCalls = 0;
-    const r = await startWorkerMachine();
+    const r = await startWorkerMachine(START_TARGET);
     check("default gate, switch off → blocked as disabled, Fly not contacted",
       !r.ok && r.code === "paid_execution_blocked" && /switched off/.test(r.detail) && flyCalls === 0, JSON.stringify(r));
     process.env.ZYPACT_PAID_EXECUTION_ENABLED = "true";
     flyCalls = 0;
-    const r2 = await startWorkerMachine();
+    const r2 = await startWorkerMachine(START_TARGET);
     check("default gate, switch on but no ceiling → blocked, Fly not contacted",
       !r2.ok && r2.code === "paid_execution_blocked" && /ceiling/.test(r2.detail) && flyCalls === 0, JSON.stringify(r2));
     delete process.env.ZYPACT_PAID_EXECUTION_ENABLED;
@@ -384,11 +406,11 @@ async function main(): Promise<void> {
     const env: Record<string, string | undefined> = { ...ON };
     __setPaidExecutionGateForTests(() => evaluatePaidExecution({ client, now: () => NOW, env }));
     machineStarted = false; flyCalls = 0;
-    const first = await startWorkerMachine();
+    const first = await startWorkerMachine(START_TARGET);
     check("switch on → starts", first.ok && flyCalls === 1, JSON.stringify(first));
     env.ZYPACT_PAID_EXECUTION_ENABLED = "false";
     machineStarted = false; flyCalls = 0;
-    const second = await startWorkerMachine();
+    const second = await startWorkerMachine(START_TARGET);
     check("switch flipped off → the very next start is refused, Fly not contacted",
       !second.ok && second.code === "paid_execution_blocked" && flyCalls === 0, JSON.stringify(second));
   }
@@ -400,7 +422,7 @@ async function main(): Promise<void> {
       [{ protocol_id: "p1", status: "queued" }], [{ id: "p1", spend_cap_usd: 0.25 }]);
     __setPaidExecutionGateForTests(() => evaluatePaidExecution({ client, now: () => NOW, env: ON }));
     machineStarted = false; flyCalls = 0;
-    const results = await Promise.all(Array.from({ length: 5 }, () => startWorkerMachine()));
+    const results = await Promise.all(Array.from({ length: 5 }, () => startWorkerMachine(START_TARGET)));
     const fresh = results.filter((r) => r.ok && !r.alreadyRunning).length;
     check("five simultaneous starts at the ceiling's edge give exactly one fresh start",
       fresh === 1, JSON.stringify(results));
@@ -420,7 +442,7 @@ async function main(): Promise<void> {
       [{ id: "r1", spend_cap_usd: 2 }]);
     __setPaidExecutionGateForTests(() => evaluatePaidExecution({ client, now: () => NOW, env: ON }));
     machineStarted = false; flyCalls = 0;
-    const results = await Promise.all(Array.from({ length: 5 }, () => startWorkerMachine()));
+    const results = await Promise.all(Array.from({ length: 5 }, () => startWorkerMachine(START_TARGET)));
     check("five simultaneous starts against a resumable job over the ceiling all refuse",
       results.every((r) => !r.ok && r.code === "paid_execution_blocked"), JSON.stringify(results));
     check("and none of them contacts Fly", flyCalls === 0, String(flyCalls));
@@ -431,7 +453,7 @@ async function main(): Promise<void> {
       [{ id: "r1", spend_cap_usd: 2 }]);
     __setPaidExecutionGateForTests(() => evaluatePaidExecution({ client, now: () => NOW, env: ON }));
     machineStarted = false; flyCalls = 0;
-    const results = await Promise.all(Array.from({ length: 5 }, () => startWorkerMachine()));
+    const results = await Promise.all(Array.from({ length: 5 }, () => startWorkerMachine(START_TARGET)));
     check("under the ceiling, simultaneous starts to resume a job still give exactly one fresh start",
       results.filter((r) => r.ok && !r.alreadyRunning).length === 1, JSON.stringify(results));
   }
@@ -631,15 +653,17 @@ async function main(): Promise<void> {
     const expectedFly = [
       "app/api/internal/founder-baselines/[jobId]/run/route.ts",
       "app/api/internal/interventions/[interventionId]/run-retest/route.ts",
+      // D-054 — a pilot question's Run, founder-guarded like the others.
+      "app/api/internal/pilots/[pilotId]/questions/[pilotQuestionId]/run/route.ts",
       "app/api/internal/snapshot-requests/[requestId]/run-pipeline/route.ts",
     ];
-    check("exactly the three founder routes can start the worker", JSON.stringify(fly) === JSON.stringify(expectedFly), fly.join(", "));
+    check("exactly the four founder routes can start the worker", JSON.stringify(fly) === JSON.stringify(expectedFly), fly.join(", "));
     for (const f of fly) {
       const src = fs.readFileSync(path.join(root, f), "utf8");
       // Three reviewed guard shapes. Whichever it is, it must come before
       // the route's start call.
       const guardAt = src.search(/requireFounderForRoute\(|guardInterventionRoute\(|isFounderEmail\(user\.email\)/);
-      const startAt = src.indexOf("startWorkerMachine()");
+      const startAt = src.indexOf("startWorkerMachine({");
       check(`${f} is founder-guarded before it can start the worker`, guardAt > 0 && startAt > guardAt,
         `guard@${guardAt} start@${startAt}`);
     }

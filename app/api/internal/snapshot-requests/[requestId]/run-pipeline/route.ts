@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 
-import { requireCurrentUser } from "@/lib/auth/current-user";
+import { requireCurrentUser, type CurrentUser } from "@/lib/auth/current-user";
 import { isFounderEmail } from "@/lib/auth/founder";
 import { getReportServiceClient } from "@/lib/reports/service-client";
-import { startWorkerMachine } from "@/lib/worker-control/fly-machine";
+import { startFailureHttpStatus, startWorkerMachine } from "@/lib/worker-control/fly-machine";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,6 +13,9 @@ const UUID_PATTERN =
 
 /**
  * Starts the scan-and-report pipeline for one approved request.
+ *
+ * D-052 — the start names this request's own job. The worker claims that
+ * job or nothing, so a Run can never run another request's measurement.
  *
  * Starts the deployed worker; it does not run the work here. The pipeline
  * executes every planned run of the request's own protocol (two paid
@@ -36,7 +39,7 @@ export async function POST(
 ) {
   const { requestId } = await params;
 
-  let user: { email: string | null } | null;
+  let user: CurrentUser | null;
   try {
     user = await requireCurrentUser();
   } catch {
@@ -81,7 +84,7 @@ export async function POST(
   // watching two spawns race and assuming both are doing work.
   const { data: job } = await client
     .from("protocol_execution_jobs")
-    .select("status,lease_expires_at")
+    .select("id,project_id,status,lease_expires_at")
     .eq("protocol_id", row.protocol_id)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -89,6 +92,13 @@ export async function POST(
 
   const jobRow = (job as Record<string, any> | null) ?? null;
   const jobStatus = jobRow?.status ?? null;
+
+  if (!jobRow?.id || !jobRow?.project_id) {
+    return NextResponse.json(
+      { ok: false, error: "This request has no measurement job to run." },
+      { status: 409 }
+    );
+  }
 
   // A leased job blocks a second run only while its lease is still good. Once
   // the lease has lapsed the worker is gone, and refusing here would strand
@@ -123,6 +133,30 @@ export async function POST(
     );
   }
 
+  // D-052 — an ended job is not run again by pressing Run. A failed one is
+  // retried or closed on the request page, where the cause is shown.
+  if (jobStatus === "failed" || jobStatus === "abandoned_exhausted") {
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          "This measurement stopped before it finished. Retry it or close the request on the request page.",
+      },
+      { status: 409 }
+    );
+  }
+
+  if (jobStatus === "succeeded") {
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          "This measurement has already finished. If its report is missing, use Regenerate report on the request page.",
+      },
+      { status: 409 }
+    );
+  }
+
   // The run count shown to the founder comes from this protocol's own frozen
   // plan, never a constant: baselines approved under an older default keep
   // the plan they were approved with.
@@ -135,36 +169,51 @@ export async function POST(
   const plannedRuns = (protocol as Record<string, any> | null)
     ?.planned_baseline_runs;
 
+  // Measured on production evidence (D-036): a run takes about 20 seconds,
+  // and a 5-run scan finished in 91-102 seconds.
   const startedDetail =
     typeof plannedRuns === "number" && plannedRuns > 0
-      ? `Scan started. It executes ${plannedRuns} planned run${
+      ? `Scan started for this request only. It executes ${plannedRuns} planned run${
           plannedRuns === 1 ? "" : "s"
-        } (two paid provider calls each) and usually takes about 2 minutes per run.`
-      : "Scan started. It executes the protocol's planned runs and usually takes a few minutes.";
+        } (two paid provider calls each) and usually takes about 20 seconds per run.`
+      : "Scan started for this request only. It executes the protocol's planned runs and usually takes a few minutes.";
 
-  const start = await startWorkerMachine();
+  const start = await startWorkerMachine({
+    jobId: jobRow.id,
+    projectId: jobRow.project_id,
+    via: "admin_run_pipeline",
+    requestedBy: user.id,
+  });
 
   if (!start.ok) {
-    // `not_configured` is the deployment's fault, not the request's, and 503
-    // says so: retrying this request cannot help until the worker variables
-    // are set.
+    // 503 is the deployment's configuration or switches, 409 a refused run,
+    // 502 Fly. Retrying cannot help a 503 until the deployment is fixed.
     return NextResponse.json(
       { ok: false, error: start.detail },
-      { status: start.code === "not_configured" || start.code === "paid_execution_blocked" ? 503 : 502 }
+      { status: startFailureHttpStatus(start.code) }
     );
   }
 
-  // An already-running machine is not a second job. The worker claims one
-  // job and exits, so the honest answer is that this request is queued
-  // behind whatever it is doing now.
+  // An already-running machine is not a second job. A press that found it
+  // up had its own run request withdrawn (a single-job worker never claims
+  // again); a press for a job whose start is already pending just waits.
   if (start.alreadyRunning) {
+    if (start.runRequestWithdrawn) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "The worker is still running from an earlier start, so nothing new was started. "
+            + "Press Run again once it has stopped, usually within a minute.",
+        },
+        { status: 409 }
+      );
+    }
     return NextResponse.json(
       {
         ok: true,
         started: true,
-        detail:
-          "The worker was already running. It finishes its current job, then stops; "
-          + "start it again to run this one.",
+        detail: "The worker was already starting and takes this request when it is ready, or has already taken it.",
       },
       { status: 202 }
     );

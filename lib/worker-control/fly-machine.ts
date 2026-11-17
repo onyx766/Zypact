@@ -22,6 +22,13 @@
  * the environment, never logged, and never returned to the browser.
  */
 
+import { getDb } from "@/lib/db";
+import type {
+  CancelProtocolJobRunRequestOutcome,
+  RequestProtocolJobRunInput,
+  RequestProtocolJobRunOutcome,
+  RequestProtocolJobRunResult,
+} from "@/lib/db/types";
 import { getReportServiceClient } from "@/lib/reports/service-client";
 import {
   evaluatePaidExecution,
@@ -59,12 +66,116 @@ export type FlyMachineState =
   | "suspended" | "replacing" | "destroying" | "destroyed" | "unknown";
 
 export type StartWorkerResult =
-  | { ok: true; alreadyRunning: boolean; state: FlyMachineState }
+  | {
+      ok: true;
+      alreadyRunning: boolean;
+      state: FlyMachineState;
+      /** D-052 — the run request that names this start's job. */
+      runRequestId: string;
+      runRequestExpiresAt: string;
+      /** True when this call recorded the request; false when it was already pending for this job. */
+      runRequestCreated: boolean;
+      /**
+       * True only when the machine was already running and this call's cancel
+       * of the request it had just recorded was confirmed: nothing new will
+       * run from this press.
+       */
+      runRequestWithdrawn: boolean;
+    }
   | {
       ok: false;
-      code: "not_configured" | "paid_execution_blocked" | "unauthorized" | "not_found" | "fly_error";
+      code:
+        | "not_configured"
+        | "paid_execution_blocked"
+        | "run_request_unavailable"
+        | "run_request_refused"
+        | "unauthorized"
+        | "not_found"
+        | "fly_error";
       detail: string;
+      /** Set when `code` is `run_request_refused`: the closed refusal. */
+      refusal?: RequestProtocolJobRunOutcome;
     };
+
+/**
+ * D-052 — how long a Run's request waits for the machine it starts. The
+ * machine boots in seconds and claims on its first pass; two minutes is
+ * room for a slow boot, and short enough that a request nobody served does
+ * not hold the next Run back for long.
+ */
+export const RUN_REQUEST_TTL_SECONDS = 120;
+
+/** D-052 — the one job a start is for, and who pressed Run. */
+export interface WorkerRunTarget {
+  jobId: string;
+  projectId: string;
+  via: "admin_run_pipeline" | "admin_run_retest" | "admin_founder_baseline" | "admin_pilot_run";
+  /** The signed-in founder's user id. */
+  requestedBy: string;
+}
+
+interface RunRequests {
+  request(input: RequestProtocolJobRunInput): Promise<RequestProtocolJobRunResult>;
+  cancel(requestId: string): Promise<CancelProtocolJobRunRequestOutcome>;
+}
+
+const defaultRunRequests: RunRequests = {
+  request: (input) => getDb().requestProtocolJobRun(input),
+  cancel: (requestId) => getDb().cancelProtocolJobRunRequest(requestId),
+};
+
+let runRequests: RunRequests = defaultRunRequests;
+
+export function __setRunRequestsForTests(next: RunRequests | null): void {
+  runRequests = next ?? defaultRunRequests;
+}
+
+/** What the founder is told when the run request is refused. Fixed text only. */
+const RUN_REQUEST_REFUSAL_TEXT: Record<Exclude<RequestProtocolJobRunOutcome, "REQUESTED" | "ALREADY_REQUESTED">, string> = {
+  ANOTHER_RUN_PENDING:
+    "Another run was started in the last two minutes and has not been picked up yet. Wait for it, or try again in two minutes.",
+  WORKER_BUSY:
+    "The worker is running another job. Press Run again when that job has finished.",
+  JOB_LOCKED:
+    "This job is being changed by another action right now. Try again in a moment.",
+  JOB_NOT_FOUND:
+    "This job no longer exists.",
+  JOB_ATTEMPTS_EXHAUSTED:
+    "This job's worker stopped too many times, so the job is now marked abandoned. Close the request from its page.",
+  JOB_NOT_RUNNABLE:
+    "This job is not waiting to run. It may have finished, failed or be held for review. Refresh the page.",
+  PILOT_CLOSED:
+    "This pilot is closed or past its end date, so its questions are no longer measured.",
+  PILOT_NOT_STARTED:
+    "This pilot has not started yet. Its questions can be run from its start date.",
+  PILOT_QUESTION_RETIRED:
+    "This pilot question was retired, so it is no longer measured.",
+};
+
+/**
+ * The HTTP status a route answers with when a start fails: 503 for the
+ * deployment's configuration or switches, 409 when the run itself was
+ * refused, 502 for Fly.
+ */
+export function startFailureHttpStatus(code: Extract<StartWorkerResult, { ok: false }>["code"]): number {
+  if (code === "not_configured" || code === "paid_execution_blocked" || code === "run_request_unavailable") return 503;
+  if (code === "run_request_refused") return 409;
+  return 502;
+}
+
+/**
+ * Best effort: an unserved request also expires on its own. Only a request
+ * this call created is ever withdrawn: one that was already pending belongs
+ * to an earlier start whose machine may be about to claim it.
+ */
+async function withdraw(requestId: string): Promise<CancelProtocolJobRunRequestOutcome | null> {
+  try {
+    return await runRequests.cancel(requestId);
+  } catch {
+    /* The request expires after RUN_REQUEST_TTL_SECONDS regardless. */
+    return null;
+  }
+}
 
 interface FlyConfig { app: string; machineId: string; token: string }
 
@@ -114,14 +225,20 @@ export async function readWorkerState(): Promise<FlyMachineState> {
 }
 
 /**
- * Starts the worker machine.
+ * Starts the worker machine for one named job.
+ *
+ * D-052 — the target is required, so no caller can start the machine
+ * without saying which job it is for. After the paid-execution gate, and
+ * before Fly is contacted, the job is recorded as the one pending run
+ * request; the worker's requested claim takes that job or nothing. If Fly
+ * does not accept the start, the request is withdrawn.
  *
  * Starting an already-running machine is reported rather than repeated. Fly
  * would accept the call, but a second start is not a second job — the
  * running process claims one job and exits — so telling the founder it is
  * already running is the honest answer to "why did nothing new happen".
  */
-export async function startWorkerMachine(): Promise<StartWorkerResult> {
+export async function startWorkerMachine(target: WorkerRunTarget): Promise<StartWorkerResult> {
   const config = readConfig();
   if (!config) {
     return {
@@ -145,11 +262,47 @@ export async function startWorkerMachine(): Promise<StartWorkerResult> {
     return { ok: false, code: "paid_execution_blocked", detail: decision.detail };
   }
 
+  // D-052 — name the job before anything can start.
+  let requested: RequestProtocolJobRunResult;
+  try {
+    requested = await runRequests.request({
+      jobId: target.jobId,
+      projectId: target.projectId,
+      via: target.via,
+      requestedBy: target.requestedBy,
+      ttlSeconds: RUN_REQUEST_TTL_SECONDS,
+    });
+  } catch {
+    return {
+      ok: false, code: "run_request_unavailable",
+      detail: "The run could not be recorded, so the worker was not started.",
+    };
+  }
+  if (requested.outcome !== "REQUESTED" && requested.outcome !== "ALREADY_REQUESTED") {
+    return {
+      ok: false, code: "run_request_refused", refusal: requested.outcome,
+      detail: RUN_REQUEST_REFUSAL_TEXT[requested.outcome],
+    };
+  }
+  if (!requested.requestId || !requested.expiresAt) {
+    return {
+      ok: false, code: "run_request_unavailable",
+      detail: "The run could not be recorded, so the worker was not started.",
+    };
+  }
+  const runRequestId = requested.requestId;
+  const runRequestExpiresAt = requested.expiresAt;
+  const created = requested.outcome === "REQUESTED";
+
   let status: number;
   let body: string;
   try {
     ({ status, body } = await flyFetch(config, "/start", { method: "POST" }));
   } catch (error) {
+    // Fly may or may not have started the machine. Withdrawing the request
+    // makes either case safe: a machine that did start finds no request
+    // and stops without claiming.
+    if (created) await withdraw(runRequestId);
     return {
       ok: false, code: "fly_error",
       detail: error instanceof Error && error.name === "TimeoutError"
@@ -157,6 +310,8 @@ export async function startWorkerMachine(): Promise<StartWorkerResult> {
         : "Could not reach Fly to start the worker.",
     };
   }
+
+  if (created && (status < 200 || status >= 300)) await withdraw(runRequestId);
 
   if (status === 401 || status === 403) {
     return {
@@ -185,9 +340,25 @@ export async function startWorkerMachine(): Promise<StartWorkerResult> {
     previous = (JSON.parse(body) as { previous_state?: string }).previous_state ?? "";
   } catch { /* A 2xx with an unreadable body is still a start. */ }
 
+  // A machine still booting ('starting') makes its first claim after this
+  // request was recorded, so it may serve it: the request is kept. One that
+  // is already running ('started') is a single-job worker that never claims
+  // again once its loop has ended, so a request this press created would only
+  // block the next Run: it is withdrawn, unless that worker took it first
+  // (NOT_PENDING), and only a confirmed cancel is reported as a withdrawal.
+  const alreadyRunning = previous === "started" || previous === "starting";
+  let runRequestWithdrawn = false;
+  if (previous === "started" && created) {
+    runRequestWithdrawn = (await withdraw(runRequestId)) === "CANCELLED";
+  }
+
   return {
     ok: true,
-    alreadyRunning: previous === "started" || previous === "starting",
+    alreadyRunning,
     state: "starting",
+    runRequestId,
+    runRequestExpiresAt,
+    runRequestCreated: created,
+    runRequestWithdrawn,
   };
 }

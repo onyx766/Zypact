@@ -770,6 +770,7 @@ export default async function SnapshotRequestDetailPage({
                 competitors={request.competitors}
                 scannedCompany={request.companyName}
                 scannedDomain={request.normalizedDomain}
+                origin={request.origin}
               />
 
               <RejectButton

@@ -3,15 +3,19 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { runConfirmationText } from "@/lib/reports/run-confirmation";
+
 /**
  * Per-row control that takes an approved request all the way to a report.
  *
- * The run is a detached server-side process, so this button only starts it and
- * then watches. While a run is live it polls the row's own state rather than
+ * The run happens on the Fly worker, so this button only starts it and then
+ * watches. While a run is live it polls the row's own state rather than
  * holding anything open, which means a closed tab or a dev-server reload does
- * not interrupt a paid scan.
+ * not interrupt a paid scan. The start names this request's own job (D-052),
+ * so it can never run another request's measurement.
  *
- * The confirm dialog is deliberate: the click spends real money.
+ * The confirm dialog is deliberate: the click spends real money, and it says
+ * how much this protocol allows, from the protocol's own frozen plan.
  */
 
 export interface PipelineRowState {
@@ -22,7 +26,11 @@ export interface PipelineRowState {
   integrityStatus: string | null;
   publicToken: string | null;
   delivered: boolean;
+  plannedRuns: number | null;
+  runCap: number | null;
+  spendCapUsd: number | null;
 }
+
 
 const POLL_INTERVAL_MS = 6000;
 
@@ -121,11 +129,7 @@ export function RunPipelineButton({
   }, [claimed, startedAt]);
 
   async function start() {
-    if (
-      !window.confirm(
-        "Run the scan now?\n\nThis makes 3 real, paid provider calls and takes about 5-6 minutes."
-      )
-    ) {
+    if (!window.confirm(runConfirmationText(state))) {
       return;
     }
 
@@ -194,6 +198,33 @@ export function RunPipelineButton({
         href={`/admin/snapshot-requests/${requestId}`}
       >
         Needs review
+      </a>
+    );
+  }
+
+  // A finished measurement whose report is not built yet is never offered as
+  // a paid Run: the report is built by the worker's report pass, or by
+  // Regenerate report on the request page.
+  if (state.jobStatus === "succeeded") {
+    return (
+      <a
+        className="zpa-btn zpa-btn-sm"
+        href={`/admin/snapshot-requests/${requestId}`}
+      >
+        Finished: report pending
+      </a>
+    );
+  }
+
+  // D-052 — a stopped measurement is retried or closed on its page, where
+  // the cause is shown. Pressing Run again would start nothing useful.
+  if (state.jobStatus === "failed" || state.jobStatus === "abandoned_exhausted") {
+    return (
+      <a
+        className="zpa-btn zpa-btn-sm zpa-btn-amber-ghost"
+        href={`/admin/snapshot-requests/${requestId}`}
+      >
+        Stopped: open
       </a>
     );
   }

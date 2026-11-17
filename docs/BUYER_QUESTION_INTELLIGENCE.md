@@ -16,7 +16,7 @@
 Buyer feedback: the questions Zypact measures must reflect how buyers describe their own problems, not how sellers describe their products. Today:
 
 - the public request form takes one website URL and one free-text question (`lib/snapshot-requests/public-form.ts`, field `buyerCategory`);
-- founder approval calls `approve_and_launch_snapshot_baseline`, which turns that text into question version 1 with provenance `customer_supplied`, approves it, creates and approves a protocol, and enqueues one baseline job, all in one transaction (0062, last redefined in 0069);
+- founder approval calls `approve_and_launch_snapshot_baseline`, which turns that text into question version 1, approves it, creates and approves a protocol, and enqueues one baseline job, all in one transaction (0062, last redefined in `20261114120000`). A public-form question is stored as `customer_supplied`; for a founder-created request the founder says at approval whether the customer or Zypact wrote it, and it is stored as `customer_supplied` or `founder_supplied` (D-052);
 - the only automated question generator, `lib/pipeline/generate-buyer-prompts.ts`, writes questions from the Site Reader's reading of the seller's own copy, keeps no sources, and is refused by `legacyPipelineRefusal`.
 
 Nothing in the repository collects, stores or attributes buyer wording, or records who the customer's buyers are.
@@ -276,7 +276,7 @@ A self-service "send me a new link" button is a later step. It would be rate-lim
 `approve_and_launch_snapshot_baseline(uuid, uuid, jsonb, text)` (0062, redefined in 0063 and 0069) is the founder's one-step path for a single-question request. In one transaction it:
 
 - locks the request (which must be `pending_approval`) and validates competitors;
-- creates question version 1 from `buyer_category` (provenance `customer_supplied`) and approves it;
+- creates question version 1 from `buyer_category` (provenance `customer_supplied`, or for a founder-created request the founder's answer to who wrote it, D-052) and approves it;
 - creates the protocol and approves it;
 - enqueues the job;
 - marks the request `approved`.

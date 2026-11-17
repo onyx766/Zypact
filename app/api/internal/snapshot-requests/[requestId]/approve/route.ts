@@ -10,6 +10,7 @@ import {
   parseCompetitorsInput,
 } from "@/lib/snapshot-requests/competitors";
 import { getDb } from "@/lib/db";
+import type { QuestionProvenanceChoice } from "@/lib/db/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,14 +43,24 @@ function founderEmails(): Set<string> {
   );
 }
 
-async function readCompetitorsField(
+/**
+ * The approval body is read once: the competitor frame and, for a
+ * founder-created request, who wrote the question (D-052).
+ */
+async function readApprovalBody(
   request: Request
-): Promise<unknown> {
+): Promise<{ competitors: unknown; questionProvenance: unknown }> {
   try {
-    const body = await request.json();
-    return (body as { competitors?: unknown })?.competitors;
+    const body = (await request.json()) as {
+      competitors?: unknown;
+      questionProvenance?: unknown;
+    } | null;
+    return {
+      competitors: body?.competitors,
+      questionProvenance: body?.questionProvenance,
+    };
   } catch {
-    return undefined;
+    return { competitors: undefined, questionProvenance: undefined };
   }
 }
 
@@ -170,8 +181,10 @@ export async function POST(
   // local feedback cannot say "valid" for input the RPC will reject. This
   // read is for feedback only: the RPC re-normalizes, re-validates, and
   // remains authoritative for any state change between here and approval.
+  const approvalBody = await readApprovalBody(request);
+
   const parsed = parseCompetitorsInput(
-    await readCompetitorsField(request),
+    approvalBody.competitors,
     snapshotRequest.companyName,
     snapshotRequest.normalizedDomain
   );
@@ -194,13 +207,33 @@ export async function POST(
     .update(snapshotRequest.buyerCategory)
     .digest("hex");
 
+  // D-052 — the report shows the customer who wrote the question. A
+  // public-form question was written by the requester; for an audit the
+  // founder created, the founder must say whether the customer or Zypact
+  // wrote it. The database refuses a founder-created approval without it.
+  let questionProvenance: QuestionProvenanceChoice | null = null;
+  if (snapshotRequest.origin === "founder") {
+    const choice = approvalBody.questionProvenance;
+    if (choice !== "customer_supplied" && choice !== "founder_supplied") {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Say who supplied this question, the customer or Zypact, before approving.",
+        },
+        { status: 400 }
+      );
+    }
+    questionProvenance = choice;
+  }
+
   const approved =
     await db
       .approveAndLaunchSnapshotBaseline(
         requestId,
         user.id,
         parsed.competitors,
-        promptHash
+        promptHash,
+        questionProvenance
       );
 
   if (!approved) {
@@ -224,6 +257,8 @@ export async function POST(
       approvedBy: user.id,
       status: approved.status,
       protocolId: approved.protocolId,
+      origin: snapshotRequest.origin,
+      questionProvenance: questionProvenance ?? "customer_supplied",
     })
   );
 

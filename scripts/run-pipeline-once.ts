@@ -101,7 +101,55 @@ async function main() {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  // D-052 — the spawned worker claims only the job a run request names, so
+  // name this request's own job first. Without it the worker stops at once.
+  const { data: requestRow } = await client
+    .from("snapshot_requests")
+    .select("protocol_id")
+    .eq("id", requestId)
+    .maybeSingle();
+  const protocolId = (requestRow as { protocol_id?: string | null } | null)?.protocol_id ?? null;
+  if (!protocolId) fail("The request has no protocol. Approve it first.");
+
+  const { data: jobRow } = await client
+    .from("protocol_execution_jobs")
+    .select("id,project_id")
+    .eq("protocol_id", protocolId)
+    .maybeSingle();
+  const job = jobRow as { id: string; project_id: string } | null;
+  if (!job) fail("The request has no protocol job.");
+
+  const { data: runRequest, error: runRequestError } = await client.rpc("request_protocol_job_run", {
+    p_job_id: job.id,
+    p_project_id: job.project_id,
+    p_requested_via: "operator_cli",
+    p_requested_by: null,
+    p_ttl_seconds: 120,
+  });
+  if (runRequestError) fail("The run could not be recorded.");
+  const runRow = (Array.isArray(runRequest) ? runRequest[0] : runRequest) as
+    | { outcome?: string; request_id?: string | null }
+    | null;
+  const runOutcome = runRow?.outcome;
+  if (runOutcome !== "REQUESTED" && runOutcome !== "ALREADY_REQUESTED") {
+    fail(`The run was refused: ${String(runOutcome)}.`);
+  }
+  log("run_requested", { requestId, outcome: runOutcome });
+  // Only a request this run created is withdrawn afterwards; one that was
+  // already pending belongs to another start.
+  const createdRunRequestId = runOutcome === "REQUESTED" ? runRow?.request_id ?? null : null;
+
   const workerExit = await runProtocolWorker();
+
+  // A worker that exited without claiming (a refusal, a crash, a failed
+  // spawn) must not leave this request for the next start to pick up. A
+  // consumed request answers NOT_PENDING, which is fine.
+  if (createdRunRequestId) {
+    const { error: cancelError } = await client.rpc("cancel_protocol_job_run_request", {
+      p_request_id: createdRunRequestId,
+    });
+    log("run_request_closed", { requestId, cancelled: !cancelError });
+  }
   log("protocol_worker_exited", { code: workerExit });
 
   // A non-zero worker exit is not fatal to this stage. The job may have

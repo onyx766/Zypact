@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { requireFounderForPage } from "@/lib/auth/founder";
+import { listPilotActionsForAdmin } from "@/lib/pilots/action-store";
 import {
   ENGINE_NOT_MEASURED,
   PILOT_ENGINES,
@@ -23,6 +24,7 @@ import {
   QuestionControls,
   RetireQuestionButton,
 } from "../pilot-forms";
+import { PilotActionsPanel } from "../pilot-action-forms";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -43,6 +45,11 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
   const { pilot, questions } = loaded;
   // D-055 — the combined report's revisions, newest first.
   const revisions = await listPilotReportRevisions(client, pilot.id);
+  // D-057 — the team's suggested actions, and the questions whose answers they may link to.
+  const actions = await listPilotActionsForAdmin(client, pilot.id);
+  const actionQuestions = questions
+    .filter((q) => q.retiredAt === null && q.perplexity !== null)
+    .map((q) => ({ pilotQuestionId: q.id, ordinal: q.ordinal, text: q.questionText }));
   const siteUrl = publicSiteUrl();
   const today = todayUtc();
   const over = pilotIsOver(pilot.status, pilot.endsOn, today);
@@ -169,6 +176,32 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
           </table>
         </div>
       )}
+
+      <div className="zpa-card">
+        <h2 className="zpa-title">Suggested actions</h2>
+        <p className="zpa-muted">
+          Written by the team from the stored answers, each linked to the answers and sources it rests on. A saved action is
+          a draft; only actions you have reviewed appear in the next report built, and any edit needs a new review. Any
+          action in a report holds it for your review before sharing.
+        </p>
+        <PilotActionsPanel
+          pilotId={pilot.id}
+          questions={actionQuestions}
+          actions={actions.map((a) => ({
+            actionId: a.actionId,
+            status: a.status,
+            versionNumber: a.versionNumber,
+            title: a.title,
+            observation: a.observation,
+            suggestedAction: a.suggestedAction,
+            whyItMightMatter: a.whyItMightMatter,
+            alternativeExplanations: a.alternativeExplanations,
+            openQuestions: a.openQuestions,
+            withdrawReason: a.withdrawReason,
+            evidence: a.evidence,
+          }))}
+        />
+      </div>
 
       <div className="zpa-card">
         <div className="zpa-page-head">

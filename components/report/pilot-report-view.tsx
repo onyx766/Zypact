@@ -130,6 +130,41 @@ export function PilotReportView({
           ))}
         </section>
 
+        {v.actions ? (
+          <section className="zpr-card zpr-section">
+            <h2 className="zpr-section-title">{v.actions.heading}</h2>
+            {v.actions.intro.map((p) => (
+              <p key={p} className="zpr-section-sub">
+                {p}
+              </p>
+            ))}
+            {v.actions.actions.map((a) => (
+              <article key={a.key} className="zpr-section">
+                <h3 className="zpr-note-title">{a.heading}</h3>
+                <ul className="zpr-list">
+                  {a.fields.map((f) => (
+                    <li key={`${a.key}-${f.label}`}>
+                      <strong>{f.label}:</strong> {f.text}
+                    </li>
+                  ))}
+                </ul>
+                <p className="zpr-section-sub">{a.basedOnHeading}:</p>
+                <ul className="zpr-list">
+                  {a.basedOn.map((line, i) => (
+                    <li key={`${a.key}-evidence-${i}`}>{line}</li>
+                  ))}
+                </ul>
+                <p className="zpr-footnote">{a.reviewed}</p>
+              </article>
+            ))}
+            {v.actions.notes.map((n) => (
+              <p key={n} className="zpr-section-sub">
+                {n}
+              </p>
+            ))}
+          </section>
+        ) : null}
+
         <section className="zpr-card zpr-section">
           <h2 className="zpr-section-title">{v.limitsHeading}</h2>
           <ul className="zpr-list">

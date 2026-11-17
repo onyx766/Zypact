@@ -66,6 +66,31 @@ export function renderPilotReportMarkdown(payload: PilotReportPayload): string {
     out.push("");
   }
 
+  if (v.actions) {
+    out.push(`## ${v.actions.heading}`);
+    out.push("");
+    for (const p of v.actions.intro) {
+      out.push(p);
+      out.push("");
+    }
+    for (const a of v.actions.actions) {
+      out.push(`### ${cell(a.heading)}`);
+      out.push("");
+      for (const f of a.fields) out.push(`- **${f.label}:** ${f.text.replace(/\s+/g, " ").trim()}`);
+      out.push("");
+      out.push(`${a.basedOnHeading}:`);
+      out.push("");
+      for (const line of a.basedOn) out.push(`- ${line}`);
+      out.push("");
+      out.push(a.reviewed);
+      out.push("");
+    }
+    for (const n of v.actions.notes) {
+      out.push(n);
+      out.push("");
+    }
+  }
+
   out.push(`## ${v.limitsHeading}`);
   out.push("");
   for (const l of v.limitations) out.push(`- ${l}`);

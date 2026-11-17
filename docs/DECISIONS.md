@@ -1281,3 +1281,66 @@ Each item below departed from a document that governed before this approval: V1_
   - a revision changed after it is shared;
   - recommended actions added to the payload;
   - a second engine measured.
+
+## D-057 — Suggested actions in the pilot report: written by the team, linked to stored answers, reviewed before they are shown
+
+- **Date:** 2026-11-17
+- **Status:** Built on branch `feat/pilot-actions`, stacked on the combined pilot report (D-055, PR #125). It implements D-053 item 4, which the founder approved on 2026-11-17: actions are written by the team, each linked to the answers and sources it rests on, and reviewed before they are sent; nothing is generated automatically, and no action is said to be likely to change results. Rules marked *(engineer)* are **proposed for founder confirmation**. Migration `20261120120000_pilot_actions.sql` is **not applied to any Supabase project**, and nothing is deployed.
+- **Revisits:** D-055's trigger "recommended actions added to the payload". The payload gains an optional `actions` list; revisions built before D-057 have none and still render.
+- **Decision:**
+  1. **What an action version states** *(engineer)*, from METHODOLOGY §12 at this stage:
+     - a title;
+     - what we observed;
+     - the suggested action;
+     - why this might matter, worded as a hypothesis;
+     - what else could explain it;
+     - what we don't know yet;
+     - and at least one, at most ten, links to stored answers.
+
+     Target, owner, observation window and what would count as a change, no change or an unclear result are **not** taken here. They are captured when the customer chooses to test an action as a registered intervention (M7), and the report says so.
+  2. **Links** *(engineer)*. Each link names one completed attempt of one of this pilot's measurements with a stored response hash, and optionally one source URL from that answer's own extracted sources.
+     - The founder picks them question by question in the console, from the answers whose stored response re-hashes to its fingerprint, and the sources come from that answer; a URL is never typed.
+     - The save route re-checks that every named source is among that answer's sources. The database refuses an answer outside the pilot, a failed or unanswered attempt, or an answer to a retired question, and a trigger refuses such a link even for the database owner.
+     - **At every build**, every link is checked again against the evidence the report is built from. An answer that is not the pilot's, no longer completed, retired, or no longer matching its fingerprint, or a source that cannot be re-found in that answer under the question's own source rule, makes the report `blocked`.
+  3. **Status** *(engineer)*. Draft, reviewed, withdrawn, as append-only events.
+     - Saving creates a version, which is a draft.
+     - **Review** is a separate founder action with an explicit confirmation ("I have read this suggested action, and the answers and sources it links to"), and applies to the latest version only.
+     - **Editing** creates a new version, which is a draft again until reviewed; the earlier reviewed version is not shown in its place.
+     - **Withdrawal** needs a reason, is final, and keeps the history. A revision already shared keeps what it showed.
+     - At most 30 actions in use per pilot, and 50 versions per action.
+  4. **Wording lint** *(engineer)*, at save and again at build. It refuses METHODOLOGY §19's statements, causal or promise wording ("will improve", "will increase", "guarantee", "caused", "because of this page", "ensure", "boost your ranking" and close variants), and the repository's claim-language list (`FORBIDDEN_W1_PHRASES`). A phrase matches at a word start. A hit refuses the save; at build it makes the report `blocked`.
+  5. **In the report.**
+     - A "Suggested actions" section in the shared presentation model, so the page and the Markdown cannot drift.
+     - Each action shows its fields and its links in words (question, engine, answer number, the first characters of the stored response's SHA-256, and the source with whether the answer cites it), and the day it was reviewed.
+     - The section carries the fixed note: "Suggested by the Zypact team from the answers above. These are hypotheses to test, not predictions; we can't say any change will alter what an AI engine answers."
+     - It also says that an action names no owner, timing or expected result until the customer chooses to test it.
+     - **No section at all** when no reviewed action exists.
+  6. **Integrity.** Any action makes the report at least `needs_review`, so the founder's preview and acknowledgement path (D-055) is always used. `save_pilot_report_artifact` enforces this in the database: the manifest lists the action versions the payload shows; each must be its action's latest version, reviewed, of an action of this pilot that is not withdrawn (`ACTION_NOT_REVIEWED`); every such action must be listed (`ACTIONS_INCOMPLETE`); the payload and the manifest must list the same versions; and a revision with any action is never `integrity_passed`.
+- **Migration** `20261120120000_pilot_actions.sql`:
+  - four append-only tables (`pilot_actions`, `pilot_action_versions`, `pilot_action_evidence`, `pilot_action_events`) with RLS on and no policy, select-only for `service_role`;
+  - a guard trigger on each refusing every update and delete;
+  - the evidence trigger;
+  - `save_pilot_action`, `review_pilot_action` and `withdraw_pilot_action`, SECURITY DEFINER with a pinned search_path, executable by `service_role` only; the trigger functions by no role;
+  - `save_pilot_report_artifact` redefined: `20261119120000`'s body byte for byte, with one block marked `D-057 begin`/`D-057 end` added after the evidence checks and before the revision is numbered (test M9).
+
+  Every refusal in `save_pilot_action` comes before its first write. A review and a withdrawal take the pilot row `for share`, and a save of an action or of a report takes it `for update`, so they never interleave.
+- **Release order:** directly after `20261119120000`, wherever the founder places the pilot migrations (D-052, `PROD_PREFLIGHT_SPEC.md`). It changes no worker, spend or claim function, so D-037's list is unchanged.
+- **Recovery:** in the migration's header. Roll back the web app, restore `save_pilot_report_artifact` from `20261119120000`, then drop the three functions, the four tables and the two trigger functions. Shared revisions keep the actions in their stored payload.
+- **Tests:**
+  - `npm run test:pilot-actions` (offline): fields, lint, status selection, the report on page and in Markdown, every blocking link, routes, client-safety of the console, and the migration's contract including the byte-for-byte check of the redefined save;
+  - `scripts/test-pilot-actions-db.ts`, run by `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db`;
+  - results in `CURRENT_STATUS.md` §34.
+- **Open for the founder:**
+  - the *(engineer)* rules above, especially the limits (30 actions, 10 links) and that a withdrawal is final;
+  - whether the report should also list the stored responses' full fingerprints in an evidence appendix, rather than the first twelve characters beside each link;
+  - whether a reviewer other than the writer should be required once the team has more than one person.
+- **Not built:**
+  - turning an action into a registered intervention (M7) from the console;
+  - ChatGPT answers as evidence: they are linkable once ChatGPT is wired (D-056), and the build will use the question's own source rule.
+- **Revisit trigger:**
+  - an action shown without a review;
+  - a link not re-checked at build;
+  - a URL typed rather than picked;
+  - an action worded as a prediction or a cause;
+  - a report with actions saved as `integrity_passed`;
+  - actions generated by a model.

@@ -212,7 +212,19 @@ What the report says and does not say:
 - Answers still being collected are counted as such, never as failed.
 - Other brands and source types are shown per question, with totals across questions labelled as such.
 - ChatGPT reads "not measured in this pilot yet" until it is connected (D-053 item 3).
-- Recommended actions are not in the report yet (phase 3).
+- Suggested actions appear only once reviewed (§8.3, D-057).
+
+### 8.3 Suggested actions (D-057)
+
+Suggested actions are written by the team, never generated, and each rests on stored answers of this pilot (D-053 item 4).
+
+1. In the pilot page's **Suggested actions** section, press **Write a suggested action**. Fill in every field: what we observed, the suggested action, why it might matter (as a hypothesis), what else could explain it, and what we don't know yet.
+2. Link the answers it rests on: choose a question, then one of its completed answers, then, if the action rests on a particular source, one of that answer's own sources. Link at least one and at most ten. You cannot type a URL.
+3. Save. The action is a draft. Wording that predicts an effect or claims a cause ("will improve", "guarantee", "caused", "ensure" and the like) is refused; reword it as a hypothesis.
+4. Read the action and the answers it links to, then press **I have read it: mark reviewed** and confirm. Only reviewed actions appear in the next report built. An edit is a new draft that needs a new review.
+5. Withdraw an action that no longer holds, with a reason. It stays on record, appears in no later report, and cannot be edited.
+
+Any action in a report holds the report for your review before sharing. A link that no longer checks out (an answer since retired, or a source no longer found in the answer) blocks the report until you edit or withdraw the action.
 
 ## 9. Protocol and budget approval
 

@@ -10,6 +10,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { ReportIntegrityStatus } from "@/lib/export/report-integrity";
+import { readReportableActions } from "@/lib/pilots/action-store";
 import { buildPilotReport } from "@/lib/reports/build-pilot-report";
 import { evaluatePilotReportIntegrity, type PilotQuestionSignals } from "@/lib/reports/pilot-report-integrity";
 import { presentationStrings, presentPilotReport } from "@/lib/reports/pilot-report-presentation";
@@ -24,7 +25,9 @@ export type SavePilotReportOutcome =
   | "EVIDENCE_OUTSIDE_PILOT"
   | "EVIDENCE_MISMATCH"
   | "EVIDENCE_INCOMPLETE"
-  | "MEASUREMENT_IN_PROGRESS";
+  | "MEASUREMENT_IN_PROGRESS"
+  | "ACTION_NOT_REVIEWED"
+  | "ACTIONS_INCOMPLETE";
 
 export interface BuildPilotReportResult {
   outcome: SavePilotReportOutcome;
@@ -53,7 +56,10 @@ export async function buildAndSavePilotReport(
   }
   if (!input) return { outcome: "PILOT_NOT_FOUND", artifactId: null, revision: null, integrityStatus: null, integrityReasons: [] };
 
-  const built = buildPilotReport({ ...input, now: now() });
+  // D-057 — each action's latest reviewed version; the builder re-checks
+  // every link and the database refuses any other version at save.
+  const actions = await readReportableActions(client, pilotId);
+  const built = buildPilotReport({ ...input, actions, now: now() });
   const markdown = renderPilotReportMarkdown(built.payload);
   // Every string the client page renders, from the same presentation model.
   const pageText = presentationStrings(presentPilotReport(built.payload));

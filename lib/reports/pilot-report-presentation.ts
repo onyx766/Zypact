@@ -12,6 +12,12 @@
 import { pilotProvenanceLabel } from "@/lib/pilots/copy";
 import { engineLabel } from "@/lib/reports/build-pilot-report";
 import {
+  ACTION_FIELD_WORDS,
+  ACTIONS_HEADING,
+  ACTIONS_NOT_REGISTERED_NOTE,
+  ACTIONS_NOTE,
+  actionEvidenceWords,
+  actionReviewedWords,
   ANSWER_MODE_WORDS,
   LABEL_WORDS,
   PILOT_REPORT_TITLE,
@@ -55,6 +61,23 @@ export interface PilotPresentationQuestion {
   lines: string[];
 }
 
+/** D-057 — one suggested action: its fields in words and the answers it rests on. */
+export interface PilotPresentationAction {
+  key: string;
+  heading: string;
+  fields: { label: string; text: string }[];
+  reviewed: string;
+  basedOnHeading: string;
+  basedOn: string[];
+}
+
+export interface PilotPresentationActions {
+  heading: string;
+  intro: string[];
+  actions: PilotPresentationAction[];
+  notes: string[];
+}
+
 export interface PilotPresentation {
   eyebrow: string;
   title: string;
@@ -68,6 +91,8 @@ export interface PilotPresentation {
   questionsHeading: string;
   questionsIntro: string[];
   questions: PilotPresentationQuestion[];
+  /** D-057 — absent when no reviewed action exists: no section at all. */
+  actions: PilotPresentationActions | null;
   limitsHeading: string;
   limitations: string[];
   methodHeading: string;
@@ -262,6 +287,39 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
     };
   });
 
+  const reportActions = payload.actions ?? [];
+  const actions: PilotPresentationActions | null =
+    reportActions.length === 0
+      ? null
+      : {
+          heading: ACTIONS_HEADING,
+          intro: [ACTIONS_NOTE],
+          actions: reportActions.map((a, i) => ({
+            key: a.versionId,
+            heading: `${i + 1}. ${a.title}`,
+            fields: [
+              { label: ACTION_FIELD_WORDS.observation, text: a.observation },
+              { label: ACTION_FIELD_WORDS.suggestedAction, text: a.suggestedAction },
+              { label: ACTION_FIELD_WORDS.whyItMightMatter, text: a.whyItMightMatter },
+              { label: ACTION_FIELD_WORDS.alternativeExplanations, text: a.alternativeExplanations },
+              { label: ACTION_FIELD_WORDS.openQuestions, text: a.openQuestions },
+            ],
+            reviewed: actionReviewedWords(a.reviewedOn),
+            basedOnHeading: "Based on",
+            basedOn: a.evidence.map((e) =>
+              actionEvidenceWords({
+                ordinal: e.ordinal,
+                engineLabel: engineLabel(e.engine),
+                answerNumber: e.answerNumber,
+                rawResponseSha256: e.rawResponseSha256,
+                sourceUrl: e.sourceUrl,
+                sourceCited: e.sourceCited,
+              })
+            ),
+          })),
+          notes: [ACTIONS_NOT_REGISTERED_NOTE],
+        };
+
   return {
     eyebrow: PILOT_REPORT_TITLE,
     title: `${subject.companyName}: ${plural(live.length, "buyer question")}`,
@@ -278,6 +336,7 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
     questionsHeading: "The questions",
     questionsIntro: [payload.dependenceNote],
     questions,
+    actions,
     limitsHeading: "Limits of this report",
     limitations: [...payload.limitations, payload.dependenceNote],
     methodHeading: "How the figures were produced",
@@ -308,6 +367,20 @@ export function presentationStrings(p: PilotPresentation): string[] {
     p.questionsHeading,
     ...p.questionsIntro,
     ...p.questions.flatMap((q) => [q.heading, q.meta, ...q.lines]),
+    ...(p.actions
+      ? [
+          p.actions.heading,
+          ...p.actions.intro,
+          ...p.actions.actions.flatMap((a) => [
+            a.heading,
+            ...a.fields.flatMap((f) => [f.label, f.text]),
+            a.reviewed,
+            a.basedOnHeading,
+            ...a.basedOn,
+          ]),
+          ...p.actions.notes,
+        ]
+      : []),
     p.limitsHeading,
     ...p.limitations,
     p.methodHeading,

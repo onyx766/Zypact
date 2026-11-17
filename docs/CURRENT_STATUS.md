@@ -2074,3 +2074,44 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 | `npm run test:paid-execution-guards` | 143/143 |
 | `npm run test:source-insights` | pass |
 | `npm run test:founder-baseline-control`, `npm run test:worker-start` | pass, 41/41 |
+
+## 34. Suggested actions in the pilot report (D-057) — branch `feat/pilot-actions`, stacked on the combined report, not applied anywhere, not deployed
+
+- **Base:** `feat/pilot-report` at `0ebadf0` (PR #125). Section numbers 33 and 34 are used on two open branches (ChatGPT in the worker uses 33); they are renumbered when both merge.
+- **What it adds** (D-053 item 4):
+  - **Migration** `20261120120000_pilot_actions.sql`:
+    - four append-only tables (`pilot_actions`, `pilot_action_versions`, `pilot_action_evidence`, `pilot_action_events`), with a guard trigger on each and the evidence trigger;
+    - `save_pilot_action`, `review_pilot_action`, `withdraw_pilot_action`;
+    - `save_pilot_report_artifact` redefined with one marked block: listed action versions must be reviewed, latest and not withdrawn; a reviewed action cannot be left out; a revision with an action is never `integrity_passed`.
+  - **Rules and copy:** `lib/pilots/action-rules.ts` (validation, the wording lint, which version is reportable) and `lib/pilots/action-copy.ts` (import-free, for the console's client code).
+  - **The store:** `lib/pilots/action-store.ts` (save, review, withdraw, the founder's list, the reportable versions, the evidence picker, and the source check before a save).
+  - **The builder:** `lib/reports/build-pilot-actions.ts`, called by `buildPilotReport`. It re-checks every link at every build. `runOrdinalsByAttemptId` is exported from `build-protocol-report.ts`, so an action's "answer N" is the report's own run number.
+  - **The report:** a "Suggested actions" section in the shared presentation model, on the page and in the Markdown, with the fixed D-057 note.
+  - **Console:** four founder routes under `/api/internal/pilots/[pilotId]/actions` (save, evidence choices, review, withdraw), and the Suggested actions panel on the pilot page (`app/admin/pilots/pilot-action-forms.tsx`), whose evidence picker offers only an answer's own sources.
+  - **No provider or model call, no email, no worker, spend or claim change.**
+- **Not established:**
+  - no browser walk-through of the panel or the picker;
+  - no report built from real pilot evidence;
+  - no test races a review against a report save on two real database sessions. The ordering rests on the pilot-row lock, which is checked statically (test M13);
+  - no Level 2 run with this migration. It changes no worker path.
+- **Open:** D-057 *Open for the founder*:
+  - the *(engineer)* rules;
+  - fingerprints in an appendix;
+  - a second reviewer.
+- **Inventory on this branch:** 93 migrations, 223 files matching `scripts/test-*.ts`, 131 `test:*` and 4 `verify:*` commands.
+- **Commands and local results (2026-11-17):**
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | pass |
+| `npm run build:verify` | pass; the four routes and the pilot page are built (`next-env.d.ts` restored afterwards) |
+| `npm run test:pilot-actions` | 68/68 |
+| `npm run test:pilot-report` | 93/93 |
+| `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | P1 45/45, P2 71/71, E1 74/74, Q4 52/52, pilot step 1 60/60, pilot questions 69/69, pilot report 39/39, pilot actions 37/37 (all 93 migrations applied) |
+| `npm run test:pilot-questions` | pass |
+| `npm run test:pilot-step1` | pass |
+| `npm run test:protocol-report` | pass |
+| `npm run test:source-insights` | pass |
+| `npm run test:prod-preflight` | 18/18 (the version, four tables and five functions added to the absence checks) |
+| `npm run test:paid-execution-guards` | 143/143 |
+| `npm run test:founder-baseline-control`, `npm run test:worker-start` | pass, 41/41 |

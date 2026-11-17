@@ -51,7 +51,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { sha256Hex } from "@/lib/evidence/hash";
-import { PERPLEXITY_AGENT_ENDPOINT, PERPLEXITY_SONAR_ENDPOINT } from "@/lib/probes/endpoints";
+import { OPENAI_RESPONSES_ENDPOINT, PERPLEXITY_AGENT_ENDPOINT, PERPLEXITY_SONAR_ENDPOINT } from "@/lib/probes/endpoints";
 import { fingerprintRawResponseBody, UNREADABLE_FINGERPRINT } from "@/lib/reports/served-provider-comparability";
 
 export const MEASUREMENT_FINGERPRINT_VERSION = "mf-1";
@@ -68,6 +68,8 @@ const ADAPTER_ENDPOINTS: Record<string, string> = {
   // PR #4. Still an adapter constant, not per-call evidence: the existing
   // schema has nowhere to record the endpoint each call reached.
   perplexity_agent: PERPLEXITY_AGENT_ENDPOINT,
+  // D-056 — the ChatGPT engine's adapter constant, with the same caveat.
+  openai_chatgpt: OPENAI_RESPONSES_ENDPOINT,
   // The legacy "perplexity" label is deliberately absent: its calls ran on
   // Sonar, but nothing recorded which endpoint, so it stays unverifiable.
 };

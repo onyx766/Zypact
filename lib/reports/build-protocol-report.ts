@@ -19,7 +19,7 @@
 
 import { DEPENDENCE_LIMITATION, surfaceLimitation } from "@/lib/reports/surface-limitations";
 import { buildSourceInsights } from "@/lib/source-insights/build-source-insights";
-import { extractProviderSources } from "@/lib/source-insights/extract-provider-sources";
+import { extractProviderSources, sourcesRuleVersionForProvider } from "@/lib/source-insights/extract-provider-sources";
 import {
   PROTOCOL_REPORT_VERSION,
   type BuildProtocolReportInput,
@@ -333,10 +333,12 @@ export function buildProtocolReport(
       const result = resultByRun.get(run);
       return {
         ordinal: run.ordinal,
-        ...extractProviderSources(result?.rawResponse, result?.rawResponseSha256),
+        // D-056 — the protocol's provider decides the source rule.
+        ...extractProviderSources(result?.rawResponse, result?.rawResponseSha256, input.protocol.provider),
       };
     }),
-    input.subject.normalizedDomain
+    input.subject.normalizedDomain,
+    sourcesRuleVersionForProvider(input.protocol.provider)
   );
 
   return {

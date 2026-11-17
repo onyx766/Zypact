@@ -47,3 +47,6 @@ supabase/.temp/
 *-Coverage-*.zip
 *-Coverage-*/
 search-console-exports/
+
+# X1 benchmark output: raw provider responses, never committed
+.benchmark-out/

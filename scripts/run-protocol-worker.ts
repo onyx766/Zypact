@@ -257,11 +257,14 @@ async function runLive(cfg: LiveWorkerConfig, build: BuildProvenance): Promise<v
         import("@/lib/reports/report-pass"),
         import("@/lib/worker-control/paid-execution-gate"),
         import("@/lib/reports/service-client"),
+        // D-056 — the ChatGPT engine (and with it the adapter) is loaded only
+        // when WORKER_CHATGPT_ENABLED is exactly "true". Off, it never loads.
+        cfg.chatgpt.enabled ? import("@/lib/protocol-worker/chatgpt-engine") : Promise.resolve(null),
       ]),
     run: async ([
       { getDb }, { runPerplexityProbe }, callModel, { sleep }, { runWorkerLoop },
       { WorkerHealth, idleProofEvent }, { runReportPass },
-      { paidExecutionGateFor }, { getReportServiceClient },
+      { paidExecutionGateFor }, { getReportServiceClient }, chatgptEngineModule,
     ], adopt) => {
       const analysis: AnalysisTransport = {
         prepare: (call) =>
@@ -276,9 +279,25 @@ async function runLive(cfg: LiveWorkerConfig, build: BuildProvenance): Promise<v
         execute: (prepared, opts) => callModel.executePreparedCallModelRequest(prepared, opts),
       };
 
+      // D-056 — built only when the switch is on. No approved setting, or a
+      // worst case that cannot be priced, stops the worker before any claim.
+      let chatgpt: WorkerDeps["chatgpt"];
+      if (cfg.chatgpt.enabled) {
+        const engine = chatgptEngineModule?.buildChatGptEngine({
+          callTimeoutMs: cfg.chatgpt.callTimeoutMs,
+          probeMode: "live_openai_chatgpt",
+        }) ?? null;
+        if (!engine) {
+          log("worker_chatgpt_engine_unavailable", { executionEnabled: true });
+          return;
+        }
+        chatgpt = engine;
+      }
+
       const deps: WorkerDeps = {
         db: getDb(),
         runProbe: runPerplexityProbe,
+        ...(chatgpt ? { chatgpt } : {}),
         analysis,
         realFetch: ((url, init) =>
           fetch(url, { ...init, signal: init?.signal ?? shutdown.signal })) as typeof fetch,
@@ -317,6 +336,7 @@ async function runLive(cfg: LiveWorkerConfig, build: BuildProvenance): Promise<v
         workerId: cfg.workerId,
         leaseSeconds: cfg.leaseSeconds,
         probeMode: deps.probeMode,
+        chatgptEnabled: cfg.chatgpt.enabled,
         maxRuntimeSeconds: cfg.maxRuntimeSeconds,
         executionEnabled: true,
         ...build,

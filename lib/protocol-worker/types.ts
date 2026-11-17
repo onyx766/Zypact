@@ -21,6 +21,32 @@ import type { CallModelResult, PreparedCallModelRequest } from "@/lib/llm/call-m
  */
 export type PerplexityProbeRunner = typeof runPerplexityProbe;
 
+/**
+ * D-056 — everything the worker needs to run one approved ChatGPT setting,
+ * built by lib/protocol-worker/chatgpt-engine.ts (the only worker module that
+ * imports the adapter) and injected, so worker.ts and execute-job.ts never
+ * import lib/probes/chatgpt.ts.
+ */
+export interface ChatGptEngine {
+  /** runChatGptProbe pinned to the approved setting; same seam as the Perplexity runner. */
+  readonly runProbe: PerplexityProbeRunner;
+  /** The approved setting version; a protocol must name exactly this in model_config.setting_version. */
+  readonly settingVersion: string;
+  /** The setting's requested model; a protocol must name exactly this in model_config.model. Also the price row. */
+  readonly model: string;
+  /** Per-call ceiling for the ChatGPT leg only, in ms. The analysis leg keeps providerTimeoutMs. */
+  readonly callTimeoutMs: number;
+  /** Reserved before each ChatGPT call: the setting's worst case at standard rates (worstCaseRunUsd). */
+  readonly reservedCostUsd: number;
+  /** The probe mode a ChatGPT attempt is recorded under. */
+  readonly probeMode: ProbeMode;
+  /**
+   * The answer in a stored body, or null: a completed response, from the
+   * pinned model, on the setting's tier, with non-empty output text.
+   */
+  answerFromBody(raw: string | null): string | null;
+}
+
 /** Two-phase analysis seam: prepare first, then execute the prepared body. */
 export interface AnalysisTransport {
   prepare(call: {
@@ -48,6 +74,14 @@ export interface WorkerDeps {
    * authorized change.
    */
   runAgentProbe?: PerplexityProbeRunner;
+  /**
+   * D-056 — the ChatGPT engine, for protocols whose provider is
+   * `openai_chatgpt`. Present only when WORKER_CHATGPT_ENABLED is exactly
+   * "true": scripts/run-protocol-worker.ts then imports
+   * lib/protocol-worker/chatgpt-engine.ts lazily and builds it. Absent → such
+   * a protocol is refused before admission (nothing reserved, nothing sent).
+   */
+  chatgpt?: ChatGptEngine;
   analysis: AnalysisTransport;
   realFetch: RealFetch;
   /** Wall clock, injected so tests are deterministic. */

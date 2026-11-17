@@ -1897,6 +1897,45 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 | `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | P1 45/45, P2 71/71, E1 74/74, Q4 52/52 (all 89 migrations applied) |
 | `npm run test:prod-preflight` | pass (Q4's version, 2 tables, 3 functions and `_q4_` listed) |
 
+## 29. X1 ChatGPT adapter and model benchmark (D-050) — branch `feat/x1-chatgpt-adapter`, not wired, benchmark calls only
+
+- **What it adds:**
+  - `lib/probes/chatgpt.ts`, the OpenAI Responses API with web search under versioned settings (`auto` for monitoring, `required` as a separate protocol). `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05` is approved for measurement (2026-11-17); the adapter is not wired.
+  - `lib/probes/chatgpt-pricing.ts`, usage capture and cost estimation from the dated price table. Unknown, never $0.
+  - `scripts/benchmark-chatgpt-models.ts`, a dry run by default. It compares candidate models against the `chat-latest` reference:
+    - candidates: `gpt-6-luna`, `gpt-6.1-terra`, and, from 2026-11-11, the dated snapshots `gpt-5.5-2026-04-23` and `gpt-5.4-2026-03-05`;
+    - question sets: `general`, `smaller-vendor` or both, with per-model repeats;
+    - spending: a $40 lifetime ceiling counted from every recorded run.
+  - The validity note `docs/ADAPTER_VALIDITY_CHATGPT.md`, recording the founder's 2026-11-10 decisions.
+- **Model choice (2026-11-13):**
+  - The founder chose `gpt-5.4-2026-03-05` on 2026-11-13. On 2026-11-17, after the confirmation run passed, the founder approved its flex setting for measurement, and `CHATGPT_APPROVED_SETTING_VERSION` now names it. Nothing calls the adapter until it is wired.
+  - Its new setting, `openai-responses-websearch-v3:auto:gpt-5.4-2026-03-05`, raises the output cap from 4,000 to 8,000 tokens. It is the version to approve if the confirmation run passes, and the 4,000-cap setting can never be approved.
+  - A 60-run confirmation run with a $12 cap was prepared under that setting and never run. On 2026-11-17 the founder agreed to run it on OpenAI's half-price flex tier and added OpenAI credit. The run now uses `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05` (the `v3` setting plus `service_tier: "flex"`), which is the version to approve if it passes.
+  - Wiring this model into the worker would need longer worker time limits than the present 45 seconds per provider call. That is a separate decision; see D-050.
+- **Not connected:**
+  - the worker refuses provider `openai_chatgpt`;
+  - no web entry point or other app module imports the adapter;
+  - `OPENAI_PROBE_API_KEY` appears in no deployment configuration in the repository, and this work did not add it to Vercel or Fly. It is used only for local benchmark runs.
+- **Commands and local results (2026-11-13 unless dated otherwise):**
+
+| Command | Result |
+|---|---|
+| `npm run test:chatgpt-adapter` | 182/182 on 2026-11-13; 193/193 on 2026-11-17 with the `v4` (flex) setting |
+| Mutation check of that suite, in a scratch copy: 79 deliberate single-line defects, one at a time | the suite failed on all 79 |
+| Live benchmark, 2026-11-11, founder-confirmed budget | 124 of 150 runs reached the models before the account credit ran out; estimated spend $5.73 plus $0.22 for the smoke test; results in the validity note |
+| `npm run benchmark:chatgpt-models` (dry run, no flags) | prints the plan for all five models: 250 runs, over the 150-run limit, so a live run of it would be refused; no call |
+| Smaller-vendor validation dry run, 2026-11-11 (`--question-set=smaller-vendor`, 110 runs, `--max-usd=10`) | plan and lifetime ledger printed, no call |
+| Smaller-vendor validation, live, 2026-11-11 (founder-approved $10 phase) | 84 of 110 runs before the $10 cap stopped it as designed; estimated spend $9.41 (lifetime $15.35 of $40); results and blind review in the validity note; recommendation `gpt-5.4-2026-03-05` |
+| Confirmation dry run (`--models=gpt-5.4-2026-03-05 --question-set=general,smaller-vendor --repeats=3 --max-failed=3 --max-usd=12`) | 60 runs under the `v3` setting; projected $9.05, worst case $0.54 per run; lifetime $15.35 spent, $24.65 left; no call |
+| The same dry run on 2026-11-17, under the `v4` (flex) setting | 60 runs; projected $7.68 at the upper bound ($5.98 if flex halves the input tokens too), worst case $0.54 per run, deadline 290 s per call; lifetime $15.35 spent, $24.65 left; no call |
+| Confirmation run, live, 2026-11-17 (founder-authorised, $12 cap, flex) | 60 of 60 usable, all served on flex by `gpt-5.4-2026-03-05`, 0 at the 8,000 cap, slowest 145 s, estimated $5.64 (upper bound); all seven criteria pass; lifetime $20.9955 of $40 over 297 runs; results in the validity note |
+| Offline simulation of the live loop, in a scratch copy with a stand-in provider (no network, fake key) | each of these behaved as designed: a complete run; a run cut off at the cap; repeated and alternating failures; a rejected request; a deadline; an overrun; a budget stop; a credit refusal; resume under one cap, with the failure count carried over; a resume refused past the failure limit or with a higher cap; a second resume of the same run; two runs at once; a killed process; missing earlier output; a damaged ledger. Not a validation against OpenAI |
+| `npm run test:paid-execution-guards` | 143/143 |
+| `npm run test:perplexity-agent-adapter` | 158/158 |
+| `npm run test:measurement-compatibility` | 89/89 |
+| `npm run test:s1-accounts` | 74/74 |
+| `npm run typecheck`, `npm run build:verify` | pass |
+
 ## 30. Pilot Mode (D-051, D-052, D-053) — decisions recorded; step 1 on branch `feat/pilot-mode-phase1`, not applied anywhere, not deployed
 
 - **Decision (D-051, 2026-11-14):**
@@ -2074,6 +2113,44 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 | `npm run test:paid-execution-guards` | 143/143 |
 | `npm run test:source-insights` | pass |
 | `npm run test:founder-baseline-control`, `npm run test:worker-start` | pass, 41/41 |
+
+## 33. ChatGPT in the worker, phase A (D-056) — branch `feat/chatgpt-worker`, switch off, not deployed
+
+- **Base:** `feat/x1-chatgpt-adapter` at `ce25c28` (PR #121). Section 32 is reserved for the combined pilot report (D-055), built on another branch.
+- **What it adds:**
+  - a provider profile per engine;
+  - the `WORKER_CHATGPT_ENABLED` switch, off everywhere and refused at startup until phase B;
+  - a lazily loaded ChatGPT engine pinned to the approved setting;
+  - estimated cost from usage;
+  - the flex capacity refusal as a failed, retryable attempt;
+  - the source rule `openai-responses-sources/1`, chosen by provider;
+  - the ChatGPT surface limitation and fingerprint endpoint.
+- **Unchanged:** the Perplexity path. Every pre-existing worker suite passes unmodified apart from the four tests listed under D-056's *Tests*.
+- **Not in phase A:**
+  - any migration;
+  - any change to an existing numeric bound;
+  - any canon document;
+  - any deployment;
+  - any provider call.
+- **Founder decisions before the switch can be turned on:** D-056 *For the founder*: the time limits, the caps, the daily ceiling, the flex handling and the source rule.
+- **Commands and local results (2026-11-17):**
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | pass |
+| `npm run build:verify` | pass (`next-env.d.ts` restored afterwards) |
+| `npm run test:chatgpt-worker` | 104/104 (new; 102 before the review fixes) |
+| `npm run test:chatgpt-adapter` | 195/195 |
+| `npm run test:source-insights` | pass |
+| `npm run test:paid-execution-guards` | 145/145 |
+| `npm run test:worker-start` | 41/41 |
+| `npm run test:pilot-step1`, `npm run test:pilot-questions` | pass |
+| `npm run test:protocol-report` | pass |
+| `npm run test:m0-worker-execution-gate` | 498/498 |
+| `npm run test:m0-worker-hosting-contract` | 150/150 |
+| `scripts/test-worker-execution-options.ts` | 56 passed, 0 failed |
+| Offline worker suites: `test:m5-a-worker-loop` 52, `test:m5-a-recovery` 18, `test:m5-a-real-probe-fencing` 18, `test:m5-a-conflict-identity` 62, `test:m5-a-failure-matrix` 58, `test:m5-a-abort-and-cancel` 23, `test:m5-a-throttling` 28, `test:m5-a-lifecycle` 34, `test:m5-tk-r` 120, `test:m5-phase3d-bounds` 62, `test:m5-b3-max-runtime` 189, `test:m5-phase3d-evidence` 131, `test:m5-2-adapter` 359, `test:cost-recording` 59, `test:perplexity-agent-adapter` 158, `test:worker-precheck-closure` 171, `test:worker-paid-execution-gate` 69, `test:worker-image-provenance` 89, `test:report-pass` 38, `test:m5-0056-schema` 71, `test:m5-0059-schema` 165, `test:m5-0060-schema` 266, `test:m5-0083-schema` 30 | all pass |
+| `ZYPACT_LEVEL2_LOCAL=1 npm run test:snapshot-worker-postgres-level2` | `LEVEL2_RESULT=PASS`, 886 PASS and 0 FAIL on `postgres:16-alpine` with all 91 migrations applied (the local runner then exits 1 from its known cleanup trap, §30) |
 
 ## 34. Suggested actions in the pilot report (D-057) — branch `feat/pilot-actions`, stacked on the combined report, not applied anywhere, not deployed
 

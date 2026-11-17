@@ -1,0 +1,16 @@
+{
+  "version": "x1-smaller-vendor-questions-v1",
+  "note": "Non-confidential, brand-free B2B SaaS buyer questions for the X1 smaller-vendor validation (D-050, founder 2026-11-11). Chosen so that credible smaller and challenger vendors are a natural part of a good answer: startup or small-team buyers, budget limits, and niche categories. No prospect, customer or company data, and no vendor named.",
+  "questions": [
+    { "id": "s1", "category": "discovery", "text": "What are good customer success platforms for a B2B SaaS startup with fewer than 500 customers?" },
+    { "id": "s2", "category": "discovery", "text": "Which subscription billing tools work well for an early-stage SaaS company selling monthly and annual plans?" },
+    { "id": "s3", "category": "discovery", "text": "What product analytics tools are affordable for a small B2B SaaS team?" },
+    { "id": "s4", "category": "comparison", "text": "How do the lighter-weight contract management tools for small in-house legal teams compare with the large enterprise platforms?" },
+    { "id": "s5", "category": "comparison", "text": "What are the differences between the main incident management and on-call tools for a 15-person engineering team?" },
+    { "id": "s6", "category": "evaluation", "text": "What should a 40-person B2B company look for in an applicant tracking system, and which ones fit that size?" },
+    { "id": "s7", "category": "evaluation", "text": "Which sales engagement tools are worth it for a small B2B sales team running email sequences and follow-ups?" },
+    { "id": "s8", "category": "use_case", "text": "What tools can a B2B SaaS company use to collect and prioritize customer feature requests?" },
+    { "id": "s9", "category": "use_case", "text": "Which in-app onboarding and product tour tools suit a B2B SaaS product without a large budget?" },
+    { "id": "s10", "category": "use_case", "text": "What HR and people management software suits a 50-person company that has outgrown spreadsheets?" }
+  ]
+}

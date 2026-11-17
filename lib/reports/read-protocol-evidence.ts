@@ -383,3 +383,23 @@ export async function readRetestProtocolEvidence(
     subject
   );
 }
+
+/**
+ * D-055 — reads evidence for one pilot question's protocol. The caller (the
+ * pilot report reader) has already resolved the protocol from the pilot's
+ * own slot table and supplies the subject from the pilot's project, which is
+ * the brand the worker measured against. The protocol must still belong to
+ * that project, which the shared core checks.
+ *
+ * `snapshotRequestId` is set to the protocol's own id, as for a retest: a
+ * pilot question has no request, and the pilot report takes identity from
+ * the pilot question and the protocol, never from this field.
+ */
+export async function readPilotProtocolEvidence(
+  client: SupabaseClient,
+  protocolId: string,
+  projectId: string,
+  subject: BuildProtocolReportInput["subject"]
+): Promise<BuildProtocolReportInput> {
+  return readProtocolEvidenceCore(client, protocolId, projectId, protocolId, subject);
+}

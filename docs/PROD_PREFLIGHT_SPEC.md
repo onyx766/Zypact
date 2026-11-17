@@ -45,13 +45,13 @@ psql -X -q -v ON_ERROR_STOP=1 "<connection string>" -f scripts/sql/prod-prefligh
 | P2.1 | PASS | The ledger holds 0001 to 0080, each once. |
 | P2.2 | PASS | The ledger holds the 0081 alias `20260924023646`. |
 | P2.3 | PASS | The ledger tail is `20260924023646`. |
-| P2.4 | PASS | None of 0081 to 0085, `20261102132000`, `20261103173000`, `20261109120000`, `20261110120000`, `20261111120000`, `20261112120000`, `20261113120000`, `20261114120000` or `20261118120000` is recorded. |
+| P2.4 | PASS | None of 0081 to 0085, `20261102132000`, `20261103173000`, `20261109120000`, `20261110120000`, `20261111120000`, `20261112120000`, `20261113120000`, `20261114120000`, `20261118120000` or `20261119120000` is recorded. |
 | P2.5 | PASS | Exactly 81 ledger rows: no version anyone added outside the procedures. |
 | P3.1 | PASS | `reconcile_attempt_for_job` is exactly as 0050 left it (md5 `baaf43cc539611ec78fef9762c168a53`, the reserved procedure's pinned pre-state). |
 | P3.2 | PASS | Only `service_role` may execute it. |
 | P3.3 | PASS | `approve_and_launch_snapshot_baseline(uuid, uuid, jsonb, text)` is exactly as 0069 left it (md5 `710dfb5cb84ce09a94040ebb84086025`, computed on a disposable stack with every migration before `20261114120000` applied). Pilot step 1 (D-052) redefines it. |
 | P3.4 | PASS | Its five-argument version does not exist yet. |
-| P4.1 | PASS | None of the 40 Q2′-1, Q2′-2, S1, P1, P2, E1, Q4, pilot step-1 or pilot-question tables exists. |
+| P4.1 | PASS | None of the 41 Q2′-1, Q2′-2, S1, P1, P2, E1, Q4, pilot step-1, pilot-question or pilot-report tables exists. |
 | P4.2 | PASS | None of their new public functions or `_q2p_`, `_q2p2_`, `_s1_`, `_p1_`, `_p2_`, `_e1_` or `_q4_` helpers exists. A function they redefine is checked by its pinned pre-state instead (P3.3). |
 | P4.3 | PASS | `projects`, `buyer_question_versions` and `snapshot_requests`, which Q2′ references, exist. |
 | P5.1 | PASS | `anon`, `authenticated` and `service_role` exist. |
@@ -89,6 +89,8 @@ The procedures are the D-041 texts. The repository holds their rehearsal copies,
 **Pilot step 1 (D-052, `20261114120000`) is not in this sequence yet.** Its position is the founder's choice when its apply is authorised: after 0083 and renamed below `20261102132000` (then Q2′-1's `expected_prev` becomes its version), or after Q4. Before it is applied, this preflight is re-baselined for that position: P2.3's expected tail, P2.4's list and the absence checks for whatever has been applied by then. P3.3 pins the approval function's pre-state either way.
 
 **Pilot questions (D-054, `20261118120000`) are not in this sequence yet either.** The migration depends only on 0047-0081 and pilot step 1, and redefines step 1's `request_protocol_job_run`, `claim_requested_protocol_execution_job` and `retry_failed_protocol_job` (and widens two CHECKs of `protocol_job_run_requests`), so it applies directly after step 1 wherever step 1 is placed, and is re-baselined with it. P4.2 also lists its four new functions, `retire_pilot_question` included, as absent.
+
+**Pilot report artifacts (D-055, `20261119120000`) follow pilot questions.** The migration depends only on 0047-0081 and the two pilot migrations, redefines nothing, and adds one table (`pilot_report_artifacts`) and four functions (`pilot_report_artifacts_guard`, `save_pilot_report_artifact`, `share_pilot_report_artifact`, `read_shared_pilot_report`), which P4.1 and P4.2 list as absent. It applies directly after `20261118120000` and is re-baselined with it.
 
 **This preflight is valid only before step 1.** Once 0083 is applied it fails by design, so do not re-run it as a post-check. After each step, confirm that the ledger tail and that step's objects are as expected.
 

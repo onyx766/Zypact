@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Local runner for the P1, P2, E1, Q4, pilot step-1 (D-052) and pilot-questions (D-054) database tests
+# Local runner for the P1, P2, E1, Q4, pilot step-1 (D-052), pilot-questions (D-054) and pilot-report (D-055) database tests
 # (scripts/test-p1-workspace-db.ts, scripts/test-p2-workspace-db.ts).
 #
 # Starts a disposable Supabase Postgres container (no published port),
@@ -69,4 +69,5 @@ ZYPACT_P2_DB_CONTAINER="${NAME}" npx tsx scripts/test-e1-plans-db.ts || status=1
 ZYPACT_P2_DB_CONTAINER="${NAME}" npx tsx scripts/test-q4-activation-db.ts || status=1
 ZYPACT_P2_DB_CONTAINER="${NAME}" npx tsx scripts/test-pilot-step1-db.ts || status=1
 ZYPACT_P2_DB_CONTAINER="${NAME}" npx tsx scripts/test-pilot-questions-db.ts || status=1
+ZYPACT_P2_DB_CONTAINER="${NAME}" npx tsx scripts/test-pilot-report-db.ts || status=1
 exit "${status}"

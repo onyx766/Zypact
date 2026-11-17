@@ -32,7 +32,8 @@ q2p_s1_tables(name) as (values
   ('workspace_plan_assignments'), ('workspace_usage_events'), ('paid_measurement_switch_events'),
   ('workspace_question_approvals'), ('workspace_active_question_events'),
   ('protocol_job_run_requests'), ('snapshot_request_closures'),
-  ('pilots'), ('pilot_questions'), ('pilot_question_protocols')
+  ('pilots'), ('pilot_questions'), ('pilot_question_protocols'),
+  ('pilot_report_artifacts')
 ),
 q2p_s1_functions(name) as (values
   ('create_workspace_with_owner'), ('assign_project_to_workspace'), ('add_workspace_member'),
@@ -48,7 +49,8 @@ q2p_s1_functions(name) as (values
   ('approve_question_draft'), ('archive_active_question'), ('list_active_questions'),
   ('request_protocol_job_run'), ('cancel_protocol_job_run_request'), ('claim_requested_protocol_execution_job'),
   ('retry_failed_protocol_job'), ('close_failed_snapshot_request'),
-  ('create_pilot'), ('add_pilot_question'), ('close_pilot'), ('retire_pilot_question')
+  ('create_pilot'), ('add_pilot_question'), ('close_pilot'), ('retire_pilot_question'),
+  ('pilot_report_artifacts_guard'), ('save_pilot_report_artifact'), ('share_pilot_report_artifact'), ('read_shared_pilot_report')
 ),
 reconcile as (
   select to_regprocedure('public.reconcile_attempt_for_job(uuid,uuid,uuid,uuid,text,text)') as oid
@@ -87,9 +89,9 @@ checks(id, label, pass, observed) as (
   union all
   select 'P2.4', 'no held, reserved or pending version is recorded',
          not exists (select 1 from ledger where version in
-           ('0081', '0082', '0083', '0084', '0085', '20261102132000', '20261103173000', '20261109120000', '20261110120000', '20261111120000', '20261112120000', '20261113120000', '20261114120000', '20261118120000')),
+           ('0081', '0082', '0083', '0084', '0085', '20261102132000', '20261103173000', '20261109120000', '20261110120000', '20261111120000', '20261112120000', '20261113120000', '20261114120000', '20261118120000', '20261119120000')),
          (select coalesce(string_agg(version, ',' order by version), 'none') from ledger where version in
-           ('0081', '0082', '0083', '0084', '0085', '20261102132000', '20261103173000', '20261109120000', '20261110120000', '20261111120000', '20261112120000', '20261113120000', '20261114120000', '20261118120000'))
+           ('0081', '0082', '0083', '0084', '0085', '20261102132000', '20261103173000', '20261109120000', '20261110120000', '20261111120000', '20261112120000', '20261113120000', '20261114120000', '20261118120000', '20261119120000'))
   union all
   select 'P2.5', 'ledger has exactly 81 rows (no unknown version)',
          (select count(*) from ledger) = 81, (select count(*)::text from ledger)
@@ -116,11 +118,11 @@ checks(id, label, pass, observed) as (
 
   -- P4 nothing from Q2'-1, Q2'-2 or S1 exists yet --------------------------
   union all
-  select 'P4.1', 'none of the 40 Q2''/S1 tables exists',
+  select 'P4.1', 'none of the 41 Q2''/S1 tables exists',
          (select count(*) from q2p_s1_tables t where to_regclass('public.' || t.name) is not null) = 0,
          (select coalesce(string_agg(t.name, ','), 'none') from q2p_s1_tables t where to_regclass('public.' || t.name) is not null)
   union all
-  select 'P4.2', 'none of the Q2''/S1/P1/P2/E1/Q4/pilot step-1/pilot-question functions exists, nor any _q2p_, _q2p2_, _s1_, _p1_, _p2_, _e1_ or _q4_ helper',
+  select 'P4.2', 'none of the Q2''/S1/P1/P2/E1/Q4/pilot step-1/pilot-question/pilot-report functions exists, nor any _q2p_, _q2p2_, _s1_, _p1_, _p2_, _e1_ or _q4_ helper',
          (select count(*) from pg_proc p where p.pronamespace = 'public'::regnamespace
             and (p.proname in (select name from q2p_s1_functions)
                  or p.proname like '\_q2p\_%' or p.proname like '\_q2p2\_%' or p.proname like '\_s1\_%' or p.proname like '\_p1\_%' or p.proname like '\_p2\_%' or p.proname like '\_e1\_%' or p.proname like '\_q4\_%')) = 0,

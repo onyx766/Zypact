@@ -70,4 +70,5 @@ ZYPACT_P2_DB_CONTAINER="${NAME}" npx tsx scripts/test-q4-activation-db.ts || sta
 ZYPACT_P2_DB_CONTAINER="${NAME}" npx tsx scripts/test-pilot-step1-db.ts || status=1
 ZYPACT_P2_DB_CONTAINER="${NAME}" npx tsx scripts/test-pilot-questions-db.ts || status=1
 ZYPACT_P2_DB_CONTAINER="${NAME}" npx tsx scripts/test-pilot-report-db.ts || status=1
+ZYPACT_P2_DB_CONTAINER="${NAME}" npx tsx scripts/test-pilot-actions-db.ts || status=1
 exit "${status}"

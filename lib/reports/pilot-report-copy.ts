@@ -69,7 +69,14 @@ export function rangeWords(low: number | null, high: number | null): string {
 
 /** The founder console's words for a build the database refused. */
 export const BUILD_PILOT_REPORT_REFUSAL: Record<
-  "PILOT_NOT_FOUND" | "EVIDENCE_OUTSIDE_PILOT" | "EVIDENCE_INCOMPLETE" | "EVIDENCE_MISMATCH" | "MEASUREMENT_IN_PROGRESS",
+  | "PILOT_NOT_FOUND"
+  | "EVIDENCE_OUTSIDE_PILOT"
+  | "EVIDENCE_INCOMPLETE"
+  | "EVIDENCE_MISMATCH"
+  | "MEASUREMENT_IN_PROGRESS"
+  | "ACTION_NOT_REVIEWED"
+  | "ACTIONS_INCOMPLETE"
+  | "ACTIONS_CONTENT_MISMATCH",
   string
 > = {
   PILOT_NOT_FOUND: "This pilot no longer exists.",
@@ -81,13 +88,20 @@ export const BUILD_PILOT_REPORT_REFUSAL: Record<
     "A stored answer changed between reading it and saving the report, usually because a measurement was still finishing, so nothing was saved. Build the report again; if it repeats, tell the engineer.",
   MEASUREMENT_IN_PROGRESS:
     "A measurement for this pilot is still running, waiting to run, or has an answer still being collected. Wait until it finishes, then build the report. If nothing is running, tell the engineer.",
+  ACTION_NOT_REVIEWED:
+    "A suggested action changed, or was withdrawn, while the report was being built, so nothing was saved. Build the report again.",
+  ACTIONS_INCOMPLETE:
+    "A suggested action was reviewed while the report was being built, so nothing was saved. Build the report again.",
+  ACTIONS_CONTENT_MISMATCH:
+    "What the report showed of a suggested action did not match the stored, reviewed action, so nothing was saved. Build the report again; if it repeats, tell the engineer.",
 };
 
 /** The founder console's words for a share the database refused. */
 export const SHARE_PILOT_REPORT_REFUSAL: Record<
-  "NOT_FOUND" | "BLOCKED" | "ACKNOWLEDGEMENT_REQUIRED" | "NOT_LATEST",
+  "NOT_FOUND" | "BLOCKED" | "ACKNOWLEDGEMENT_REQUIRED" | "NOT_LATEST" | "ACTIONS_STALE",
   string
 > = {
+  ACTIONS_STALE: "An action changed after this revision was built. Build the report again.",
   NOT_FOUND: "This report revision no longer exists.",
   BLOCKED: "This revision failed its checks and can never be shared.",
   ACKNOWLEDGEMENT_REQUIRED:
@@ -108,3 +122,39 @@ export const INTEGRITY_WORDS: Record<"integrity_passed" | "needs_review" | "bloc
   needs_review: "Needs review",
   blocked: "Blocked",
 };
+
+/* D-057 — suggested actions, in the report's own words. */
+export const ACTIONS_HEADING = "Suggested actions";
+
+/** The fixed note every suggested-actions section carries (D-057). */
+export const ACTIONS_NOTE =
+  "Suggested by the Zypact team from the answers above. These are hypotheses to test, not predictions; we can't say any change will alter what an AI engine answers.";
+
+/** METHODOLOGY §12's remaining fields are taken when an action is tested, not here (D-057). */
+export const ACTIONS_NOT_REGISTERED_NOTE =
+  "A suggested action names no owner, timing or expected result here. If you choose to test one, the Zypact team registers it with you as a separate step, with its owner, its timing and what would count as a change, no change or an unclear result, before anything is measured again.";
+
+export const ACTION_FIELD_WORDS = {
+  observation: "What we observed",
+  suggestedAction: "Suggested action",
+  whyItMightMatter: "Why this might matter (a hypothesis)",
+  alternativeExplanations: "What else could explain it",
+  openQuestions: "What we don't know yet",
+} as const;
+
+export function actionReviewedWords(reviewedOn: string): string {
+  return `Reviewed by the Zypact team on ${reviewedOn}.`;
+}
+
+export function actionEvidenceWords(e: {
+  ordinal: number;
+  engineLabel: string;
+  answerNumber: number;
+  rawResponseSha256: string;
+  sourceUrl: string | null;
+  sourceCited: boolean | null;
+}): string {
+  const base = `Question ${e.ordinal}, ${e.engineLabel} answer ${e.answerNumber} (stored response ${e.rawResponseSha256.slice(0, 12)})`;
+  if (!e.sourceUrl) return `${base}.`;
+  return `${base}; source ${e.sourceUrl}, ${e.sourceCited ? "cited in that answer" : "returned by the engine but not cited in that answer"}.`;
+}

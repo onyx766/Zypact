@@ -178,6 +178,24 @@ function orderAttempts(
   });
 }
 
+/**
+ * Each attempt's run number as the report shows it: its baseline ordinal,
+ * or its place in the report's order when it has none. D-057's suggested
+ * actions name answers by this number, so they and the report agree.
+ */
+export function runOrdinalsByAttemptId(
+  attempts: BuildProtocolReportInput["attempts"]
+): Map<string, number> {
+  const ordinalByAttemptId = new Map<string, number>();
+  orderAttempts(attempts).forEach((attempt, index) => {
+    ordinalByAttemptId.set(
+      attempt.id,
+      attempt.baselineOrdinal ?? index + 1
+    );
+  });
+  return ordinalByAttemptId;
+}
+
 export function buildProtocolReport(
   input: BuildProtocolReportInput
 ): ProtocolReportPayload {
@@ -190,13 +208,7 @@ export function buildProtocolReport(
 
   const ordered = orderAttempts(input.attempts);
 
-  const ordinalByAttemptId = new Map<string, number>();
-  ordered.forEach((attempt, index) => {
-    ordinalByAttemptId.set(
-      attempt.id,
-      attempt.baselineOrdinal ?? index + 1
-    );
-  });
+  const ordinalByAttemptId = runOrdinalsByAttemptId(input.attempts);
 
   const resultByRun = new Map<ProtocolReportRun, EvidenceResultInput | undefined>();
 

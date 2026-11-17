@@ -212,7 +212,20 @@ What the report says and does not say:
 - Answers still being collected are counted as such, never as failed.
 - Other brands and source types are shown per question, with totals across questions labelled as such.
 - ChatGPT reads "not measured in this pilot yet" until it is connected (D-053 item 3).
-- Recommended actions are not in the report yet (phase 3).
+- Suggested actions appear only once reviewed (§8.3, D-057).
+
+### 8.3 Suggested actions (D-057)
+
+Suggested actions are written by the team, never generated, and each rests on stored answers of this pilot (D-053 item 4).
+
+1. In the pilot page's **Suggested actions** section, press **Write a suggested action**. Fill in every field: what we observed, the suggested action, why it might matter (as a hypothesis), what else could explain it, and what we don't know yet.
+2. Link the answers it rests on: choose a question, then one of its completed answers, then, if the action rests on a particular source, one of that answer's own sources. Link at least one and at most ten. You cannot type a URL.
+3. Save. The action is a draft. Wording that predicts an effect or claims a cause is refused: "will improve", "should increase", "is expected to", "guarantee", "ensure", "caused", "led to", "due to", "because of" and the like, in any spelling. Reword it as a hypothesis ("one possibility is", "may reflect", "could come from"). This applies to "What else could explain it" too.
+4. Read the action and, under each link, the stored answer it rests on (**Read the stored answer**) and the source it names. Then press **I have read it: mark reviewed** and confirm. Only reviewed actions appear in a report built after that. An edit is a new draft that needs a new review.
+5. Withdraw an action that no longer holds, with a reason. It stays on record, appears in no later report, and cannot be edited.
+6. **After any review, edit or withdrawal, build the report again before sharing.** A revision built before the change is marked out of date, and Share refuses it (D-057).
+
+Any action in a report holds the report for your review before sharing. A link that no longer checks out (an answer since retired, or a source no longer found in the answer) blocks the report until you edit or withdraw the action.
 
 ## 9. Protocol and budget approval
 

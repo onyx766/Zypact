@@ -928,7 +928,7 @@ Each item below departed from a document that governed before this approval: V1_
   - **Founder decisions of 2026-11-10 recorded below.** The methodology, the dedicated OpenAI project, the cost-tracking rules and automatic search for monitoring are approved.
   - **The founder chose `gpt-5.4-2026-03-05` on 2026-11-13** (written reply relayed by the engineer: "I recommend gpt-5.4-2026-03-05 model."). It is a choice of model. It authorises no paid run and is not yet an approval to measure.
   - **On 2026-11-17 the founder agreed to run the confirmation run on OpenAI's half-price flex tier**, with the same $12 cap, and added OpenAI credit (reply relayed by the engineer). That authorises the run under the new setting `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05`. It is not an approval to measure.
-  - **No model is approved.** Approval follows that confirmation run (output cap 8,000, flex tier).
+  - **Approved for measurement on 2026-11-17** (written reply, relayed: "I approve ChatGPT"), after the confirmation run passed: `CHATGPT_APPROVED_SETTING_VERSION` is `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05`. Automatic search only. The adapter is not wired into any worker; wiring, its worker time limits and its deploy each need their own authorisation.
   - **Benchmark budget confirmed by the founder on 2026-11-11.** The benchmark ran the same day; see "Benchmark results" in the validity note.
   - **First recommendation superseded (2026-11-11).** The first recommendation, `gpt-6-luna`, is superseded for two reasons:
     - a follow-up analysis found it names far fewer smaller vendors than the reference;
@@ -1015,7 +1015,7 @@ Each item below departed from a document that governed before this approval: V1_
     - `chat-latest` (reference): $0.110 per run, 18.3 s, stability 0.46.
   - No human rating of answer quality was done in this first benchmark. A blind review followed in the smaller-vendor validation.
 - **Smaller-vendor validation (2026-11-11):** 84 of 110 runs before the $10 cap stopped it; estimated spend $9.41. Results, the blind review and the engineer's recommendation of `gpt-5.4-2026-03-05` are in the validity note.
-- **Confirmation run result (2026-11-17):** all 60 runs completed with a usable answer, all on flex, from the pinned model, none at the output cap, the slowest 145 s, estimated $5.64 (upper bound). All seven criteria pass. Lifetime spend $20.9955 of $40 over 297 runs. Approving `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05` for measurement is the founder's decision; `CHATGPT_APPROVED_SETTING_VERSION` stays `null` until then.
+- **Confirmation run result (2026-11-17):** all 60 runs completed with a usable answer, all on flex, from the pinned model, none at the output cap, the slowest 145 s, estimated $5.64 (upper bound). All seven criteria pass. Lifetime spend $20.9955 of $40 over 297 runs. The founder approved `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05` for measurement the same day.
 - **Confirmation run on the flex tier (authorised 2026-11-17):**
   - `gpt-5.4-2026-03-05` under the `v4` setting, the same 60 runs and $12 cap. Projected at $7.68 counted at the upper bound (output at the flex rate, input and search calls at the standard rate), or $5.98 if flex halves the input tokens too; $9.05 on the standard tier.
   - **New spend rules, written before any flex call:**
@@ -1034,7 +1034,7 @@ Each item below departed from a document that governed before this approval: V1_
   1. ~~Choose a model~~: `gpt-5.4-2026-03-05`, chosen on 2026-11-13.
   2. ~~Authorise the confirmation run~~: authorised on 2026-11-17, on the flex tier, with a $12 cap; the founder added OpenAI credit.
   3. Say whether about $35–38 per Starter month fits the plan's price.
-  4. Approve the model for measurement after the confirmation run reports, and judge whether flex's speed and capacity refusals suit the worker.
+  4. ~~Approve the model for measurement~~: approved 2026-11-17. Still open: whether flex's speed and capacity refusals suit the worker, decided with the wiring.
   5. Confirm OpenAI's terms permit this use.
   6. Check the project's rate limits before production.
 - **Tests:**
@@ -1111,6 +1111,7 @@ Each item below departed from a document that governed before this approval: V1_
   - 2026-11-16, to the V1 status update: the pilot offer in eight parts, the price, "approximately 15-20 buyer questions", and "I approve the rest and ChatGPT (The two engines are included in the paid pilot)";
   - 2026-11-17, to the reply that proposed the pilot's shape, recommended actions, the retest limit, the flex tier and the offer's wording: "ok I agree all as you said".
   The second reply did not name a security reviewer, so that stays open.
+  - **2026-11-17, later:** the founder approved ChatGPT's setting for measurement (D-050), the second of item 3's four conditions. The confirmation run had passed the first. The wiring and its deploy remain.
 - **Amends:** D-051 item 2 (Perplexity only) and D-051's open pilot terms and daily ceiling.
 - **Decision:**
   1. **The offer.** A paid pilot at 1,500 USD with eight parts:

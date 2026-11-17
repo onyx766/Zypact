@@ -1900,7 +1900,7 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 ## 29. X1 ChatGPT adapter and model benchmark (D-050) — branch `feat/x1-chatgpt-adapter`, not wired, benchmark calls only
 
 - **What it adds:**
-  - `lib/probes/chatgpt.ts`, the OpenAI Responses API with web search under versioned settings (`auto` for monitoring, `required` as a separate protocol). No model is approved yet.
+  - `lib/probes/chatgpt.ts`, the OpenAI Responses API with web search under versioned settings (`auto` for monitoring, `required` as a separate protocol). `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05` is approved for measurement (2026-11-17); the adapter is not wired.
   - `lib/probes/chatgpt-pricing.ts`, usage capture and cost estimation from the dated price table. Unknown, never $0.
   - `scripts/benchmark-chatgpt-models.ts`, a dry run by default. It compares candidate models against the `chat-latest` reference:
     - candidates: `gpt-6-luna`, `gpt-6.1-terra`, and, from 2026-11-11, the dated snapshots `gpt-5.5-2026-04-23` and `gpt-5.4-2026-03-05`;
@@ -1908,7 +1908,7 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
     - spending: a $40 lifetime ceiling counted from every recorded run.
   - The validity note `docs/ADAPTER_VALIDITY_CHATGPT.md`, recording the founder's 2026-11-10 decisions.
 - **Model choice (2026-11-13):**
-  - The founder chose `gpt-5.4-2026-03-05`. It is not approved for measurement yet, and `CHATGPT_APPROVED_SETTING_VERSION` is still `null`.
+  - The founder chose `gpt-5.4-2026-03-05` on 2026-11-13. On 2026-11-17, after the confirmation run passed, the founder approved its flex setting for measurement, and `CHATGPT_APPROVED_SETTING_VERSION` now names it. Nothing calls the adapter until it is wired.
   - Its new setting, `openai-responses-websearch-v3:auto:gpt-5.4-2026-03-05`, raises the output cap from 4,000 to 8,000 tokens. It is the version to approve if the confirmation run passes, and the 4,000-cap setting can never be approved.
   - A 60-run confirmation run with a $12 cap was prepared under that setting and never run. On 2026-11-17 the founder agreed to run it on OpenAI's half-price flex tier and added OpenAI credit. The run now uses `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05` (the `v3` setting plus `service_tier: "flex"`), which is the version to approve if it passes.
   - Wiring this model into the worker would need longer worker time limits than the present 45 seconds per provider call. That is a separate decision; see D-050.

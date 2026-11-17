@@ -32,13 +32,13 @@
  * version cannot name two different requests. Founder decisions
  * (2026-11-10, D-050):
  *   - no model is approved until the benchmark (scripts/benchmark-chatgpt-
- *     models.ts) reports results and cost and the founder approves one, so
- *     CHATGPT_APPROVED_SETTING_VERSION is null and a run without an explicit
- *     setting is refused before any call. On 2026-11-13 the founder chose
- *     gpt-5.4-2026-03-05; on 2026-11-17 the founder agreed to confirm it on
- *     OpenAI's half-price flex tier. That setting (CHATGPT_CONFIRMATION_SETTING:
- *     raised output cap, flex) is still to be validated by the confirmation
- *     run, and its version is the one to approve if it passes;
+ *     models.ts) reports results and cost and the founder approves one. On
+ *     2026-11-13 the founder chose gpt-5.4-2026-03-05; on 2026-11-17 it was
+ *     confirmed on OpenAI's half-price flex tier (CHATGPT_CONFIRMATION_SETTING:
+ *     raised output cap, flex; all seven criteria passed) and the founder
+ *     approved that exact version, which CHATGPT_APPROVED_SETTING_VERSION now
+ *     names. A run in a search mode with no approved setting is still refused
+ *     before any call;
  *   - the main monitoring protocol uses automatic search, and whether search
  *     happened is recorded on every run; search-required is a separate
  *     setting, never mixed with automatic results;
@@ -249,19 +249,22 @@ export const CHATGPT_BENCHMARK_CANDIDATES: ReadonlyArray<Readonly<{ role: "candi
 ]);
 
 /**
- * The one setting version approved for measurement, or null. Nothing is
- * approved yet. Approving is a founder decision and a code change to this
- * line, made only after the confirmation run of that exact version has
- * passed; the version awaiting that is CHATGPT_CONFIRMATION_SETTING.version.
- * The founder's choice of model on 2026-11-13 (gpt-5.4-2026-03-05) is not an
- * approval to measure: the confirmation run comes first.
+ * The one setting version approved for measurement, or null. Approving is a
+ * founder decision and a code change to this line, made only after the
+ * confirmation run of that exact version has passed.
+ *
+ * Approved by the founder on 2026-11-17 ("I approve ChatGPT"), after the
+ * confirmation run of this exact version passed all seven criteria the same
+ * day (D-050, ADAPTER_VALIDITY_CHATGPT.md). Approval is not wiring: no worker
+ * calls this adapter, and a pilot measures on ChatGPT only once it is wired
+ * and deployed under its own authorisation (D-053 item 3).
  *
  * It is a full version string, not a model name, so that approving names the
  * family (and with it the output cap) and the search mode, and so that
  * preparing a later confirmation run can neither change nor switch off what
  * is approved.
  */
-export const CHATGPT_APPROVED_SETTING_VERSION: string | null = null;
+export const CHATGPT_APPROVED_SETTING_VERSION: string | null = "openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05";
 
 /**
  * The approved setting for a search mode, or null: the setting the approved

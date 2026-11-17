@@ -376,13 +376,24 @@ async function main(): Promise<void> {
   check("M1 a mock is marked and carries no outbound body", mock.usedMock === true && mock.fullRequestBody === undefined && mock.fullRequestBodySha256 === undefined);
 
   /* A: approval ------------------------------------------------------ */
-  check("A1 no setting is approved yet", CHATGPT_APPROVED_SETTING_VERSION === null && approvedChatGptSetting("auto") === null && approvedChatGptSetting("required") === null);
-  const refusedWire: Wire[] = [];
-  const refused = await expectFailure(() => runChatGptProbe({ prompt: QUESTION, brandName: "A", fetchImpl: fixtureFetch(200, responseBody(), refusedWire) }));
-  check("A2 a run without a setting is refused before any request", !!refused && /No ChatGPT setting is approved/.test(refused.message) && refusedWire.length === 0);
-  const mockRefused = await expectFailure(() => runChatGptProbe({ prompt: QUESTION, brandName: "A", mockResponse: ok }));
-  check("A3 even a mock needs a setting", !!mockRefused);
   const CONFIRM_VERSION = "openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05";
+  check("A1 exactly the confirmed setting is approved (founder, 2026-11-17): auto search only, cap 8000, flex",
+    CHATGPT_APPROVED_SETTING_VERSION === CONFIRM_VERSION && JSON.stringify(approvedChatGptSetting("auto")) === JSON.stringify(CHATGPT_CONFIRMATION_SETTING) &&
+    approvedChatGptSetting("auto")?.maxOutputTokens === 8000 && approvedChatGptSetting("auto")?.serviceTier === "flex" && approvedChatGptSetting("required") === null);
+  const refusedWire: Wire[] = [];
+  const refused = await expectFailure(() => runChatGptProbe({ prompt: QUESTION, brandName: "A", search: "required", fetchImpl: fixtureFetch(200, responseBody(), refusedWire) }));
+  check("A2 a run in a search mode with no approved setting is refused before any request", !!refused && /No ChatGPT setting is approved/.test(refused.message) && refusedWire.length === 0);
+  const mockRefused = await expectFailure(() => runChatGptProbe({ prompt: QUESTION, brandName: "A", search: "required", mockResponse: ok }));
+  check("A3 even a mock needs an approved setting", !!mockRefused);
+  const approvedWire: Wire[] = [];
+  const approvedRun = await runChatGptProbe({ prompt: QUESTION, brandName: "A", fetchImpl: fixtureFetch(200, responseBody({ model: CONFIRM_MODEL, service_tier: "flex" }), approvedWire) });
+  check("A13 a run with no explicit setting sends exactly the approved request: the pinned model, auto search, cap 8000, low effort, flex last", (() => {
+    if (approvedWire.length !== 1 || !approvedRun) return false;
+    const sent = String(approvedWire[0].init.body);
+    const body = JSON.parse(sent);
+    return sent === JSON.stringify(buildChatGptRequestBody(QUESTION, CHATGPT_CONFIRMATION_SETTING)) && body.model === CONFIRM_MODEL &&
+      body.max_output_tokens === 8000 && body.service_tier === "flex" && Object.keys(body).pop() === "service_tier";
+  })());
   check("A4 approving the confirmation setting's version yields exactly that setting (cap 8000, flex), never the 4000-cap one", (() => {
     const a = approvedChatGptSetting("auto", CONFIRM_VERSION);
     return !!a && CHATGPT_CONFIRMATION_SETTING.version === CONFIRM_VERSION && JSON.stringify(a) === JSON.stringify(CHATGPT_CONFIRMATION_SETTING) && a.maxOutputTokens === 8000 &&
@@ -931,9 +942,10 @@ async function main(): Promise<void> {
   ]) check(`N §4 note covers "${heading}"`, note.includes(`## ${heading}`));
   check("N the note states the required limitation", note.includes("It is not what users of the ChatGPT app see"));
   check("N the note names every setting family and the price table", Object.keys(CHATGPT_SETTING_FAMILIES).every((f) => note.includes(f)) && note.includes(OPENAI_PRICE_TABLE.version));
-  check("N the note records the founder's choice, the confirmation setting, and that no model is approved yet",
-    note.includes(CHATGPT_CONFIRMATION_SETTING.version) && note.includes("2026-11-13") && /No model is approved/.test(note) && note.includes("CHATGPT_APPROVED_SETTING_VERSION") &&
-    !note.includes("CHATGPT_APPROVED_MODEL") && CHATGPT_APPROVED_SETTING_VERSION === null);
+  check("N the note records the founder's choice, the confirmation setting, and its approval for measurement on 2026-11-17, and says it is not wired",
+    note.includes(CHATGPT_CONFIRMATION_SETTING.version) && note.includes("2026-11-13") && /Approved for measurement by the founder on 2026-11-17/.test(note) &&
+    /not wired into any worker/.test(note) && note.includes("CHATGPT_APPROVED_SETTING_VERSION") &&
+    !note.includes("CHATGPT_APPROVED_MODEL") && CHATGPT_APPROVED_SETTING_VERSION === CHATGPT_CONFIRMATION_SETTING.version);
   check("N the note states the V1 claim boundary", note.includes("controlled OpenAI API responses, not observations of ChatGPT.com"));
   check("N the note records that no scraping service is used", /third-party ChatGPT scraping/.test(note));
   const hit = FORBIDDEN_W1_PHRASES.find((p) => note.toLowerCase().includes(p));

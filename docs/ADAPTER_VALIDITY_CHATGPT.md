@@ -5,7 +5,8 @@
   - **The founder chose `gpt-5.4-2026-03-05` on 2026-11-13.** That is a choice of model, not yet an approval to measure.
   - **On 2026-11-17 the founder agreed to run the confirmation run on OpenAI's half-price flex tier**, under the same $12 cap, and added OpenAI credit. That authorises the run; it does not approve the model. See "The half-price tier and the revised confirmation run".
   - **The confirmation run was made on 2026-11-17 and passed all seven criteria** (60 of 60 usable, all on flex, estimated $5.64). See "Confirmation run results".
-  - **No model is approved yet.** Approval of `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05` for measurement is the founder's next decision.
+  - **Approved for measurement by the founder on 2026-11-17** (written reply, relayed: "I approve ChatGPT"): `CHATGPT_APPROVED_SETTING_VERSION` is `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05`, the exact version the confirmation run validated. Automatic search only; `required` is not approved.
+  - **Approval is not wiring.** The adapter is still not wired into any worker. A pilot measures on ChatGPT only after the wiring, its worker time limits and its deploy are each authorised (D-053 item 3).
   - Until a model is approved the adapter refuses every run that passes no explicit setting, and only the benchmark passes one. It is not wired into any worker, and the paid-measurement switch stays off.
 - **Required by:** METHODOLOGY §4, "Adding another surface".
 - **Adapter:** `lib/probes/chatgpt.ts`. Pricing is in `lib/probes/chatgpt-pricing.ts`.
@@ -588,6 +589,6 @@ These need reading the answers or fetching third-party pages, and they are left 
 3. ~~Choose a model~~: the founder chose `gpt-5.4-2026-03-05` on 2026-11-13.
 4. ~~Authorise the confirmation run~~: authorised on 2026-11-17, on the half-price flex tier, under a $12 cap. The founder added OpenAI credit the same day.
 5. **Say whether the Starter-month cost fits the plan's price**, if all 240 runs go to this engine. On the standard tier it is about $35–38; on flex it is projected at about $24–31, and the confirmation run measures it.
-6. **Approve the model for measurement** now that the confirmation run has passed (2026-11-17). Approval is a code change to `CHATGPT_APPROVED_SETTING_VERSION`.
+6. ~~Approve the model for measurement~~: approved on 2026-11-17 after the confirmation run passed; `CHATGPT_APPROVED_SETTING_VERSION` names the `v4` version.
 7. **After the confirmation run, judge whether flex's speed and capacity refusals suit the worker.** The worker's time limits are decided when the engine is wired.
 8. **Wire the adapter into the worker.** That is a separate step behind the paid-measurement switch, and for this model it also needs the longer worker time limits described above.

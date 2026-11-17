@@ -11,9 +11,19 @@ import {
 } from "@/lib/pilots/copy";
 import { loadPilot, pilotIsOver, pilotNotStarted } from "@/lib/pilots/reads";
 import { todayUtc, UUID_PATTERN } from "@/lib/pilots/validate";
+import { INTEGRITY_WORDS } from "@/lib/reports/pilot-report-copy";
+import { listPilotReportRevisions } from "@/lib/reports/process-pilot-report";
 import { getReportServiceClient } from "@/lib/reports/service-client";
+import { publicSiteUrl } from "@/lib/seo/site";
 import { AdminShell } from "../../admin-shell";
-import { AddQuestionPanel, ClosePilotButton, QuestionControls, RetireQuestionButton } from "../pilot-forms";
+import {
+  AddQuestionPanel,
+  BuildPilotReportButton,
+  ClosePilotButton,
+  QuestionControls,
+  RetireQuestionButton,
+  SharePilotReportButton,
+} from "../pilot-forms";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -28,9 +38,14 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
   const user = await requireFounderForPage(`/admin/pilots/${pilotId}`);
   if (!UUID_PATTERN.test(pilotId)) notFound();
 
-  const loaded = await loadPilot(getReportServiceClient(), pilotId);
+  const client = getReportServiceClient();
+  const loaded = await loadPilot(client, pilotId);
   if (!loaded) notFound();
   const { pilot, questions } = loaded;
+  // D-055 — the combined report's revisions, newest first.
+  const revisions = await listPilotReportRevisions(client, pilot.id);
+  const latest = revisions[0] ?? null;
+  const siteUrl = publicSiteUrl();
   const today = todayUtc();
   const over = pilotIsOver(pilot.status, pilot.endsOn, today);
   const notStarted = pilotNotStarted(pilot.startsOn, today);
@@ -156,6 +171,73 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
           </table>
         </div>
       )}
+
+      <div className="zpa-card">
+        <div className="zpa-page-head">
+          <div>
+            <h2 className="zpa-title">Pilot report</h2>
+            <p className="zpa-muted">
+              One report for all of this pilot&apos;s questions, built from the stored answers. Building spends nothing and
+              shares nothing. Share the newest revision once you have reviewed it; the customer receives only the private
+              link you send them.
+            </p>
+          </div>
+          {questions.length > 0 ? <BuildPilotReportButton pilotId={pilot.id} /> : null}
+        </div>
+        {revisions.length === 0 ? (
+          <p className="zpa-muted">No report built yet.</p>
+        ) : (
+          <table className="zpa-table">
+            <thead>
+              <tr>
+                <th>Revision</th>
+                <th>Built</th>
+                <th>Checks</th>
+                <th>Link</th>
+              </tr>
+            </thead>
+            <tbody>
+              {revisions.map((r) => (
+                <tr key={r.id}>
+                  <td>{r.revision}</td>
+                  <td>{r.generatedAt.slice(0, 16).replace("T", " ")} UTC</td>
+                  <td>
+                    <p>{INTEGRITY_WORDS[r.integrityStatus]}</p>
+                    {r.integrityReasons.length > 0 ? (
+                      <ul className="zpa-muted">
+                        {r.integrityReasons.map((reason) => (
+                          <li key={reason}>{reason}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </td>
+                  <td>
+                    {r.publicToken ? (
+                      <p>
+                        <a href={`/pilot-report/${r.publicToken}`} target="_blank" rel="noopener noreferrer">
+                          {`${siteUrl}/pilot-report/${r.publicToken}`}
+                        </a>
+                        <br />
+                        <span className="zpa-muted">Shared {r.sharedAt?.slice(0, 10)}</span>
+                      </p>
+                    ) : latest && r.id === latest.id && r.integrityStatus !== "blocked" ? (
+                      <SharePilotReportButton
+                        pilotId={pilot.id}
+                        artifactId={r.id}
+                        needsReview={r.integrityStatus === "needs_review"}
+                      />
+                    ) : (
+                      <span className="zpa-muted">
+                        {r.integrityStatus === "blocked" ? "Cannot be shared" : "Not shared (a newer revision exists)"}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </AdminShell>
   );
 }

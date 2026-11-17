@@ -1158,3 +1158,77 @@ Each item below departed from a document that governed before this approval: V1_
   - a Run path that does not go through `request_protocol_job_run`;
   - a pilot measurement reported or sent outside the combined pilot report;
   - a closed pilot that spends.
+
+## D-055 — The combined pilot report: one report for all of a pilot's questions, reviewed before it is shared
+
+- **Date:** 2026-11-17
+- **Status:** Built on branch `feat/pilot-report`, from `main` at `53262cf`, as phase 2 of the pilot work D-053 lists. Rules marked *(engineer)* are **proposed for founder confirmation**. Migration `20261119120000_pilot_report_artifacts.sql` is **not applied to any Supabase project**, and nothing is deployed.
+- **Builds on:**
+  - D-044 (source insights);
+  - D-053 (the $1,500 pilot: each engine its own measurement, no combined score);
+  - D-054 (pilot questions);
+  - 0068 and 0076 (the integrity pairing and the Outcome Card artifact pattern);
+  - METHODOLOGY §8–§11, §16 and §19.
+- **Decision:**
+  1. **Built from stored evidence only.** No provider or model call. Each question's section embeds exactly the payload `buildProtocolReport` builds for its protocol, so its reconciliation, range, competitors and sources are the single source. Every table in the report repeats those figures.
+  2. **Per engine, never combined.**
+     - Perplexity is reported as measured.
+     - ChatGPT is listed as "not measured in this pilot yet" and has no table, so it is never shown as zero.
+     - No figure combines engines.
+  3. **Per question, not a score (METHODOLOGY §10).**
+     - Each question has its own row: named in k of n readable answers, the 95% likely range, and attempts planned, attempted, failed and without a readable result.
+     - A label follows rule `pilot-question-labels/1` *(engineer)*. With at least 3 readable answers it says "named in every answer", "named in no answer" or "named in some answers"; with fewer it says "not enough answers". The counts always sit beside the label.
+     - One total line per engine adds up readable answers over the finished, live questions, each answer counting once *(engineer)*.
+       - It names the questions it leaves out.
+       - It gives the per-question range beside it.
+       - It says it is a count, not a rate for the company. It has no interval, because answers to different questions are not one sample.
+  4. **Across questions (METHODOLOGY §11)** *(engineer)*:
+     - **Competitors** are grouped by rule `pilot-competitor-names/1`: the same name apart from spacing and case. Each is shown with the questions it appeared in and its runs per question, and the table is labelled as totals across questions. The client's own brand is excluded, as in each question's report. At most 30 rows are shown.
+     - **Source types** are counted per question, once per answer, under `source-types/1`. An answer whose stored response gave no usable source list is counted apart and never counted as absent.
+  5. **Integrity.**
+     - The status starts from the worst per-question result: each live question's own signals go through the one-question gate.
+     - A live question that has not finished, or whose attempts do not reconcile, makes the report `needs_review`.
+     - Evidence from another project or protocol makes it `blocked`.
+     - Report text with legacy verdicts makes it `blocked`.
+     - A measured brand that differs from the pilot's company name makes it `needs_review`.
+     - A retired question is listed as retired and does not hold the report. Its attempts stay in its own row, the evidence index and the manifest, and it is named as left out of the total.
+  6. **Saved as append-only revisions** (`pilot_report_artifacts`).
+     - The database stores a revision only when its manifest names exactly the pilot's protocols, retired questions' included, and every attempt of them. Each attempt must be listed under its own protocol, and each listed response hash must be the stored one. Otherwise nothing is stored.
+     - A revision's content never changes. Only the review and share fields can be written, once. A shared revision never changes at all, and no revision is deleted.
+  7. **Reviewed, then shared by link** *(engineer)*.
+     - The founder shares only the newest revision.
+     - A `blocked` revision is never shared, by function and by constraint.
+     - A `needs_review` revision is shared only with an explicit acknowledgement, which is recorded.
+     - Sharing records who reviewed it and when, and shows the private link; the founder sends it.
+     - Nothing is emailed in this phase. The founder console is behind `SNAPSHOT_APPROVAL_ENABLED`, like the other pilot routes.
+  8. **The customer's page** `/pilot-report/<token>`:
+     - is noindex, and reads only through `read_shared_pilot_report`;
+     - is served for a shared, non-blocked revision with a 64-character token, and is a 404 otherwise;
+     - says when a newer revision has been shared;
+     - uses plain words, never a stored code;
+     - states D-053's limit: "Results show what these engines answered during the pilot. They don't represent every AI tool or every buyer."
+  9. **Not in this phase:**
+     - recommended actions (phase 3);
+     - the pilot retest and its Outcome Cards (phase 4);
+     - email delivery;
+     - the customer login.
+- **Open for the founder:**
+  - each *(engineer)* rule above, in particular whether the total line should be shown at all;
+  - whether the first report waits for recommended actions;
+  - whether an older shared link should stop working when a newer revision is shared. Today it keeps working and says a newer one exists.
+- **Not established:**
+  - no browser walk-through of the pages;
+  - no report built from real pilot evidence. The payload is tested on fixtures, and the save, share and read on a disposable database with an attempt produced through the worker's own functions.
+- **Tests:**
+  - `npm run test:pilot-report` (59, offline): builder purity; per-question rows equal to each question's own report; denominators with failed and excluded attempts; the total line; competitor grouping; source types; the evidence index and manifest; ChatGPT never zero; the integrity rules, including the retired question; wording (no forbidden claim, no score, no stored code, the D-053 limit); the page's token gate and noindex; founder guards and closed log fields; the migration's privileges, guard and refusals.
+  - `scripts/test-pilot-report-db.ts` (34, disposable Supabase Postgres, run by `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db`): saves and every refusal; share rules; immutability, even for the database owner; the shared-only read; privileges.
+  - `npm run test:prod-preflight` lists the new version, table and four functions as absent.
+  - Results in `CURRENT_STATUS.md` §32.
+- **Recovery:** in the migration's header. Roll the web app back, then drop the three functions, the table and the guard's function. Nothing else references the table, and a revision can be rebuilt from the evidence.
+- **Release order:** directly after `20261118120000`, wherever the founder places the pilot migrations (D-052, `PROD_PREFLIGHT_SPEC.md`). It redefines no function, so D-037's list is unchanged.
+- **Revisit trigger:**
+  - a figure combining engines or questions into a score;
+  - a pilot report sent or served outside `read_shared_pilot_report`;
+  - a revision changed after it is shared;
+  - recommended actions added to the payload;
+  - a second engine measured.

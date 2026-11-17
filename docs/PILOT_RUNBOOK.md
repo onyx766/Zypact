@@ -192,6 +192,25 @@ A managed pilot holds all of one customer's questions in one project, on **Pilot
 
 ChatGPT shows as "Not measured" until it is wired (D-053 item 3). A pilot's results are not yet reported or sent: the combined pilot report is the next step.
 
+### 8.2 The combined pilot report (D-055)
+
+The pilot page's **Pilot report** section builds one report for all of the pilot's questions from the stored answers. Building spends nothing, calls no AI provider or model, and shares nothing.
+
+1. Press **Build report** once the questions have finished. Each press saves a new revision; earlier ones are kept.
+2. Read the revision's check result:
+   - **Passed its checks**: every live question finished, and every answer's evidence is complete.
+   - **Needs review**: the reasons are listed, for example a question that has not finished or has incomplete evidence. Fix what you can (finish, retry or retire the question) and build again. If the report is still right to send, share it after reading every reason; the console asks you to confirm.
+   - **Blocked**: it can never be shared. Tell the engineer.
+3. Press **Share** on the newest revision. Only the newest can be shared, and a shared revision can never change. The console then shows the private link; send it to the customer yourself. Nothing is emailed.
+4. Build and share again when the pilot changes, for example after the retest. The customer's older link keeps working and says that a newer revision has been shared.
+
+What the report says and does not say:
+- Each question's result is its own: how often the company was named in that question's readable answers, the likely range, and every failed or excluded attempt.
+- One total line adds up readable answers over the finished questions. It is a count of answers, not a rate or a score for the company.
+- Other brands and source types are shown per question, with totals across questions labelled as such.
+- ChatGPT reads "not measured in this pilot yet" until it is connected (D-053 item 3).
+- Recommended actions are not in the report yet (phase 3).
+
 ## 9. Protocol and budget approval
 
 Before execution, document:

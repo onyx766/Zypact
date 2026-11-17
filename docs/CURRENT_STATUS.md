@@ -2024,3 +2024,43 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 | `npm run test:worker-start` | 41/41 |
 | `npm run test:paid-execution-guards` | 143/143. Its founder-route inventory now names the pilot Run route as the fourth route that can start the worker, and checks it is founder-guarded before the start. The first version of this branch failed that check: the route was added without updating the inventory. |
 | `ZYPACT_LEVEL2_LOCAL=1 npm run test:snapshot-worker-postgres-level2` | `LEVEL2_RESULT=PASS`, 886 PASS and 0 FAIL on `postgres:16-alpine`, with all 91 migrations applied, including this one. The local runner then exits 1 from its known cleanup trap (§30). CI's Level 2 job runs only for pull requests into `main`, so it does not run on this stacked branch. |
+
+## 32. Combined pilot report (D-055) — branch `feat/pilot-report`, not applied anywhere, not deployed
+
+- **Base:** `main` at `53262cf`, which holds pilot step 1 (D-052) and pilot questions (D-054).
+- **What it adds:**
+  - **Migration** `20261119120000_pilot_report_artifacts.sql`:
+    - `pilot_report_artifacts`, append-only revisions that are immutable once shared;
+    - `save_pilot_report_artifact`, which refuses evidence outside the pilot, a manifest that leaves out a protocol or attempt, and a hash mismatch;
+    - `share_pilot_report_artifact`, for the newest revision only. It never shares a blocked one, and shares a needs-review one only with an acknowledgement;
+    - `read_shared_pilot_report`;
+    - the guard trigger's function.
+  - **A pure builder, integrity rule and Markdown** in `lib/reports/build-pilot-report.ts`, `pilot-report-integrity.ts` and `render-pilot-report-markdown.ts`.
+  - **The reader** `lib/reports/read-pilot-evidence.ts`, and `readPilotProtocolEvidence` in `read-protocol-evidence.ts`.
+  - **Build and share** in `lib/reports/process-pilot-report.ts`, with two founder routes under `/api/internal/pilots/[pilotId]/report`.
+  - **The admin section** on the pilot page, and the customer page `/pilot-report/[secureToken]`.
+  - **No provider or model call, no email, no change to any existing function.**
+- **Not established:**
+  - no browser walk-through;
+  - no report built from real pilot evidence;
+  - no Level 2 run with this migration. It changes no worker path; CI's Level 2 job applies it on a pull request into `main`.
+- **Open:** D-055 *Open for the founder*:
+  - the total line;
+  - whether the first report waits for recommended actions;
+  - older shared links.
+- **Inventory on this branch:** 92 migrations, 221 files matching `scripts/test-*.ts`, 130 `test:*` and 4 `verify:*` commands.
+- **Commands and local results (2026-11-17):**
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | pass |
+| `npm run build:verify` | pass; the two routes and the page are built (`next-env.d.ts` restored afterwards) |
+| `npm run test:pilot-report` | 59/59 |
+| `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | P1 45/45, P2 71/71, E1 74/74, Q4 52/52, pilot step 1 60/60, pilot questions 69/69, pilot report 34/34 (all 92 migrations applied) |
+| `npm run test:pilot-questions` | 128/128. S1 now checks that pilot questions directly follow step 1, not that it is the newest migration. |
+| `npm run test:pilot-step1` | 75/75 |
+| `npm run test:protocol-report` | pass |
+| `npm run test:prod-preflight` | 18/18 (the version, the table and four functions added to the absence checks) |
+| `npm run test:paid-execution-guards` | 143/143 |
+| `npm run test:source-insights` | pass |
+| `npm run test:founder-baseline-control`, `npm run test:worker-start` | pass, 41/41 |

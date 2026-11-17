@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Plus, X } from "lucide-react";
 
 import { CLOSE_PILOT_PROMPT, pilotRunConfirmationText } from "@/lib/pilots/copy";
+import { SHARE_NEEDS_REVIEW_PROMPT, SHARE_PASSED_PROMPT } from "@/lib/reports/pilot-report-copy";
 
 /**
  * D-054 — the founder's pilot controls. Each form sends a fresh
@@ -403,6 +404,88 @@ export function RetireQuestionButton({ pilotId, pilotQuestionId }: { pilotId: st
     <div className="zpa-actions">
       <button type="button" className="zpa-btn zpa-btn-sm zpa-btn-warn" onClick={retire} disabled={busy}>
         Retire question
+      </button>
+      {message ? <p className="zpa-action-note">{message}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * D-055 — builds a new revision of the pilot's combined report from stored
+ * evidence. It spends nothing and shares nothing.
+ */
+export function BuildPilotReportButton({ pilotId }: { pilotId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function build() {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const { ok, payload } = await post(`/api/internal/pilots/${pilotId}/report`, {});
+      if (ok) {
+        window.location.reload();
+        return;
+      }
+      setMessage(payload?.error ?? "The report could not be built.");
+    } catch {
+      setMessage("The request did not reach the server.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="zpa-actions">
+      <button type="button" className="zpa-btn zpa-btn-sm" onClick={build} disabled={busy}>
+        {busy ? "Building…" : "Build report"}
+      </button>
+      {message ? <p className="zpa-action-note">{message}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * D-055 — the founder's review and share of the latest revision. A revision
+ * that needs review is shared only after an explicit confirmation; a blocked
+ * revision has no Share button and the database refuses it anyway.
+ */
+export function SharePilotReportButton({
+  pilotId,
+  artifactId,
+  needsReview,
+}: {
+  pilotId: string;
+  artifactId: string;
+  needsReview: boolean;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function share() {
+    if (!window.confirm(needsReview ? SHARE_NEEDS_REVIEW_PROMPT : SHARE_PASSED_PROMPT)) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const { ok, payload } = await post(`/api/internal/pilots/${pilotId}/report/${artifactId}/share`, {
+        acknowledgeNeedsReview: needsReview,
+      });
+      if (ok) {
+        window.location.reload();
+        return;
+      }
+      setMessage(payload?.error ?? "The report could not be shared.");
+    } catch {
+      setMessage("The request did not reach the server.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="zpa-actions">
+      <button type="button" className="zpa-btn zpa-btn-sm" onClick={share} disabled={busy}>
+        {needsReview ? "Reviewed: share" : "Share"}
       </button>
       {message ? <p className="zpa-action-note">{message}</p> : null}
     </div>

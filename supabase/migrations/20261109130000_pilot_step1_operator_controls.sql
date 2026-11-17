@@ -1,7 +1,10 @@
 -- Pilot Mode step 1 (D-051, D-052): the operator controls a paid pilot needs
 -- before its first run.
 --
--- Applies after 20261113120000 (Q4). Depends only on objects from 0047-0081.
+-- Applies after 20261109120000 (S1), ahead of the unapplied account stack
+-- (P1 to Q4), under the release order D-058 proposes. It was numbered
+-- 20261114120000 until 2026-11-17; the SQL is unchanged. Depends only on
+-- objects from 0047-0081.
 --
 -- Four changes. Each adds new objects, except item 4, which redefines one
 -- function: a public-form approval behaves exactly as before, while a

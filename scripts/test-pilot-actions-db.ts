@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 /**
  * Pilot suggested actions on a real PostgreSQL
- * (20261120120000_pilot_actions.sql, D-057):
+ * (20261109160000_pilot_actions.sql, D-057):
  *
  *   A  save_pilot_action: a completed answer of this pilot saves version 1;
  *      a replay answers the same ids; another body under the same key is a

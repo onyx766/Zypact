@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Pilot questions on a real PostgreSQL (20261118120000_pilot_questions.sql, D-054):
+ * Pilot questions on a real PostgreSQL (20261109140000_pilot_questions.sql, D-054):
  *
  *   A  create_pilot: one project per pilot, replay and conflict, one open
  *      pilot per website, no pilot over a live request;

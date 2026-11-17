@@ -654,8 +654,8 @@ check("C5 the customer's note promises no step that does not exist: the team reg
 
 /* ---------------------------------------------------------------- M */
 
-const MIG = read("supabase/migrations/20261120120000_pilot_actions.sql");
-const OLD = read("supabase/migrations/20261119120000_pilot_report_artifacts.sql");
+const MIG = read("supabase/migrations/20261109160000_pilot_actions.sql");
+const OLD = read("supabase/migrations/20261109150000_pilot_report_artifacts.sql");
 const TABLES = ["pilot_actions", "pilot_action_versions", "pilot_action_evidence", "pilot_action_events"];
 check("M1 four tables, RLS on each, and service_role may only read them",
   TABLES.every((t) =>
@@ -703,7 +703,7 @@ const NEW_SAVE = fnBody(MIG);
 const blockStart = NEW_SAVE.indexOf("  -- D-057 begin");
 const blockEnd = NEW_SAVE.indexOf("  -- D-057 end\n");
 const withoutBlock = blockStart > 0 && blockEnd > blockStart ? NEW_SAVE.slice(0, blockStart) + NEW_SAVE.slice(blockEnd + "  -- D-057 end\n".length + 1) : "";
-check("M9 save_pilot_report_artifact is 20261119120000's body byte for byte apart from the marked D-057 block",
+check("M9 save_pilot_report_artifact is 20261109150000's body byte for byte apart from the marked D-057 block",
   withoutBlock === fnBody(OLD), `${withoutBlock.length} vs ${fnBody(OLD).length}`);
 const block = blockStart > 0 ? NEW_SAVE.slice(blockStart, blockEnd) : "";
 check("M10 the block refuses an unreviewed, stale or withdrawn version, an omitted reviewed action, and a pass with any action",
@@ -725,7 +725,7 @@ const NEW_SHARE = shareBody(MIG);
 const sBlockStart = NEW_SHARE.indexOf("  -- D-057 begin");
 const sBlockEnd = NEW_SHARE.indexOf("  -- D-057 end\n");
 const shareWithout = sBlockStart > 0 && sBlockEnd > sBlockStart ? NEW_SHARE.slice(0, sBlockStart) + NEW_SHARE.slice(sBlockEnd + "  -- D-057 end\n".length + 1) : "";
-check("M14 share_pilot_report_artifact is 20261119120000's body byte for byte apart from the marked D-057 block",
+check("M14 share_pilot_report_artifact is 20261109150000's body byte for byte apart from the marked D-057 block",
   shareWithout === shareBody(OLD), `${shareWithout.length} vs ${shareBody(OLD).length}`);
 const sBlock = sBlockStart > 0 ? NEW_SHARE.slice(sBlockStart, sBlockEnd) : "";
 check("M15 the share block refuses ACTIONS_STALE when a listed version is not current, reviewed and live, or a reviewed action is missing, after the newest-revision check",

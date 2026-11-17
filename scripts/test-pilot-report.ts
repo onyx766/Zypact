@@ -639,7 +639,7 @@ check("T9 the console shows a link only once a revision is shared",
 
 /* ---------------------------------------------------------------- M */
 
-const MIG = readFileSync("supabase/migrations/20261119120000_pilot_report_artifacts.sql", "utf8");
+const MIG = readFileSync("supabase/migrations/20261109150000_pilot_report_artifacts.sql", "utf8");
 const body = MIG.replace(/^\s*--.*$/gm, "");
 const fns = [...body.matchAll(/create or replace function public\.([a-z_]+)\(/g)].map((m) => m[1]);
 check("M1 four functions are created", fns.sort().join(",") === "pilot_report_artifacts_guard,read_shared_pilot_report,save_pilot_report_artifact,share_pilot_report_artifact", fns.join(","));

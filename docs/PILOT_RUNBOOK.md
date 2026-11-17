@@ -36,6 +36,8 @@ The pilot does not provide:
 
 ### 2.1 Pilot Mode (D-051)
 
+> **Going live:** the step-by-step production plan, with each founder approval, check and rollback, is [`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md). Its release order (D-058) and step 1, the read-only preflight, were approved by the founder on 2026-11-17; every later step needs its own authorisation.
+
 Pilot Mode is the managed pilot the founder approved on 2026-11-14. The team runs every measurement and retest from the admin console, and the customer views the results. Until the customer login shows results, they reach the customer by private link.
 
 - **Paid runs:** only team-run jobs, one job per operator start, within the database caps and the worker's daily ceiling, set at the figure the founder confirms when authorising that production step (10 USD proposed). Nothing a customer can do starts paid work. The first paid pilot run waits for step 1 (D-052) to be deployed: until then a Run is not limited to its own request (`CURRENT_STATUS.md` §18.5 item 2).

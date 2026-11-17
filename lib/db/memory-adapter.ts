@@ -247,7 +247,7 @@ interface MemoryStore {
   pilotQuestionProtocols: Map<string, MemoryPilotQuestionProtocol>;
 }
 
-/** D-054 — mirrors pilots (20261118120000). */
+/** D-054 — mirrors pilots (20261109140000). */
 interface MemoryPilot {
   id: string;
   projectId: string;
@@ -267,7 +267,7 @@ interface MemoryPilot {
   closeReason: string | null;
 }
 
-/** D-054 — mirrors pilot_questions (20261118120000). */
+/** D-054 — mirrors pilot_questions (20261109140000). */
 interface MemoryPilotQuestion {
   id: string;
   pilotId: string;
@@ -287,7 +287,7 @@ interface MemoryPilotQuestion {
   retireReason: string | null;
 }
 
-/** D-054 — mirrors pilot_question_protocols (20261118120000). */
+/** D-054 — mirrors pilot_question_protocols (20261109140000). */
 interface MemoryPilotQuestionProtocol {
   id: string;
   pilotQuestionId: string;
@@ -367,7 +367,7 @@ const LIVE_REQUEST_STATUSES = new Set([
   "queued", "running", "quality_review", "needs_founder_review",
 ]);
 
-/** D-052 — mirrors protocol_job_run_requests (20261114120000). */
+/** D-052 — mirrors protocol_job_run_requests (20261109130000). */
 interface MemoryRunRequest {
   id: string;
   jobId: string;
@@ -382,7 +382,7 @@ interface MemoryRunRequest {
   refusalCode: "JOB_NOT_FOUND" | "JOB_NOT_ELIGIBLE" | "JOB_LOCKED" | "PILOT_CLOSED" | null;
 }
 
-/** D-052 — mirrors snapshot_request_closures (20261114120000). */
+/** D-052 — mirrors snapshot_request_closures (20261109130000). */
 interface MemoryRequestClosure {
   id: string;
   snapshotRequestId: string;

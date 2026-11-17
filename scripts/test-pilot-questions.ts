@@ -449,15 +449,15 @@ async function main(): Promise<void> {
   /* S: static contracts ---------------------------------------------------- */
   console.log("\n[S] static contracts");
   const DIR = "supabase/migrations";
-  const FILE = "20261118120000_pilot_questions.sql";
+  const FILE = "20261109140000_pilot_questions.sql";
   const versions = readdirSync(DIR).filter((f) => f.endsWith(".sql")).map((f) => parseMigrationName(f)).filter((r) => r.ok);
   const parsed = parseMigrationName(FILE);
   // Directly after pilot step 1: no migration sorts between them. Later
   // migrations (the pilot report, D-055) may follow it.
   check("S1 the migration name is valid and directly follows pilot step 1", parsed.ok && parsed.kind === "timestamp"
-    && (parsed.ok ? parsed.version : 0) > 20261114120000
-    && versions.some((r) => r.ok && r.version === 20261114120000)
-    && !versions.some((r) => r.ok && r.version > 20261114120000 && r.version < (parsed.ok ? parsed.version : 0)));
+    && (parsed.ok ? parsed.version : 0) > 20261109130000
+    && versions.some((r) => r.ok && r.version === 20261109130000)
+    && !versions.some((r) => r.ok && r.version > 20261109130000 && r.version < (parsed.ok ? parsed.version : 0)));
   const sql = read(path.join(DIR, FILE));
   const code = sql.replace(/--[^\n]*/g, "");
   const defined = [...code.matchAll(/create\s+or\s+replace\s+function\s+public\.([a-z_0-9]+)/gi)].map((m) => m[1]).sort();
@@ -516,7 +516,7 @@ async function main(): Promise<void> {
     code.includes("check (refusal_code in ('JOB_NOT_FOUND', 'JOB_NOT_ELIGIBLE', 'JOB_LOCKED', 'PILOT_CLOSED'));"));
 
   // Parity 1: request_protocol_job_run is step 1's, with two changes only.
-  const step1 = read(path.join(DIR, "20261114120000_pilot_step1_operator_controls.sql"));
+  const step1 = read(path.join(DIR, "20261109130000_pilot_step1_operator_controls.sql"));
   const fnOf = (src: string, name: string) => {
     const start = src.indexOf(`create or replace function public.${name}(`);
     return src.slice(start, src.indexOf("\n$$;\n", start) + 5);
@@ -699,7 +699,7 @@ async function main(): Promise<void> {
     /claimed\.outcome === "JOB_LOCKED" \|\|\s*\n\s*claimed\.outcome === "PILOT_CLOSED"\s*\n\s*\) \{\s*\n\s*return \{ outcome: "run_request_refused"/.test(workerSrc));
   const preflight = read("scripts/sql/prod-preflight.sql");
   check("S27 the preflight checks the version, the three tables and the three functions as absent",
-    (preflight.match(/'20261118120000'/g) ?? []).length === 2
+    (preflight.match(/'20261109140000'/g) ?? []).length === 2
       && TABLES.every((t) => preflight.includes(`('${t}')`))
       && ["create_pilot", "add_pilot_question", "close_pilot", "retire_pilot_question"].every((f) => preflight.includes(`('${f}')`)));
   check("S28 the DB runner runs the pilot-questions database test",

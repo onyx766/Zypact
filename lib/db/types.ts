@@ -1699,7 +1699,7 @@ export interface ClaimProtocolExecutionJobByIdResult {
 
 /**
  * D-052 — a run request names the one job the next worker start may claim
- * (migration 20261114120000). The console writes it just before it starts
+ * (migration 20261109130000). The console writes it just before it starts
  * the machine; the worker's requested claim consumes it. At most one is
  * pending at any time.
  */
@@ -1799,7 +1799,7 @@ export interface RetryFailedProtocolJobResult {
 }
 
 /**
- * D-054 — a managed pilot (migration 20261118120000): one project holding
+ * D-054 — a managed pilot (migration 20261109140000): one project holding
  * up to 20 approved buyer questions, each measured by its own protocol and
  * job. The website is normalized exactly as a request's before the call.
  */

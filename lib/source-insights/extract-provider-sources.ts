@@ -271,14 +271,24 @@ export function openAiBodySearchSourceUrls(output: unknown): unknown[] {
   return out;
 }
 
-/** Removes exactly `utm_source=openai` from a normalized URL (rule openai-responses-sources/1). */
-function withoutOpenAiUtm(normalized: { url: string; domain: string }): { url: string; domain: string } {
-  const parsed = new URL(normalized.url);
-  const kept = [...parsed.searchParams].filter(([k, v]) => !(k === "utm_source" && v === "openai"));
-  if (kept.length === [...parsed.searchParams].length) return normalized;
-  parsed.search = "";
-  for (const [k, v] of kept) parsed.searchParams.append(k, v);
-  return { url: parsed.toString(), domain: normalized.domain };
+/**
+ * Removes exactly the query pair `utm_source=openai` from a normalized URL
+ * (rule openai-responses-sources/1). It edits the query text, so every other
+ * parameter keeps the exact encoding it arrived with; rebuilding through
+ * URLSearchParams would re-encode them ("a%20b" → "a+b", "a,b" → "a%2Cb").
+ */
+export function withoutOpenAiUtm(normalized: { url: string; domain: string }): { url: string; domain: string } {
+  const url = normalized.url;
+  const queryAt = url.indexOf("?");
+  if (queryAt < 0) return normalized;
+  const hashAt = url.indexOf("#", queryAt);
+  const query = url.slice(queryAt + 1, hashAt < 0 ? undefined : hashAt);
+  const fragment = hashAt < 0 ? "" : url.slice(hashAt);
+  const pairs = query.split("&");
+  const kept = pairs.filter((pair) => pair !== "utm_source=openai");
+  if (kept.length === pairs.length) return normalized;
+  const rest = kept.filter((pair) => pair !== "");
+  return { url: url.slice(0, queryAt) + (rest.length > 0 ? `?${rest.join("&")}` : "") + fragment, domain: normalized.domain };
 }
 
 function openAiCandidate(url: unknown, title: unknown): Candidate | null {

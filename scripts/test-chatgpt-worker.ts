@@ -38,7 +38,7 @@ import {
 import type { AnalysisTransport, ChatGptEngine, IterationResult, WorkerDeps, WorkerOptions } from "@/lib/protocol-worker/types";
 import { answerFromRawResponseBody, probeRunnerForProtocol, runOneIteration } from "@/lib/protocol-worker/worker";
 import { CHATGPT_SURFACE_LIMITATION, PERPLEXITY_SURFACE_LIMITATION, surfaceLimitation } from "@/lib/reports/surface-limitations";
-import { buildSourceInsights } from "@/lib/source-insights/build-source-insights";
+import { buildSourceInsights, LINKED_SOURCE_DEFINITION_NOTE, SOURCE_DEFINITION_NOTE } from "@/lib/source-insights/build-source-insights";
 import {
   extractProviderSources,
   OPENAI_RESPONSES_SOURCES_RULE_VERSION,
@@ -46,6 +46,7 @@ import {
   openAiBodySearchSourceUrls,
   PROVIDER_SOURCES_RULE_VERSION,
   sourcesRuleVersionForProvider,
+  withoutOpenAiUtm,
 } from "@/lib/source-insights/extract-provider-sources";
 
 // The worker's leg deadlines are unref'd timers. A test waiting on one with
@@ -518,6 +519,20 @@ async function main(): Promise<void> {
   check("source insights name the rule they were read under", insights.extractionVersion === OPENAI_RESPONSES_SOURCES_RULE_VERSION &&
     insights.notes.some((n) => n.includes(OPENAI_RESPONSES_SOURCES_RULE_VERSION)) && insights.notes.some((n) => n.includes("linked citation")));
   check("Perplexity insights are unchanged by default", buildSourceInsights([], "client.example").extractionVersion === PROVIDER_SOURCES_RULE_VERSION);
+  check("ChatGPT insights define cited as a link in the text, never a numbered reference; Perplexity keeps its definition",
+    insights.notes.includes(LINKED_SOURCE_DEFINITION_NOTE) && !insights.notes.includes(SOURCE_DEFINITION_NOTE) && !insights.notes.some((n) => n.includes("numbered reference")) &&
+    buildSourceInsights([], "client.example").notes.includes(SOURCE_DEFINITION_NOTE));
+  const utm = (url: string) => withoutOpenAiUtm({ url, domain: "x.example" }).url;
+  check("the utm rule removes exactly utm_source=openai and keeps every other parameter's encoding as received",
+    utm("https://x.example/p?q=a%20b&utm_source=openai") === "https://x.example/p?q=a%20b" &&
+    utm("https://x.example/p?tags=a,b&utm_source=openai") === "https://x.example/p?tags=a,b" &&
+    utm("https://x.example/p?path=/a/b&utm_source=openai") === "https://x.example/p?path=/a/b" &&
+    utm("https://x.example/p?id&utm_source=openai") === "https://x.example/p?id" &&
+    utm("https://x.example/p?utm_source=openai") === "https://x.example/p" &&
+    utm("https://x.example/p?utm_source=openai&a=1#top") === "https://x.example/p?a=1#top" &&
+    utm("https://x.example/p?utm_source=other&a=1") === "https://x.example/p?utm_source=other&a=1" &&
+    utm("https://x.example/p?xutm_source=openai") === "https://x.example/p?xutm_source=openai" &&
+    utm("https://x.example/p") === "https://x.example/p");
 
   /* ═══════ 5. labels ═══════ */
   console.log("\n[5] Report labels");

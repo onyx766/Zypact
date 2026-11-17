@@ -1356,6 +1356,8 @@ Each item below departed from a document that governed before this approval: V1_
   - the memory-adapter mirror;
   - the readers that treat an unknown probe mode as simulated (`coerceProbeMode`, `isLive`);
   - an engine parameter in the pilot reads and routes;
+  - **the provider leg's call kind.** ChatGPT's leg is recorded as `call_kind 'perplexity'` (`execute-job.ts`), so the cost reconciliation (`lib/costs/reconcile-costs.ts`) would file ChatGPT spend under Perplexity. The measurement fingerprint (`measurement-fingerprint.ts`) also finds probe calls by that label. Phase B must give the leg a provider-neutral or ChatGPT kind, and move the receipt RPC's check, the cost grouping and the fingerprint together (from the independent review of 27f85d7);
+  - **`searchResultsPresence`** in `measurement-fingerprint.ts` reads only Sonar and Agent search results, so every ChatGPT run would show as "absent". It should read `web_search_call` items. It is an observation only, never a compatibility decision (same review);
   - a database test.
 
   It flips `CHATGPT_WORKER_SCHEMA_READY`.

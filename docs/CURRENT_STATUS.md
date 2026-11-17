@@ -2089,7 +2089,7 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 |---|---|
 | `npm run typecheck` | pass |
 | `npm run build:verify` | pass (`next-env.d.ts` restored afterwards) |
-| `npm run test:chatgpt-worker` | 102/102 (new) |
+| `npm run test:chatgpt-worker` | 104/104 (new; 102 before the review fixes) |
 | `npm run test:chatgpt-adapter` | 195/195 |
 | `npm run test:source-insights` | pass |
 | `npm run test:paid-execution-guards` | 145/145 |

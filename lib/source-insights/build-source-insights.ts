@@ -28,6 +28,14 @@ const MAX_URLS_PER_DOMAIN = 10;
 
 export const SOURCE_DEFINITION_NOTE =
   "“Cited” means the answer points to the source with a numbered reference. “Retrieved only” means the provider returned the source but the answer does not point to it.";
+/** D-056 — the definition under openai-responses-sources/1, whose citations are links on the answer text. */
+export const LINKED_SOURCE_DEFINITION_NOTE =
+  "“Cited” means the answer links to the source in its text. “Retrieved only” means the provider's search returned the source but the answer does not link to it.";
+
+/** The definition that matches the rule the runs were read under. */
+export function sourceDefinitionNote(extractionVersion: string): string {
+  return extractionVersion === OPENAI_RESPONSES_SOURCES_RULE_VERSION ? LINKED_SOURCE_DEFINITION_NOTE : SOURCE_DEFINITION_NOTE;
+}
 export const NOT_READ_NOTE =
   "Zypact has not opened these pages. What they say, and whether they mention you or another brand, has not been checked.";
 export const NO_CAUSAL_SOURCE_NOTE =
@@ -110,7 +118,7 @@ export function buildSourceInsights(
   const domains = all.slice(0, MAX_DOMAINS_SHOWN);
 
   const notes = [
-    SOURCE_DEFINITION_NOTE,
+    sourceDefinitionNote(extractionVersion),
     `Read from each run's stored provider response under rule ${extractionVersion}, after checking it against its recorded hash. Nothing was requested again.`,
     NOT_READ_NOTE,
     NO_CAUSAL_SOURCE_NOTE,
@@ -231,6 +239,6 @@ export function compareSourceInsights(
     retestRunsWithSourceEvidence: retest.runsWithSourceEvidence,
     ownedCited: { baseline: baseline.runsWithOwnedCitation, retest: retest.runsWithOwnedCitation },
     domains,
-    notes: [SOURCE_COMPARISON_NOTE, SOURCE_DEFINITION_NOTE, NOT_READ_NOTE],
+    notes: [SOURCE_COMPARISON_NOTE, sourceDefinitionNote(baseline.extractionVersion), NOT_READ_NOTE],
   };
 }

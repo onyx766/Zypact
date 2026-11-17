@@ -34,6 +34,19 @@ The pilot does not provide:
 - full-service content, PR, or development execution unless contracted separately;
 - a finished self-serve platform experience during the founder-led phase.
 
+### 2.1 Pilot Mode (D-051)
+
+Pilot Mode is the managed pilot the founder approved on 2026-11-14. The team runs every measurement and retest from the admin console, and the customer views the results. Until the customer login shows results, they reach the customer by private link.
+
+- **Paid runs:** only team-run jobs, one job per operator start, within the database caps and the worker's daily ceiling, set at the figure the founder confirms when authorising that production step (10 USD proposed). Nothing a customer can do starts paid work. The first paid pilot run waits for step 1 (D-052) to be deployed: until then a Run is not limited to its own request (`CURRENT_STATUS.md` §18.5 item 2).
+- **Engines (D-053, replacing D-051's Perplexity only):** the 1,500 USD pilot includes Perplexity Sonar and ChatGPT. Each is reported as its own directional measurement of one AI engine, with no score combined across engines and no claim about other assistants. ChatGPT measures nothing for a pilot until its confirmation run passes, its setting is approved, it is wired into the worker and its deploy is authorised. Until then a pilot starts on Perplexity, and the customer's change waits until both baselines are taken. Never state an overall visibility score.
+- **Shape (D-053):** 15 approved buyer questions (20 at most), 5 answers per question on each engine, a retest of up to 5 questions on both engines, 90 days.
+- **Recommended actions (D-053):** written by the team, each linked to the answers and sources it rests on, reviewed before sending. Never generated automatically, and never said to be likely to change results.
+- **Offer wording:** use D-053 item 8.
+- **Website ownership:** confirm that the customer controls the website before its first measurement, because automatic verification is not built. Record how it was confirmed.
+- **Written approvals:** keep the customer's dated, written approval of the buyer questions and of the change to be tested, until the account records these approvals itself.
+- **Logins:** one login per customer, once the login is enabled.
+
 ## 3. Initial ICP
 
 Prioritize:
@@ -111,6 +124,7 @@ The written pilot agreement should define:
 - payment schedule;
 - cancellation, refund, and out-of-scope rules;
 - statement that results may be positive, negative, unchanged, or inconclusive;
+- the smallest change the retest can show, stated before payment: with 5 runs per phase, a change of 60 points or more ([`OUTCOME_COMPARISON_PROPOSAL.md`](OUTCOME_COMPARISON_PROPOSAL.md) §6, decision 3). A pilot whose expected change is smaller must be offered a 10-run plan; until that plan exists, such a pilot cannot meet this condition;
 - no causal, citation, lead, or revenue guarantee.
 
 Legal form, entity, tax, immigration, and payment authority must be handled through appropriate professional guidance outside this runbook.
@@ -139,12 +153,44 @@ For each proposed question:
 - remove unnecessary brand naming for unbranded discovery/comparison tests;
 - confirm category and decision context;
 - identify ambiguity or multiple intents;
-- record provenance;
+- record provenance: for an audit the team creates, say at approval whether the customer or Zypact wrote the question (D-052);
 - assign stable identity/version;
 - document buyer stage/persona/constraints;
 - obtain explicit approval before paid execution.
 
 Model-generated questions are suggestions until approved.
+
+### 8.1 Adding a pilot's questions (D-054)
+
+A managed pilot holds all of one customer's questions in one project, on **Pilots** in the founder console. Do not create one request per question.
+
+1. Create the pilot:
+   - the company and its website;
+   - how you confirmed the customer controls the website;
+   - the question limit (15 by default, 20 at most);
+   - the start date, from yesterday to 60 days ahead. The pilot ends 90 days later. Questions can be added before the start, but not run.
+
+   A website with an audit in progress, or with an open pilot, cannot start one.
+2. Add each question only after the customer has approved it in writing. For each one, record:
+   - the exact text;
+   - who supplied it, the customer or Zypact;
+   - where the written approval is kept;
+   - the date of that approval.
+
+   Adding a question queues its Perplexity measurement with the same plan and caps as an audit: 5 runs, a run cap of 7, a retry cap of 2 and $2.
+3. Press **Run** for one question at a time, after the paid-execution switch and the daily ceiling are set. A run that failed at the provider is retried from the pilot page, then run again.
+4. If a question's measurement stopped and cannot go on, **Retire** it from the pilot page with a reason. That covers a measurement that was abandoned, or that failed in a way Retry does not take.
+   - The question and its evidence are kept.
+   - It no longer counts toward the limit, and it can never be run again.
+   - You can add the same approved question again.
+   - A measurement that can still be retried is not retired; retry it.
+   - A pilot may have at most 5 retired questions.
+5. Close the pilot when it ends, or the customer stops.
+   - A close is refused while one of its measurements is running or about to start: wait for it to finish, then close.
+   - Closing keeps all evidence.
+   - The database then refuses any further Run, retry or claim for the pilot, including a retest of one of its questions. It also refuses a Run for a pilot past its end date.
+
+ChatGPT shows as "Not measured" until it is wired (D-053 item 3). A pilot's results are not yet reported or sent: the combined pilot report is the next step.
 
 ## 9. Protocol and budget approval
 
@@ -179,12 +225,22 @@ If the sample required for a useful decision exceeds the cap or customer value, 
 
 ### Execution
 
+- press Run for the one request to measure. Once D-052 is deployed (its migration, worker image and web app), the start names that request's job and the worker runs that job or nothing; a Run is refused while another is pending or the worker is busy. Before that, confirm no other job is queued before pressing Run (`CURRENT_STATUS.md` §18.5 item 2);
 - reserve before every paid attempt;
 - log attempt lifecycle without secrets;
 - store exact response and metadata;
 - reconcile failures, timeouts, retries, and spend;
 - stop at approved bounds;
 - do not add convenient extra runs outside the protocol.
+
+### When a measurement stops (D-052)
+
+Once D-052 is deployed, the request page says where and why it stopped. Before that, the console has no retry or close: a stopped measurement keeps its website blocked, and nothing may be edited by hand.
+
+- **The AI provider returned an error or no readable reply:** retry the failed run, with a note saying why. The retry reserves one paid run inside the measurement's caps; then press Run on the requests list. The failed run stays in the run table and in the attempt reconciliation; the rate counts readable runs only.
+- **Any other cause** (an answer that arrived empty, a failed analysis, a used-up cap, an abandoned job): close the request, with a note. Its evidence is kept, nothing is sent, and the website can be audited again. Tell the customer, and agree a fresh measurement if the pilot needs one.
+- **A retest** that stops has no console retry or close yet. It needs a founder decision, and the intervention's one retest (0079) may be spent.
+- Never edit job or attempt rows by hand.
 
 ### Founder/operator review during hybrid phase
 

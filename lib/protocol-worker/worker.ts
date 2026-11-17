@@ -184,10 +184,17 @@ export async function runOneIteration(
 ): Promise<IterationResult> {
   let claimed;
   try {
-    claimed = await deps.db.claimProtocolExecutionJob({
-      workerId: opts.workerId,
-      leaseSeconds: opts.leaseSeconds,
-    });
+    // D-052 — the live runner claims only the job a Run named.
+    claimed =
+      opts.claimScope === "requested"
+        ? await deps.db.claimRequestedProtocolExecutionJob({
+            workerId: opts.workerId,
+            leaseSeconds: opts.leaseSeconds,
+          })
+        : await deps.db.claimProtocolExecutionJob({
+            workerId: opts.workerId,
+            leaseSeconds: opts.leaseSeconds,
+          });
   } catch (err) {
     // TK-R-0 — a claim that threw never answered, so it is not an idle
     // cycle: the streak breaks. The error still propagates exactly as it
@@ -202,6 +209,17 @@ export async function runOneIteration(
     // TK-R-0 — the one place an idle cycle is provable. Counted before the
     // return, so no idle claim can escape the record.
     health.markNoJob();
+    // D-052 — a run request whose job could not be claimed is an answer,
+    // not an empty queue: the request is closed and nothing else is tried.
+    // D-054 — a closed pilot's job refused at the claim is such an answer.
+    if (
+      claimed.outcome === "JOB_NOT_FOUND" ||
+      claimed.outcome === "JOB_NOT_ELIGIBLE" ||
+      claimed.outcome === "JOB_LOCKED" ||
+      claimed.outcome === "PILOT_CLOSED"
+    ) {
+      return { outcome: "run_request_refused", jobId: null, detail: claimed.outcome };
+    }
     return { outcome: "no_job", jobId: null, detail: claimed.outcome };
   }
   // TK-R-0 — a claimed job ends any idle streak. `markIteration` below is
@@ -755,7 +773,19 @@ export async function runWorkerLoop(
     // fall through to a second claim.
     const r = await runOneIteration(deps, opts, health);
     onIteration?.(r);
-    if (r.outcome === "no_job") {
+    // D-052 — a single-job worker on the requested claim exists to run the
+    // one job a Run named, and that request is written before the machine
+    // is started. With no request pending, or the named job refused, there
+    // is nothing it may do, so it stops instead of waiting for work: a
+    // deploy-time or stray start can never pick up a later Run.
+    if (
+      opts.claimScope === "requested" &&
+      opts.exitAfterClaimedJob &&
+      (r.outcome === "no_job" || r.outcome === "run_request_refused")
+    ) {
+      break;
+    }
+    if (r.outcome === "no_job" || r.outcome === "run_request_refused") {
       idle += 1;
       // Still waits on an empty queue: single-job mode bounds JOBS, not
       // patience.

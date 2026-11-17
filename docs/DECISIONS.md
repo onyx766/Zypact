@@ -920,3 +920,241 @@ Each item below departed from a document that governed before this approval: V1_
   - `npm run test:q4-activation` (42, offline);
   - `scripts/test-q4-activation-db.ts` (52, disposable Supabase Postgres, run by `npm run test:p2-workspace-db`).
 - **Recovery:** a rollback drops the two Q4 tables and functions. Buyer questions and versions created through Q4 stay, as every M4 version does, and remain identifiable by `approved_by`.
+
+## D-051 — Pilot Mode: team-run paid pilots first, then a results-only customer login
+
+- **Date:** 2026-11-14
+- **Status:** **Approved by the Founder on 2026-11-14** (written reply, relayed: "Yes I approve") to the five decisions requested in the Pilot Mode assessment of the same day. The reply approves the requests as written. It does not supply the figures and names some of them need; those are listed under *Still open* and are not decided here. Number D-050 belongs to the X1 pull request (#121), which is not merged.
+- **Context:** an adviser recommended paid pilots of 60–90 days that roll into a subscription, run by the team first, with platform access for the customer alongside. The founder asked whether V1 can support a Pilot Mode, in which customers log in and view brand analysis, AI answer results, competitor insights, sources and recommended actions while the team runs measurements and retests, with monitoring and customer-started retests disabled, through feature flags, permissions and usage limits and without a rebuild or a roadmap change. The assessment found no rebuild is needed. The founder-operated engine (admin console, worker, report, intervention, retest, Outcome Card) and the customer account area (S1, P1, P2, E1, Q4) both exist, but nothing calls `assign_project_to_workspace` to link a team-run project to a customer's workspace, and no session-checked read of reports or Outcome Cards exists.
+- **Decision:**
+  1. **Paid runs, as a narrow exception to the PG-9 HOLD.** The team may run paid measurements for pilot customers, and the self-test rehearsal retest, in production through the operator-started worker (D-034, D-035, D-036), under the controls that exist today, without first building the database ledger gate (D-037):
+     - the admission, reservation, run-cap, spend-cap, rate-limit and concurrency checks the database already enforces before every paid call, with `run_cap` 7, `retry_cap` 2 and `spend_cap_usd` 2 per protocol and a 5-run plan (D-032);
+     - the worker's daily ceiling, `ZYPACT_DAILY_SPEND_CEILING_USD`. The request proposed 10 USD and the reply named no figure, so the figure is the one the founder confirms when authorising the production step that sets it, never above the 50 USD hard maximum;
+     - one worker machine and one job per operator start (D-034).
+
+     The founder accepts that the daily ceiling is checked in application code, outside the claim transaction (D-037, gaps G1, G3 and G4), so it is a soft limit. A single machine that takes one job per start is what keeps claims from running concurrently. Everything else stays on HOLD: paid execution a customer can start (X1 and its prerequisites), the ChatGPT engine and its confirmation test (see *Still open*), and live Stripe charges.
+  2. **Engine.** Perplexity Sonar only for the first pilots, described as a directional measurement of one AI engine. No pilot offer promises visibility in ChatGPT, and none states an overall visibility score.
+  3. **Pilot Mode.**
+     - Pilot customers see team-run results in their login before they can authorise spending themselves. This moves a results-only view of team-run measurements ahead of X1 (`SELF_SERVICE_PRODUCT.md` §10); the rest of R1, customer-registered interventions and scheduled retests, stays after X1. Nothing a pilot customer can do in the login spends money.
+     - The team confirms that each pilot customer controls the website before its first measurement, because workspace domain verification (V1d) is not built.
+     - The team keeps each customer's written approval of the buyer questions and of the change to be tested, until the account holds approval records for them.
+     - One login per customer, as S1 provides (one owner per workspace).
+  4. **Production steps.** Each production step, whether a deploy, a worker redeploy, a secret or configuration change, a migration apply or the first paid run, gets its own explicit founder authorisation when it comes. The privacy review (`SELF_SERVICE_PRODUCT.md` §11, D5) and a wording review of the pilot's customer-facing copy may start.
+- **Carried forward:** the 2026-09-16 sign-off of the 5-run plan ([`OUTCOME_COMPARISON_PROPOSAL.md`](OUTCOME_COMPARISON_PROPOSAL.md) §6, decision 3) applies to every pilot. Each pilot customer is told before paying that a retest can show only a change of 60 points or more, in the pilot agreement until the login shows it. A pilot whose expected change is smaller must be offered a 10-run plan, which is not built.
+- **Still open:**
+  - pilot terms: length, number of questions, 5 or 10 runs per question, number of retests, price;
+  - a named security reviewer for the customer login;
+  - the daily ceiling (10 USD proposed, not yet confirmed);
+  - whether the reply also approves the 12 USD ChatGPT confirmation test (D-050, PR #121). It is treated as not approved.
+- **Reason:** canon already provides founder-operated pilots (V1_SCOPE §2, `PILOT_RUNBOOK.md`) and keeps them as the validation phase until the self-service release passes its exit gate (`SELF_SERVICE_PRODUCT.md` §9). The founder chose to start paid pilots under the database's per-protocol caps and a low daily ceiling rather than wait several weeks for the ledger gate.
+- **Effect:** this entry, `PILOT_RUNBOOK.md` §2.1 and §6, and `CURRENT_STATUS.md` §30. No code, migration, deployment, secret or database is changed by this decision. The work it enables is built in separate pull requests, and each behaviour change gets its own entry (D-052 for step 1).
+- **Revisit trigger:** any paid action a customer can start; more than one worker machine or concurrent claim; a daily ceiling set without a founder record; a pilot that must detect a change smaller than 60 points before the 10-run plan exists; a second engine in a pilot; pilot copy outside the methodology.
+
+## D-052 — Pilot step 1: a Run names its job, a provider failure can be retried, a failed request can be closed
+
+- **Date:** 2026-11-14
+- **Status:** Built on branch `feat/pilot-mode-phase1` as step 1 of D-051. Rules marked *(engineer)* are **proposed for founder confirmation**. Migration `20261114120000_pilot_step1_operator_controls.sql` is **not applied to any Supabase project**, and nothing is deployed.
+- **Builds on:** D-021 to D-025 (operator retry, replay, slots), D-031 (targeted claim), D-034 to D-036 (operator start, slots), 0081 (founder-created requests). D-037's ledger gate is unchanged.
+- **Decision:**
+  1. **A Run names its job.**
+     - Every console start (Run scan, Run retest now, the founder-baseline Run) records one run request for its own job, after the paid-execution gate and before the machine is started (`request_protocol_job_run`). The live worker claims that job or nothing (`claim_requested_protocol_execution_job`). With no request pending, or the named job no longer claimable, it stops at once without claiming, so a deploy-time or stray start claims nothing, and a Run can never take another request's job.
+     - At most one request is pending. A Run while another is pending, or while a job holds a live lease, is refused. A request expires after 120 seconds *(engineer)*, and is withdrawn when Fly does not accept the start.
+     - Eligibility, the lease and the abandoned-job sweep are the global claim's (0054). The global claim and the D-031 canary claim are unchanged and stay for the M5 test harnesses; the live runner always uses the requested claim. For production this replaces D-031's statement that the global claim keeps selecting the oldest claimable job for ordinary operation, and it resolves `CURRENT_STATUS.md` §18.5 item 2.
+  2. **Retry a run that failed at the AI provider.**
+     - From the request page the founder can retry a measurement that stopped because the provider returned an error or no readable reply: the failed run's Perplexity call failed and holds a receipt, so no answer was bought. The worker records a reply with no readable answer exactly as it records an HTTP error. `retry_failed_protocol_job` reopens the job and authorises one retry of that run through `authorize_operator_retry` (0051). Admission, reservation, the run, retry and spend caps, the idempotency key and the operator-action record are that path's own, and the reservation is the failed run's own recorded amounts.
+     - Refused: every run whose answer arrived, including one that arrived empty (`empty_provider_answer`), an analysis failure, a cap, a run already retried, a job the founder closed through review, a closed request, and a retry the run cap could not finish *(engineer)*. A replay is answered by `authorize_operator_retry`'s own fingerprint check, so a key reused for a different run is a conflict, never the first run's answer. Retrying a run whose answer arrived would discard a paid answer, which `retry_full_attempt_for_job` never does either. A denied retry leaves the job `failed`; the denial is recorded and replays.
+     - A retry reserves at once and does not start the worker; the founder then presses Run. There is no un-retry: cancelling the reservation would refill the caps (D-037). The job gets a fresh claim budget, as `reactivate_abandoned_job` does (D-024) *(engineer)*. The failed run stays `failed` and counted in reconciliation.
+  3. **Close a failed request.** `close_failed_snapshot_request` moves an `approved` request whose job ended `failed` or `abandoned_exhausted` to the existing `failed` status, which the active-domain rule does not count, so the website can be audited again. It records who closed it and why (`snapshot_request_closures`). An abandoned job is ended with it (`failed`, reason `request_closed`), so no later path can revive it and spend for a closed request. Evidence is unchanged and nothing is sent. Refused when any report exists for the request.
+  4. **Who supplied the question.** Approving a founder-created request requires the founder to say whether the customer wrote the question or Zypact recommended or drafted it (even if the customer then edited it). It is stored as `customer_supplied` or `founder_supplied`, with a rationale saying the founder entered it. A public-form approval is unchanged. Every client view shows provenance in words ("supplied by the requester", "supplied by Zypact"), never the stored code.
+  5. **Report and copy.**
+     - The per-run "Other brands named" lists drop the client's own brand, as the summary already did. This applies to reports built or regenerated from now on; stored reports are unchanged.
+     - Page titles no longer repeat "Zypact", and the report page is titled "Private AI answer snapshot", the report's own name.
+     - The Run confirmation states the request's plan, call ceiling and spending cap from its protocol, not "3 real, paid provider calls". The retest copy no longer says a queued retest runs on any start.
+- **Not in step 1:** the worker redeploy, setting the daily ceiling and the self-test retest, which are production steps that each need their own authorisation (D-051 item 4); an analysis-only retry for a failed job; reactivating an abandoned job from the console; the 10-run plan (pilot terms pending).
+- **Deploy order** *(engineer)*: the migration, then the worker image, then the web app, with no founder-created approval in between: the old console calls the approval without the new input, which a founder-created request now requires. A new worker started by the old web app finds no run request and stops without claiming, so the gap fails closed: a Run does nothing rather than running another request's job. The other order would let the old worker claim the oldest job of any project while the new console believes Runs are named. A worker with the requested claim against a database without the migration finds no function and stops without claiming.
+- **Release order (not decided):** production applies migrations in numeric order (D-041), and none of the timestamped migrations is applied there, so `20261114120000` would follow Q2′-1, Q2′-2, S1, P1, P2, E1 and Q4. Shipping step 1 before that account stack means applying it after 0083 (0083's reserved-version procedure expects the ledger tail `20260924023646`), renamed to a version below `20261102132000`, and re-baselining Q2′-1's `expected_prev` and the preflight for its new position (`PROD_PREFLIGHT_SPEC.md`). The choice belongs to the apply's own authorisation.
+- **D-037:** the held 0084/0085 plan must cover the new claim and run-request functions, through a within-spend variant or its revocation list, before PG-9.
+- **Existing rows:** founder-created requests approved before this migration carry `customer_supplied` with the public-form rationale. Question versions are immutable, so they are not corrected. A read-only count, if authorised, decides whether anyone needs telling.
+- **Tests:**
+  - `npm run test:pilot-step1` (75, offline): the worker loop end to end on the memory adapter, the memory mirrors, the start path with Fly and the run requests stubbed, static contracts for the runner, the routes and the migration, and the copy;
+  - `scripts/test-pilot-step1-db.ts` (60, disposable Supabase Postgres, run by `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db`), driving provider failures, empty answers, retries, refusals and closures through the worker's own RPCs;
+  - `npm run test:protocol-report` (114, from 100) and `npm run test:prod-preflight` (18) extended; `npm run test:worker-start`, `npm run test:paid-execution-guards`, `npm run test:founder-baseline-control` and `npm run test:scan-page` updated for the named start and the titles;
+  - results in `CURRENT_STATUS.md` §30.
+- **Recovery:** in the migration's header, in the reverse of the deploy order so each step fails closed: the web app with the approval function restored, then the worker image, then the rest. Dropping the two new tables loses only run-request and closure history; retried attempts and closed requests are ordinary rows in existing statuses.
+- **Revisit trigger:** more than one worker machine; a run request written by anything other than a founder-guarded route or the operator CLI; a retry path that buys an answer when one already arrived; a request closed with a report present; any client copy that shows a stored code.
+
+## D-053 — The $1,500 pilot: both engines, its shape, recommended actions and the offer's wording
+
+- **Date:** 2026-11-17
+- **Status:** **Approved by the Founder** in two written replies, relayed by the engineer:
+  - 2026-11-16, to the V1 status update: the pilot offer in eight parts, the price, "approximately 15-20 buyer questions", and "I approve the rest and ChatGPT (The two engines are included in the paid pilot)";
+  - 2026-11-17, to the reply that proposed the pilot's shape, recommended actions, the retest limit, the flex tier and the offer's wording: "ok I agree all as you said".
+  The second reply did not name a security reviewer, so that stays open.
+- **Amends:** D-051 item 2 (Perplexity only) and D-051's open pilot terms and daily ceiling.
+- **Decision:**
+  1. **The offer.** A paid pilot at 1,500 USD with eight parts:
+     - website and brand profile;
+     - buyer questions;
+     - AI answer measurement on Perplexity and ChatGPT, with repeated answers;
+     - brand and competitor analysis;
+     - source analysis;
+     - recommended actions;
+     - retest and Outcome Card;
+     - a private customer report.
+  2. **The shape.**
+     - 15 approved buyer questions, 20 at most.
+     - 5 answers per question on each engine (the 5-run plan of D-032, per engine).
+     - A retest of up to 5 of those questions, on both engines.
+     - 90 days.
+     - AI cost estimated at about 20 USD per pilot and under 85 USD in the worst case, more than 90% of it ChatGPT. This is an estimate, not a cap; the database's per-protocol caps and the worker's daily ceiling remain the limits.
+  3. **Both engines.** Perplexity Sonar and ChatGPT (`openai_chatgpt`, D-050) are both in the paid pilot. This replaces D-051 item 2.
+     - ChatGPT runs no pilot measurement until all of these hold:
+       - its confirmation run passes the criteria written in `ADAPTER_VALIDITY_CHATGPT.md` before the run;
+       - the founder approves its setting for measurement;
+       - it is wired into the worker under the same approval, admission, reservation and caps as Perplexity;
+       - its deploy is authorised.
+     - Until then a pilot starts on Perplexity. The customer's change waits until both engines' baselines are taken, so both retests compare against a baseline from before the change.
+     - Each engine is reported as its own directional measurement. There is no combined score across engines, and no statement that the two engines stand for every AI tool or every buyer.
+  4. **Recommended actions** are written by the team, each linked to the answers and sources it rests on, and reviewed before they are sent. Nothing is generated automatically, and no action is said to be likely to change results.
+  5. **The retest limit is in the pilot terms.** With 5 answers per question, a retest can show only a change of 60 points or more (`PILOT_RUNBOOK.md` §6). Each customer is told before paying. The 10-run plan stays unbuilt.
+  6. **Daily ceiling:** 10 USD, accepted on 2026-11-16. It is set at the worker's production step, under that step's own authorisation.
+  7. **ChatGPT on the flex tier.** The confirmation run and the pilot's ChatGPT measurements use OpenAI's half-price flex tier, under a setting that checks the tier on every response (D-050).
+  8. **The offer's wording** shows only what the evidence can support:
+     - "Zypact establishes their brand profile" becomes "we start a brand profile from your website (products, positioning, main competitors), and you confirm it". The first draft is copied only from the homepage's meta description or H1 (D-046).
+     - "repeated runs to improve reliability" becomes "each question is asked several times on each engine, so you can see how consistent the answers are".
+     - "relevant patterns" becomes "what comes up again and again across answers".
+     - Sources become "the sources each engine cites, grouped as your own site, review platforms, communities, publications, video and reference sites" (`source-types/1`, D-044).
+     - "evidence-based marketing recommendations" becomes "suggested actions, each linked to the answers and sources behind it".
+     - The retest adds "we report what changed; we can't prove that your change caused it".
+     - The offer adds "results show what these two engines answered during the pilot; they don't represent every AI tool or every buyer".
+- **What the pilot needs that is not built.** Each item gets its own pull request and decision entry:
+  - one pilot project holding all the questions (today one request holds one question in its own project);
+  - a combined pilot report: brands, competitors and sources across questions, reported per engine;
+  - recommended actions, as decided in item 4;
+  - ChatGPT in the worker;
+  - the customer login (D-051 step 2). The first report may go by private link.
+- **Still open:**
+  - a named security reviewer for the customer login;
+  - the release order of step 1's migration (D-052);
+  - each production step (D-051 item 4).
+- **Canon:** `V1_SCOPE.md`, `METHODOLOGY.md` §4 and the repository's `CLAUDE.md` still name Perplexity as the only live surface. That stays true until ChatGPT is wired, so they are updated in the pull request that wires it.
+- **Effect:** this entry, `PILOT_RUNBOOK.md` §2.1 and `CURRENT_STATUS.md` §30. No code, migration, deployment or secret is changed by this decision.
+- **Revisit trigger:**
+  - a pilot with more than 20 questions, or another number of answers per question;
+  - a ChatGPT pilot measurement before the conditions in item 3;
+  - a score combined across engines;
+  - a recommended action without linked evidence;
+  - AI cost for one pilot above 85 USD;
+  - offer copy outside item 8.
+
+## D-054 — Pilot questions: one pilot holds all of a customer's approved questions in one project
+
+- **Date:** 2026-11-17
+- **Status:** Built on branch `feat/pilot-questions`, stacked on `feat/pilot-mode-phase1`, as the first build step D-053 lists. Revised the same day after an independent review found six defects, none of which spent without approval or exceeded a cap (item 11). Rules marked *(engineer)* are **proposed for founder confirmation**. Migration `20261118120000_pilot_questions.sql` is **not applied to any Supabase project**, and nothing is deployed.
+- **Builds on:**
+  - D-032 (the 5-run plan);
+  - D-051 (Pilot Mode rules);
+  - D-052 (a Run names its job, the provider-failure retry, who supplied the question);
+  - D-053 (the $1,500 pilot);
+  - 0081 (founder-created requests).
+- **Problem:** before this, one snapshot request held one question in its own project. A 15-question pilot would have been 15 projects, 15 report links and 15 domain locks.
+- **Decision:**
+  1. **A pilot is its own record, not a request** *(engineer)*. Three reasons:
+     - after a request's scan, the report pass builds that request's one-question report, and could email it when `SNAPSHOT_AUTO_DELIVERY_ENABLED` is `true`;
+     - saving that report moves the request to `report_ready`, which lifts the active-domain rule while the pilot is still running;
+     - the first question would be handled differently from the other fourteen.
+
+     The report pass reads requests only, so a pilot's measurements are never reported or sent by it.
+  2. **`pilots`** holds:
+     - the company and website, normalized exactly as a request's;
+     - how the team confirmed the customer controls the website (D-051, required);
+     - the question limit (1 to 20, 15 by default, D-053);
+     - the 90-day window: `ends_on` is `starts_on` + 90 by constraint (D-053). The start date must be between yesterday and 60 days from today *(engineer)*, checked after the replay so a repeated press on a later day still answers;
+     - the status, `active` or `closed`, with who closed it, when and why.
+
+     `create_pilot` creates the pilot and its one project, whose company and domain the worker names in its prompts. It takes the same per-website lock as a request. It refuses a website with a request in progress (0081's status set) or another open pilot; one open pilot per website is also a unique index. A repeated press replays; the same key with another body is a conflict.
+  3. **`add_pilot_question`** adds one question in one transaction:
+     - it checks the question: trimmed, 10-300 characters, the request form's rule;
+     - it records who supplied it, customer or Zypact (D-052 item 4, required);
+     - it records the customer's written approval as a reference and a date, both required *(engineer)*;
+     - it then runs exactly the approval sequence of `approve_and_launch_snapshot_baseline`: question, version, M4 approval, a protocol with the identical Perplexity plan (5 runs, run cap 7, retry cap 2, 2 USD), protocol approval and the queue. `test:pilot-questions` S15 checks this against the SQL, and the database test compares the stored rows column by column.
+
+     It refuses:
+     - a closed pilot, or one past its end date;
+     - a pilot at its limit, counting live questions only;
+     - the same live question twice in one pilot (a retired one does not count, item 9);
+     - a hash that is not the SHA-256 of the exact text. The application computes the hash, and this function re-checks it in SQL *(engineer)*. That departs from 0047's rule that only the application computes it, for this path only.
+
+     Replay and conflict work as for `create_pilot`. A question may be added before the start date. Ordinals follow every question, retired ones included, and are never reused. Nothing runs: the founder presses Run per question.
+  4. **The per-engine slot** (`pilot_question_protocols`) allows only Perplexity's baseline. ChatGPT gets a slot in the pull request that wires it (D-053 item 3), and a pilot retest gets one in the retest step. The pilot page shows ChatGPT as "Not measured", never as zero.
+  5. **A Run for a pilot question.** Pilot step 1's `request_protocol_job_run` is redefined:
+     - the console start `admin_pilot_run` is accepted;
+     - a job of a pilot is refused when the pilot is closed or past its end date (`PILOT_CLOSED`), before its start date (`PILOT_NOT_STARTED`), or when its question is retired (`PILOT_QUESTION_RETIRED`) *(engineer)*;
+     - "a job of a pilot" is the pilot question's baseline, or any retest of that baseline;
+     - the pilot row is locked `FOR SHARE` before the check, so a Run and `close_pilot` or `retire_pilot_question` (`FOR UPDATE`) cannot interleave.
+
+     `test:pilot-questions` S13 checks that the body is otherwise step 1's, byte for byte, apart from three declarations.
+  6. **`close_pilot`** records who closed the pilot and why, and changes no job *(engineer)*: a queued job may hold a reserved retry, and ending it could strand that reservation. It is refused (`PILOT_JOB_ACTIVE`) while any of the pilot's measurements, a baseline or a retest of one, holds a live lease or has a pending run request *(engineer)*. The founder waits for it to finish, usually about two minutes, and closes again. So nothing already started spends after a close.
+  7. **Retry.** A pilot question that stopped at the provider is retried through `retry_failed_protocol_job` (D-052). It is redefined with the same pilot check, under the same `FOR SHARE` lock: a closed, ended or not-started pilot, or a retired question, is refused (`PILOT_CLOSED`) before anything is reserved *(engineer)*. `test:pilot-questions` S31 checks the body is otherwise step 1's, byte for byte, apart from three declarations. The request retry route shows the same words for that outcome.
+  8. **Console.** **Pilots** in the founder console holds:
+     - a list of pilots, and a page per pilot;
+     - per question: its text, who supplied it, the approval reference and date, and the Perplexity status with completed and failed runs;
+     - Run and Retry per question;
+     - adding a question, retiring one (item 9), and closing the pilot.
+
+     Pilot jobs are left out of the founder-experiments list in its query, before its 20-row limit, so a pilot's 15-20 jobs never push founder experiments off it. No route logs a company name, a website address, a question, an approval reference, a note or a reason. Pilot creation logs the normalized domain, as request creation does.
+  9. **Retiring a question** *(engineer)*. A question whose measurement stopped and cannot go on would otherwise stay in the pilot for good. That covers an abandoned job, and a failed job the D-052 retry does not take: Run, Retry and adding the same text again all refuse it. `retire_pilot_question` handles that case:
+     - **When it is allowed:**
+       - the job is `abandoned_exhausted`; or
+       - the job is `failed` and cannot be retried. Retry's job, slot and run-cap gates are repeated; its call-level gates (an open or unreceipted call) are not, so such a job waits for its call to be reconciled.
+     - **What it refuses:**
+       - a question whose baseline or retest is running or has a pending run request;
+       - a closed pilot;
+       - more than 5 retired questions per pilot. That bounds the extra spend re-adding can cause to 5 protocols' caps.
+     - **What it changes:**
+       - every row and all evidence are kept;
+       - the question stops counting toward the limit;
+       - its approved text may be added again: a new question version, protocol and job, with fresh caps;
+       - any later Run or retry of it is refused.
+     - **Who and why:** the reason, the founder and the time are recorded.
+
+     The founder's console and the Run route name retiring, never "close the request", for an abandoned pilot measurement.
+  10. **The requested claim is a second barrier.** Pilot step 1's `claim_requested_protocol_execution_job` is redefined with one block: a job of a closed, ended or not-started pilot, or a retired question (its baseline or a retest of it), is refused at the claim (`PILOT_CLOSED`), and the run request is closed with that refusal code. A pilot can pass its end date while a request waits.
+      - The worker treats this like step 1's other claim refusals: it stops without calling a provider.
+      - `protocol_job_run_requests`' refusal_code CHECK gains `PILOT_CLOSED`.
+      - `test:pilot-questions` S29 checks that the body is otherwise step 1's, byte for byte.
+  11. **Review (2026-11-17).** An independent read-only review of the first version found six defects; all six are fixed here and tested on the memory adapter and a disposable PostgreSQL:
+      1. a Run already pending or running when the pilot closed could still spend (items 5, 6, 10);
+      2. a retest of a pilot baseline bypassed the closed-pilot block (items 5, 7, 10);
+      3. a Run before the start date was allowed, and the start date had no bounds (items 2, 5);
+      4. a question whose measurement could not go on could never be measured again (item 9);
+      5. pilot jobs could push founder baselines off the founder-experiments list (item 8);
+      6. the database test of the protocol key passed without proving it. It now uses a question with no slot, so only that key can refuse.
+- **Not in this step:**
+  - the combined pilot report (the next step);
+  - recommended actions;
+  - ChatGPT;
+  - a pilot retest and its Outcome Card recipients;
+  - the customer login;
+  - a per-question results preview for the team.
+- **Open:**
+  - **A live pilot does not yet block a new public request for its website** *(engineer)*. The request functions are untouched, so a request can be created for a pilot's website, and its measurement would sit in a separate project. Either a redefinition of the two request-creation functions or a console check would close it.
+  - **Intent type.** Every pilot question version is stored with intent `shortlist`, as a request's is. Questions about alternatives or purchase decisions are not distinguished.
+  - **Release position.** The migration depends only on 0047-0081 and step 1. It goes directly after step 1, wherever the founder places step 1 (D-052).
+  - **D-037.** The held 0084/0085 plan must also cover the three functions this migration redefines: `request_protocol_job_run`, `claim_requested_protocol_execution_job` and `retry_failed_protocol_job`.
+  - **Interventions on pilot baselines.** The intervention console lists every baseline, so a pilot question's baseline can already be chosen for an intervention. Its retest is gated by the pilot (items 5, 7, 10), but its Outcome Card would have no recipient, because a pilot has no request. This belongs to the pilot retest step.
+  - **The older claims.** `claim_protocol_execution_job` (0054) and `claim_protocol_execution_job_by_id` (0059) are unchanged and do not check pilots. The live runner uses only the requested claim (D-052); they remain for the M5 test harnesses. A process that still used an older claim could take a pilot's queued job, including a closed pilot's. A worker running older code is such a process.
+  - **A retry reserved just before a close.** Its reservation stays held on a job that can no longer be run, and counts toward the worker's 24-hour spend ceiling until it ages out. Nothing is spent.
+  - **Concurrency.** The Run/close interleaving rests on the `FOR SHARE`/`FOR UPDATE` row lock, which the static tests check. No test races two sessions.
+- **Tests:**
+  - `npm run test:pilot-questions` (128, offline): the memory mirrors, the real worker loop on the memory adapter (including a claim refused for a pilot that ended while its request waited), static contracts with the three redefinition parity checks and the launch parity check, the routes, the pages and the copy;
+  - `scripts/test-pilot-questions-db.ts` (69, disposable Supabase Postgres, run by `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db`). It covers the date window, closing against a pending Run and a live lease, the claim barrier, a retest of a pilot baseline, retiring through a real abandoned job and a real provider failure, the retry refused for a closed pilot, the retirement limit, and the protocol key;
+  - updated: `test:pilot-step1` S8, `test:founder-baseline-control`, `test:prod-preflight`, and `test:paid-execution-guards` (the pilot Run route is the fourth founder route that can start the worker);
+  - results in `CURRENT_STATUS.md` §31.
+- **Recovery:** in the migration's header. Roll the web app back first, then restore step 1's three functions and the two CHECKs, then drop the four functions and three tables. Every project, version, protocol, job and attempt a pilot created is an ordinary row and is kept.
+- **Revisit trigger:**
+  - a pilot with more than 20 questions or another plan;
+  - a second engine's slot;
+  - a Run path that does not go through `request_protocol_job_run`;
+  - a pilot measurement reported or sent outside the combined pilot report;
+  - a closed pilot that spends.

@@ -23,6 +23,7 @@ import type { ReactNode } from "react";
 import type { OutcomeCardPayload, OutcomeCardPhase } from "@/lib/reports/outcome-card-types";
 import { NON_CAUSALITY_FOOTER } from "@/lib/reports/outcome-card-types";
 import type { OutcomeCardSourceComparison } from "@/lib/source-insights/build-source-insights";
+import { questionProvenanceLabel } from "@/lib/reports/question-provenance";
 import { SOURCE_CATEGORY_LABEL } from "@/lib/source-insights/source-types";
 import { Brand, NoteCard, percent } from "./protocol-report-view";
 import { CopyHashButton } from "./copy-hash-button";
@@ -381,7 +382,7 @@ export function OutcomeCardView({ payload }: { payload: OutcomeCardPayload }) {
                 <p className="zoc-sub">
                   The same question and version on both the baseline and the
                   retest. Intent: {sentenceCase(question.intentType).toLowerCase()}.
-                  Provenance: {sentenceCase(question.provenance).toLowerCase()}.
+                  Provenance: {questionProvenanceLabel(question.provenance)}.
                 </p>
               </div>
 

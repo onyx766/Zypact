@@ -5,7 +5,7 @@ const evidenceFormUrl =
   "https://tally.so/r/2EyA7p";
 
 export const metadata: Metadata = {
-  title: "Payment received — Zypact",
+  title: "Payment received",
   description:
     "Payment received. Zypact will collect your company details and deliver your AI recommendation diagnosis by email.",
 };

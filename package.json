@@ -157,6 +157,8 @@
     "test:e1-plans": "tsx scripts/test-e1-plans.ts",
     "test:q4-activation": "tsx scripts/test-q4-activation.ts",
     "test:p2-workspace-db": "bash scripts/run-p2-workspace-db-local.sh",
+    "test:pilot-step1": "tsx scripts/test-pilot-step1.ts",
+    "test:pilot-questions": "tsx scripts/test-pilot-questions.ts",
     "test:source-insights": "tsx scripts/test-source-insights.ts",
     "source-insights:audit": "tsx scripts/source-insights-audit.ts"
   },

@@ -26,14 +26,21 @@ import { ui } from "../ui-classes";
  *
  * Every check here is feedback only. The RPC re-normalizes and re-validates,
  * and it is what actually decides.
+ *
+ * D-052 — for an audit the founder created, approval also records who wrote
+ * the question, because the report shows that provenance to the customer.
+ * A public-form question was written by the requester, so nothing is asked.
  */
 export function ApproveButton({
   requestId,
   competitors,
   scannedCompany,
   scannedDomain,
+  origin,
 }: {
   requestId: string;
+  /** Where the request came from (0081). */
+  origin: "public_form" | "founder";
   /** Stored frame, prefilled for editing. */
   competitors: string[];
   /**
@@ -51,6 +58,10 @@ export function ApproveButton({
   const [busy, setBusy] = useState(false);
   const [error, setError] =
     useState<string | null>(null);
+  const [provenance, setProvenance] = useState<
+    "" | "customer_supplied" | "founder_supplied"
+  >("");
+  const needsProvenance = origin === "founder";
 
   const parsed = parseCompetitorsInput(
     text,
@@ -69,6 +80,11 @@ export function ApproveButton({
       return;
     }
 
+    if (needsProvenance && !provenance) {
+      setError("Say who supplied this question before approving.");
+      return;
+    }
+
     setBusy(true);
     setError(null);
 
@@ -83,6 +99,7 @@ export function ApproveButton({
           },
           body: JSON.stringify({
             competitors: text,
+            ...(needsProvenance ? { questionProvenance: provenance } : {}),
           }),
         }
       );
@@ -141,10 +158,48 @@ export function ApproveButton({
         className={cn(ui.input, "mt-2 font-mono text-[13px] leading-6")}
       />
 
+      {needsProvenance ? (
+        <fieldset className="mt-4" disabled={busy}>
+          <legend className="block text-sm font-semibold text-foreground">
+            Who supplied this question?
+          </legend>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Required for an audit you created. The report shows this to the
+            customer.
+          </p>
+          <label className="mt-2 flex items-center gap-2 text-sm text-foreground">
+            <input
+              type="radio"
+              name="question-provenance"
+              value="customer_supplied"
+              checked={provenance === "customer_supplied"}
+              onChange={() => {
+                setProvenance("customer_supplied");
+                setError(null);
+              }}
+            />
+            The customer wrote it themselves
+          </label>
+          <label className="mt-1 flex items-center gap-2 text-sm text-foreground">
+            <input
+              type="radio"
+              name="question-provenance"
+              value="founder_supplied"
+              checked={provenance === "founder_supplied"}
+              onChange={() => {
+                setProvenance("founder_supplied");
+                setError(null);
+              }}
+            />
+            Zypact recommended or drafted it, even if the customer then edited it
+          </label>
+        </fieldset>
+      ) : null}
+
       <button
         type="button"
         onClick={approve}
-        disabled={busy || !parsed.ok}
+        disabled={busy || !parsed.ok || (needsProvenance && !provenance)}
         className={cn(ui.btnPrimary, "mt-3", busy && "cursor-wait")}
       >
         <CircleCheck size={16} strokeWidth={2.2} />

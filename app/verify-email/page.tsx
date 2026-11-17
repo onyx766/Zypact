@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { VerifyEmailClient } from "./verify-email-client";
 
 export const metadata: Metadata = {
-  title: "Verify your email — Zypact",
+  title: "Verify your email",
   description:
     "Verify the email address associated with your Zypact V1 demo request.",
   robots: {

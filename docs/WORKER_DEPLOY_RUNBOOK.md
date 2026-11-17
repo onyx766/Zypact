@@ -58,7 +58,15 @@ Two consequences:
 - **Never deploy between "Queue retest run" and "Run retest now"** (self-test §7
   steps 4 and 5). In that interval a job sits `queued` and a deploy-time start
   could claim it, outside the founder's intent and outside the console.
-- The claim is unscoped (`CURRENT_STATUS.md` §18.5 item 2):
+- Until D-052 is deployed (migration `20261114120000` and a worker image
+  built from it), the claim is unscoped (`CURRENT_STATUS.md` §18.5 item 2).
+  Deploy D-052's worker after its migration and before its web app: the
+  new worker, started by the old console, finds no run request and stops.
+  Roll back in the reverse order: the web app first, then the worker.
+  After it, a worker claims only the job a Run named and stops at once when
+  no Run is pending, so a deploy-time start claims nothing; keep the empty
+  queue rule anyway until a deploy has been observed under D-052.
+- Before D-052:
   `claim_protocol_execution_job` takes the oldest eligible job *globally*. An
   empty queue is therefore the check, not "no job for this intervention".
 

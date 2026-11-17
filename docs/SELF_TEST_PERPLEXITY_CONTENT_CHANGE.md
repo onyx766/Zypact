@@ -129,6 +129,8 @@ unconditionally, with no dependence on a protocol identity mismatch.
       are all-or-nothing; with any unset the retest start answers 503.
 - [ ] No other job in `queued` — `claim_protocol_execution_job` takes the oldest
       eligible job globally, not this one (see CURRENT_STATUS §18.5 item 2).
+      Not needed once D-052 is deployed: "Run retest now" then names this
+      retest's job, and the worker claims that job or nothing.
 - [ ] Freeze holding (§6).
 
 ## 6. Freeze list, 2026-09-30 → 2026-10-09

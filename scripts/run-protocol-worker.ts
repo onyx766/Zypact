@@ -298,6 +298,8 @@ async function runLive(cfg: LiveWorkerConfig, build: BuildProvenance): Promise<v
         maxThrottledRetries: cfg.maxThrottledRetries,
         graceMs: cfg.graceMs,
         exitAfterClaimedJob: cfg.exitAfterClaimedJob,
+        // D-052 — a live worker claims only the job a Run named.
+        claimScope: "requested",
         providerTimeoutMs: cfg.providerTimeoutMs,
         perplexityReservedCostUsd: cfg.perplexityReservedCostUsd,
         analysisReservedCostUsd: cfg.analysisReservedCostUsd,
@@ -342,6 +344,12 @@ async function runLive(cfg: LiveWorkerConfig, build: BuildProvenance): Promise<v
        * accidental.
        */
       const health = await runWorkerLoop(deps, opts, paidExecutionGate, signal, sleep, (r: IterationResult) => {
+        if (r.outcome === "no_job" && r.detail === "NO_RUN_REQUEST" && cfg.exitAfterClaimedJob) {
+          // D-052 — a start with no pending run request claims nothing and
+          // stops; this one line is the evidence of that.
+          log("iteration", { outcome: r.outcome, jobId: null, detail: r.detail });
+          return;
+        }
         if (r.outcome === "no_job") {
           // TK-R-0 — idle cycles are still NOT logged one by one: a worker
           // on an empty queue would otherwise fill the log with nothing.

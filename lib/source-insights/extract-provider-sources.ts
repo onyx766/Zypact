@@ -21,6 +21,32 @@ import { bareDomain } from "@/lib/source-insights/source-types";
 
 export const PROVIDER_SOURCES_RULE_VERSION = "provider-sources/1";
 
+/**
+ * D-056 — the rule for the ChatGPT engine (OpenAI Responses API with web
+ * search), chosen by the protocol's provider, never guessed from the body:
+ *
+ *   - only a `completed` body is read; any other is `unrecognised_shape`;
+ *   - cited: each `url_citation` annotation on the answer's `output_text`,
+ *     numbered 1, 2, 3… in the order they appear, with its title;
+ *   - retrieved: each `web_search_call.action.sources[].url`;
+ *   - a citation whose URL is unusable is an unmatched marker, never a source;
+ *   - markersFound: at least one `url_citation` annotation is present.
+ *
+ * URL identity: OpenAI appends `utm_source=openai` to many cited links (573
+ * of 821 in the 2026-11-17 confirmation run) and to some search sources
+ * (288 of 3,404). Matched as received, 763 of the 821 cited URLs are found
+ * among their run's sources; with that one parameter removed, all 821 are.
+ * So this rule removes exactly the query parameter `utm_source` when its
+ * value is `openai`, and nothing else. The URL as received stays in the
+ * stored body, which is the evidence.
+ */
+export const OPENAI_RESPONSES_SOURCES_RULE_VERSION = "openai-responses-sources/1";
+
+/** The source rule a protocol provider is read under. */
+export function sourcesRuleVersionForProvider(provider: string | null | undefined): string {
+  return provider === "openai_chatgpt" ? OPENAI_RESPONSES_SOURCES_RULE_VERSION : PROVIDER_SOURCES_RULE_VERSION;
+}
+
 const MAX_SOURCES_PER_LIST = 50;
 const MAX_URL_LENGTH = 2048;
 const MAX_TITLE_LENGTH = 200;
@@ -210,6 +236,90 @@ export function agentBodySearchResults(
   return out;
 }
 
+/*
+ * OpenAI Responses body readers, raw: the same items lib/probes/chatgpt.ts
+ * reads (chatGptCitedUrls, chatGptSearchSources), kept separate so report
+ * pages never import a provider adapter. Parity is pinned by
+ * test-chatgpt-worker.
+ */
+type OpenAiItem = { type?: unknown; content?: unknown; action?: unknown };
+
+export function openAiBodyCitations(output: unknown): Array<{ url: unknown; title: unknown }> {
+  if (!Array.isArray(output)) return [];
+  const out: Array<{ url: unknown; title: unknown }> = [];
+  for (const item of output as OpenAiItem[]) {
+    if (item?.type !== "message" || !Array.isArray(item.content)) continue;
+    for (const c of item.content as Array<{ type?: unknown; text?: unknown; annotations?: unknown }>) {
+      if (c?.type !== "output_text" || typeof c.text !== "string" || !Array.isArray(c.annotations)) continue;
+      for (const a of c.annotations as Array<{ type?: unknown; url?: unknown; title?: unknown }>) {
+        if (a?.type === "url_citation") out.push({ url: a.url, title: a.title });
+      }
+    }
+  }
+  return out;
+}
+
+export function openAiBodySearchSourceUrls(output: unknown): unknown[] {
+  if (!Array.isArray(output)) return [];
+  const out: unknown[] = [];
+  for (const item of output as OpenAiItem[]) {
+    if (item?.type !== "web_search_call" || !item.action || typeof item.action !== "object") continue;
+    const sources = (item.action as { sources?: unknown }).sources;
+    if (!Array.isArray(sources)) continue;
+    for (const src of sources as Array<{ url?: unknown }>) out.push(src?.url);
+  }
+  return out;
+}
+
+/**
+ * Removes exactly the query pair `utm_source=openai` from a normalized URL
+ * (rule openai-responses-sources/1). It edits the query text, so every other
+ * parameter keeps the exact encoding it arrived with; rebuilding through
+ * URLSearchParams would re-encode them ("a%20b" → "a+b", "a,b" → "a%2Cb").
+ */
+export function withoutOpenAiUtm(normalized: { url: string; domain: string }): { url: string; domain: string } {
+  const url = normalized.url;
+  const queryAt = url.indexOf("?");
+  if (queryAt < 0) return normalized;
+  const hashAt = url.indexOf("#", queryAt);
+  const query = url.slice(queryAt + 1, hashAt < 0 ? undefined : hashAt);
+  const fragment = hashAt < 0 ? "" : url.slice(hashAt);
+  const pairs = query.split("&");
+  const kept = pairs.filter((pair) => pair !== "utm_source=openai");
+  if (kept.length === pairs.length) return normalized;
+  const rest = kept.filter((pair) => pair !== "");
+  return { url: url.slice(0, queryAt) + (rest.length > 0 ? `?${rest.join("&")}` : "") + fragment, domain: normalized.domain };
+}
+
+function openAiCandidate(url: unknown, title: unknown): Candidate | null {
+  const normalized = normalizeSourceUrl(url);
+  return normalized ? { ...withoutOpenAiUtm(normalized), title: cleanTitle(title) } : null;
+}
+
+function fromOpenAiResponses(body: Record<string, unknown>): ExtractedRunSources {
+  if (body.object !== "response" || body.status !== "completed" || !Array.isArray(body.output)) {
+    return empty("unrecognised_shape");
+  }
+  const citations = openAiBodyCitations(body.output);
+  const citedEntries: Array<{ candidate: Candidate; marker: number }> = [];
+  const unmatched: number[] = [];
+  citations.forEach((c, i) => {
+    const ref = openAiCandidate(c.url, c.title);
+    if (ref) citedEntries.push({ candidate: ref, marker: i + 1 });
+    else unmatched.push(i + 1);
+  });
+  const returned = openAiBodySearchSourceUrls(body.output)
+    .map((u) => openAiCandidate(u, null))
+    .filter((c): c is Candidate => c !== null);
+  return {
+    status: "ok",
+    responseFormat: "openai_responses",
+    ...split(citedEntries, returned),
+    unmatchedMarkers: unmatched,
+    markersFound: citations.length > 0,
+  };
+}
+
 /** Agent API: [n] or [web:n] refers to a search result's own `id`. */
 function fromAgentResponse(body: Record<string, unknown>): ExtractedRunSources {
   const answer = agentBodyAnswerText(body.output);
@@ -244,7 +354,10 @@ function fromAgentResponse(body: Record<string, unknown>): ExtractedRunSources {
 
 export function extractProviderSources(
   rawResponse: string | null | undefined,
-  rawResponseSha256: string | null | undefined
+  rawResponseSha256: string | null | undefined,
+  // D-056 — the protocol's provider decides the rule. Absent (every caller
+  // before D-056) or any Perplexity provider reads exactly as before.
+  provider?: string | null
 ): ExtractedRunSources {
   if (typeof rawResponse !== "string" || rawResponse.length === 0) return empty("no_raw_response");
   if (typeof rawResponseSha256 !== "string" || !/^[0-9a-f]{64}$/.test(rawResponseSha256)) {
@@ -261,6 +374,7 @@ export function extractProviderSources(
   if (!json || typeof json !== "object" || Array.isArray(json)) return empty("not_provider_json");
   const body = json as Record<string, unknown>;
 
+  if (provider === "openai_chatgpt") return fromOpenAiResponses(body);
   if (body.object === "response" && Array.isArray(body.output)) return fromAgentResponse(body);
   if (Array.isArray(body.choices) && body.choices.length > 0) return fromChatCompletions(body);
   return empty("unrecognised_shape");

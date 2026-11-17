@@ -47,10 +47,7 @@ import type {
   ProtocolExternalCall,
   ProviderCallReceipt,
 } from "@/lib/db/types";
-import {
-  answerFromRawResponseBody,
-  measuredCostUsdFromRawResponseBody,
-} from "@/lib/protocol-worker/worker";
+import { perplexityProfile, type ProviderProfile } from "@/lib/protocol-worker/provider-profile";
 import {
   WorkerAbort,
   type AnalysisTransport,
@@ -202,14 +199,18 @@ async function runProviderCall(
   f: Fenced,
   call: ProtocolExternalCall,
   probeRunId: string,
-  probeInput: { prompt: string; brandName: string; domain: string | null }
+  probeInput: { prompt: string; brandName: string; domain: string | null },
+  // D-056 — the engine's deadline, cost reader, answer reader and failure
+  // label. Defaults to the Perplexity profile, which is exactly what this
+  // leg did before: so a caller that names no profile is unchanged.
+  profile: ProviderProfile = perplexityProfile(deps.runProbe, deps, opts)
 ): Promise<{ done: IterationResult } | { probe: Awaited<ReturnType<PerplexityProbeRunner>> }> {
   // `runPerplexityProbe` wraps EVERY throw from its fetcher into a
   // PerplexityProbeFailure, so a WorkerAbort raised here never survives as
   // itself. The decision therefore rests on this explicit state, recorded
   // before anything can throw — never on the exception's type.
   let markOutcome: string | null = null;
-  const deadline = createLegDeadline(deps, opts.providerTimeoutMs);
+  const deadline = createLegDeadline(deps, profile.callTimeoutMs);
   const fetchImpl: typeof fetch = async (url, init) => {
     const body = typeof init?.body === "string" ? init.body : "";
     const m = await deps.db.markExternalCallSentForJob({
@@ -255,7 +256,10 @@ async function runProviderCall(
     // unusable, and then BOTH fields stay unset: the ledger records an
     // honest `unknown` rather than the reservation, which migration 0050
     // forbids substituting and enforces as a pair.
-    const measuredCostUsd = measuredCostUsdFromRawResponseBody(res.rawResponseBody);
+    //
+    // D-056 — the engine's reader: Perplexity's MEASURED cost exactly as
+    // before, or ChatGPT's cost ESTIMATED from the usage in the same body.
+    const receiptCost = profile.costFromBody(res.rawResponseBody);
     const rec = await deps.db.recordProviderCallReceiptForJob({
       jobId: f.jobId,
       claimToken: f.claimToken,
@@ -267,8 +271,8 @@ async function runProviderCall(
       providerRequestId: res.providerRequestId ?? null,
       rawResponseSha256: res.rawResponseBodySha256 ?? null,
       latencyMs: res.latencyMs ?? null,
-      actualCostUsd: measuredCostUsd,
-      costBasis: measuredCostUsd === null ? null : "measured",
+      actualCostUsd: receiptCost === null ? null : receiptCost.actualCostUsd,
+      costBasis: receiptCost === null ? null : receiptCost.costBasis,
       rawResponseBody: res.rawResponseBody ?? null,
     });
     // Only two outcomes let the run continue, and in BOTH the durable
@@ -286,7 +290,7 @@ async function runProviderCall(
       // reason to fall back on the response in hand.
       return { done: { outcome: "failed", jobId: f.jobId, detail: `${rec.outcome}:NO_RECEIPT` } };
     }
-    const durableAnswer = answerFromRawResponseBody(rec.receipt.rawResponseBody);
+    const durableAnswer = profile.answerFromBody(rec.receipt.rawResponseBody);
     if (durableAnswer === null) {
       return { done: { outcome: "failed", jobId: f.jobId, detail: `${rec.outcome}:EMPTY_DURABLE_ANSWER` } };
     }
@@ -322,6 +326,10 @@ async function runProviderCall(
       // have been served and billed, and only the receipt RPC's own T1
       // may close that, atomically.
       const known = e.reason === "http_error" || e.reason === "empty_answer";
+      // D-056 — a definite failure whose body reports usage (a ChatGPT 2xx
+      // answer refused for its tier or model) was billed: its estimated cost
+      // is recorded with it. Perplexity reads none here, exactly as before.
+      const failureCost = known && profile.engine !== "perplexity" ? profile.costFromBody(e.errorBody) : null;
       const rec = await deps.db.recordProviderCallReceiptForJob({
         jobId: f.jobId,
         claimToken: f.claimToken,
@@ -334,8 +342,9 @@ async function runProviderCall(
         rawResponseSha256: known ? e.errorBodySha256 : null,
         latencyMs: e.latencyMs,
         rawResponseBody: known ? e.errorBody : null,
+        ...(failureCost === null ? {} : { actualCostUsd: failureCost.actualCostUsd, costBasis: failureCost.costBasis }),
       });
-      const detail = `${e.reason}:${rec.outcome}`;
+      const detail = `${known ? profile.failureLabel(e) : e.reason}:${rec.outcome}`;
       if (!known) {
         // T1 already cancelled the unsent legs, terminalised the attempt
         // and moved the job, inside that RPC's transaction.

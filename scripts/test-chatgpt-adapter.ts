@@ -908,7 +908,8 @@ async function main(): Promise<void> {
   /* W: worker --------------------------------------------------------- */
   const runner = async () => ok;
   const route = probeRunnerForProtocol({ runProbe: runner, runAgentProbe: runner }, { provider: CHATGPT_PROVIDER, modelConfig: { model: MODEL } });
-  check("W1 the worker refuses an openai_chatgpt protocol (not wired)", !route.ok && route.detail === "UNKNOWN_PROVIDER");
+  // D-056 — the worker knows the provider now, and refuses it before admission unless the engine is enabled.
+  check("W1 the worker refuses an openai_chatgpt protocol when the engine is not enabled", !route.ok && route.detail === "PROVIDER_ADAPTER_NOT_ENABLED");
   check("W2 a stored ChatGPT body is not replayed as an answer", answerFromRawResponseBody(raw) === null);
   check("W3 the worker does not import the adapter", !/probes\/chatgpt/.test(fs.readFileSync("lib/protocol-worker/worker.ts", "utf8")));
 
@@ -921,12 +922,29 @@ async function main(): Promise<void> {
     });
   check("B1 nothing under app/ imports the adapter", importers("app").length === 0, importers("app").join(", "));
   const libImporters = importers("lib").filter((p) => p !== path.join("lib", "probes", "chatgpt.ts"));
-  check("B2 nothing else under lib/ imports the adapter yet", libImporters.length === 0, libImporters.join(", "));
+  // D-056 — exactly one worker module imports the adapter, and only the worker entry point loads it, dynamically.
+  check("B2 under lib/ only lib/protocol-worker/chatgpt-engine.ts imports the adapter",
+    libImporters.length === 1 && libImporters[0] === path.join("lib", "protocol-worker", "chatgpt-engine.ts"), libImporters.join(", "));
+  const engineImporters = [...importers("lib"), ...importers("app"), ...importers("scripts").filter((p) => !/test-/.test(p))]
+    .filter((p) => /protocol-worker\/chatgpt-engine"/.test(fs.readFileSync(p, "utf8")));
+  check("B6 only scripts/run-protocol-worker.ts loads the engine, and only by a dynamic import",
+    (() => {
+      const all = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) return all(p);
+        return /\.(ts|tsx)$/.test(e.name) && /protocol-worker\/chatgpt-engine"/.test(fs.readFileSync(p, "utf8")) ? [p] : [];
+      });
+      const users = [...all("lib"), ...all("app"), ...all("scripts").filter((p) => !path.basename(p).startsWith("test-"))];
+      const entry = fs.readFileSync("scripts/run-protocol-worker.ts", "utf8");
+      return users.length === 1 && users[0] === path.join("scripts", "run-protocol-worker.ts") &&
+        /cfg\.chatgpt\.enabled \? import\("@\/lib\/protocol-worker\/chatgpt-engine"\) : Promise\.resolve\(null\)/.test(entry) &&
+        !/^import [^\n]*chatgpt-engine/m.test(entry);
+    })(), engineImporters.join(", "));
   const pricingSrc = fs.readFileSync("lib/probes/chatgpt-pricing.ts", "utf8");
   check("B4 the pricing module cannot make a call", !/fetch\(|process\.env|from "@\/lib\/probes\/chatgpt"/.test(pricingSrc));
   const scriptImporters = importers("scripts").map((p) => p.replace(/\\/g, "/")).sort();
-  check("B5 only the benchmark and this test import the adapter under scripts/",
-    JSON.stringify(scriptImporters) === JSON.stringify(["scripts/benchmark-chatgpt-models.ts", "scripts/lib/chatgpt-benchmark.ts", "scripts/test-chatgpt-adapter.ts"]), scriptImporters.join(", "));
+  check("B5 only the benchmark and the two ChatGPT tests import the adapter under scripts/",
+    JSON.stringify(scriptImporters) === JSON.stringify(["scripts/benchmark-chatgpt-models.ts", "scripts/lib/chatgpt-benchmark.ts", "scripts/test-chatgpt-adapter.ts", "scripts/test-chatgpt-worker.ts"]), scriptImporters.join(", "));
   check("B3 the adapter never reads the analysis key", !/process\.env\.OPENAI_API_KEY\b/.test(fs.readFileSync("lib/probes/chatgpt.ts", "utf8")));
 
   /* N: validity note -------------------------------------------------- */

@@ -2063,3 +2063,41 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 | `npm run test:worker-start` | 41/41 |
 | `npm run test:paid-execution-guards` | 143/143. Its founder-route inventory now names the pilot Run route as the fourth route that can start the worker, and checks it is founder-guarded before the start. The first version of this branch failed that check: the route was added without updating the inventory. |
 | `ZYPACT_LEVEL2_LOCAL=1 npm run test:snapshot-worker-postgres-level2` | `LEVEL2_RESULT=PASS`, 886 PASS and 0 FAIL on `postgres:16-alpine`, with all 91 migrations applied, including this one. The local runner then exits 1 from its known cleanup trap (§30). CI's Level 2 job runs only for pull requests into `main`, so it does not run on this stacked branch. |
+
+## 33. ChatGPT in the worker, phase A (D-056) — branch `feat/chatgpt-worker`, switch off, not deployed
+
+- **Base:** `feat/x1-chatgpt-adapter` at `ce25c28` (PR #121). Section 32 is reserved for the combined pilot report (D-055), built on another branch.
+- **What it adds:**
+  - a provider profile per engine;
+  - the `WORKER_CHATGPT_ENABLED` switch, off everywhere and refused at startup until phase B;
+  - a lazily loaded ChatGPT engine pinned to the approved setting;
+  - estimated cost from usage;
+  - the flex capacity refusal as a failed, retryable attempt;
+  - the source rule `openai-responses-sources/1`, chosen by provider;
+  - the ChatGPT surface limitation and fingerprint endpoint.
+- **Unchanged:** the Perplexity path. Every pre-existing worker suite passes unmodified apart from the four tests listed under D-056's *Tests*.
+- **Not in phase A:**
+  - any migration;
+  - any change to an existing numeric bound;
+  - any canon document;
+  - any deployment;
+  - any provider call.
+- **Founder decisions before the switch can be turned on:** D-056 *For the founder*: the time limits, the caps, the daily ceiling, the flex handling and the source rule.
+- **Commands and local results (2026-11-17):**
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | pass |
+| `npm run build:verify` | pass (`next-env.d.ts` restored afterwards) |
+| `npm run test:chatgpt-worker` | 104/104 (new; 102 before the review fixes) |
+| `npm run test:chatgpt-adapter` | 195/195 |
+| `npm run test:source-insights` | pass |
+| `npm run test:paid-execution-guards` | 145/145 |
+| `npm run test:worker-start` | 41/41 |
+| `npm run test:pilot-step1`, `npm run test:pilot-questions` | pass |
+| `npm run test:protocol-report` | pass |
+| `npm run test:m0-worker-execution-gate` | 498/498 |
+| `npm run test:m0-worker-hosting-contract` | 150/150 |
+| `scripts/test-worker-execution-options.ts` | 56 passed, 0 failed |
+| Offline worker suites: `test:m5-a-worker-loop` 52, `test:m5-a-recovery` 18, `test:m5-a-real-probe-fencing` 18, `test:m5-a-conflict-identity` 62, `test:m5-a-failure-matrix` 58, `test:m5-a-abort-and-cancel` 23, `test:m5-a-throttling` 28, `test:m5-a-lifecycle` 34, `test:m5-tk-r` 120, `test:m5-phase3d-bounds` 62, `test:m5-b3-max-runtime` 189, `test:m5-phase3d-evidence` 131, `test:m5-2-adapter` 359, `test:cost-recording` 59, `test:perplexity-agent-adapter` 158, `test:worker-precheck-closure` 171, `test:worker-paid-execution-gate` 69, `test:worker-image-provenance` 89, `test:report-pass` 38, `test:m5-0056-schema` 71, `test:m5-0059-schema` 165, `test:m5-0060-schema` 266, `test:m5-0083-schema` 30 | all pass |
+| `ZYPACT_LEVEL2_LOCAL=1 npm run test:snapshot-worker-postgres-level2` | `LEVEL2_RESULT=PASS`, 886 PASS and 0 FAIL on `postgres:16-alpine` with all 91 migrations applied (the local runner then exits 1 from its known cleanup trap, §30) |

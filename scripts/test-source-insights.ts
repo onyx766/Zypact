@@ -188,6 +188,12 @@ console.log("extraction");
   const body = agentBody();
   const r = extractProviderSources(body, sha256Hex(body));
   check("E7 a verified Agent API body is read", r.status === "ok" && r.responseFormat === "agent_response");
+  // D-056 — the protocol's provider selects the rule; Perplexity providers read exactly as before.
+  check("E7b a Perplexity provider argument changes nothing (Agent and Sonar bodies)",
+    JSON.stringify(extractProviderSources(body, sha256Hex(body), "perplexity_agent")) === JSON.stringify(r) &&
+    JSON.stringify(extractProviderSources(sonarBody(), sha256Hex(sonarBody()), "perplexity_sonar")) === JSON.stringify(extractProviderSources(sonarBody(), sha256Hex(sonarBody()))));
+  check("E7c the ChatGPT provider reads the same object:\"response\" shape under its own rule, never the Agent's",
+    extractProviderSources(body, sha256Hex(body), "openai_chatgpt").responseFormat === "openai_responses");
   check("E7 [web:n] maps to the result's own id", r.cited.length === 1 && r.cited[0].domain === "capterra.com" && r.cited[0].markers[0] === 2);
   check("E7 an id with no result is unmatched", r.unmatchedMarkers.join(",") === "7");
   check("E7 the other results are retrieved only", r.retrievedOnly.map((s) => s.domain).sort().join(",") === "acme.test,vanta.test");

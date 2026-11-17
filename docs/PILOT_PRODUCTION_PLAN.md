@@ -48,8 +48,18 @@ Order rule (D-052): migrations, then the worker, then the web app. Rollback runs
 ### Step 1 — read-only preflight
 
 - **Approval:** "Run the read-only production check. It changes nothing." **Authorised by the founder on 2026-11-17** ("I agree.", relayed), together with the release order (D-058). It runs at R, after this plan's pull request is merged.
-- **Does:** runs `scripts/sql/prod-preflight.sql` at R ([`PROD_PREFLIGHT_SPEC.md`](PROD_PREFLIGHT_SPEC.md)).
-- **Pass:** every must-pass check is PASS. **Any FAIL means stop.**
+- **Does:** runs `scripts/sql/prod-preflight.sql` at R ([`PROD_PREFLIGHT_SPEC.md`](PROD_PREFLIGHT_SPEC.md)). The exact command, from a checkout of R:
+
+  ```
+  psql -X -q -v ON_ERROR_STOP=1 -v expected_sysid=<from your private record> \
+       "<production connection string>" -f scripts/sql/prod-preflight.sql
+  echo "exit $?"
+  ```
+
+  `expected_sysid` is the cluster system identifier recorded privately on 2026-11-09. Read it from your own record. It is never written into the repository, a pull request or a chat.
+- **Pass:** the last line is `PREFLIGHT: PASS` and the exit code is 0. **Anything else means stop:** `PREFLIGHT: FAIL (n)`, a non-zero exit, or an error.
+- **If P3.3 fails:** its pin `710dfb5c…` was computed on disposable databases and has never been observed on production. Stop. Compare the observed hash against a disposable copy built to the recorded state before anything else. A mismatch means production's `approve_and_launch_snapshot_baseline` is not what step 2 expects to replace.
+- **Output:** check ids, PASS/FAIL, versions, hashes and counts, and the system identifier itself. Keep the full output private; the record notes only the result and the date.
 - **Rollback:** none.
 
 ### Steps 2–5 — the four pilot migrations, one approval each
@@ -63,6 +73,8 @@ Order rule (D-052): migrations, then the worker, then the web app. Rollback runs
 
 - **Approval:** "Apply pilot migration N (version V) to production."
 - **Does:** applies the migration with the D-041 named-file procedure under `--single-transaction`, never `db push`. Each is rehearsed first on a disposable copy of the live state, as §25 records for Q2′-1, Q2′-2 and S1.
+  - **The procedure** is the body of `scripts/sql/sv1-apply-named-migration.sql` below its header, sha256 `db6feffff039c324bef2a8894deb3e2c3236f5c0e8bbca7cd4ecc204b8972cca` since 2026-11-17. Q2′-1, Q2′-2 and S1 used the earlier body, `8a430331…`, which had no order guard.
+  - **Every apply passes** `-v target_sysid=<from your private record>` as well as `file`, `new_version`, `new_name` and `expected_prev`. The guard refuses a different database, a version not later than `expected_prev`, and a tail other than `expected_prev`.
 - **Before:**
   - the ledger tail equals `expected_prev`;
   - V is absent;
@@ -183,9 +195,12 @@ Order rule (D-052): migrations, then the worker, then the web app. Rollback runs
   - A shared revision cannot be withdrawn (D-055, open). Only rolling back the web app hides it.
   - The customer's change waits until the ChatGPT baselines are taken (D-053 item 3).
 
-## Part B — release order (D-058, proposed)
+## Part B — release order (D-058, approved by the founder on 2026-11-17)
 
-The four pilot migrations are renumbered to sit directly after S1 and before P1. They can then be applied in numeric order, as D-041 and the named-file guard require, while P1 to Q4 stay unapplied behind their own gates.
+The four pilot migrations are renumbered to sit directly after S1 and before P1. They can then be applied in numeric order, as D-041 requires, while P1 to Q4 stay unapplied behind their own gates.
+
+- **The numbering rule until P1 to Q4 are applied:** every production migration, including ChatGPT's phase B and any forward-recovery migration, is numbered strictly between `20261109160000` and `20261110120000`, or waits until P1 to Q4 are applied. A migration numbered after Q4 would leave P1 to Q4 below the tail, where they could never be applied in order.
+- **2026-11-17 correction (review of PR #129):** this part first said the named-file guard required numeric order. It did not: it checked only the tail, a new version and 14 digits, and a disposable database accepted an earlier version after a later one. The guard now refuses any version not strictly later than `expected_prev` (D-058 item 5).
 
 - **Why not apply P1 to Q4 first:**
   - it adds four more production applies;
@@ -209,6 +224,7 @@ The four pilot migrations are renumbered to sit directly after S1 and before P1.
 
    Also open: the conflict between a two-engine retest and 0079's one retest per intervention.
 2. **Phase B pull request.**
+   - **Numbering:** strictly between `20261109160000` and `20261110120000` while P1 to Q4 are unapplied (Part B).
    - **Migration:** the probe mode, a provider-aware persist, the baseline index by provider, the pilot engine CHECK, `add_pilot_question_engine`, the provider leg's call kind, and `searchResultsPresence`.
    - **Flips** `CHATGPT_WORKER_SCHEMA_READY`.
    - **Canon:** updates V1_SCOPE, METHODOLOGY §4 and PILOT_RUNBOOK, plus `CLAUDE.md`'s "Initial live surface" line, **which needs the user's OK**.

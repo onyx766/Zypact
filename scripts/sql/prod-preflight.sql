@@ -1,7 +1,12 @@
 -- PRODUCTION PREFLIGHT (read-only). docs/PROD_PREFLIGHT_SPEC.md.
 --
 -- Run ONLY as:
---   psql -X -q -v ON_ERROR_STOP=1 "<connection string>" -f scripts/sql/prod-preflight.sql
+--   psql -X -q -v ON_ERROR_STOP=1 -v expected_sysid=<from your private record> \
+--        "<connection string>" -f scripts/sql/prod-preflight.sql
+--
+-- expected_sysid is the cluster system identifier recorded privately on
+-- 2026-11-09; it is never written into the repository. Without it, or with a
+-- different value, P1.1 fails.
 --
 -- Baseline (re-baselined 2026-11-17): production as CURRENT_STATUS §25
 -- records it after S1 — 85 ledger rows, tail 20261109120000, with 0083,
@@ -13,11 +18,24 @@
 -- PASS/FAIL, versions, hashes and counts: no row of customer data, no email,
 -- no evidence, no token. Every check that must pass has pass = true or false;
 -- informational rows have pass = null.
+--
+-- The check set is built once (the checks CTE). One statement turns it into
+-- the printed lines and the FAIL count. The last line printed is the verdict,
+-- "PREFLIGHT: PASS" or "PREFLIGHT: FAIL (n)". On a FAIL the single raise-only
+-- DO block below raises, so psql exits non-zero under ON_ERROR_STOP; on a PASS
+-- the transaction is rolled back and psql exits 0.
 
 \set ON_ERROR_STOP on
+\if :{?expected_sysid}
+\else
+  \echo 'preflight: -v expected_sysid=<system identifier from your private record> was not given; P1.1 will FAIL'
+  \set expected_sysid 'not given'
+\endif
 begin transaction isolation level repeatable read read only;
 set local statement_timeout = '30s';
 set local lock_timeout = '2s';
+-- A role subject to row-level security now errors instead of reading 0 rows.
+set local row_security = off;
 
 with
 ledger as (
@@ -67,6 +85,9 @@ pending_functions(name) as (values
   ('settle_measurement_run'), ('get_workspace_usage'),
   ('approve_question_draft'), ('archive_active_question'), ('list_active_questions')
 ),
+-- The only informational checks. Every other check must be exactly true: a
+-- must-pass check that comes out false or null is a FAIL (fail closed).
+informational(id) as (values ('P1.4'), ('P6.2')),
 reconcile as (
   select to_regprocedure('public.reconcile_attempt_for_job(uuid,uuid,uuid,uuid,text,text)') as oid
 ),
@@ -76,8 +97,10 @@ launch as (
 ),
 checks(id, label, pass, observed) as (
   -- P1 target identity --------------------------------------------------
-  select 'P1.1', 'cluster system identifier (informational)',
-         null::boolean,
+  select 'P1.1', 'this is the target database: system identifier equals -v expected_sysid',
+         case when has_function_privilege('pg_control_system()', 'execute')
+              then (select system_identifier::text from pg_control_system()) = :'expected_sysid'
+              else false end,
          case when has_function_privilege('pg_control_system()', 'execute')
               then (select system_identifier::text from pg_control_system())
               else 'NO ACCESS to pg_control_system()' end
@@ -165,8 +188,9 @@ checks(id, label, pass, observed) as (
          (select count(distinct p.proname)::text from pg_proc p where p.pronamespace = 'public'::regnamespace
             and p.proname in (select name from applied_functions))
   union all
-  select 'P4.6', 'applied helpers present: _q2p_, _q2p2_, _s1_ (informational count)',
-         null,
+  select 'P4.6', 'all 40 applied helpers exist: _q2p_, _q2p2_, _s1_ (Q2''-1, Q2''-2, S1)',
+         (select count(*) from pg_proc p where p.pronamespace = 'public'::regnamespace
+            and (p.proname like '\_q2p\_%' or p.proname like '\_q2p2\_%' or p.proname like '\_s1\_%')) = 40,
          (select count(*)::text from pg_proc p where p.pronamespace = 'public'::regnamespace
             and (p.proname like '\_q2p\_%' or p.proname like '\_q2p2\_%' or p.proname like '\_s1\_%'))
 
@@ -193,8 +217,17 @@ checks(id, label, pass, observed) as (
          (select count(*) from public.protocol_execution_jobs where status = 'queued') = 0,
          (select count(*)::text from public.protocol_execution_jobs where status = 'queued')
 )
-select id, label, case when pass is null then 'info' when pass then 'PASS' else 'FAIL' end as result, observed
-  from checks
- order by id;
-
+select string_agg(format('%-5s %-4s %s | %s', c.id,
+                         case when i.id is not null then 'info' when c.pass is true then 'PASS' else 'FAIL' end,
+                         c.label, coalesce(c.observed, '')),
+                  E'\n' order by c.id) as lines,
+       case when count(*) filter (where i.id is null and c.pass is not true) = 0 then 'PREFLIGHT: PASS'
+            else 'PREFLIGHT: FAIL (' || count(*) filter (where i.id is null and c.pass is not true) || ')' end as verdict,
+       count(*) filter (where i.id is null and c.pass is not true) > 0 as failed
+  from checks c left join informational i on i.id = c.id \gset pf_
+\echo :pf_lines
+\echo :pf_verdict
+\if :pf_failed
+do $preflight$ begin raise exception 'PREFLIGHT: FAIL - a must-pass check failed; see the verdict line above'; end $preflight$;
+\endif
 rollback;

@@ -10,7 +10,7 @@ Referenced by D-041, D-058 and CURRENT_STATUS §20.6, §24, §25 and §30–§34
 Before any pending migration is applied to production, confirm the production database is exactly in the state the next apply was rehearsed against.
 
 - **Recorded production state** (CURRENT_STATUS §25): 0001–0080, the 0081 alias `20260924023646`, 0083, Q2′-1 `20261102132000`, Q2′-2 `20261103173000` and S1 `20261109120000`. That is 85 ledger rows, with tail `20261109120000`.
-- **Next pending migrations** under D-058's proposed release order: pilot step 1 `20261109130000`, pilot questions `20261109140000`, pilot report `20261109150000`, then pilot actions `20261109160000`.
+- **Next pending migrations** under D-058's release order (approved by the founder on 2026-11-17): pilot step 1 `20261109130000`, pilot questions `20261109140000`, pilot report `20261109150000`, then pilot actions `20261109160000`.
 - **Still unapplied, and after those:** P1 `20261110120000`, P2 `20261111120000`, E1 `20261112120000` and Q4 `20261113120000`.
 
 The Supabase project named **`zypact-staging` is the production database** (D-041). There is no separate staging database.
@@ -19,8 +19,15 @@ The Supabase project named **`zypact-staging` is the production database** (D-04
 
 [`scripts/sql/prod-preflight.sql`](../scripts/sql/prod-preflight.sql) has the following properties:
 
-- **One `READ ONLY` transaction, rolled back.** It has no write, lock, grant or schema statement, and `npm run test:prod-preflight` enforces that.
-- **It prints only** check ids, PASS/FAIL, versions, hashes and counts. It prints no customer row, email, token, prompt or evidence.
+- **One `READ ONLY` transaction, rolled back.** It has no write, lock, grant, schema, role or session statement, and no function with a side effect. `npm run test:prod-preflight` enforces that.
+  - The contract test also inserts each forbidden pattern into a copy and proves it is caught. The patterns are advisory locks, a session `set_config`, `pg_terminate_backend`, `set role`, `nextval`, every write and DDL keyword, a second DO block, and psql includes and shell escapes.
+- **The one DO block** only raises. It runs only when a must-pass check failed, so psql exits non-zero under `ON_ERROR_STOP`.
+- **It confirms its target.** It requires `-v expected_sysid=<value>`, and P1.1 passes only when the cluster's system identifier equals it.
+- **It fails closed.**
+  - Only P1.4 and P6.2 are informational. Every other check must come out exactly true; false or null is a FAIL.
+  - With `row_security = off`, a role without BYPASSRLS errors instead of reading 0 rows.
+- **Output:** one line per check (`id`, `PASS`/`FAIL`/`info`, label, observed value), then a last line, `PREFLIGHT: PASS` or `PREFLIGHT: FAIL (n)`. It prints no customer row, email, token, prompt or evidence.
+- **Exit code:** 0 only on `PREFLIGHT: PASS`.
 - **Timeouts:** 30 seconds per statement and 2 seconds per lock.
 
 ## Before running
@@ -36,8 +43,12 @@ The Supabase project named **`zypact-staging` is the production database** (D-04
 
 ```bash
 export PGCLIENTENCODING=UTF8
-psql -X -q -v ON_ERROR_STOP=1 "<connection string>" -f scripts/sql/prod-preflight.sql
+psql -X -q -v ON_ERROR_STOP=1 -v expected_sysid=<from your private record> \
+     "<connection string>" -f scripts/sql/prod-preflight.sql
+echo "exit $?"
 ```
+
+`expected_sysid` is the system identifier recorded privately when the first version ran on 2026-11-09. Read it from your own record; it is never written into the repository, a pull request or a chat. Without it, or with a different value, P1.1 fails.
 
 `PGCLIENTENCODING=UTF8` matters on Windows: the migration files contain non-ASCII characters, and a WIN1252 client refuses them.
 
@@ -45,7 +56,7 @@ psql -X -q -v ON_ERROR_STOP=1 "<connection string>" -f scripts/sql/prod-prefligh
 
 | Id | Must be | Meaning |
 |---|---|---|
-| P1.1 | info | The cluster's system identifier. Record it privately; it is not published. |
+| P1.1 | PASS | This is the target database: the cluster's system identifier equals `-v expected_sysid`. The observed value is printed; keep the output private. |
 | P1.2 | PASS | This role can read `pg_control_system()`. |
 | P1.3 | PASS | PostgreSQL 15 or later. Production reported 17.6 on 2026-11-09. |
 | P1.4 | info | The database name. |
@@ -64,7 +75,7 @@ psql -X -q -v ON_ERROR_STOP=1 "<connection string>" -f scripts/sql/prod-prefligh
 | P4.3 | PASS | `projects`, `buyer_question_versions`, `snapshot_requests`, `protocol_execution_jobs` and `protocol_attempts`, which the pilot migrations reference, exist. |
 | P4.4 | PASS | All 25 applied tables exist: Q2′-1's 15, Q2′-2's 8 and S1's 2. |
 | P4.5 | PASS | All 12 applied public functions exist: Q2′-1's 6 and S1's 6. |
-| P4.6 | info | The count of `_q2p_`, `_q2p2_` and `_s1_` helpers. On a disposable stack at this position it is 40. |
+| P4.6 | PASS | All 40 `_q2p_`, `_q2p2_` and `_s1_` helpers exist: 19, 16 and 5, the distinct helpers the three applied migrations define. There are no overloads. |
 | P5.1 | PASS | `anon`, `authenticated` and `service_role` exist. |
 | P5.2 | PASS | `service_role` has BYPASSRLS. |
 | P6.1 | PASS | No protocol job is `claimed` or `running`. |
@@ -76,7 +87,20 @@ psql -X -q -v ON_ERROR_STOP=1 "<connection string>" -f scripts/sql/prod-prefligh
 - Every must-pass check passed.
 - P3.1 computed `721e4879…`, the reserved procedure's `post_def`. P3.3 computed `710dfb5c…`, the existing pin.
 - After pilot step 1 was applied to the same database and recorded, P2.3, P2.4, P2.5, P3.3, P3.4, P4.1 and P4.2 failed, as they should.
-- **Not exercised:** a queued job making P6.3 fail.
+- **Not exercised in that first run:** a queued job making P6.3 fail.
+
+**Re-validated on 2026-11-17 after the review of PR #129**, on a fresh disposable database built to the same state:
+
+| Case | Result |
+|---|---|
+| The right `expected_sysid` | every check PASS; last line `PREFLIGHT: PASS`; exit 0 |
+| No `expected_sysid` | P1.1 FAIL; `PREFLIGHT: FAIL (1)`; exit 3 |
+| A wrong `expected_sysid` | P1.1 FAIL; `PREFLIGHT: FAIL (1)`; exit 3 |
+| One queued job (inserted only in that copy) | P6.3 FAIL; `PREFLIGHT: FAIL (1)`; exit 3 |
+| The queued job removed | `PREFLIGHT: PASS`; exit 0 |
+| A role without BYPASSRLS reading `protocol_execution_jobs` with `row_security = off` | error, not 0 rows |
+
+**If P3.3 fails:** its pin `710dfb5c…` was computed on disposable databases and has never been observed on production. The first version of this check, which ran on production on 2026-11-09, did not include it. Stop. Compare the observed hash against a disposable copy built to the recorded state before anything else.
 
 The run is in the D-058 pull request's notes, and `npm run test:prod-preflight` enforces the structure: the applied set is a prefix of the migrations on disk, every pending object is checked absent, every applied object is checked present, and the pins are as stated.
 
@@ -91,11 +115,21 @@ Record the date, the commit and the full output **privately**. CURRENT_STATUS re
 
 This is for reference only. **Each step needs its own founder authorisation**, run in this order, never with `supabase db push` or `supabase migration repair` (D-041). Every apply runs in one transaction with its ledger row, so a failure leaves nothing behind. The full plan, including the worker and web steps, is [`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md).
 
-The procedure is the D-041 named-file text. The repository holds its rehearsal copy, [`scripts/sql/sv1-apply-named-migration.sql`](../scripts/sql/sv1-apply-named-migration.sql), whose header says *never run against a remote database*. The production copy is the body below that header, unchanged, and must match the source sha256 the header records. Preparing that copy is part of each step's authorisation.
+The procedure is the D-041 named-file text. The repository holds its rehearsal copy, [`scripts/sql/sv1-apply-named-migration.sql`](../scripts/sql/sv1-apply-named-migration.sql), whose header says *never run against a remote database*. The production copy is the body below that header, unchanged, and must match the body sha256 the header records. Preparing that copy is part of each step's authorisation.
+
+- **2026-11-17 (D-058 item 5):** the body changed. Its sha256 is now `db6feffff039c324bef2a8894deb3e2c3236f5c0e8bbca7cd4ecc204b8972cca`; Q2′-1, Q2′-2 and S1 used the earlier body, `8a430331…`.
+  - It now refuses a `new_version` that is not strictly later than `expected_prev`, and both must be 14 digits. The earlier body checked only the tail, which let a disposable database record `20261109125000` after `20261109160000`.
+  - With `-v target_sysid=<value>`, it refuses any database whose system identifier differs. Every production apply passes it.
+- **Proved on a disposable database** at the recorded state:
+  - The four pilot migrations applied in order. The first ran without `target_sysid`, the other three with the right one.
+  - `20261109125000` after `20261109160000` was refused (exit 3).
+  - A wrong `target_sysid` was refused (exit 3).
+  - Each refusal left the ledger unchanged.
+- **Until P1 to Q4 are applied,** every production migration is numbered strictly between `20261109160000` and `20261110120000`, or waits (D-058 item 4).
 
 **Done** (CURRENT_STATUS §25): 0083 (reserved version), then Q2′-1, Q2′-2 and S1 (named file).
 
-**Proposed next** (D-058, the founder's choice):
+**Next** (D-058, approved by the founder on 2026-11-17; each apply still needs its own authorisation):
 
 | Step | Procedure | Arguments |
 |---|---|---|

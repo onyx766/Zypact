@@ -12,6 +12,7 @@
  *
  * No database, no network.
  */
+import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
@@ -32,14 +33,115 @@ globalThis.fetch = (() => {
 }) as unknown as typeof fetch;
 
 const SQL = readFileSync("scripts/sql/prod-preflight.sql", "utf8");
-const code = SQL.replace(/--[^\n]*/g, "");
+
+/*
+ * The one raise-only DO block the preflight may contain (2026-11-17, D-058):
+ * on a FAIL it makes psql exit non-zero under ON_ERROR_STOP. It is matched
+ * exactly and removed before every read-only check; any other DO is refused.
+ */
+const ALLOWED_DO =
+  "do $preflight$ begin raise exception 'PREFLIGHT: FAIL - a must-pass check failed; see the verdict line above'; end $preflight$;";
+
+/** The read-only violations in a preflight text: empty means read-only. */
+export function readOnlyViolations(sqlText: string): string[] {
+  const out: string[] = [];
+  const doCount = sqlText.split(ALLOWED_DO).length - 1;
+  if (doCount > 1) out.push("the raise-only DO block appears more than once");
+  const code = sqlText.split(ALLOWED_DO).join("").replace(/--[^\n]*/g, "");
+  const lower = code.toLowerCase();
+  if ((lower.match(/begin transaction[^;]*read only;/g) ?? []).length !== 1 || (lower.match(/\bbegin\b/g) ?? []).length !== 1) {
+    out.push("not exactly one READ ONLY transaction");
+  }
+  if (!/rollback;\s*$/.test(lower.trim() + "\n") || /\bcommit\b/.test(lower)) out.push("does not end by rolling back");
+  // String literals are blanked so a label can say anything.
+  const statements = lower.replace(/'(?:[^']|'')*'/g, "''");
+  const keywords = statements.match(
+    /\b(insert|update|delete|merge|create|alter|drop|grant|revoke|truncate|copy|lock|call|vacuum|analyze|reindex|cluster|notify|listen|unlisten|do|discard|prepare|execute|checkpoint|refresh|import|load|reassign|security\s+label|comment\s+on)\b/g
+  ) ?? [];
+  out.push(...keywords.map((k) => `keyword:${k}`));
+  if (/\\(i|ir|include|include_relative|copy|o|out|w|write|gexec|setenv|cd|lo_\w+)\b/.test(statements) || /\\!/.test(statements)) out.push("psql meta-command that reads, writes or executes");
+  for (const fn of statements.match(/\b(pg_(?:try_)?advisory\w*|pg_terminate_backend|pg_cancel_backend|pg_reload_conf|pg_rotate_logfile|pg_switch_wal|pg_create_\w+|pg_drop_\w+|pg_promote|pg_log_backend_memory_contexts|nextval|setval|lo_\w+|dblink\w*|txid_current|pg_current_xact_id)\s*\(/g) ?? []) {
+    out.push(`function:${fn.replace(/\s*\($/, "")}`);
+  }
+  if (/\bset\s+(?:local\s+)?(?:role|session)\b/.test(statements) || /\breset\s+(?:role|session)\b/.test(statements)) out.push("set role / set session");
+  if (/\bset\s+(?!local\b)[a-z_]+/.test(statements.replace(/\\set\b/g, "\\setvar"))) out.push("a SET that is not SET LOCAL");
+  // set_config is allowed only transaction-local (third argument true).
+  for (const m of statements.matchAll(/\bset_config\s*\(/g)) {
+    let depth = 1, i = (m.index ?? 0) + m[0].length;
+    const start = i;
+    while (i < statements.length && depth > 0) {
+      if (statements[i] === "(") depth += 1;
+      else if (statements[i] === ")") depth -= 1;
+      i += 1;
+    }
+    const args = statements.slice(start, i - 1);
+    const parts: string[] = [];
+    let d = 0, cur = "";
+    for (const ch of args) {
+      if (ch === "(") d += 1;
+      if (ch === ")") d -= 1;
+      if (ch === "," && d === 0) { parts.push(cur); cur = ""; } else cur += ch;
+    }
+    parts.push(cur);
+    if (parts.length !== 3 || parts[2].trim() !== "true") out.push("set_config that is not transaction-local");
+  }
+  return out;
+}
+
+const code = SQL.split(ALLOWED_DO).join("").replace(/--[^\n]*/g, "");
 const lower = code.toLowerCase();
 
 assert("PF-01 opens exactly one READ ONLY transaction", (lower.match(/begin transaction[^;]*read only;/g) ?? []).length === 1 && (lower.match(/\bbegin\b/g) ?? []).length === 1);
 assert("PF-02 ends by rolling back", /rollback;\s*$/.test(lower.trim() + "\n") && !/\bcommit\b/.test(lower));
-const statements = lower.replace(/'(?:[^']|'')*'/g, "''");
-const forbidden = statements.match(/\b(insert|update|delete|merge|create|alter|drop|grant|revoke|truncate|copy|lock|call|vacuum|analyze|reindex|cluster|comment\s+on|security\s+label|refresh)\b|\bdo\s+\$|\\(i|ir|copy|o|w|!)\b/g) ?? [];
-assert("PF-03 no statement writes, locks, grants or changes schema", forbidden.length === 0, forbidden.join(","));
+const violations = readOnlyViolations(SQL);
+assert("PF-03 no statement writes, locks, grants, changes schema, role or session, or calls a function with side effects", violations.length === 0, violations.join(","));
+assert("PF-03a the raise-only DO block appears exactly once, guarded by the FAIL verdict",
+  SQL.split(ALLOWED_DO).length - 1 === 1 && SQL.includes(`\\if :pf_failed\n${ALLOWED_DO}\n\\endif\nrollback;`));
+
+/* Mutation checks: each forbidden pattern, inserted before the rollback, is caught. */
+const MUTATIONS: Array<[string, string]> = [
+  ["advisory lock", "select pg_advisory_lock(42);"],
+  ["advisory xact lock", "select pg_advisory_xact_lock(42);"],
+  ["try advisory lock", "select pg_try_advisory_lock(42);"],
+  ["session set_config", "select set_config('search_path', 'x', false);"],
+  ["set_config without its third argument", "select set_config('search_path', 'x');"],
+  ["terminate backend", "select pg_terminate_backend(0);"],
+  ["cancel backend", "select pg_cancel_backend(0);"],
+  ["set role", "set role service_role;"],
+  ["set local role", "set local role service_role;"],
+  ["set session authorization", "set session authorization service_role;"],
+  ["plain session set", "set search_path = x;"],
+  ["nextval", "select nextval('public.some_seq');"],
+  ["setval", "select setval('public.some_seq', 1);"],
+  ["insert", "insert into public.pilots default values;"],
+  ["update", "update public.pilots set status = 'closed';"],
+  ["delete", "delete from public.pilots;"],
+  ["alter", "alter table public.pilots add column x int;"],
+  ["drop", "drop table public.pilots;"],
+  ["create", "create temp table x(a int);"],
+  ["grant", "grant select on public.pilots to anon;"],
+  ["revoke", "revoke select on public.pilots from service_role;"],
+  ["truncate", "truncate public.pilots;"],
+  ["copy", "copy public.pilots to stdout;"],
+  ["lock table", "lock table public.pilots in exclusive mode;"],
+  ["vacuum", "vacuum public.pilots;"],
+  ["notify", "notify zypact;"],
+  ["listen", "listen zypact;"],
+  ["call", "call public.some_procedure();"],
+  ["a second DO block", "do $x$ begin perform 1; end $x$;"],
+  ["a duplicate of the allowed DO block", ALLOWED_DO],
+  ["commit", "commit;"],
+  ["psql include", "\\i other.sql"],
+  ["psql shell escape", "\\! touch x"],
+  ["psql gexec", "select 'select 1' \\gexec"],
+];
+for (const [name, line] of MUTATIONS) {
+  const mutated = SQL.replace(/\nrollback;\s*$/, `\n${line}\nrollback;\n`);
+  assert(`PF-03m mutation caught: ${name}`, mutated !== SQL && readOnlyViolations(mutated).length > 0);
+}
+assert("PF-03n a transaction-local set_config(..., true) is allowed",
+  readOnlyViolations(SQL.replace(/\nrollback;\s*$/, "\nselect set_config('search_path', 'x', true);\nrollback;\n")).length === 0);
+
 assert("PF-04 statement and lock timeouts are set", lower.includes("set local statement_timeout = '30s'") && lower.includes("set local lock_timeout = '2s'"));
 assert("PF-05 it reads no customer column (no email, token, prompt, response or evidence field)",
   !/\b(email|token|prompt|raw_response|answer|work_email|company_name|website_url|claim_token)\b/.test(lower.replace(/'[^']*'/g, "")));
@@ -147,6 +249,48 @@ assert("PF-22 the 0069 pre-state of approve_and_launch_snapshot_baseline is pinn
 assert("PF-23 the queue is checked empty (P6.3) as well as nothing claimed or running (P6.1)",
   /status = 'queued'\) = 0/.test(SQL) && /status in \('claimed', 'running'\)\) = 0/.test(SQL));
 assert("PF-24 the header says this baseline has never been run against production", /has NEVER been\s*\n?-- run against production/.test(SQL));
+
+/* Target, verdict and fail-closed rules (2026-11-17, review of PR #129) --- */
+assert("PF-25 P1.1 must pass: the system identifier equals -v expected_sysid, and a missing value cannot pass",
+  /select 'P1\.1', '[^']*',\s*case when has_function_privilege\('pg_control_system\(\)', 'execute'\)\s*then \(select system_identifier::text from pg_control_system\(\)\) = :'expected_sysid'\s*else false end,/.test(SQL)
+    && SQL.includes("\\if :{?expected_sysid}") && SQL.includes("\\set expected_sysid 'not given'")
+    && SQL.includes("-v expected_sysid=<from your private record>"));
+assert("PF-25a no system identifier is written into the repository (no 15-20 digit number in the script)", !/\b\d{15,20}\b/.test(SQL));
+assert("PF-26 the check set is built once and one statement yields the lines, the verdict and the FAIL flag",
+  (SQL.match(/\bfrom checks\b/g) ?? []).length === 1 && SQL.includes("from checks c left join informational i on i.id = c.id \\gset pf_")
+    && /\\echo :pf_lines\n\\echo :pf_verdict\n\\if :pf_failed\n/.test(SQL)
+    && SQL.includes("'PREFLIGHT: PASS'") && SQL.includes("'PREFLIGHT: FAIL (' ||"));
+assert("PF-26a a must-pass check that is false or null counts as a FAIL (only the informational ids are exempt)",
+  (SQL.match(/count\(\*\) filter \(where i\.id is null and c\.pass is not true\)/g) ?? []).length === 3);
+const literalNullIds = [...SQL.matchAll(/select '(P\d\.\d)', '(?:[^']|'')*',\s*null(?:::boolean)?\s*,/g)].map((m) => m[1]).sort();
+const infoIds = [...(SQL.match(/informational\(id\) as \(values([^\n]*)\)/)?.[1] ?? "").matchAll(/'(P\d\.\d)'/g)].map((m) => m[1]).sort();
+assert("PF-26b the informational ids are exactly the checks whose pass is a literal null",
+  infoIds.length > 0 && JSON.stringify(infoIds) === JSON.stringify(literalNullIds), `info ${infoIds.join(",")} vs null ${literalNullIds.join(",")}`);
+assert("PF-27 row security is off, so a role without BYPASSRLS errors instead of reading 0", /set local row_security = off;/.test(SQL));
+const HELPER_DEF = /create\s+(?:or\s+replace\s+)?function\s+public\.(_q2p_[a-z0-9_]+|_q2p2_[a-z0-9_]+|_s1_[a-z0-9_]+)/gi;
+const appliedHelpers = new Set<string>();
+for (const f of appliedFiles) for (const m of readFileSync(path.join(DIR, f), "utf8").matchAll(HELPER_DEF)) appliedHelpers.add(m[1]);
+assert(`PF-28 P4.6 must pass with exactly the ${appliedHelpers.size} helpers the applied migrations define`,
+  appliedHelpers.size > 0 && SQL.includes(`all ${appliedHelpers.size} applied helpers exist`)
+    && new RegExp(`'\\\\_s1\\\\_%'\\)\\) = ${appliedHelpers.size},`).test(SQL), String(appliedHelpers.size));
+
+/* The named-file apply procedure (scripts/sql/sv1-apply-named-migration.sql) */
+const APPLY = readFileSync("scripts/sql/sv1-apply-named-migration.sql", "utf8");
+const bodyStart = APPLY.search(/^-- Named-file migration apply\./m);
+const body = bodyStart >= 0 ? APPLY.slice(bodyStart) : "";
+const bodySha = createHash("sha256").update(body).digest("hex");
+assert("PF-40 the apply script's header records its body's sha256 (the production copy is that body, unchanged)",
+  bodyStart > 0 && APPLY.slice(0, bodyStart).includes(bodySha), bodySha);
+assert("PF-41 the apply guard refuses a version that is not later than expected_prev, and both must be 14 digits",
+  body.includes(":'expected_prev' ~ '^[0-9]{14}$' and :'new_version' > :'expected_prev' as order_ok")
+    && body.includes("\\if :order_ok\n\\else\n  do $g$ begin raise exception 'named-migration guard: version is not later than the expected predecessor'; end $g$;\n\\endif"));
+assert("PF-42 the apply guard refuses a different system identifier when -v target_sysid is given, before the ledger lock",
+  /\\if :\{\?target_sysid\}\nselect \(select system_identifier::text from pg_control_system\(\)\) = :'target_sysid' as sysid_ok \\gset\n\\if :sysid_ok\n\\else\n  do \$g\$ begin raise exception 'named-migration guard: this database is not the target \(system identifier differs\)'; end \$g\$;\n\\endif\n\\endif\nlock table/.test(body));
+assert("PF-43 the earlier guards are unchanged (predecessor, 14 digits, not yet recorded)",
+  body.includes("select coalesce(max(version), '') = :'expected_prev' as prev_ok,")
+    && body.includes("'named-migration guard: version is not 14 digits'")
+    && body.includes("'named-migration guard: latest ledger version is not the expected predecessor'")
+    && body.includes("'named-migration guard: version already recorded'"));
 
 /* Wiring -------------------------------------------------------------- */
 const spec = readFileSync("docs/PROD_PREFLIGHT_SPEC.md", "utf8");

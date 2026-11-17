@@ -1992,7 +1992,7 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
   - the preflight rows for the new migration.
 - **Production steps waiting for authorisation, in order:**
   1. Apply `20261114120000` at the position the founder chooses (D-052, release order: after 0083, renamed below `20261102132000`, or after Q4), with the read-only preflight re-baselined for that position (`PROD_PREFLIGHT_SPEC.md`).
-     - **2026-11-17 correction (D-058, proposed):** "below `20261102132000`" is no longer possible, since Q2′-1 is applied. The migration is renumbered `20261109130000`, directly after S1, and the preflight is re-baselined to production's recorded state. The whole sequence is in [`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md).
+     - **2026-11-17 correction (D-058, approved by the founder on 2026-11-17):** "below `20261102132000`" is no longer possible, since Q2′-1 is applied. The migration is renumbered `20261109130000`, directly after S1, and the preflight is re-baselined to production's recorded state. The whole sequence is in [`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md).
   2. Redeploy the worker from the same commit (`WORKER_DEPLOY_RUNBOOK.md` §6, with an empty queue). This also brings D-036's 7 slots and 900 seconds into effect (§18.5 item 8). The worker goes before the web app: started by the old console, it finds no run request and stops (D-052, deploy order). Confirm the machine runs the new image (the `gitSha` its start event reports, `WORKER_DEPLOY_RUNBOOK.md` §6) before step 3. A rollback runs in the reverse order.
   3. Deploy the web app.
   4. Set the paid-execution switch and `ZYPACT_DAILY_SPEND_CEILING_USD` (the figure the founder confirms; 10 USD proposed) on both the web host and the worker. Their deployed values are not known from the repository.
@@ -2208,7 +2208,7 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 | `npm run test:paid-execution-guards` | 143/143 |
 | `npm run test:founder-baseline-control`, `npm run test:worker-start` | pass, 41/41 |
 
-## 35. Release prep for the pilot (D-058, proposed) — branch `release/pilot-production-prep`, nothing applied anywhere
+## 35. Release prep for the pilot (D-058, approved 2026-11-17) — branch `release/pilot-production-prep`, PR #129, nothing applied anywhere
 
 - **What it changes:**
   - **Renumbered migrations.** The four pilot migrations are renumbered to sit directly after S1 and before P1: `20261109130000` (step 1), `20261109140000` (questions), `20261109150000` (report) and `20261109160000` (actions). Their SQL is unchanged; only header comments stating an order or a version changed.
@@ -2228,4 +2228,26 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 | `ZYPACT_LEVEL2_LOCAL=1 npm run test:snapshot-worker-postgres-level2` | `LEVEL2_RESULT=PASS`, 886 PASS, 0 FAIL, 93 migrations with the pilot four applied directly after S1. The local runner then exits 1 from its known cleanup trap. |
 | `npm run typecheck`, `npm run build:verify` | pass (`next-env.d.ts` restored) |
 
-- **Not established:** nothing about production. The preflight's P6.3 (a queued job) was not exercised.
+- **Independent review of PR #129 (2026-11-17), fixed on the same branch.** It found nothing that blocks a read-only run. Its findings:
+  1. **The named-file guard did not enforce order.** It checked only that the tail equals `expected_prev`, and a disposable database recorded `20261109125000` after `20261109160000`.
+     - **Fix:** the guard refuses any version not strictly later than `expected_prev`, and both must be 14 digits. An optional `-v target_sysid` guard refuses a different database.
+     - **New body sha256:** `db6feffff039c324bef2a8894deb3e2c3236f5c0e8bbca7cd4ecc204b8972cca`. Q2′-1, Q2′-2 and S1 used `8a430331…`.
+     - **D-058 item 4:** until P1 to Q4 are applied, every production migration is numbered strictly between `20261109160000` and `20261110120000`, or waits.
+  2. **The preflight never confirmed its target.** It now requires `-v expected_sysid`, and P1.1 must pass.
+  3. **A FAIL left the exit code at 0.** The check set is now built once. The last line is `PREFLIGHT: PASS` or `PREFLIGHT: FAIL (n)`, and a FAIL raises inside the read-only transaction, so psql exits 3. A must-pass check that comes out null now counts as a FAIL.
+  4. **The read-only contract missed** advisory locks, a session `set_config`, `pg_terminate_backend` and `set role`. It now refuses them and every other side-effecting pattern. 34 mutation checks prove each is caught.
+  5. **The records disagreed on whether D-058 was approved.** They now all say approved.
+  6. **Smaller fixes:**
+     - P4.6 is must-pass at 40 helpers;
+     - `row_security = off`;
+     - a diagnosis note for P3.3, whose pin has never been observed on production.
+- **Results after the review's fixes (2026-11-17):**
+
+| Command | Result |
+|---|---|
+| `npm run test:prod-preflight` | 71/71, including 34 mutation checks and the apply procedure's body sha256 |
+| Preflight on a fresh disposable database at the recorded state | right `expected_sysid`: all PASS, `PREFLIGHT: PASS`, exit 0. Missing or wrong value: P1.1 FAIL, exit 3. One queued job: P6.3 FAIL, exit 3. Job removed: PASS, exit 0. |
+| Named-file procedure on that database | the four pilot migrations in order: exit 0 each, tail `20261109160000`, 89 rows. Out of order (`20261109125000`): refused, exit 3. Wrong `target_sysid`: refused, exit 3. Ledger unchanged by each refusal. |
+| `row_security = off` with a role without BYPASSRLS | error instead of 0 rows |
+
+- **Not established:** nothing about production.

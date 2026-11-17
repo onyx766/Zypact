@@ -36,7 +36,7 @@ The pilot does not provide:
 
 ### 2.1 Pilot Mode (D-051)
 
-> **Going live:** the step-by-step production plan, with each founder approval, check and rollback, is [`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md). Its release order (D-058) is proposed and awaits the founder.
+> **Going live:** the step-by-step production plan, with each founder approval, check and rollback, is [`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md). Its release order (D-058) and step 1, the read-only preflight, were approved by the founder on 2026-11-17; every later step needs its own authorisation.
 
 Pilot Mode is the managed pilot the founder approved on 2026-11-14. The team runs every measurement and retest from the admin console, and the customer views the results. Until the customer login shows results, they reach the customer by private link.
 

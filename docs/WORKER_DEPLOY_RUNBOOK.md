@@ -58,7 +58,7 @@ Two consequences:
 - **Never deploy between "Queue retest run" and "Run retest now"** (self-test §7
   steps 4 and 5). In that interval a job sits `queued` and a deploy-time start
   could claim it, outside the founder's intent and outside the console.
-- Until D-052 is deployed (migration `20261114120000` and a worker image
+- Until D-052 is deployed (migration `20261109130000`, numbered `20261114120000` until 2026-11-17 (D-058), and a worker image
   built from it), the claim is unscoped (`CURRENT_STATUS.md` §18.5 item 2).
   Deploy D-052's worker after its migration and before its web app: the
   new worker, started by the old console, finds no run request and stops.
@@ -97,6 +97,14 @@ service-role key, the Perplexity key and the analysis-provider key live in `fly
 secrets` and are absent from the config by design. Do not add them to the toml:
 the ten `[env]` values are contract-locked, and the hosting contract fails on an
 eleventh.
+
+> **2026-11-17 note (pending PR #121):** D-056's phase A, on PR #121 and not
+> yet in `main` on this branch, adds an eleventh `[env]` value,
+> `WORKER_CHATGPT_ENABLED = "false"`, and generalises the hosting contract to
+> lock it. Once #121 is merged, this section and §6's environment check must
+> name eleven values, and the check must confirm the switch reads exactly
+> `"false"`. The production sequence is in
+> [`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md), step 6.
 
 ## 6. The sequence
 

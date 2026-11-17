@@ -3,7 +3,8 @@
 -- job through the same approval, admission and reservation path a
 -- founder-created request uses.
 --
--- Applies after 20261114120000 (pilot step 1). Depends only on objects from
+-- Applies after 20261109130000 (pilot step 1). Numbered 20261118120000
+-- until 2026-11-17 (D-058); the SQL is unchanged. Depends only on objects from
 -- 0047-0081 and pilot step 1; nothing from the account stack (Q2'-1 to Q4).
 --
 -- Before this, one snapshot request held one question in its own project,
@@ -60,7 +61,7 @@
 -- app, then the database):
 --   1. Roll the web app back. The old console never sends admin_pilot_run.
 --   2. Restore pilot step 1's three functions and the two CHECKs:
---        re-apply 20261114120000's bodies and grants of
+--        re-apply 20261109130000's bodies and grants of
 --        request_protocol_job_run, claim_requested_protocol_execution_job
 --        and retry_failed_protocol_job, then
 --        alter table public.protocol_job_run_requests

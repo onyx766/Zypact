@@ -729,6 +729,7 @@ Each entry records:
 - **Status:** **Approved by the Founder on 2026-11-09** (written reply "I approve"). Merged as PR #108 (`2dac4f0`). **Not applied to any Supabase project and not live:** the account area is off unless `ZYPACT_ACCOUNTS_ENABLED` is exactly `true`.
   - **The same reply approved:** a security review before customer use (the reviewer is not yet named); running the read-only production preflight (`PROD_PREFLIGHT_SPEC.md`); and a real-login test on a non-production Supabase project, or the local stack, before customer use.
   - **Still separately gated:** each production apply (0083, Q2′-1, Q2′-2, S1) needs its own authorisation after the preflight passes.
+  - **2026-11-17 note:** "Not applied to any Supabase project" was true when written. The preflight then ran against production on 2026-11-09 (every must-pass check PASS), and 0083, Q2′-1, Q2′-2 and S1 were applied on 2026-11-09 and 2026-11-10 (CURRENT_STATUS §25).
 - **Builds on:** D-040 (self-service; identity is not a grant; separate session types), D-041 (migration naming and release order), D-042 (closed tables; Q2′-1's F1 and membership model).
 - **Choices made for S1 (engineer, 2026-11-09):** email and password sign-in with email verification; sign-up limited to approved pilot emails by default; database cases run in the Level 2 harness.
 - **Decision:**
@@ -973,6 +974,8 @@ Each item below departed from a document that governed before this approval: V1_
 - **Not in step 1:** the worker redeploy, setting the daily ceiling and the self-test retest, which are production steps that each need their own authorisation (D-051 item 4); an analysis-only retry for a failed job; reactivating an abandoned job from the console; the 10-run plan (pilot terms pending).
 - **Deploy order** *(engineer)*: the migration, then the worker image, then the web app, with no founder-created approval in between: the old console calls the approval without the new input, which a founder-created request now requires. A new worker started by the old web app finds no run request and stops without claiming, so the gap fails closed: a Run does nothing rather than running another request's job. The other order would let the old worker claim the oldest job of any project while the new console believes Runs are named. A worker with the requested claim against a database without the migration finds no function and stops without claiming.
 - **Release order (not decided):** production applies migrations in numeric order (D-041), and none of the timestamped migrations is applied there, so `20261114120000` would follow Q2′-1, Q2′-2, S1, P1, P2, E1 and Q4. Shipping step 1 before that account stack means applying it after 0083 (0083's reserved-version procedure expects the ledger tail `20260924023646`), renamed to a version below `20261102132000`, and re-baselining Q2′-1's `expected_prev` and the preflight for its new position (`PROD_PREFLIGHT_SPEC.md`). The choice belongs to the apply's own authorisation.
+  - **2026-11-17 (D-058, proposed, awaiting the founder):** renumbered to `20261109130000` (was `20261114120000`), directly after S1 and before P1, so the pilot migrations can be applied in numeric order without the unapplied account stack. The SQL is unchanged; version numbers elsewhere in this entry are the old ones.
+  - **2026-11-17 correction:** "none of the timestamped migrations is applied there" was out of date when written: Q2′-1, Q2′-2 and S1 were applied to production on 2026-11-09 and 2026-11-10 (CURRENT_STATUS §25), so the option "below `20261102132000`" no longer exists.
 - **D-037:** the held 0084/0085 plan must cover the new claim and run-request functions, through a within-spend variant or its revocation list, before PG-9.
 - **Existing rows:** founder-created requests approved before this migration carry `customer_supplied` with the public-form rationale. Question versions are immutable, so they are not corrected. A read-only count, if authorised, decides whether anyone needs telling.
 - **Tests:**
@@ -1141,6 +1144,7 @@ Each item below departed from a document that governed before this approval: V1_
   - **A live pilot does not yet block a new public request for its website** *(engineer)*. The request functions are untouched, so a request can be created for a pilot's website, and its measurement would sit in a separate project. Either a redefinition of the two request-creation functions or a console check would close it.
   - **Intent type.** Every pilot question version is stored with intent `shortlist`, as a request's is. Questions about alternatives or purchase decisions are not distinguished.
   - **Release position.** The migration depends only on 0047-0081 and step 1. It goes directly after step 1, wherever the founder places step 1 (D-052).
+    - **2026-11-17 (D-058, proposed, awaiting the founder):** renumbered to `20261109140000` (was `20261118120000`), directly after S1 and before P1, so the pilot migrations can be applied in numeric order without the unapplied account stack. The SQL is unchanged; version numbers elsewhere in this entry are the old ones.
   - **D-037.** The held 0084/0085 plan must also cover the three functions this migration redefines: `request_protocol_job_run`, `claim_requested_protocol_execution_job` and `retry_failed_protocol_job`.
   - **Interventions on pilot baselines.** The intervention console lists every baseline, so a pilot question's baseline can already be chosen for an intervention. Its retest is gated by the pilot (items 5, 7, 10), but its Outcome Card would have no recipient, because a pilot has no request. This belongs to the pilot retest step.
   - **The older claims.** `claim_protocol_execution_job` (0054) and `claim_protocol_execution_job_by_id` (0059) are unchanged and do not check pilots. The live runner uses only the requested claim (D-052); they remain for the M5 test harnesses. A process that still used an older claim could take a pilot's queued job, including a closed pilot's. A worker running older code is such a process.
@@ -1273,6 +1277,7 @@ Each item below departed from a document that governed before this approval: V1_
   - Results in `CURRENT_STATUS.md` §32.
 - **Recovery:** in the migration's header. Roll the web app back, then drop the three functions, the table and the guard's function. Nothing else references the table, and a revision can be rebuilt from the evidence.
 - **Release order:** directly after `20261118120000`, wherever the founder places the pilot migrations (D-052, `PROD_PREFLIGHT_SPEC.md`). It redefines no function, so D-037's list is unchanged.
+  - **2026-11-17 (D-058, proposed, awaiting the founder):** renumbered to `20261109150000` (was `20261119120000`), directly after S1 and before P1, so the pilot migrations can be applied in numeric order without the unapplied account stack. The SQL is unchanged; version numbers elsewhere in this entry are the old ones.
 - **Revisit trigger:**
   - a report shared without the founder's preview;
   - a build while a measurement is running;
@@ -1339,6 +1344,7 @@ Each item below departed from a document that governed before this approval: V1_
 
   Every refusal in `save_pilot_action` comes before its first write. A review, a withdrawal and a save of an action or of a report take the pilot row `for update`, and a share takes it `for share`, so none of them interleave.
 - **Release order:** directly after `20261119120000`, wherever the founder places the pilot migrations (D-052, `PROD_PREFLIGHT_SPEC.md`). It changes no worker, spend or claim function, so D-037's list is unchanged.
+  - **2026-11-17 (D-058, proposed, awaiting the founder):** renumbered to `20261109160000` (was `20261120120000`), directly after S1 and before P1, so the pilot migrations can be applied in numeric order without the unapplied account stack. The SQL is unchanged; version numbers elsewhere in this entry are the old ones. `20261119120000` in this entry is now `20261109150000`.
 - **Recovery:** in the migration's header. Roll back the web app, restore `save_pilot_report_artifact` and `share_pilot_report_artifact` from `20261119120000`, then drop the three functions, the four tables and the two trigger functions. Shared revisions keep the actions in their stored payload.
 - **Tests:**
   - `npm run test:pilot-actions` (offline): fields, lint, status selection, the report on page and in Markdown, every blocking link, routes, client-safety of the console, and the migration's contract including the byte-for-byte check of the redefined save;
@@ -1359,3 +1365,40 @@ Each item below departed from a document that governed before this approval: V1_
   - an action worded as a prediction or a cause;
   - a report with actions saved as `integrity_passed`;
   - actions generated by a model.
+
+## D-058 — Release order for the pilot migrations
+
+- **Date:** 2026-11-17
+- **Status:** **Approved by the Founder on 2026-11-17** (written reply, relayed: "I agree."). The reply answered the production-plan message, which asked "OK to use the recommended order?" and asked the founder to approve step 1, the read-only check. Option (b) is chosen. Nothing is applied anywhere yet; each apply still needs its own authorisation (D-051 item 4).
+- **The problem.** Production applies migrations in numeric order: D-041 makes numeric order the apply order, and the named-file guard checks that `max(version)` equals `expected_prev`. The recorded production tail is S1, `20261109120000`, at 85 rows (CURRENT_STATUS §25). The four pilot migrations were numbered `20261114120000`, `20261118120000`, `20261119120000` and `20261120120000`, after the unapplied P1, P2, E1 and Q4 (`20261110120000`–`20261113120000`). As numbered, they could go live only after the account stack, which waits on D-045's gates: a named security reviewer, the real-login test, and SMTP and Auth settings.
+- **Decision (proposed):**
+  1. **Renumber the four pilot migrations** to `20261109130000` (step 1), `20261109140000` (questions), `20261109150000` (report) and `20261109160000` (actions). They then sit directly after S1 and before P1, keep their names, and have unchanged SQL; only header comments that state an order or a version change.
+  2. **Apply them in that order** with the named-file procedure, each separately authorised, `expected_prev` chaining from `20261109120000`. P1 to Q4 follow later, behind their own gates, with `expected_prev=20261109160000` for P1.
+  3. **Re-baseline the read-only preflight** to the recorded post-S1 state (`PROD_PREFLIGHT_SPEC.md`):
+     - tail `20261109120000` and 85 rows;
+     - 0083, Q2′-1, Q2′-2 and S1 checked present, with their 25 tables and 12 public functions;
+     - every later migration checked absent: its 20 tables and 38 public functions, and the old pilot numbers;
+     - P3.1 pinned to 0083's `post_def`, `721e4879…`;
+     - P3.3 still `710dfb5c…`;
+     - a new check that no job is queued.
+
+     This version has never been run against production.
+- **Evidence it is safe** (2026-11-17, disposable databases only):
+  - The pilot migrations reference no account-stack object. The account stack defines none of the 18 functions the pilot migrations define, alters no earlier table, and references earlier tables only through foreign keys from its own new tables.
+  - The full `pg_dump --schema-only` (privileges and comments included) is identical, 26,440 lines, with the pilot migrations applied after Q4 (the old order) and after S1 (the new one), on `supabase/postgres:17.6.1.167`.
+  - At the recorded production position, the re-baselined preflight passes every must-pass check, and it fails P2.3, P2.4, P2.5, P3.3, P3.4, P4.1 and P4.2 once pilot step 1 is applied.
+- **Alternatives:**
+  - **(a) Apply P1, P2, E1 and Q4 first.** That is four more production applies. It locks E1's and Q4's unconfirmed engineer rules into production and needs D-045's gates first. Not recommended.
+  - **(c) Apply out of order.** Refused by D-041 and by the guard. Renaming the account stack upward is not documented. Not allowed.
+- **Effect:**
+  - the four files renamed;
+  - their tests' ordering checks (test-pilot-step1 S8 now requires "directly after S1, before P1");
+  - `scripts/sql/prod-preflight.sql`, `scripts/test-prod-preflight-contract.ts` and `PROD_PREFLIGHT_SPEC.md`;
+  - dated notes in D-045, D-052, D-054, D-055 and D-057, and in CURRENT_STATUS §20.6, §21.4 and §30–§34;
+  - the new [`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md).
+- **Recovery:** before any apply, revert the rename. After an apply, the version in production is the new number, and later migrations chain from it.
+- **Revisit trigger:**
+  - a pilot migration applied under its old number;
+  - any account-stack migration applied before the four pilot migrations;
+  - a new migration that references both stacks;
+  - a preflight run at a state other than its baseline.

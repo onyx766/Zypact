@@ -2,7 +2,8 @@
 -- team, each linked to the stored answers and sources it rests on, reviewed
 -- before they reach a report.
 --
--- Applies after 20261119120000 (pilot report artifacts). Depends only on
+-- Applies after 20261109150000 (pilot report artifacts). Numbered
+-- 20261120120000 until 2026-11-17 (D-058); the SQL is unchanged. Depends only on
 -- objects from 0047-0081 and the three pilot migrations; nothing from the
 -- account stack (Q2'-1 to Q4).
 --
@@ -24,7 +25,7 @@
 --      whole action), append-only.
 --   5. `save_pilot_action`, `review_pilot_action`, `withdraw_pilot_action`.
 --   6. `save_pilot_report_artifact` is redefined with one added block (marked
---      D-057 begin/end; otherwise byte for byte 20261119120000's body): the
+--      D-057 begin/end; otherwise byte for byte 20261109150000's body): the
 --      manifest lists the action versions the payload shows; each must be its
 --      action's latest version, reviewed, of an action of this pilot that is
 --      not withdrawn, and every such action must be listed. Unless the
@@ -34,7 +35,7 @@
 --      never saved as integrity_passed, so the founder's preview and
 --      acknowledgement path is always used.
 --   7. `share_pilot_report_artifact` is redefined with one added block (marked
---      D-057 begin/end; otherwise byte for byte 20261119120000's body): a
+--      D-057 begin/end; otherwise byte for byte 20261109150000's body): a
 --      revision whose listed actions are no longer exactly the reviewed,
 --      current actions of the pilot (one withdrawn, edited or reviewed since
 --      the build) is refused as ACTIONS_STALE, so a withdrawn or superseded
@@ -50,7 +51,7 @@
 -- Rollback / forward recovery (the web app first, then the database):
 --   1. Roll the web app back. Report builds stop listing actions.
 --   2. Restore save_pilot_report_artifact and share_pilot_report_artifact
---      from 20261119120000 (re-run its sections 3 and 4), then:
+--      from 20261109150000 (re-run its sections 3 and 4), then:
 --      drop function if exists public.withdraw_pilot_action(uuid, uuid, uuid, text);
 --      drop function if exists public.review_pilot_action(uuid, uuid, integer, uuid, boolean);
 --      drop function if exists public.save_pilot_action(uuid, uuid, integer, uuid, text, text, text, text, text, text, jsonb, uuid);
@@ -616,7 +617,7 @@ revoke all on function public.withdraw_pilot_action(uuid, uuid, uuid, text) from
 grant execute on function public.withdraw_pilot_action(uuid, uuid, uuid, text) to service_role;
 
 -- ---------------------------------------------------------------------
--- 6. save_pilot_report_artifact, redefined: 20261119120000's body, byte for
+-- 6. save_pilot_report_artifact, redefined: 20261109150000's body, byte for
 --    byte, with the D-057 block added before the revision is numbered.
 -- ---------------------------------------------------------------------
 
@@ -901,7 +902,7 @@ revoke all on function public.save_pilot_report_artifact(uuid, uuid, text, jsonb
 grant execute on function public.save_pilot_report_artifact(uuid, uuid, text, jsonb, jsonb, text, jsonb, timestamptz) to service_role;
 
 -- ---------------------------------------------------------------------
--- 7. share_pilot_report_artifact, redefined: 20261119120000's body, byte for
+-- 7. share_pilot_report_artifact, redefined: 20261109150000's body, byte for
 --    byte, with the D-057 block added after the newest-revision check.
 -- ---------------------------------------------------------------------
 

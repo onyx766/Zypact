@@ -2,7 +2,8 @@
 -- pilot's questions, saved as append-only revisions and shared by link once
 -- the founder has reviewed it.
 --
--- Applies after 20261118120000 (pilot questions). Depends only on objects
+-- Applies after 20261109140000 (pilot questions). Numbered 20261119120000
+-- until 2026-11-17 (D-058); the SQL is unchanged. Depends only on objects
 -- from 0047-0081 and the two pilot migrations; nothing from the account
 -- stack (Q2'-1 to Q4).
 --

@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 /**
  * Pilot report artifacts on a real PostgreSQL
- * (20261119120000_pilot_report_artifacts.sql, D-055):
+ * (20261109150000_pilot_report_artifacts.sql, D-055):
  *
  *   P  save_pilot_report_artifact refuses while a measurement is running
  *      (a pending run request, a reserved attempt) and stores nothing;

@@ -393,14 +393,19 @@ async function main(): Promise<void> {
     !retryRoute.includes("startWorkerMachine") && !/sourceAttemptId\s*}\s*=\s*\(body/.test(retryRoute) && !retryRoute.includes("body.sourceAttemptId"));
 
   const DIR = "supabase/migrations";
-  const FILE = "20261114120000_pilot_step1_operator_controls.sql";
+  const FILE = "20261109130000_pilot_step1_operator_controls.sql";
   const versions = readdirSync(DIR).filter((f) => f.endsWith(".sql")).map((f) => parseMigrationName(f)).filter((r) => r.ok);
   const parsed = parseMigrationName(FILE);
-  // D-054's pilot-questions migration follows this one, so the check is the
-  // release order D-052 states: after Q4 (20261113120000).
-  check("S8 the migration name is valid and follows Q4, as D-052's release order states", parsed.ok && parsed.kind === "timestamp"
-    && (parsed.ok ? parsed.version : -1) > 20261113120000
-    && versions.some((r) => r.ok && r.version === 20261113120000));
+  // D-058 (proposed): the pilot migrations sit directly after S1
+  // (20261109120000, the recorded production tail) and before the unapplied
+  // account stack (P1, 20261110120000), so they can be applied in numeric
+  // order without P1 to Q4. This one is the first of the four.
+  check("S8 the migration name is valid, directly follows S1 and sorts before P1, as D-058 proposes", parsed.ok && parsed.kind === "timestamp"
+    && (parsed.ok ? parsed.version : -1) > 20261109120000
+    && (parsed.ok ? parsed.version : Number.MAX_SAFE_INTEGER) < 20261110120000
+    && versions.some((r) => r.ok && r.version === 20261109120000)
+    && versions.some((r) => r.ok && r.version === 20261110120000)
+    && !versions.some((r) => r.ok && r.version > 20261109120000 && r.version < (parsed.ok ? parsed.version : 0)));
   const sql = read(path.join(DIR, FILE));
   const code = sql.replace(/--[^\n]*/g, "");
   const defined = [...code.matchAll(/create\s+or\s+replace\s+function\s+public\.([a-z_0-9]+)/gi)].map((m) => m[1]).sort();

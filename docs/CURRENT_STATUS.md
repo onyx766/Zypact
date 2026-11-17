@@ -1266,6 +1266,8 @@ holds 83 files: the 82 historical files plus `20261102132000`. On `main` at
 
 ### 20.6 Remaining gates before production
 
+> **2026-11-17 note:** this list describes the state when it was written. Gate 3, the read-only preflight, ran against production on 2026-11-09 with every must-pass check PASS, and 0083, Q2′-1, Q2′-2 and S1 were applied to production on 2026-11-09 and 2026-11-10 (§25).
+
 Each gate needs its own authorisation, in this order:
 
 1. **Done.** Independent review: `0d3f3f6..f7ce558` requested changes,
@@ -1438,6 +1440,8 @@ with Colima. The results at `e28cf3b` are in 21.5.
    is generated from the harness and not committed.
 
 ### 21.4 Remaining gates before production
+
+> **2026-11-17 note:** written before the applies. The preflight ran on 2026-11-09 and 0083, Q2′-1 and Q2′-2 (then S1) were applied to production on 2026-11-09 and 2026-11-10 (§25).
 
 Each needs its own authorisation: independent review of this commit; push and
 a pull request (CI will apply the migration to disposable PostgreSQL in the
@@ -1949,6 +1953,7 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
   - the preflight rows for the new migration.
 - **Production steps waiting for authorisation, in order:**
   1. Apply `20261114120000` at the position the founder chooses (D-052, release order: after 0083, renamed below `20261102132000`, or after Q4), with the read-only preflight re-baselined for that position (`PROD_PREFLIGHT_SPEC.md`).
+     - **2026-11-17 correction (D-058, proposed):** "below `20261102132000`" is no longer possible, since Q2′-1 is applied. The migration is renumbered `20261109130000`, directly after S1, and the preflight is re-baselined to production's recorded state. The whole sequence is in [`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md).
   2. Redeploy the worker from the same commit (`WORKER_DEPLOY_RUNBOOK.md` §6, with an empty queue). This also brings D-036's 7 slots and 900 seconds into effect (§18.5 item 8). The worker goes before the web app: started by the old console, it finds no run request and stops (D-052, deploy order). Confirm the machine runs the new image (the `gitSha` its start event reports, `WORKER_DEPLOY_RUNBOOK.md` §6) before step 3. A rollback runs in the reverse order.
   3. Deploy the web app.
   4. Set the paid-execution switch and `ZYPACT_DAILY_SPEND_CEILING_USD` (the figure the founder confirms; 10 USD proposed) on both the web host and the worker. Their deployed values are not known from the repository.
@@ -1978,7 +1983,7 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 ## 31. Pilot questions (D-054) — branch `feat/pilot-questions`, stacked on step 1, not applied anywhere, not deployed
 
 - **What it adds:** one pilot holds all of a customer's approved questions in one project. Before this, each question needed its own request, project and report.
-  - Migration `20261118120000_pilot_questions.sql` adds:
+  - Migration `20261118120000_pilot_questions.sql` (renumbered `20261109140000_pilot_questions.sql` on 2026-11-17, D-058) adds:
     - three tables: `pilots`, `pilot_questions` and `pilot_question_protocols`, the per-engine slot, which allows Perplexity's baseline only;
     - `create_pilot` (start date between yesterday and 60 days ahead), `add_pilot_question`, `close_pilot` (refused while a measurement is running or about to start) and `retire_pilot_question`;
     - three step 1 functions redefined, each byte for byte apart from its pilot block:
@@ -2029,7 +2034,7 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 
 - **Base:** `main` at `53262cf`, which holds pilot step 1 (D-052) and pilot questions (D-054).
 - **What it adds:**
-  - **Migration** `20261119120000_pilot_report_artifacts.sql`:
+  - **Migration** `20261119120000_pilot_report_artifacts.sql` (renumbered `20261109150000_pilot_report_artifacts.sql` on 2026-11-17, D-058):
     - `pilot_report_artifacts`, append-only revisions that are immutable once shared;
     - `save_pilot_report_artifact`, which refuses evidence outside the pilot, a manifest that leaves out a protocol or attempt, and a hash mismatch;
     - `share_pilot_report_artifact`, for the newest revision only. It never shares a blocked one, and shares a needs-review one only with an acknowledgement;
@@ -2079,7 +2084,7 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 
 - **Base:** `feat/pilot-report` at `0ebadf0` (PR #125). Section numbers 33 and 34 are used on two open branches (ChatGPT in the worker uses 33); they are renumbered when both merge.
 - **What it adds** (D-053 item 4):
-  - **Migration** `20261120120000_pilot_actions.sql`:
+  - **Migration** `20261120120000_pilot_actions.sql` (renumbered `20261109160000_pilot_actions.sql` on 2026-11-17, D-058):
     - four append-only tables (`pilot_actions`, `pilot_action_versions`, `pilot_action_evidence`, `pilot_action_events`), with a guard trigger on each and the evidence trigger;
     - `save_pilot_action`, `review_pilot_action`, `withdraw_pilot_action`;
     - `save_pilot_report_artifact` redefined with one marked block: listed action versions must be reviewed, latest and not withdrawn; a reviewed action cannot be left out; a revision with an action is never `integrity_passed`; unless the revision is blocked, what the payload shows of each action must equal the stored version and its links (`ACTIONS_CONTENT_MISMATCH`);
@@ -2125,3 +2130,25 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 | `npm run test:prod-preflight` | pass (the version, four tables and five functions added to the absence checks) |
 | `npm run test:paid-execution-guards` | 143/143 |
 | `npm run test:founder-baseline-control`, `npm run test:worker-start` | pass, 41/41 |
+
+## 35. Release prep for the pilot (D-058, proposed) — branch `release/pilot-production-prep`, nothing applied anywhere
+
+- **What it changes:**
+  - **Renumbered migrations.** The four pilot migrations are renumbered to sit directly after S1 and before P1: `20261109130000` (step 1), `20261109140000` (questions), `20261109150000` (report) and `20261109160000` (actions). Their SQL is unchanged; only header comments stating an order or a version changed.
+  - **Re-baselined preflight.** It now matches production as §25 records it after S1 (`PROD_PREFLIGHT_SPEC.md`). This version has never been run against production.
+  - **Corrected notes.** Dated notes correct D-045, D-052, D-054, D-055 and D-057, and §20.6, §21.4 and §30–§34, where they described production as untouched or offered the "below `20261102132000`" option.
+  - **The production plan.** [`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md) is new: the step-by-step plan, with each founder approval, read-only check and rollback, the release order, ChatGPT later, and what to check read-only first. It is linked from PILOT_RUNBOOK §2.1.
+- **Founder decisions:** the release order (D-058) and step 1, the read-only preflight, were approved on 2026-11-17 ("I agree."). Every later production step in the plan awaits its own authorisation.
+- **Commands and local results (2026-11-17):**
+
+| Command | Result |
+|---|---|
+| Schema equivalence: two disposable `supabase/postgres:17.6.1.167` databases, all 93 migrations, the pilot four applied after Q4 (the old order) and after S1 (the new one), compared by full `pg_dump --schema-only` | identical, 26,440 lines, privileges and comments included |
+| Re-baselined preflight against a disposable database built to the recorded production state (85 ledger rows, tail `20261109120000`) | every must-pass check PASS. P3.1 computed `721e4879…` (0083's `post_def`) and P3.3 `710dfb5c…`. After pilot step 1 was applied and recorded: P2.3, P2.4, P2.5, P3.3, P3.4, P4.1 and P4.2 FAIL, as designed. |
+| `npm run test:prod-preflight` | 24/24. The contract now checks the applied set is a prefix of the migrations on disk, applied objects are present, pending objects absent, and the pins and counts. A mutation check confirmed PF-12, PF-12a and PF-21 each catch a removed entry. |
+| `npm run test:pilot-step1`, `test:pilot-questions`, `test:pilot-report`, `test:pilot-actions` | pass |
+| `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | 93 migrations applied in the new order; P1 45/45, P2 71/71, E1 74/74, Q4 52/52, pilot step 1 60/60, pilot questions 69/69, pilot report 39/39, pilot actions 53/53 |
+| `ZYPACT_LEVEL2_LOCAL=1 npm run test:snapshot-worker-postgres-level2` | `LEVEL2_RESULT=PASS`, 886 PASS, 0 FAIL, 93 migrations with the pilot four applied directly after S1. The local runner then exits 1 from its known cleanup trap. |
+| `npm run typecheck`, `npm run build:verify` | pass (`next-env.d.ts` restored) |
+
+- **Not established:** nothing about production. The preflight's P6.3 (a queued job) was not exercised.

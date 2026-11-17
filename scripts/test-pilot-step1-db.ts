@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Pilot Mode step 1 on a real PostgreSQL (20261114120000_pilot_step1_operator_controls.sql, D-052):
+ * Pilot Mode step 1 on a real PostgreSQL (20261109130000_pilot_step1_operator_controls.sql, D-052):
  *
  *   R  a run names its job: the requested claim takes that job or nothing;
  *   F  a run that failed at the provider can be retried, inside the caps,

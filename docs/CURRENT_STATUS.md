@@ -1897,7 +1897,7 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 | `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | P1 45/45, P2 71/71, E1 74/74, Q4 52/52 (all 89 migrations applied) |
 | `npm run test:prod-preflight` | pass (Q4's version, 2 tables, 3 functions and `_q4_` listed) |
 
-## 30. Pilot Mode (D-051, D-052) — decision recorded; step 1 on branch `feat/pilot-mode-phase1`, not applied anywhere, not deployed
+## 30. Pilot Mode (D-051, D-052, D-053) — decisions recorded; step 1 on branch `feat/pilot-mode-phase1`, not applied anywhere, not deployed
 
 - **Decision (D-051, 2026-11-14):**
   - the team may run paid pilot measurements, and the self-test retest, under today's controls with a worker daily ceiling the founder confirms (10 USD proposed);
@@ -1906,6 +1906,23 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
   - each production step is authorised when it comes.
 
   Still open: pilot terms, a named security reviewer, and the ChatGPT confirmation test.
+- **Decision (D-053, 2026-11-16 and 2026-11-17):**
+  - a 1,500 USD pilot with both engines;
+  - 15 questions (20 at most), 5 answers per question per engine, a retest of up to 5 questions on both engines, 90 days;
+  - recommended actions written by the team, each linked to its evidence;
+  - the 60-point retest limit in the pilot terms;
+  - a 10 USD daily ceiling;
+  - ChatGPT on OpenAI's flex tier;
+  - the offer's wording.
+
+  ChatGPT measures nothing for a pilot until it is confirmed, approved, wired and deployed. Still open: the security reviewer.
+
+  Not built for the pilot:
+  - one project holding all the questions;
+  - the combined pilot report;
+  - recommended actions;
+  - ChatGPT in the worker;
+  - the customer login.
 - **The assessment, in brief:** no rebuild is needed. The founder-operated engine and the customer account area both exist and are not connected: nothing calls `assign_project_to_workspace`, and no session-checked read of reports or Outcome Cards exists. The work, in order:
   1. **Before the first paid pilot:** step 1, below.
   2. **The customer login:**

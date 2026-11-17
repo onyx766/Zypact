@@ -39,7 +39,10 @@ The pilot does not provide:
 Pilot Mode is the managed pilot the founder approved on 2026-11-14. The team runs every measurement and retest from the admin console, and the customer views the results. Until the customer login shows results, they reach the customer by private link.
 
 - **Paid runs:** only team-run jobs, one job per operator start, within the database caps and the worker's daily ceiling, set at the figure the founder confirms when authorising that production step (10 USD proposed). Nothing a customer can do starts paid work. The first paid pilot run waits for step 1 (D-052) to be deployed: until then a Run is not limited to its own request (`CURRENT_STATUS.md` §18.5 item 2).
-- **Engine:** Perplexity Sonar only, described as a directional measurement of one AI engine. Do not promise visibility in ChatGPT or any other assistant, and never state an overall visibility score.
+- **Engines (D-053, replacing D-051's Perplexity only):** the 1,500 USD pilot includes Perplexity Sonar and ChatGPT. Each is reported as its own directional measurement of one AI engine, with no score combined across engines and no claim about other assistants. ChatGPT measures nothing for a pilot until its confirmation run passes, its setting is approved, it is wired into the worker and its deploy is authorised. Until then a pilot starts on Perplexity, and the customer's change waits until both baselines are taken. Never state an overall visibility score.
+- **Shape (D-053):** 15 approved buyer questions (20 at most), 5 answers per question on each engine, a retest of up to 5 questions on both engines, 90 days.
+- **Recommended actions (D-053):** written by the team, each linked to the answers and sources it rests on, reviewed before sending. Never generated automatically, and never said to be likely to change results.
+- **Offer wording:** use D-053 item 8.
 - **Website ownership:** confirm that the customer controls the website before its first measurement, because automatic verification is not built. Record how it was confirmed.
 - **Written approvals:** keep the customer's dated, written approval of the buyer questions and of the change to be tested, until the account records these approvals itself.
 - **Logins:** one login per customer, once the login is enabled.

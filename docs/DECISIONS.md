@@ -982,3 +982,67 @@ Each item below departed from a document that governed before this approval: V1_
   - results in `CURRENT_STATUS.md` §30.
 - **Recovery:** in the migration's header, in the reverse of the deploy order so each step fails closed: the web app with the approval function restored, then the worker image, then the rest. Dropping the two new tables loses only run-request and closure history; retried attempts and closed requests are ordinary rows in existing statuses.
 - **Revisit trigger:** more than one worker machine; a run request written by anything other than a founder-guarded route or the operator CLI; a retry path that buys an answer when one already arrived; a request closed with a report present; any client copy that shows a stored code.
+
+## D-053 — The $1,500 pilot: both engines, its shape, recommended actions and the offer's wording
+
+- **Date:** 2026-11-17
+- **Status:** **Approved by the Founder** in two written replies, relayed by the engineer:
+  - 2026-11-16, to the V1 status update: the pilot offer in eight parts, the price, "approximately 15-20 buyer questions", and "I approve the rest and ChatGPT (The two engines are included in the paid pilot)";
+  - 2026-11-17, to the reply that proposed the pilot's shape, recommended actions, the retest limit, the flex tier and the offer's wording: "ok I agree all as you said".
+  The second reply did not name a security reviewer, so that stays open.
+- **Amends:** D-051 item 2 (Perplexity only) and D-051's open pilot terms and daily ceiling.
+- **Decision:**
+  1. **The offer.** A paid pilot at 1,500 USD with eight parts:
+     - website and brand profile;
+     - buyer questions;
+     - AI answer measurement on Perplexity and ChatGPT, with repeated answers;
+     - brand and competitor analysis;
+     - source analysis;
+     - recommended actions;
+     - retest and Outcome Card;
+     - a private customer report.
+  2. **The shape.**
+     - 15 approved buyer questions, 20 at most.
+     - 5 answers per question on each engine (the 5-run plan of D-032, per engine).
+     - A retest of up to 5 of those questions, on both engines.
+     - 90 days.
+     - AI cost estimated at about 20 USD per pilot and under 85 USD in the worst case, more than 90% of it ChatGPT. This is an estimate, not a cap; the database's per-protocol caps and the worker's daily ceiling remain the limits.
+  3. **Both engines.** Perplexity Sonar and ChatGPT (`openai_chatgpt`, D-050) are both in the paid pilot. This replaces D-051 item 2.
+     - ChatGPT runs no pilot measurement until all of these hold:
+       - its confirmation run passes the criteria written in `ADAPTER_VALIDITY_CHATGPT.md` before the run;
+       - the founder approves its setting for measurement;
+       - it is wired into the worker under the same approval, admission, reservation and caps as Perplexity;
+       - its deploy is authorised.
+     - Until then a pilot starts on Perplexity. The customer's change waits until both engines' baselines are taken, so both retests compare against a baseline from before the change.
+     - Each engine is reported as its own directional measurement. There is no combined score across engines, and no statement that the two engines stand for every AI tool or every buyer.
+  4. **Recommended actions** are written by the team, each linked to the answers and sources it rests on, and reviewed before they are sent. Nothing is generated automatically, and no action is said to be likely to change results.
+  5. **The retest limit is in the pilot terms.** With 5 answers per question, a retest can show only a change of 60 points or more (`PILOT_RUNBOOK.md` §6). Each customer is told before paying. The 10-run plan stays unbuilt.
+  6. **Daily ceiling:** 10 USD, accepted on 2026-11-16. It is set at the worker's production step, under that step's own authorisation.
+  7. **ChatGPT on the flex tier.** The confirmation run and the pilot's ChatGPT measurements use OpenAI's half-price flex tier, under a setting that checks the tier on every response (D-050).
+  8. **The offer's wording** shows only what the evidence can support:
+     - "Zypact establishes their brand profile" becomes "we start a brand profile from your website (products, positioning, main competitors), and you confirm it". The first draft is copied only from the homepage's meta description or H1 (D-046).
+     - "repeated runs to improve reliability" becomes "each question is asked several times on each engine, so you can see how consistent the answers are".
+     - "relevant patterns" becomes "what comes up again and again across answers".
+     - Sources become "the sources each engine cites, grouped as your own site, review platforms, communities, publications, video and reference sites" (`source-types/1`, D-044).
+     - "evidence-based marketing recommendations" becomes "suggested actions, each linked to the answers and sources behind it".
+     - The retest adds "we report what changed; we can't prove that your change caused it".
+     - The offer adds "results show what these two engines answered during the pilot; they don't represent every AI tool or every buyer".
+- **What the pilot needs that is not built.** Each item gets its own pull request and decision entry:
+  - one pilot project holding all the questions (today one request holds one question in its own project);
+  - a combined pilot report: brands, competitors and sources across questions, reported per engine;
+  - recommended actions, as decided in item 4;
+  - ChatGPT in the worker;
+  - the customer login (D-051 step 2). The first report may go by private link.
+- **Still open:**
+  - a named security reviewer for the customer login;
+  - the release order of step 1's migration (D-052);
+  - each production step (D-051 item 4).
+- **Canon:** `V1_SCOPE.md`, `METHODOLOGY.md` §4 and the repository's `CLAUDE.md` still name Perplexity as the only live surface. That stays true until ChatGPT is wired, so they are updated in the pull request that wires it.
+- **Effect:** this entry, `PILOT_RUNBOOK.md` §2.1 and `CURRENT_STATUS.md` §30. No code, migration, deployment or secret is changed by this decision.
+- **Revisit trigger:**
+  - a pilot with more than 20 questions, or another number of answers per question;
+  - a ChatGPT pilot measurement before the conditions in item 3;
+  - a score combined across engines;
+  - a recommended action without linked evidence;
+  - AI cost for one pilot above 85 USD;
+  - offer copy outside item 8.

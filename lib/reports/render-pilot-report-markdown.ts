@@ -1,0 +1,82 @@
+/**
+ * D-055 — the combined pilot report as Markdown. It renders the shared
+ * presentation model (pilot-report-presentation.ts), the same one the client
+ * page renders, so the two say the same thing and add no words of their own.
+ */
+import {
+  presentPilotReport,
+  type PilotPresentationSection,
+} from "@/lib/reports/pilot-report-presentation";
+import type { PilotReportPayload } from "@/lib/reports/pilot-report-types";
+
+const cell = (value: string) => value.replace(/\|/g, "\\|").replace(/\s+/g, " ").trim();
+
+function section(out: string[], s: PilotPresentationSection): void {
+  out.push(`## ${cell(s.heading)}`);
+  out.push("");
+  for (const p of s.paragraphs) {
+    out.push(p);
+    out.push("");
+  }
+  if (s.table) {
+    out.push(`| ${s.table.columns.map(cell).join(" | ")} |`);
+    out.push(`|${s.table.columns.map(() => "---").join("|")}|`);
+    for (const row of s.table.rows) out.push(`| ${row.map(cell).join(" | ")} |`);
+    out.push("");
+  }
+  for (const n of s.notes) {
+    out.push(n);
+    out.push("");
+  }
+}
+
+export function renderPilotReportMarkdown(payload: PilotReportPayload): string {
+  const v = presentPilotReport(payload);
+  const out: string[] = [];
+
+  out.push(`# ${v.eyebrow}: ${cell(v.title)}`);
+  out.push("");
+  out.push(`- Website: ${v.websiteUrl}`);
+  for (const chip of v.chips) out.push(`- ${chip}`);
+  out.push(`- Generated: ${payload.generatedAt.slice(0, 10)}`);
+  out.push("");
+  for (const line of v.heroCopy) out.push(line);
+  out.push("");
+
+  out.push(`## ${v.enginesHeading}`);
+  out.push("");
+  for (const e of v.engines) out.push(`- ${e}`);
+  out.push("");
+
+  for (const s of v.conditions) section(out, s);
+  for (const s of v.sections) section(out, s);
+
+  out.push(`## ${v.questionsHeading}`);
+  out.push("");
+  for (const p of v.questionsIntro) {
+    out.push(p);
+    out.push("");
+  }
+  for (const q of v.questions) {
+    out.push(`### ${cell(q.heading)}`);
+    out.push("");
+    out.push(q.meta);
+    out.push("");
+    for (const line of q.lines) out.push(`- ${line}`);
+    out.push("");
+  }
+
+  out.push(`## ${v.limitsHeading}`);
+  out.push("");
+  for (const l of v.limitations) out.push(`- ${l}`);
+  out.push("");
+  out.push(`## ${v.methodHeading}`);
+  out.push("");
+  for (const n of v.methodNotes) out.push(`- ${n}`);
+  out.push("");
+  out.push(v.evidenceLine);
+  out.push("");
+  out.push(`_${v.causalLimit}_`);
+  out.push("");
+  return out.join("\n");
+}

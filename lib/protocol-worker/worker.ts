@@ -43,6 +43,7 @@ import type { IterationResult, WorkerDeps, WorkerOptions } from "@/lib/protocol-
 import type { PaidExecutionDecision } from "@/lib/worker-control/paid-execution-gate";
 import { agentOutputText, PERPLEXITY_AGENT_MODEL } from "@/lib/probes/perplexity-agent";
 import type { PerplexityProbeRunner } from "@/lib/protocol-worker/types";
+import { CHATGPT_PROTOCOL_PROVIDER, providerProfileFor } from "@/lib/protocol-worker/provider-profile";
 
 /**
  * PR #4 — which adapter a protocol's provider calls, decided before any
@@ -57,23 +58,41 @@ import type { PerplexityProbeRunner } from "@/lib/protocol-worker/types";
  *   perplexity_agent  the Agent API adapter, only when the worker was built
  *                     with `runAgentProbe` (the production entry point is
  *                     not) and only for the approved model
+ *   openai_chatgpt    D-056 — the ChatGPT engine, only when the worker was
+ *                     built with `chatgpt` (WORKER_CHATGPT_ENABLED exactly
+ *                     "true") and only for a protocol naming exactly the
+ *                     approved setting version and its model
  *   anything else     refused — a tightening: before PR #4 it ran Sonar
  */
 export type ProviderRefusal = "PROVIDER_ADAPTER_NOT_ENABLED" | "PROVIDER_MODEL_NOT_APPROVED" | "UNKNOWN_PROVIDER";
 
 export function probeRunnerForProtocol(
-  deps: Pick<WorkerDeps, "runProbe" | "runAgentProbe">,
+  deps: Pick<WorkerDeps, "runProbe" | "runAgentProbe" | "chatgpt">,
   protocol: { provider: string; modelConfig: Record<string, unknown> }
-): { ok: true; runProbe: PerplexityProbeRunner } | { ok: false; detail: ProviderRefusal } {
+):
+  | { ok: true; runProbe: PerplexityProbeRunner; engine: "perplexity" | "chatgpt" }
+  | { ok: false; detail: ProviderRefusal } {
   if (protocol.provider === "perplexity_sonar" || protocol.provider === "perplexity") {
-    return { ok: true, runProbe: deps.runProbe };
+    return { ok: true, runProbe: deps.runProbe, engine: "perplexity" };
   }
   if (protocol.provider === "perplexity_agent") {
     if (!deps.runAgentProbe) return { ok: false, detail: "PROVIDER_ADAPTER_NOT_ENABLED" };
     if (protocol.modelConfig?.model !== PERPLEXITY_AGENT_MODEL) {
       return { ok: false, detail: "PROVIDER_MODEL_NOT_APPROVED" };
     }
-    return { ok: true, runProbe: deps.runAgentProbe };
+    return { ok: true, runProbe: deps.runAgentProbe, engine: "perplexity" };
+  }
+  if (protocol.provider === CHATGPT_PROTOCOL_PROVIDER) {
+    if (!deps.chatgpt) return { ok: false, detail: "PROVIDER_ADAPTER_NOT_ENABLED" };
+    // The protocol must name the approved setting exactly: a protocol written
+    // for another setting is never run under this one.
+    if (
+      protocol.modelConfig?.setting_version !== deps.chatgpt.settingVersion ||
+      protocol.modelConfig?.model !== deps.chatgpt.model
+    ) {
+      return { ok: false, detail: "PROVIDER_MODEL_NOT_APPROVED" };
+    }
+    return { ok: true, runProbe: deps.chatgpt.runProbe, engine: "chatgpt" };
   }
   return { ok: false, detail: "UNKNOWN_PROVIDER" };
 }
@@ -410,6 +429,12 @@ async function runOneSlot(
     // receipts (a provider disabled after admission) is left as it is.
     return await closeJobBeforeAdmission(deps, f, ctx, runner.detail);
   }
+  // D-056 — the engine's timeout, reservation, labels and readers. For
+  // Perplexity these are exactly the values used before.
+  const profile = providerProfileFor(runner, deps, opts);
+  if (!profile) {
+    return await closeJobBeforeAdmission(deps, f, ctx, "PROVIDER_ADAPTER_NOT_ENABLED");
+  }
 
   // D-025 — the key must be exactly `${jobId}:baseline:${nextBaselineOrdinal}`
   // and the ordinal comes from the ledger, never from a local counter. The
@@ -433,7 +458,9 @@ async function runOneSlot(
     projectId: f.projectId,
     attemptKind,
     idempotencyKey: `${f.jobId}:baseline:${ordinal}`,
-    perplexityReservedCostUsd: opts.perplexityReservedCostUsd,
+    // The provider leg's reservation (named for the call kind, which is
+    // 'perplexity' for every engine's provider leg — 0056).
+    perplexityReservedCostUsd: profile.reservedCostUsd,
     analysisReservedCostUsd: opts.analysisReservedCostUsd,
   });
   // Five distinct cap refusals, and they do not mean the same thing.
@@ -484,8 +511,8 @@ async function runOneSlot(
     claimToken: f.claimToken,
     projectId: f.projectId,
     attemptId: attempt.id,
-    platform: "perplexity",
-    probeMode: deps.probeMode,
+    platform: profile.platform,
+    probeMode: profile.probeMode,
   });
   if (started.outcome !== "STARTED" && started.outcome !== "ALREADY_STARTED") {
     return { outcome: "failed", jobId: f.jobId, detail: started.outcome };
@@ -518,13 +545,13 @@ async function runOneSlot(
       // and closes the attempt in one fenced transition.
       return await closeAttemptFailed(deps, f, attempt.id, "provider_error");
     }
-    answer = answerFromRawResponseBody(now.perplexityReceipt.rawResponseBody);
+    answer = profile.answerFromBody(now.perplexityReceipt.rawResponseBody);
   } else {
     const r = await runProviderCall({ ...deps, runProbe: runner.runProbe }, opts, f, now.perplexity, probeRunId, {
       prompt,
       brandName: project.companyName ?? project.domain,
       domain: project.domain,
-    });
+    }, profile);
     if ("done" in r) {
       if (r.done.outcome === "provider_failed") {
         // Known failure: the analysis leg never left `reserved`, so

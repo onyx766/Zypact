@@ -95,15 +95,12 @@ is the gap §6 step 5 closes.
 Secrets are expected to be set already. The Supabase URL and project ref, the
 service-role key, the Perplexity key and the analysis-provider key live in `fly
 secrets` and are absent from the config by design. Do not add them to the toml:
-the ten `[env]` values are contract-locked, and the hosting contract fails on an
-eleventh.
+the eleven `[env]` values are contract-locked, and the hosting contract fails on a
+twelfth.
 
-> **2026-11-17 note (pending PR #121):** D-056's phase A, on PR #121 and not
-> yet in `main` on this branch, adds an eleventh `[env]` value,
-> `WORKER_CHATGPT_ENABLED = "false"`, and generalises the hosting contract to
-> lock it. Once #121 is merged, this section and §6's environment check must
-> name eleven values, and the check must confirm the switch reads exactly
-> `"false"`. The production sequence is in
+> **2026-11-17:** D-056's phase A (PR #121, merged) added the eleventh `[env]`
+> value, `WORKER_CHATGPT_ENABLED = "false"`, and the hosting contract locks it.
+> Check (d) in §6 confirms it on the machine. The production sequence is in
 > [`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md), step 6.
 
 ## 6. The sequence
@@ -142,13 +139,14 @@ flyctl machine list -a zypact-protocol-worker
 flyctl machine status <MACHINE_ID> -a zypact-protocol-worker --json
 ```
 
-Three things to check in step 5, in order:
+Four things to check in step 5, in order:
 
 | # | Check | If it fails |
 |---|-------|-------------|
 | a | Machine ID is unchanged from step 2 | Go to §7 |
 | b | State is `stopped` | `flyctl machine stop <ID> -a zypact-protocol-worker`, then record the observation in §3 |
 | c | `WORKER_MAX_SLOTS_PER_CLAIM` is `7` and `WORKER_MAX_RUNTIME_SECONDS` is `900` in the machine's env | The deploy did not land. Do not run a retest; `1` slot cannot complete a 5-run plan (D-036) |
+| d | `WORKER_CHATGPT_ENABLED` is exactly `false` in the machine's env (D-056) | Stop. Do not start the machine; redeploy from the release commit. With anything but `"true"` the engine is off, but a value other than `false` means the config is not the committed one |
 
 Check (c) is the only direct evidence that D-036 took effect. Record the values
 you observed, not the values you expected.

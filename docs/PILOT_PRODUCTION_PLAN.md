@@ -40,7 +40,7 @@ Order rule (D-052): migrations, then the worker, then the web app. Rollback runs
 ### Step 0 — repository, no production change
 
 - **Does:**
-  - merges the open pull requests the release needs: #121 (ChatGPT phase A, switch off, Perplexity path unchanged), #128 (suggested actions), and the D-058 release-prep PR (renumbered migrations, re-baselined preflight, this plan);
+  - merges the pull requests the release needs. #121 (ChatGPT phase A, switch off, Perplexity path unchanged) and #128 (suggested actions) were merged on 2026-11-17; the D-058 release-prep PR (renumbered migrations, re-baselined preflight, this plan) is the last;
   - names the resulting `main` commit **R**. The worker and the web app are both built from R.
 - **Approval (the user, per CLAUDE.md):** "Merge the release pull requests."
 - **Check:** CI passes on R, including Level 2; `npm run test:prod-preflight` passes.
@@ -87,7 +87,7 @@ Order rule (D-052): migrations, then the worker, then the web app. Rollback runs
   - the machine ID and its state are recorded.
 - **After:**
   - same machine ID, state `stopped`;
-  - the environment shows 7 slots and 900 s, and, with #121 in R, `WORKER_CHATGPT_ENABLED` is `"false"`;
+  - the environment shows 7 slots and 900 s, and `WORKER_CHATGPT_ENABLED` is exactly `"false"` (runbook §6 check d);
   - the start event reports gitSha R, and the `--digest` comparison matches;
   - a row is appended to runbook §10.
 

@@ -53,6 +53,10 @@ kill_timeout = 30
   # cooperative. 10000 ms against 30 s leaves the invariant with room, and
   # the contract now checks it numerically instead of trusting a default.
   WORKER_GRACE_MS = "10000"
+  # D-056 — the ChatGPT engine stays off. Turning it on is its own founder-
+  # authorised step after phase B's migration; with it off the adapter is
+  # never loaded and an openai_chatgpt protocol is refused before admission.
+  WORKER_CHATGPT_ENABLED = "false"
 
 # Top-level check, not an `http_service` check: this app serves no public
 # traffic, so there is no service to hang a check on. Fly's prober reaches

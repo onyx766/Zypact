@@ -645,6 +645,12 @@ async function main(): Promise<void> {
     // PR #4 — the Agent API adapter is a paid call too.
     const agent = entries.filter((e) => reaches(e, sink("lib/probes/perplexity-agent.ts"))).map(rel);
     check("no web entry point reaches the Perplexity Agent API adapter", agent.length === 0, agent.join(", "));
+    // X1 (D-050) — the ChatGPT (OpenAI Responses API) adapter is a paid call too.
+    const chatgpt = entries.filter((e) => reaches(e, sink("lib/probes/chatgpt.ts"))).map(rel);
+    check("no web entry point reaches the ChatGPT adapter", chatgpt.length === 0, chatgpt.join(", "));
+    // D-056 — nor the worker's ChatGPT engine, which wraps that adapter.
+    const chatgptEngine = entries.filter((e) => reaches(e, sink("lib/protocol-worker/chatgpt-engine.ts"))).map(rel);
+    check("no web entry point reaches the worker's ChatGPT engine", chatgptEngine.length === 0, chatgptEngine.join(", "));
 
     const fly = entries.filter((e) => reaches(e, sink("lib/worker-control/fly-machine.ts"))).map(rel).sort();
     const expectedFly = [

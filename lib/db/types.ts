@@ -58,7 +58,13 @@ export type ProbeRunStatus = "pending" | "succeeded" | "failed";
  * Sprint 13 adds `live_perplexity`; do not read this field from a
  * hardcoded helper; read it from the row.
  */
-export type ProbeMode = "simulated" | "live_perplexity";
+/**
+ * D-056 — `live_openai_chatgpt` is the ChatGPT engine's live mode. It is
+ * typed here so the worker can name it; the database CHECK on probe_runs and
+ * probe_results does not accept it until phase B's migration, and the worker
+ * refuses WORKER_CHATGPT_ENABLED=true until then (execution-mode.ts).
+ */
+export type ProbeMode = "simulated" | "live_perplexity" | "live_openai_chatgpt";
 
 /**
  * M2 canonical observations contract, first tranche (D-014,

@@ -922,6 +922,127 @@ Each item below departed from a document that governed before this approval: V1_
   - `scripts/test-q4-activation-db.ts` (52, disposable Supabase Postgres, run by `npm run test:p2-workspace-db`).
 - **Recovery:** a rollback drops the two Q4 tables and functions. Buyer questions and versions created through Q4 stay, as every M4 version does, and remain identifiable by `approved_by`.
 
+## D-050 — X1: ChatGPT engine adapter (OpenAI Responses API with web search), model benchmark, not wired
+
+- **Date:** 2026-11-10
+- **Status:**
+  - **Founder decisions of 2026-11-10 recorded below.** The methodology, the dedicated OpenAI project, the cost-tracking rules and automatic search for monitoring are approved.
+  - **The founder chose `gpt-5.4-2026-03-05` on 2026-11-13** (written reply relayed by the engineer: "I recommend gpt-5.4-2026-03-05 model."). It is a choice of model. It authorises no paid run and is not yet an approval to measure.
+  - **On 2026-11-17 the founder agreed to run the confirmation run on OpenAI's half-price flex tier**, with the same $12 cap, and added OpenAI credit (reply relayed by the engineer). That authorises the run under the new setting `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05`. It is not an approval to measure.
+  - **Approved for measurement on 2026-11-17** (written reply, relayed: "I approve ChatGPT"), after the confirmation run passed: `CHATGPT_APPROVED_SETTING_VERSION` is `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05`. Automatic search only. The adapter is not wired into any worker; wiring, its worker time limits and its deploy each need their own authorisation.
+  - **Benchmark budget confirmed by the founder on 2026-11-11.** The benchmark ran the same day; see "Benchmark results" in the validity note.
+  - **First recommendation superseded (2026-11-11).** The first recommendation, `gpt-6-luna`, is superseded for two reasons:
+    - a follow-up analysis found it names far fewer smaller vendors than the reference;
+    - OpenAI publishes no dated snapshot for it.
+  - **The founder asked for a smaller validation first**, capped at $10, on smaller-vendor B2B SaaS questions. It compares the dated snapshots `gpt-5.5-2026-04-23` and `gpt-5.4-2026-03-05` with `gpt-6-luna` and the `chat-latest` reference.
+  - **The $40 benchmark budget is a lifetime ceiling** that includes earlier spend (founder, 2026-11-11). $15.35 of it is spent.
+  - No migration. The only paid provider calls made are the benchmark's, on 2026-11-11 (237 recorded runs). The adapter is wired into no worker.
+- **Builds on:** METHODOLOGY §4 (a second surface needs a validity note: `docs/ADAPTER_VALIDITY_CHATGPT.md`), D-044 (cited versus retrieved sources), the M1 evidence contract, PR #4's provider routing, and D-023 (spend).
+- **Founder decisions (2026-11-10):**
+  1. **Model.**
+     - `gpt-5-mini` is not used: OpenAI lists it for shutdown on 2026-12-11.
+     - Evaluate a currently supported, cost-efficient model with web search. `chat-latest` is a reference, never assumed to reproduce ChatGPT.com.
+     - Recommendation, validation results and estimated cost come before approval.
+  2. **Web search.**
+     - Automatic search for the main monitoring protocol, recording whether search occurred.
+     - Source insights only from observed evidence.
+     - Search-required is a separate protocol. Baseline and retest stay comparable.
+  3. **OpenAI project.** A dedicated project and key for measurement, with budget alerts and application-level spending limits. The budget is confirmed before any paid testing.
+  4. **Cost tracking.** Cost is unknown when unavailable, never $0 by default. Token usage, search calls and other billing data are kept so actual costs can be calculated.
+  5. **Methodology.** V1 measures controlled OpenAI API responses, not consumer ChatGPT.com observations. Original responses, citations, configurations, timestamps and limitations are kept.
+  6. **No third-party ChatGPT scraping services.** Using one needs separate legal, data-rights and reliability validation.
+- **Implementation:**
+  - **Settings.**
+    - A `ChatGptSetting` fixes the model, the search mode (`auto` or `required`), the reasoning effort (`low`), the output cap, `store: false` and the served-model rule.
+    - Its version is `<family>:<search>:<model>`. A setting is built from those three parts only, so one version names one request.
+    - Two families exist, and a family is never edited once a run is recorded under it: `openai-responses-websearch-v2` (cap 4,000; every run through 2026-11-11) and `openai-responses-websearch-v3` (cap 8,000; added 2026-11-13).
+    - A run cannot change the request. Settings are frozen, and before any request the adapter refuses a setting that is not exactly what its version names, a different `maxTokens`, and a search mode that contradicts the setting.
+  - **Approval.**
+    - Approval names one exact setting version, in `CHATGPT_APPROVED_SETTING_VERSION`. It is `null`, so a run without an explicit setting is refused before any request.
+    - The version to approve if the confirmation run passes is `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05` (since 2026-11-17; it was the `v3` version before), so what is approved is exactly what that run validates.
+    - A third family, `openai-responses-websearch-v4` (2026-11-17), is `v3` on OpenAI's flex tier: it sends `service_tier: "flex"` last, and a response that names another tier, or none, is a failure that stops the benchmark. `v2` and `v3` requests are byte-for-byte unchanged.
+    - A `v2` setting can never be approved (its cap cut answers off), nor can the `chat-latest` reference. Approving the `auto` version does not approve `required`, which has never been run.
+    - Approval names a version, not a model, so preparing a later confirmation run can neither change nor switch off what is approved.
+    - Before 2026-11-13 the approval function would have accepted any model name, including the `chat-latest` reference, at the 4,000 cap; nothing was approved through it.
+    - An approved setting requires the served model to be the approved name or its dated snapshot.
+  - **Failures.** A response body that fails to arrive after the headers did is a `network_error` carrying the request evidence and the status received, not a bare error.
+  - **Search.**
+    - Every run records `searchOccurred`, the number of web search calls and the number of search actions.
+    - Under `required`, a run without a search fails with its evidence.
+    - Under `auto`, a run without a search is an observation.
+  - **Usage and cost** (`lib/probes/chatgpt-pricing.ts`, pure).
+    - Recorded usage: input, cached, output, reasoning and total tokens, plus search calls. A usage field the provider didn't report is null.
+    - Cost is estimated from usage and a dated price table copied from OpenAI's public page: `openai-prices-2026-11-10` at first, `openai-prices-2026-11-11` since the dated snapshots were added. It is unknown when usage is missing, the model is unpriced, or the call failed before a body arrived.
+    - A billed-but-unusable response keeps its usage and cost.
+    - The estimate counts every search item as a billed call. OpenAI's own counter in the stored responses counts fewer (311 against 340). If OpenAI bills by that counter, the estimate is about $0.29 high over the runs so far. The higher count is kept until an invoice settles it.
+  - **Benchmark** (`scripts/benchmark-chatgpt-models.ts`).
+    - Runs a dry run by default. A paid run needs `--live`, `--max-usd` at or below $40, `--i-confirm-founder-approved-budget` and `OPENAI_PROBE_API_KEY`.
+    - Makes one call at a time, with no retries. The deadline follows the output cap: 120 seconds at 4,000 (every run so far) and 240 seconds at 8,000.
+    - Reserves each run's worst case before the call and stops before the cap. An unknown cost counts as the worst case, and a run above its worst case stops the benchmark. A call refused for lack of credit is the exception: OpenAI neither processes nor bills it, so it counts as nothing.
+    - The first benchmark covered 10 brand-free questions × 5 repeats × `gpt-6-luna`, `gpt-6.1-terra` and the `chat-latest` reference. Later phases choose question sets, models and repeats by flag.
+    - Writes raw output only to the git-ignored `.benchmark-out/`.
+    - **Added on 2026-11-13, before any run at the 8,000 cap:**
+      - the lifetime check fails closed on a damaged record, an amount that isn't a number, or a run of unknown cost whose worst case can't be worked out;
+      - the spend the repository records (237 runs, $15.35 through 2026-11-11) is a floor, so a machine without the earlier output can't count from $0;
+      - each call's worst case is written to `reservations.jsonl` before the call, and an unsettled reservation counts toward the ceiling;
+      - one paid run at a time: a lock file is taken before the ledger is read, because two runs started together would each pass the ceiling check;
+      - the run stops at a rejected request (HTTP 400, 401, 403, 404), after two runs in a row of unknown cost or three in one invocation, and past `--max-failed` failed runs of the phase, a count that carries across a resume;
+      - a stopped run continues with `--resume=<its folder>`: the start index, what the phase already booked and its failed runs are read from that run's files, so one cap covers every part and no call that reached the model is made again. A higher cap than the stopped run had needs a separate switch, and a phase past its failure limit is not continued;
+      - an output folder that holds a run is refused, and so is a path that leaves the ledger folder through a symbolic link;
+      - the dry run projects cost from the model's recorded runs and states that basis, because the fixed assumption understated the smaller-vendor phase ($8.65 projected for 110 runs; $9.41 spent on 84) and gives the chosen model less than half its recorded cost.
+    - The live loop was exercised offline on 2026-11-13 in a scratch copy with a stand-in for the provider (no network, a fake key). That is a check of the runner's rules, not a validation against OpenAI.
+    - Independent reviews on 2026-11-13 reproduced three gaps in the first versions of these safeguards: two overlapping runs could pass the ceiling together, a resumed run started with a fresh cap, and a resumed run started its failure count again. The lock, `--resume` and the phase-wide failure count close them.
+  - **Unchanged from the first X1 commit:** the evidence contract, sources (D-044) and the separate key (`OPENAI_PROBE_API_KEY`). The worker still refuses `openai_chatgpt` (`UNKNOWN_PROVIDER`).
+- **Not in X1:**
+  - wiring the adapter into the worker (a provider route, answer replay, the cost basis in the ledger and the per-attempt deadline);
+  - any measurement call (the benchmark's calls are the only ones);
+  - showing ChatGPT results anywhere.
+- **Consequence of the chosen model for the worker (not built here).**
+  - The production and staging worker configurations allow 45 seconds per provider call, and the startup rule keeps the call time plus the 10-second grace under the 60-second lease.
+  - 12 of the chosen model's 21 recorded runs took longer than 45 seconds at the 4,000 cap, and a full 8,000-token answer extrapolates to about 135 seconds.
+  - Wiring this engine therefore needs a longer provider timeout, lease, runtime ceiling and readiness window. A changed provider timeout is a revisit trigger in D-029, D-030, D-034 and D-036, so it needs its own decision and a worker redeploy.
+- **Benchmark (2026-11-11):**
+  - 124 of 150 runs reached the models. The OpenAI account's prepaid credit ran out at run 124, and the script now stops on that refusal.
+  - Estimated spend was $5.73, plus $0.22 for the smoke test.
+  - **Results for `gpt-6-luna`:**
+    - $0.0126 per run;
+    - p50 latency 8.7 s;
+    - search on 90.5% of runs;
+    - median 2 cited sources;
+    - cited-domain stability 0.42;
+    - no model-side failures.
+  - **Comparisons:**
+    - `gpt-6.1-terra`: $0.0197 per run, stability 0.23;
+    - `chat-latest` (reference): $0.110 per run, 18.3 s, stability 0.46.
+  - No human rating of answer quality was done in this first benchmark. A blind review followed in the smaller-vendor validation.
+- **Smaller-vendor validation (2026-11-11):** 84 of 110 runs before the $10 cap stopped it; estimated spend $9.41. Results, the blind review and the engineer's recommendation of `gpt-5.4-2026-03-05` are in the validity note.
+- **Confirmation run result (2026-11-17):** all 60 runs completed with a usable answer, all on flex, from the pinned model, none at the output cap, the slowest 145 s, estimated $5.64 (upper bound). All seven criteria pass. Lifetime spend $20.9955 of $40 over 297 runs. The founder approved `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05` for measurement the same day.
+- **Confirmation run on the flex tier (authorised 2026-11-17):**
+  - `gpt-5.4-2026-03-05` under the `v4` setting, the same 60 runs and $12 cap. Projected at $7.68 counted at the upper bound (output at the flex rate, input and search calls at the standard rate), or $5.98 if flex halves the input tokens too; $9.05 on the standard tier.
+  - **New spend rules, written before any flex call:**
+    - cost on flex is an upper bound, and the worst case reserved per run stays at the standard rates;
+    - a flex capacity refusal (HTTP 429 "Resource Unavailable", which OpenAI does not charge) is not an attempt. It books nothing and counts as no failure, and its plan index is called again after a wait of 30 s, doubling: at most 5 times per index and an hour per invocation;
+    - any other 429 keeps the unknown-cost rule;
+    - reservations are settled by count per plan index;
+    - the call deadline is 290 s on flex.
+  - Its seven pass criteria are in the validity note: pinned model, flex tier on every processed response, no run at the cap, at least 57 of 60 usable, no call of 240 s or more, the request echoed as configured, and the cap respected.
+- **Confirmation run under `v3` (prepared 2026-11-13, never authorised, never run; replaced by the flex run above):**
+  - `gpt-5.4-2026-03-05` under the `v3` setting, the 20 questions of both fixtures × 3 repeats = 60 runs, with a $12 cap.
+  - Projected at about $9 from the model's 21 recorded runs. Lifetime spend would be at most $27.35 of $40.
+  - Its pass criteria are written in the validity note before the run: pinned model, no run at the cap, at least 57 of 60 usable, no call at the deadline, the request echoed as configured, and the cap respected.
+  - **Corrected figures:** a Starter month of 240 usable runs on this engine is about $35–38, not the $33 first reported, which left out the cost of failed runs. The "about 90 seconds" worker deadline was read at the 4,000 cap and is too low for 8,000.
+- **Open founder items:**
+  1. ~~Choose a model~~: `gpt-5.4-2026-03-05`, chosen on 2026-11-13.
+  2. ~~Authorise the confirmation run~~: authorised on 2026-11-17, on the flex tier, with a $12 cap; the founder added OpenAI credit.
+  3. Say whether about $35–38 per Starter month fits the plan's price.
+  4. ~~Approve the model for measurement~~: approved 2026-11-17. Still open: whether flex's speed and capacity refusals suit the worker, decided with the wiring.
+  5. Confirm OpenAI's terms permit this use.
+  6. Check the project's rate limits before production.
+- **Tests:**
+  - `npm run test:chatgpt-adapter` (182 on 2026-11-13, 193 on 2026-11-17 with the flex setting; offline, no network). On 2026-11-13 the suite was checked by mutation: 79 deliberate single-line defects were introduced into the adapter, the pricing module, the benchmark logic and the runner, one at a time, and the suite failed on every one. The runner's own checks are on its source text, so its behaviour end to end rests on the offline simulation above;
+  - `npm run test:paid-execution-guards`, which checks that no web entry point reaches `lib/probes/chatgpt.ts`.
+- **Recovery:** nothing to roll back. The adapter, the pricing module and the benchmark are unreferenced by the app.
+
 ## D-051 — Pilot Mode: team-run paid pilots first, then a results-only customer login
 
 - **Date:** 2026-11-14
@@ -993,6 +1114,7 @@ Each item below departed from a document that governed before this approval: V1_
   - 2026-11-16, to the V1 status update: the pilot offer in eight parts, the price, "approximately 15-20 buyer questions", and "I approve the rest and ChatGPT (The two engines are included in the paid pilot)";
   - 2026-11-17, to the reply that proposed the pilot's shape, recommended actions, the retest limit, the flex tier and the offer's wording: "ok I agree all as you said".
   The second reply did not name a security reviewer, so that stays open.
+  - **2026-11-17, later:** the founder approved ChatGPT's setting for measurement (D-050), the second of item 3's four conditions. The confirmation run had passed the first. The wiring and its deploy remain.
 - **Amends:** D-051 item 2 (Perplexity only) and D-051's open pilot terms and daily ceiling.
 - **Decision:**
   1. **The offer.** A paid pilot at 1,500 USD with eight parts:
@@ -1286,6 +1408,106 @@ Each item below departed from a document that governed before this approval: V1_
   - a revision changed after it is shared;
   - recommended actions added to the payload;
   - a second engine measured.
+
+## D-056 — ChatGPT in the worker, phase A: the engine behind a switch that stays off
+
+- **Date:** 2026-11-17
+- **Status:** Built on branch `feat/chatgpt-worker`, stacked on PR #121 (X1). The switch is **off** in every Fly configuration. The values marked *(founder)* are proposed and are set nowhere. There is no migration, nothing is deployed, and no provider was called: every test uses a fake fetch.
+- **Builds on:**
+  - D-050 (the adapter; `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05` approved for measurement on 2026-11-17);
+  - D-052 (named runs and the founder's Retry);
+  - D-053 item 3 (ChatGPT measures nothing for a pilot until wired and its deploy is authorised);
+  - D-044 (the source rule);
+  - D-029, D-030, D-034 and D-036 (worker bounds);
+  - D-037 (the daily ceiling).
+- **Decision, as built *(engineer)*:**
+  1. **One provider profile per engine** (`lib/protocol-worker/provider-profile.ts`). It holds the runner, the `probe_runs.platform` label, the probe mode, the provider leg's deadline, the reservation, the cost reader, the answer reader and the failure label.
+     - The Perplexity profile is exactly what the worker did before: the same values, the MEASURED cost from `usage.cost.total_cost`, and the same answer reader. Sonar and Agent behaviour is unchanged, and every existing worker test passes unmodified.
+  2. **The switch.**
+     - `WORKER_CHATGPT_ENABLED` is on only when it is exactly `"true"`; absent or any other value is off. Every Fly file states `"false"`.
+     - **Off:**
+       - the adapter is never loaded;
+       - an `openai_chatgpt` protocol is closed before admission as `PROVIDER_ADAPTER_NOT_ENABLED`, with nothing reserved and nothing sent;
+       - no ChatGPT variable is read.
+     - **On, the worker requires:**
+       - `OPENAI_PROBE_API_KEY` (the measurement project's key, never the analysis key);
+       - `WORKER_CHATGPT_TIMEOUT_MS`, the ChatGPT leg's own deadline, with the analysis leg keeping `WORKER_PROVIDER_TIMEOUT_MS`;
+       - that deadline plus the grace must fit inside the lease;
+       - the claim budget becomes the longer provider leg plus the analysis leg plus grace, and must fit the runtime ceiling;
+       - `WORKER_READY_STALE_MS` must exceed the heartbeat interval (lease/3), because during a long call the heartbeat is the only database contact.
+     - When on, `scripts/run-protocol-worker.ts` imports `lib/protocol-worker/chatgpt-engine.ts` dynamically, inside the live branch. That file is the only worker module that imports the adapter.
+     - The engine pins the approved setting on every call. A protocol must name exactly that setting in `model_config` (`model` and `setting_version`), or it is refused before admission as `PROVIDER_MODEL_NOT_APPROVED`.
+  3. **Fail-closed until phase B.**
+     - The database cannot yet record a ChatGPT attempt honestly:
+       - `probe_runs` and `probe_results` accept no `live_openai_chatgpt` probe mode;
+       - `persist_probe_result_for_job` writes platform `'perplexity'` for every result (0054).
+     - So `CHATGPT_WORKER_SCHEMA_READY` is `false`, and a live worker refuses to start with the switch on. Turning it on early can neither fail after a reservation nor record a ChatGPT answer under Perplexity's name. Phase B flips this in the same pull request as its migration.
+  4. **Money.**
+     - Admission reserves the setting's worst case at standard rates, `worstCaseRunUsd`, $0.54, for the ChatGPT leg.
+     - A successful answer records its cost ESTIMATED from the usage in the exact body stored as the receipt. The price is the requested model's row in the dated table, at the tier the body names (on flex, an upper bound).
+     - A 2xx answer refused for its tier or model was billed. It is a provider error that keeps its whole body and its estimated cost.
+     - The price-table version behind each estimate is not stored, because the ledger has no column for it.
+  5. **Flex capacity refusal** (HTTP 429 "resource unavailable", which OpenAI does not charge):
+     - one fetch;
+     - a `provider_error` receipt keeping the refusal body, with no cost, counted at the reservation;
+     - the attempt and the job close as `provider_error`, with the termination label `flex_capacity_unavailable`;
+     - nothing is resent automatically. The founder's Retry (D-052) accepts it, because it keys on `failure_reason = 'provider_error'`. The reservation is never released.
+     - The rule `isFlexResourceUnavailable` moved from the benchmark into `lib/probes/openai-flex.ts`, and the benchmark imports it from there.
+  6. **Timeout.** The ChatGPT leg is aborted at its own deadline. As for Perplexity, an aborted call is an unknown outcome: the receipt says so, and the job goes to review. It is never resent.
+  7. **Sources: rule `openai-responses-sources/1`**, chosen by the protocol's provider, never guessed from the body.
+     - Only a `completed` body is read.
+     - Cited: each `url_citation` annotation, numbered in order, with its title.
+     - Retrieved: each `web_search_call.action.sources[].url`.
+     - An unusable citation is an unmatched marker.
+     - URL identity removes exactly the query parameter `utm_source=openai` and nothing else. In the 60 stored confirmation-run bodies, 573 of 821 cited URLs carry it. Matched as received, 763 of 821 are found among their run's sources; with the parameter removed, all 821 are. The URL as received stays in the stored body.
+     - Without the provider, a ChatGPT body has the Agent API's shape and would have been read as "ok" with no sources. `build-protocol-report.ts` now passes the provider.
+     - Perplexity bodies read exactly as before.
+  8. **Labels.** The ChatGPT surface limitation is the validity note's sentence, verbatim. The measurement fingerprint knows the Responses endpoint as an adapter constant, with the same caveat as Perplexity's.
+- **For the founder, before the switch is turned on (recommended, not set) *(founder)*:**
+  1. **ChatGPT call timeout: 290 s.** A timeout is an unknown, possibly billed outcome that goes to review. The slowest confirmation-run call took 145 s.
+  2. **Lease 330 s, readiness window 240 s, runtime ceiling 2,400 s.** Other legs stay at 45 s. A slow call must not outlive the lease. This reopens D-029, D-030, D-034 and D-036, whose revisit triggers name a changed timeout or runtime.
+  3. **ChatGPT protocol caps: `run_cap` 7, `retry_cap` 2, `spend_cap_usd` 4.** At the current $2 cap only 3 attempts of $0.56 fit, so a 5-run plan could never finish. This touches D-032 and D-051 item 1, and D-037's trigger: a ChatGPT call's cost is bounded only by an assumed worst case.
+  4. **Daily ceiling: 10 USD for the first supervised ChatGPT day, then 20 USD.**
+     - The ceiling counts every ChatGPT run at its $0.56 reservation, against about $0.09 actually spent.
+     - At 10 USD about 3 questions fit in a rolling day, and Perplexity starts share that room.
+     - At 20 USD a 15-question baseline takes about 3 days.
+  5. **Flex refusals:** a failed attempt plus a manual Retry, as built. Automatic retries only once refusal rates are known.
+  6. **Approve the source rule `openai-responses-sources/1`**, as D-044 was approved for Perplexity.
+- **Phase B (not built):**
+  - a migration:
+    - the probe-mode value;
+    - a provider-aware `persist_probe_result_for_job`;
+    - the live-baseline index by provider in place of 0073's;
+    - the pilot engine CHECK;
+    - `add_pilot_question_engine`;
+    - retiring both engines;
+  - the memory-adapter mirror;
+  - the readers that treat an unknown probe mode as simulated (`coerceProbeMode`, `isLive`);
+  - an engine parameter in the pilot reads and routes;
+  - **the provider leg's call kind.** ChatGPT's leg is recorded as `call_kind 'perplexity'` (`execute-job.ts`), so the cost reconciliation (`lib/costs/reconcile-costs.ts`) would file ChatGPT spend under Perplexity. The measurement fingerprint (`measurement-fingerprint.ts`) also finds probe calls by that label. Phase B must give the leg a provider-neutral or ChatGPT kind, and move the receipt RPC's check, the cost grouping and the fingerprint together (from the independent review of 27f85d7);
+  - **`searchResultsPresence`** in `measurement-fingerprint.ts` reads only Sonar and Agent search results, so every ChatGPT run would show as "absent". It should read `web_search_call` items. It is an observation only, never a compatibility decision (same review);
+  - a database test.
+
+  It flips `CHATGPT_WORKER_SCHEMA_READY`.
+- **Phase C:** each production step authorised on its own. They are the migration; the worker redeploy with the new bounds and the switch still off; the key; the switch; then the first supervised run.
+- **Canon to update when the switch is turned on:** `V1_SCOPE.md`, `METHODOLOGY.md` §4, `PILOT_RUNBOOK.md`, and the repository `CLAUDE.md` line "Initial live surface", which needs the user's OK. None is edited in phase A.
+- **Known and not decided:**
+  - a retest on both engines conflicts with 0079's one retest per intervention;
+  - `provider_model` stays empty until phase B.
+- **Tests:**
+  - **New:** `npm run test:chatgpt-worker` (102). It covers routing and refusals, the switch and its bounds, the full slot on the memory ledger, a crash after the receipt replayed without a second send, the flex 429, a timeout, the wrong tier or model, the Perplexity path with the engine on, the source rule and its parity with the adapter's readers, the labels and the import boundaries.
+  - **Updated:**
+    - `test:chatgpt-adapter` (W1 now expects `PROVIDER_ADAPTER_NOT_ENABLED`; B2, B5 and B6 cover the engine boundary);
+    - `test:source-insights` (E7b, E7c);
+    - `test:paid-execution-guards` (no web entry point reaches the engine);
+    - `test:m0-worker-hosting-contract` (the switch line in every Fly file).
+- **Recovery:** revert the branch. With the switch off nothing reaches ChatGPT, and phase A writes no data of its own.
+- **Revisit trigger:**
+  - a ChatGPT call without a reservation;
+  - the switch on before phase B's migration;
+  - an `openai_chatgpt` protocol run under a setting it does not name;
+  - an automatic resend of a flex refusal;
+  - a ChatGPT body read under another provider's source rule.
 
 ## D-057 — Suggested actions in the pilot report: written by the team, linked to stored answers, reviewed before they are shown
 

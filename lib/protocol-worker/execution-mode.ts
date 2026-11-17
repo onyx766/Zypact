@@ -81,6 +81,13 @@ export interface LiveWorkerConfig {
   readonly healthPort: number;
   readonly healthHost: HealthHost;
   readonly readyStaleMs: number;
+  /**
+   * D-056 — the ChatGPT engine switch. `enabled` only when
+   * WORKER_CHATGPT_ENABLED is exactly "true"; absent or any other value is
+   * off. When on, `callTimeoutMs` is the ChatGPT leg's own deadline
+   * (WORKER_CHATGPT_TIMEOUT_MS); every other bound is unchanged.
+   */
+  readonly chatgpt: { readonly enabled: false } | { readonly enabled: true; readonly callTimeoutMs: number };
 }
 
 export type ExecutionPlan =
@@ -365,6 +372,32 @@ export function claimBudgetMs(providerTimeoutMs: number, graceMs: number): numbe
 }
 
 /**
+ * D-056 — the same rule with the ChatGPT engine on: a slot's provider leg
+ * may be ChatGPT, bounded by its own deadline, and its analysis leg is still
+ * bounded by `providerTimeoutMs`. The longer provider leg is budgeted.
+ * Used only when the switch is on; with it off `claimBudgetMs` is unchanged.
+ */
+export function claimBudgetWithChatGptMs(
+  providerTimeoutMs: number,
+  chatgptCallTimeoutMs: number,
+  graceMs: number,
+): number {
+  return Math.max(providerTimeoutMs, chatgptCallTimeoutMs) + providerTimeoutMs + graceMs;
+}
+
+/**
+ * D-056 — whether the database can record a ChatGPT attempt honestly.
+ *
+ * Not yet: probe_runs and probe_results accept no `live_openai_chatgpt`
+ * probe mode, and persist_probe_result_for_job writes platform 'perplexity'
+ * for every result (0054). Phase B's migration fixes both and flips this in
+ * the same pull request. Until then a live worker refuses to start with the
+ * switch on, so turning it on early can neither fail after a reservation
+ * nor record a ChatGPT answer under Perplexity's name.
+ */
+export const CHATGPT_WORKER_SCHEMA_READY = false;
+
+/**
  * TK-R-5 — the versioned-model rule, as a pure predicate.
  *
  * Exported so the rule can be exercised value-by-value without
@@ -399,7 +432,12 @@ function requireDatedAnalysisModel(env: Env, name: string): string {
  * `disabled`: a host that forgets the variable gets the inert worker, never
  * the spending one.
  */
-export function resolveExecutionPlan(env: Env): ExecutionPlan {
+export function resolveExecutionPlan(
+  env: Env,
+  // D-056 — injectable only so tests can exercise the switch's "on" path
+  // before phase B; the live entry point never passes it.
+  overrides: { readonly chatgptSchemaReady?: boolean } = {},
+): ExecutionPlan {
   const modeRaw = raw(env, "WORKER_EXECUTION_MODE");
   const mode: string = modeRaw === undefined ? "disabled" : modeRaw;
 
@@ -580,6 +618,32 @@ export function resolveExecutionPlan(env: Env): ExecutionPlan {
     );
   }
 
+  // D-056 — the ChatGPT engine switch. Exactly "true" is on; absent or
+  // anything else is off, and then nothing below reads a ChatGPT variable.
+  const chatgptOn = exact(env, "WORKER_CHATGPT_ENABLED") === "true";
+  let chatgpt: LiveWorkerConfig["chatgpt"] = { enabled: false };
+  if (chatgptOn) {
+    if (!(overrides.chatgptSchemaReady ?? CHATGPT_WORKER_SCHEMA_READY)) {
+      throw new WorkerConfigError(
+        "WORKER_CHATGPT_ENABLED=true is refused until the ChatGPT schema migration (D-056 phase B) is applied.",
+        ["WORKER_CHATGPT_ENABLED"],
+      );
+    }
+    // The dedicated measurement project's key (D-050), never the analysis key.
+    required(env, "OPENAI_PROBE_API_KEY");
+    const chatgptCallTimeoutMs = requiredIntOrThrow(env, "WORKER_CHATGPT_TIMEOUT_MS", 1000, MAX_DURATION_MS);
+    // Same rule as the provider timeout: a ChatGPT call that runs to its
+    // deadline, plus the shutdown grace, must still finish inside the lease.
+    if (chatgptCallTimeoutMs + graceMs >= leaseSeconds * 1000) {
+      throw new WorkerConfigError(
+        "WORKER_CHATGPT_TIMEOUT_MS + WORKER_GRACE_MS must be strictly less than "
+          + "WORKER_LEASE_SECONDS in milliseconds.",
+        ["WORKER_CHATGPT_TIMEOUT_MS"],
+      );
+    }
+    chatgpt = { enabled: true, callTimeoutMs: chatgptCallTimeoutMs };
+  }
+
   // B3-intrinsic — the total runtime ceiling.
   //
   // `requiredIntOrThrow` refuses, naming only this variable: absent, empty
@@ -596,7 +660,17 @@ export function resolveExecutionPlan(env: Env): ExecutionPlan {
   // worker would start, decline its first claim and stop. That is a
   // misconfiguration, not a very short run, and it is refused at startup
   // rather than discovered from an empty log.
-  const claimBudget = claimBudgetMs(providerTimeoutMs, graceMs);
+  const claimBudget = chatgpt.enabled
+    ? claimBudgetWithChatGptMs(providerTimeoutMs, chatgpt.callTimeoutMs, graceMs)
+    : claimBudgetMs(providerTimeoutMs, graceMs);
+  if (chatgpt.enabled && claimBudget >= maxRuntimeSeconds * 1000) {
+    throw new WorkerConfigError(
+      "max(WORKER_PROVIDER_TIMEOUT_MS, WORKER_CHATGPT_TIMEOUT_MS) + WORKER_PROVIDER_TIMEOUT_MS + "
+        + "WORKER_GRACE_MS must be strictly less than WORKER_MAX_RUNTIME_SECONDS in milliseconds: "
+        + "a ChatGPT slot makes its own call and then the analysis call.",
+      ["WORKER_MAX_RUNTIME_SECONDS", "WORKER_CHATGPT_TIMEOUT_MS", "WORKER_PROVIDER_TIMEOUT_MS", "WORKER_GRACE_MS"],
+    );
+  }
   if (claimBudget >= maxRuntimeSeconds * 1000) {
     throw new WorkerConfigError(
       "2 x WORKER_PROVIDER_TIMEOUT_MS + WORKER_GRACE_MS must be strictly less than "
@@ -609,35 +683,45 @@ export function resolveExecutionPlan(env: Env): ExecutionPlan {
   const idleBackoffMs = intOrThrow(env, "WORKER_IDLE_BACKOFF_MS", 2000, 1, MAX_DURATION_MS);
   const maxBackoffMs = intOrThrow(env, "WORKER_MAX_BACKOFF_MS", 30000, 1, MAX_DURATION_MS);
 
-  return {
-    mode: "live",
-    config: {
-      workerId,
-      supabaseUrl,
-      expectedProjectRef: expectedRef,
-      analysisProvider: provider,
-      leaseSeconds,
-      idleBackoffMs,
-      maxBackoffMs,
-      maxSlotsPerClaim: intOrThrow(env, "WORKER_MAX_SLOTS_PER_CLAIM", 32, 1, MAX_SMALL_INT),
-      jitterRatio: floatOrThrow(env, "WORKER_JITTER_RATIO", 0.5, 0, false, MAX_JITTER),
-      maxThrottledRetries: intOrThrow(env, "WORKER_MAX_THROTTLED_RETRIES", 3, 0, MAX_SMALL_INT),
-      graceMs,
-      exitAfterClaimedJob,
-      providerTimeoutMs,
-      maxRuntimeSeconds,
-      claimBudgetMs: claimBudget,
-      // Strictly positive: a zero reservation would let admission control
-      // admit an attempt it has not actually budgeted for.
-      perplexityReservedCostUsd:
-        floatOrThrow(env, "WORKER_PERPLEXITY_RESERVED_USD", 0.02, 0, true, MAX_RESERVED_USD),
-      analysisReservedCostUsd:
-        floatOrThrow(env, "WORKER_ANALYSIS_RESERVED_USD", 0.02, 0, true, MAX_RESERVED_USD),
-      healthPort,
-      healthHost,
-      readyStaleMs: Math.max(
-        maxBackoffMs * 2, intOrThrow(env, "WORKER_READY_STALE_MS", 60000, 1, MAX_DURATION_MS),
-      ),
-    },
+  const config: LiveWorkerConfig = {
+    workerId,
+    supabaseUrl,
+    expectedProjectRef: expectedRef,
+    analysisProvider: provider,
+    leaseSeconds,
+    idleBackoffMs,
+    maxBackoffMs,
+    maxSlotsPerClaim: intOrThrow(env, "WORKER_MAX_SLOTS_PER_CLAIM", 32, 1, MAX_SMALL_INT),
+    jitterRatio: floatOrThrow(env, "WORKER_JITTER_RATIO", 0.5, 0, false, MAX_JITTER),
+    maxThrottledRetries: intOrThrow(env, "WORKER_MAX_THROTTLED_RETRIES", 3, 0, MAX_SMALL_INT),
+    graceMs,
+    exitAfterClaimedJob,
+    providerTimeoutMs,
+    maxRuntimeSeconds,
+    claimBudgetMs: claimBudget,
+    // Strictly positive: a zero reservation would let admission control
+    // admit an attempt it has not actually budgeted for.
+    perplexityReservedCostUsd:
+      floatOrThrow(env, "WORKER_PERPLEXITY_RESERVED_USD", 0.02, 0, true, MAX_RESERVED_USD),
+    analysisReservedCostUsd:
+      floatOrThrow(env, "WORKER_ANALYSIS_RESERVED_USD", 0.02, 0, true, MAX_RESERVED_USD),
+    healthPort,
+    healthHost,
+    readyStaleMs: Math.max(
+      maxBackoffMs * 2, intOrThrow(env, "WORKER_READY_STALE_MS", 60000, 1, MAX_DURATION_MS),
+    ),
+    chatgpt,
   };
+  // D-056 — during a long ChatGPT call the only database contact is the
+  // heartbeat, every lease/3. Readiness must outlast that interval or the
+  // health check reports a working worker as stale. Checked only with the
+  // switch on, so Perplexity-only configuration is unchanged.
+  if (chatgpt.enabled && config.readyStaleMs <= Math.ceil((leaseSeconds * 1000) / 3)) {
+    throw new WorkerConfigError(
+      "WORKER_READY_STALE_MS must exceed the heartbeat interval (WORKER_LEASE_SECONDS / 3) "
+        + "when WORKER_CHATGPT_ENABLED=true.",
+      ["WORKER_READY_STALE_MS", "WORKER_LEASE_SECONDS"],
+    );
+  }
+  return { mode: "live", config };
 }

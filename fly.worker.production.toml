@@ -75,12 +75,13 @@ kill_timeout = 30
   # (D-059, D-061) Perplexity jobs too, once deployed: /readyz reports a
   # wedged worker after 4 minutes (the code default is 1 minute).
   WORKER_READY_STALE_MS = "240000"
-  # D-056 — the ChatGPT engine stays off. Turning it on is a later
-  # production step through its own pull request, after phase B's
-  # migration (20261109180000) is applied (D-061); with it off the adapter
-  # is never loaded and an openai_chatgpt protocol is refused before
-  # admission.
-  WORKER_CHATGPT_ENABLED = "false"
+  # D-056 / D-061 — the ChatGPT engine is ON in production, turned on
+  # through its own pull request (PILOT_PRODUCTION_PLAN Part C, step C2)
+  # after phase B's migration (20261109180000) was applied at step 5b. With
+  # it on, the worker refuses to start without OPENAI_PROBE_API_KEY or
+  # against a database that cannot record a ChatGPT attempt. Staging and the
+  # template stay "false".
+  WORKER_CHATGPT_ENABLED = "true"
   # The ChatGPT call's own deadline, read only with the switch on. Stated
   # while it is off so the runtime and lease above are sized against it,
   # and the hosting contract checks them with it. (D-059, D-061)

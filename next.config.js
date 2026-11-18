@@ -21,4 +21,24 @@ const nextConfig = {
   },
 };
 
+/**
+ * Marketing-only homepage switch. beforeFiles is required because app/page.tsx
+ * still exists. Only the public homepage is rewritten; the demo request,
+ * private app, API, auth, report, workers and DB are untouched.
+ * Rollback: remove this rewrites override and deploy the previous build.
+ */
+nextConfig.rewrites = async () => ({
+  beforeFiles: [{ source: "/", destination: "/reflex-v3-production.html" }],
+  afterFiles: [],
+  fallback: [],
+});
+
+/** Prevent the static asset URL from competing with the canonical homepage. */
+nextConfig.headers = async () => [
+  {
+    source: "/reflex-v3-production.html",
+    headers: [{ key: "X-Robots-Tag", value: "noindex, nofollow" }],
+  },
+];
+
 module.exports = nextConfig;

@@ -23,7 +23,12 @@
  *      answer, the checked save calls the database only after it, the
  *      picker, the reportable versions, the console's stored answer text;
  *   C  the console and share copy: rebuild after a change, stale
- *      revisions, the review prompt, the customer note;
+ *      revisions, the review prompt, the customer note; the limits the
+ *      founder approved (30 suggested actions per pilot and 10 links per
+ *      action, D-059 item 10; not counting withdrawn actions toward the 30
+ *      is D-057's (engineer) rule, still proposed) and the 50-version rule,
+ *      each worded on its own, and a final withdrawal (D-059 item 11); the
+ *      console's panel rendered for real at and below the limit;
  *   M  the migration's contract: append-only tables, RLS, privileges, the
  *      evidence trigger, refusals before any write, review and withdrawal
  *      serialised on the pilot row, and save_pilot_report_artifact and
@@ -65,9 +70,16 @@ import {
   verifyActionEvidence,
 } from "@/lib/pilots/action-store";
 import {
+  ACTION_LIMIT_NOTE,
   EDIT_PILOT_ACTION_NOTE,
+  MAX_ACTION_EVIDENCE,
+  MAX_PILOT_ACTION_VERSIONS,
+  MAX_PILOT_ACTIONS_IN_USE,
   REVIEW_PILOT_ACTION_PROMPT,
+  SAVE_PILOT_ACTION_REFUSAL,
+  savePilotActionRefusalWords,
   STALE_REVISION_WORDS,
+  VERSION_LIMIT_REACHED_WORDS,
   WITHDRAW_PILOT_ACTION_PROMPT,
 } from "@/lib/pilots/action-copy";
 import { SHARE_PILOT_REPORT_REFUSAL } from "@/lib/reports/pilot-report-copy";
@@ -257,7 +269,7 @@ const textOf = (html: string) =>
     .replace(/&amp;/g, "&")
     .replace(/\s+/g, " ");
 const renderPage = (payload: PilotReportPayload) =>
-  textOf(renderToStaticMarkup(createElement(PilotReportView, { payload, revision: 1, sharedAt: "2026-11-20T10:00:00Z", newerSharedRevision: false })));
+  textOf(renderToStaticMarkup(createElement(PilotReportView, { payload, revision: 1, sharedAt: "2026-11-20T10:00:00Z" })));
 const flat = (t: string) => t.replace(/\s+/g, " ").trim();
 const GOOD_SIGNALS = { hasApprovedProtocol: true, hasApprovedSamplePlan: true, hasPaidCallReservation: true, hasCompleteEvidenceHashes: true };
 function integrityOf(built: ReturnType<typeof buildPilotReport>) {
@@ -652,6 +664,66 @@ check("C4 the review prompt names what the console shows: the stored answers und
 check("C5 the customer's note promises no step that does not exist: the team registers a test with the customer",
   /the Zypact team registers it with you as a separate step/.test(ACTIONS_NOT_REGISTERED_NOTE));
 
+/* D-059 items 10 and 11 (approved by the founder on 2026-11-17): the limits and a final withdrawal. */
+const ACTIONS_SQL = read("supabase/migrations/20261109160000_pilot_actions.sql");
+check("C6 the app's limits are the database's: 30 actions in use, 1 to 10 links, 50 versions",
+  MAX_PILOT_ACTIONS_IN_USE === 30 && MAX_ACTION_EVIDENCE === 10 && MAX_PILOT_ACTION_VERSIONS === 50 &&
+  /event = 'withdrawn'\)\) >= 30 then\s+return query select 'LIMIT_REACHED'/.test(ACTIONS_SQL) &&
+  /jsonb_array_length\(p_evidence\) not between 1 and 10/.test(ACTIONS_SQL) &&
+  /if v_latest >= 50 then\s+return query select 'LIMIT_REACHED'/.test(ACTIONS_SQL));
+check("C7 the action limit and the version limit read differently: a new action gets the first, an edit the second",
+  savePilotActionRefusalWords("LIMIT_REACHED", false) === SAVE_PILOT_ACTION_REFUSAL.LIMIT_REACHED &&
+  savePilotActionRefusalWords("LIMIT_REACHED", true) === VERSION_LIMIT_REACHED_WORDS &&
+  SAVE_PILOT_ACTION_REFUSAL.LIMIT_REACHED.includes("30 suggested actions") && !/version|edit/i.test(SAVE_PILOT_ACTION_REFUSAL.LIMIT_REACHED) &&
+  VERSION_LIMIT_REACHED_WORDS.includes("50 versions") && !/30/.test(VERSION_LIMIT_REACHED_WORDS) &&
+  savePilotActionRefusalWords("CONFLICT", true) === SAVE_PILOT_ACTION_REFUSAL.CONFLICT &&
+  savePilotActionRefusalWords("SOMETHING_NEW", false) === "The action could not be saved.");
+const saveRoute = read("app/api/internal/pilots/[pilotId]/actions/route.ts");
+check("C8 the save route picks the words by whether the save was an edit",
+  /savePilotActionRefusalWords\(result\.outcome, parsed\.value\.actionId !== null\)/.test(saveRoute) && !/SAVE_PILOT_ACTION_REFUSAL\[/.test(saveRoute));
+const forms = read("app/admin/pilots/pilot-action-forms.tsx");
+check("C9 the console offers no new action at the limit, counting actions not withdrawn, and says why in plain words",
+  /const atLimit = actions\.filter\(\(a\) => a\.status !== "withdrawn"\)\.length >= MAX_PILOT_ACTIONS_IN_USE;/.test(forms) &&
+  /disabled=\{questions\.length === 0 \|\| atLimit\}/.test(forms) && /\{atLimit \? <p className="zpa-muted">\{ACTION_LIMIT_NOTE\}<\/p> : null\}/.test(forms) &&
+  ACTION_LIMIT_NOTE.includes("30 suggested actions") && /Withdrawn actions do not count/.test(ACTION_LIMIT_NOTE));
+check("C10 the withdraw prompt says a withdrawal is final and cannot be undone",
+  /A withdrawal is final: it cannot be undone\./.test(WITHDRAW_PILOT_ACTION_PROMPT));
+check("C11 the new console words use no forbidden phrase",
+  [ACTION_LIMIT_NOTE, VERSION_LIMIT_REACHED_WORDS, SAVE_PILOT_ACTION_REFUSAL.LIMIT_REACHED, WITHDRAW_PILOT_ACTION_PROMPT].join("\n").toLowerCase()
+    .split("\n").every((t) => [...FORBIDDEN_W1_PHRASES, ...METHODOLOGY_19_PHRASES].every((ph) => !t.includes(ph)) && !/\bscore\b|\boverall\b/.test(t)));
+// The console's panel itself, rendered at and below the limit (D-059 item 10).
+const { PilotActionsPanel } = require("@/app/admin/pilots/pilot-action-forms") as { PilotActionsPanel: unknown };
+const panelAction = (i: number, status: "draft" | "reviewed" | "withdrawn") => ({
+  actionId: `00000000-0000-4000-8000-${String(900 + i).padStart(12, "0")}`,
+  status,
+  versionNumber: 1,
+  title: `Action ${i}`,
+  observation: "Named in two of the five stored answers.",
+  suggestedAction: "Add a comparison page for small teams.",
+  whyItMightMatter: "One possibility is that answers draw on comparison pages.",
+  alternativeExplanations: "The engine may weight other sources.",
+  openQuestions: "Whether this holds on another engine.",
+  withdrawReason: status === "withdrawn" ? "It no longer holds." : null,
+  evidence: [],
+});
+const panelQuestions = [{ pilotQuestionId: "00000000-0000-4000-8000-000000000999", ordinal: 1, text: "Which tools suit a small team?" }];
+const renderPanel = (actions: ReturnType<typeof panelAction>[], questions = panelQuestions) =>
+  renderToStaticMarkup(createElement(PilotActionsPanel, { pilotId: "00000000-0000-4000-8000-000000000998", questions, actions }));
+/** Whether the "Write a suggested action" button is disabled, and whether the limit note shows; null when there is no such button. */
+const panelState = (html: string) => {
+  const button = /<button[^>]*>(?:(?!<\/button>)[\s\S])*Write a suggested action<\/button>/.exec(html)?.[0];
+  return button === undefined ? null : { disabled: /\sdisabled=""/.test(button), note: textOf(html).includes(ACTION_LIMIT_NOTE) };
+};
+const inUse = (n: number) => Array.from({ length: n }, (_, i) => panelAction(i, i % 2 === 0 ? "draft" : "reviewed"));
+const at30 = panelState(renderPanel(inUse(30)));
+const at29 = panelState(renderPanel([...inUse(29), panelAction(99, "withdrawn")]));
+const at30w = panelState(renderPanel([...inUse(30), panelAction(99, "withdrawn")]));
+const noQuestion = panelState(renderPanel(inUse(3), []));
+check("C12 the panel, rendered: with 30 actions in use the new-action button is disabled and the note says why; 29 in use and one withdrawn leave it enabled with no note; with no question to link it is disabled without the note",
+  at30?.disabled === true && at30.note && at29?.disabled === false && !at29.note &&
+  at30w?.disabled === true && at30w.note && noQuestion?.disabled === true && !noQuestion.note,
+  JSON.stringify({ at30, at29, at30w, noQuestion }));
+
 /* ---------------------------------------------------------------- M */
 
 const MIG = read("supabase/migrations/20261109160000_pilot_actions.sql");
@@ -749,7 +821,7 @@ check("D3 test:pilot-actions is registered", /"test:pilot-actions": "tsx scripts
 // fewer checks than this suite holds fails rather than passing quietly.
 void kDone.then(() => {
   console.log(`\n${total - failures}/${total} checks passed.`);
-  if (total < 91) {
+  if (total < 98) {
     console.error(`Pilot actions FAILED: only ${total} checks ran.`);
     process.exit(1);
   }

@@ -2251,3 +2251,58 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 | `row_security = off` with a role without BYPASSRLS | error instead of 0 rows |
 
 - **Not established:** nothing about production.
+
+## 36. Pilot report links and the unscoped claims (D-059, D-060) — branch `feat/pilot-decisions-link-withdrawal`, not applied anywhere, not deployed
+
+- **Base:** `main` at `d03363f`.
+- **Founder decisions (D-059):** the founder's "I agree." of 2026-11-17 is recorded against the 14-point list. Items 1 to 6 will be implemented by ChatGPT phase B (planned as D-061, PR B; not built, and D-061 is not yet recorded); items 7, 8, 10, 11 and 12 were already built; item 9 is built here; item 13 (the login's security reviewer) is still open; item 14 (the production plan) is done. D-059 authorises no production step beyond D-058's.
+- **What it adds (D-060):**
+  - **Migration** `20261109170000_pilot_links_and_claim_scope.sql`, numbered inside D-058's window:
+    - `read_shared_pilot_report` redefined, same signature, columns and grants. Once a later revision of a pilot is shared, an earlier revision's link answers no payload and the "newer revision shared" flag. Its body is 20261109150000's byte for byte apart from one marked block;
+    - `claim_protocol_execution_job` and `claim_protocol_execution_job_by_id` revoked from `service_role`, with their other revokes restated. Neither is dropped or redefined;
+    - pre- and postconditions that refuse the whole apply. It writes no row and creates nothing.
+  - **The customer page** answers three ways: the report, a replaced link, or a 404. A replaced link shows a short noindex notice with nothing of the report and no pointer to the new link. The "a newer revision has been shared" banner is gone.
+  - **The founder console** marks an earlier shared revision "Replaced — its link no longer opens" and shows no link for it, on the pilot page and on the preview. The share prompts, the preview's note above Share and the pilot page's report note say the earlier link stops working. The pilot page lists the ten newest revisions; when none of them is shared, one more bounded read adds the newest shared revision below them, with its link, so the one link that opens is always on the page.
+  - **Suggested actions** (D-059 items 10 and 11): `MAX_PILOT_ACTIONS_IN_USE = 30`; the console disables a new action at the limit and says why (it counts actions not withdrawn, D-057's *(engineer)* rule, still proposed); the action limit and the 50-version limit read differently; the withdraw prompt says a withdrawal is final.
+  - **Preflight:** `20261109170000` added to both P2.4 lists, nothing else.
+  - **Documents:** D-059, D-060 and dated notes in D-031 and D-054 to D-058; SPEND_LEDGER_GATE §11 (0085's revoke of the two claims becomes a no-op; the three suites that call them as `service_role`); WORKER_DEPLOY_RUNBOOK §3 and §6 and PILOT_PRODUCTION_PLAN (step 5a; the R rule; step 13's note; the proposed rule before a worker redeploy after the migration, "no job holds a live lease and no run request is pending", D-060 item 5 *(engineer)*, with the empty-queue rule in force until the founder confirms it); PROD_PREFLIGHT_SPEC; PILOT_RUNBOOK §8.2 and §8.3.
+- **Checked before the revoke:** no web route, neither `scripts/run-protocol-worker.ts` nor `scripts/run-pipeline-once.ts`, and nothing in `lib/worker-control/**` calls either unscoped claim. Only `lib/db/supabase-adapter.ts` (the RPC calls), `lib/db/memory-adapter.ts` and the worker loop's `global` branch name them, and no live entry point sets `global`. No suite that calls them applies `20261109170000`: each applies a bounded migration set that ends before it. The 0050 to 0054 runtimes and `test:m7-0077-runtime` call them as the database owner, and `test:m5-0060-runtime` through a SECURITY DEFINER helper. PG-9 (0001–0081 and 0083; it refuses timestamped files) and `test:m5-a-stack-runtime` (up to 0056) call them as `service_role` over PostgREST, and `test:m5-0059-runtime` (up to 0059) through `set role service_role`; each of those three would need to move to the requested claim or the owner path before its set reached this migration.
+- **The preflight's P6.3 (no queued job) is unchanged:** step 1 runs before this migration, while the deployed worker still predates D-052 and uses the global claim.
+- **Independent review (2026-11-17), fixed on this branch:**
+  - the migration's guards were never tested refusing: the database suite now re-runs the migration in a rolled-back transaction after setups that trip each precondition and the postconditions on the unscoped claims and the read's grants (G1 to G9), and the static suite pins each guard's condition exactly (C6b, C7b);
+  - the recovery notes promised that re-running 20261109150000 §5 reopens older links. It restores the function only: D-060's page still shows the notice, and the web deployment from before step 7 has no pilot report page. The header, D-060 and the plan now say both are needed (the restored function and a separately authorised deploy of a pre-D-060 pilot build);
+  - the documents said every caller of the revoked claims calls as the owner; three suites call as `service_role` (above);
+  - the database suites' "no payload" reads accepted any payload without a pilot id; K1 and K2 were not rolled back; K6 did not compare the bodies. All three are fixed;
+  - D-060 item 5 (the rule before a worker redeploy) is now marked *(engineer)*, proposed for founder confirmation, with the empty-queue rule in force until then; P6.3's wording, the plan's steps 6 and 9 and runbook §3 agree;
+  - the new console words had no test: the preview's status line is a tested function, both "stops working" notes are copy constants whose placement is checked, the customer page is called for real (`test:pilot-report` T13 to T16) and the actions panel is rendered for real (`test:pilot-actions` C12);
+  - the only link that opens could fall outside the pilot page's ten rows (fixed, above);
+  - the R rule told the operator to apply every migration on R, P1 to Q4 included; D-061 was cited as if recorded; "withdrawn actions do not count" was credited to the founder; D-031's grant was revoked without a note. All four are corrected.
+- **Not established:**
+  - no browser walk-through of the notice or the console;
+  - nothing about production. The migration is applied nowhere, and the edited preflight has not run against production; if R includes this change, the preflight is run again from R before step 2 (PILOT_PRODUCTION_PLAN, the R rule). Whether step 1's authorisation covers that re-run is not recorded;
+  - `read_shared_pilot_report`'s md5 after the step, `7b90ce86…`, comes from a disposable rehearsal only;
+  - D-060 item 5 and D-057's "withdrawn actions do not count" are *(engineer)* rules awaiting the founder.
+- **Inventory on this branch:** 94 migrations, 227 files matching `scripts/test-*.ts`, 134 `test:*` and 4 `verify:*` commands.
+- **Commands and local results (2026-11-17):**
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | pass |
+| `npm run build:verify` | pass; `/pilot-report/[secureToken]`, `/admin/pilots/[pilotId]` and the preview are built (`next-env.d.ts` restored afterwards) |
+| `npm run test:pilot-links-claims` | 38/38 (new; 32 before the review fixes: C6b, C7b and A8 to A11 added). Eight mutations of the migration and the client read (payload not withheld, a claim granted back or not revoked, the inherited where clause changed, a claim redefined, the requested claim revoked, the replaced flag ignored, the replaced link kept in the console) were each caught, and every file restored byte for byte |
+| `npm run test:pilot-report` | 99/99 (93 on `main`: T8e, T8f and T13 to T16 added; T8d and T9 pin the new behaviour) |
+| `npm run test:pilot-actions` | 98/98 (91 on `main`: C6 to C12 added) |
+| Mutations after the review fixes, on a scratch copy of the tree (never the worktree) | 14 offline mutations each caught by `test:pilot-links-claims`, `test:pilot-report` or `test:pilot-actions`: the preview's status line collapsed, inverted or reworded; either "stops working" note deleted; the client read or the page turning a replaced link into a 404 or into the report; the list's extra read removed; the panel's limit ignored or counting withdrawn actions; an `or` turned into `and` in a pre- or postcondition. 5 migration-guard mutations (`or` to `and` at each guard) each caught by the database suite's G checks on a disposable database, with the unmutated baseline at 28/28 |
+| `npm run test:pilot-questions`, `npm run test:pilot-step1` | 128/128, 75/75 |
+| `npm run test:prod-preflight` | 71/71 |
+| `npm run test:m5-0059-schema`, `npm run test:m5-0060-schema` | 168/168 and 275/275; the [2b] guards examine the new migration too and pass (167 and 272 before) |
+| `npm run test:paid-execution-guards` | 145/145 |
+| `test:m7-0070`, `0072`, `0074`, `0075`, `0076-schema` | pass; `m7-0071-schema` (2) and `m7-0073-schema` (1) fail as on `main` (§30), and neither failure names the new migration (before the review fixes, not re-run) |
+| `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | exit 0, all 94 migrations applied: P1 45/45, P2 71/71, E1 74/74, Q4 52/52, pilot step 1 60/60, pilot questions 69/69, pilot report 39/39 (R5 rewritten), pilot actions 53/53, pilot links and claims 28/28 (new; 19 before the review fixes: G1 to G9 added) |
+| The two report suites on a disposable database without `20261109170000` (a negative control) | pilot report 38/39 (R5 fails); pilot links and claims 23/28 (R4, R5, R8, K1 and K3 fail; the G checks pass, because they re-run the file in a rolled-back transaction whatever the database's state): they detect the change |
+| `ZYPACT_LEVEL2_LOCAL=1 npm run test:snapshot-worker-postgres-level2` | `LEVEL2_RESULT=PASS`, 886 passed and 0 failed on `postgres:16-alpine` with all 94 migrations applied, the new one's pre- and postconditions included. The local runner then exits 1 from its known cleanup trap (§30). Run before the review fixes, which changed only the migration's header comments (everything from its precondition block down is byte-identical), so not re-run |
+| Preflight on a fresh disposable `supabase/postgres:17.6.1.167` at the recorded state (85 rows, migrations applied as `postgres`) | every must-pass check PASS, `PREFLIGHT: PASS`, exit 0 |
+| `20261109170000` through the named-file procedure on that database, out of order (tail S1) | refused by its own precondition, exit 3; ledger unchanged at 85 rows, nothing changed |
+| The four pilot migrations, then `20261109170000`, in order with `target_sysid` | exit 0 each; 90 rows, tail `20261109170000`; `service_role` can execute neither unscoped claim, and can execute the requested claim and the read; md5 of the read `36dd5bc1…` before, `7b90ce86…` after. The preflight then fails by design: P2.3, P2.4 (which now lists `20261109170000`), P2.5, P3.3, P3.4, P4.1, P4.2; `PREFLIGHT: FAIL (7)`, exit 3 |
+
+The last three rows ran before the review fixes. The fixes changed only the migration's header comments and none of its statements, and the read's definition (its md5) is unchanged, so they were not re-run.

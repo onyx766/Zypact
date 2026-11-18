@@ -25,7 +25,12 @@
  *   W  wording: no forbidden claim, no overall score, no stored code on the
  *      page or in the Markdown, the D-053 limitation;
  *   T  the client page: token shape first, the shared-only read, noindex;
- *      the routes are founder-guarded;
+ *      an earlier link, once a later revision is shared, shows only a
+ *      notice with nothing of the report (D-060); the routes are
+ *      founder-guarded; the page itself, called for real with the read
+ *      faked at the fetch layer (T13 to T16): the newest revision renders,
+ *      an earlier link renders exactly the notice, anything else is a 404,
+ *      and a malformed token is a 404 before any read;
  *   M  the migration's contract: privileges, RLS, the append-only guard,
  *      the save and share refusals, nothing redefined.
  */
@@ -245,11 +250,13 @@ const renderPage = (payload: PilotReportPayload, opts: { preview?: boolean; shar
         payload,
         revision: 3,
         sharedAt: opts.preview ? null : opts.sharedAt ?? "2026-11-20T10:00:00Z",
-        newerSharedRevision: false,
         preview: opts.preview ?? false,
       })
     )
   );
+// D-060 — what an earlier link shows once a later revision is shared.
+const { PilotReportReplacedNotice } = require("@/components/report/pilot-report-view") as { PilotReportReplacedNotice: unknown };
+const renderReplacedNotice = () => textOf(renderToStaticMarkup(createElement(PilotReportReplacedNotice, {})));
 const flat = (t: string) => t.replace(/\s+/g, " ");
 
 /* ---------------------------------------------------------------- P */
@@ -564,7 +571,7 @@ async function readerRefusesForeignEvidence(): Promise<boolean> {
 
 const SECTION_19 = ["you lost the sale", "cannot find you", "overall ai visibility", "caused the lift", "we control what", "we guarantee", "no competitor offers"];
 const copyTexts = Object.values(copy).flatMap((v) => (typeof v === "string" ? [v] : typeof v === "object" ? Object.values(v as Record<string, string>) : []));
-const pages = [renderPage(p), renderPage(withRetired.payload), renderPage(unfinished.payload), renderPage(p, { preview: true })];
+const pages = [renderPage(p), renderPage(withRetired.payload), renderPage(unfinished.payload), renderPage(p, { preview: true }), renderReplacedNotice()];
 // The two sentences METHODOLOGY §4 and §7 require verbatim are left out of the phrase scan ("not guaranteed" is a required negation).
 const MANDATED = [PERPLEXITY_SURFACE_LIMITATION, DEPENDENCE_LIMITATION].map((t) => t.toLowerCase());
 const allText = MANDATED.reduce(
@@ -621,8 +628,21 @@ check("T8b the preview is founder-only and renders the stored revision with the 
 const customerPage = readFileSync("app/pilot-report/[secureToken]/page.tsx", "utf8");
 check("T8c the customer's page renders the same view from the stored payload, without the preview label",
   /<PilotReportView[\s\S]*payload=\{shared\.payload\}/.test(customerPage) && !/preview/.test(customerPage.slice(customerPage.indexOf("<PilotReportView"))));
-check("T8d the share confirmation says the founder has read this revision",
-  /I have read this revision in full/.test(copy.SHARE_PASSED_PROMPT) && /I have read this revision in full/.test(copy.SHARE_NEEDS_REVIEW_PROMPT));
+check("T8d the share confirmation says the founder has read this revision, and (D-060) that the earlier shared link stops working",
+  /I have read this revision in full/.test(copy.SHARE_PASSED_PROMPT) && /I have read this revision in full/.test(copy.SHARE_NEEDS_REVIEW_PROMPT) &&
+  [copy.SHARE_PASSED_PROMPT, copy.SHARE_NEEDS_REVIEW_PROMPT].every((t) => t.includes("the link to any earlier revision of this report stops working")));
+// D-060 (D-059 item 9) — the old "a newer revision has been shared" banner is gone: a current page is always the newest shared one.
+const customerBranches = customerPage.slice(customerPage.indexOf("readSharedPilotReport("));
+check("T8e an earlier link (replaced) renders only the notice, which takes no props, before any payload is looked at; nothing else renders a newer-revision banner",
+  customerBranches.indexOf('shared.state === "not_found"') > 0 &&
+  customerBranches.indexOf('shared.state === "not_found"') < customerBranches.indexOf('shared.state === "replaced"') &&
+  /if \(shared\.state === "replaced"\) return <PilotReportReplacedNotice \/>;/.test(customerBranches) &&
+  customerBranches.indexOf('shared.state === "replaced"') < customerBranches.indexOf("isPilotReportPayload(shared.payload)") &&
+  !("NEWER_REVISION_WORDS" in copy) && !/newerSharedRevision/.test(readFileSync("components/report/pilot-report-view.tsx", "utf8") + customerPage + previewPage));
+const notice = renderReplacedNotice();
+check("T8f the notice says the link was replaced and shows nothing of a report: no revision, date or link but the home page",
+  notice.includes(copy.REPLACED_LINK_WORDS) && notice.includes(copy.PRIVATE_REPORT_WORDS) && !/Revision|\d/.test(notice) &&
+  (renderToStaticMarkup(createElement(PilotReportReplacedNotice, {})).match(/href="/g) ?? []).length === 1);
 const buildRoute = readFileSync("app/api/internal/pilots/[pilotId]/report/route.ts", "utf8");
 check("T10 the build route refuses while a measurement is running, after the founder check and before any build",
   buildRoute.indexOf("requireFounderForRoute(") < buildRoute.indexOf("pilotMeasurementInProgress(") &&
@@ -634,8 +654,9 @@ check("T11 'still running' covers live leases, pending run requests and reserved
   /lease_expires_at/.test(reader) && /baseline_protocol_id/.test(reader));
 check("T12 the mismatch refusal names the realistic cause and says to build again",
   /still finishing/.test(copy.BUILD_PILOT_REPORT_REFUSAL.EVIDENCE_MISMATCH) && /Build the report again/.test(copy.BUILD_PILOT_REPORT_REFUSAL.EVIDENCE_MISMATCH));
-check("T9 the console shows a link only once a revision is shared",
-  /publicToken: r\.shared_at && r\.public_token/.test(proc));
+check("T9 the console shows a link only once a revision is shared, and (D-060) only while it still opens",
+  /publicToken: r\.shared_at && r\.public_token && !replaced \?/.test(proc) &&
+  /\) : r\.replaced \? \(/.test(admin) && admin.includes("{REPLACED_REVISION_WORDS}"));
 
 /* ---------------------------------------------------------------- M */
 
@@ -683,11 +704,107 @@ check("M12 the save refuses while a measurement is running, before any evidence 
 const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { scripts: Record<string, string> };
 check("R1 test:pilot-report is registered", pkg.scripts["test:pilot-report"] === "tsx scripts/test-pilot-report.ts");
 
+/*
+ * D-060 — the customer's page itself, called for real (T13 to T16). The
+ * database's answer is faked at the fetch layer, the configuration is a
+ * dummy, non-secret value, and any other request is refused, so nothing
+ * leaves the process. Both are restored afterwards.
+ */
+async function customerPageChecks(): Promise<void> {
+  const saved = { url: process.env.NEXT_PUBLIC_SUPABASE_URL, key: process.env.SUPABASE_SERVICE_ROLE_KEY };
+  const networkOff = (globalThis as unknown as { fetch: unknown }).fetch;
+  let answer: unknown = [];
+  let reads = 0;
+  let strays = 0;
+  process.env.NEXT_PUBLIC_SUPABASE_URL = "http://127.0.0.1:9";
+  process.env.SUPABASE_SERVICE_ROLE_KEY = "dummy-not-a-key";
+  (globalThis as unknown as { fetch: unknown }).fetch = async (input: unknown) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : String((input as { url?: unknown }).url);
+    if (!url.startsWith("http://127.0.0.1:9/rest/v1/rpc/read_shared_pilot_report")) {
+      strays += 1;
+      throw new Error("network disabled");
+    }
+    reads += 1;
+    return new Response(JSON.stringify(answer), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const { notFound } = require("next/navigation") as { notFound: () => never };
+    let NOT_FOUND = "";
+    try {
+      notFound();
+    } catch (error) {
+      NOT_FOUND = String((error as { digest?: unknown }).digest ?? "");
+    }
+    const Page = (require("@/app/pilot-report/[secureToken]/page") as {
+      default: (props: { params: Promise<{ secureToken: string }> }) => Promise<unknown>;
+    }).default;
+    /** One request to the page, answered by `rows`; reads must run one at a time. */
+    const open = async (rows: unknown, token = "c".repeat(64)) => {
+      answer = rows;
+      reads = 0;
+      try {
+        const html = renderToStaticMarkup(await Page({ params: Promise.resolve({ secureToken: token }) }));
+        return { html, reads, thrown: null as string | null };
+      } catch (error) {
+        return { html: "", reads, thrown: String((error as { digest?: unknown }).digest ?? error) };
+      }
+    };
+    const STORED = JSON.parse(JSON.stringify(p)) as PilotReportPayload;
+    const SHARED_AT = "2026-11-21T10:00:00Z";
+    const rowWith = (extra: Record<string, unknown>) => [{ revision: 5, generated_at: p.generatedAt, shared_at: SHARED_AT, ...extra }];
+
+    const current = await open(rowWith({ payload: STORED, newer_shared_revision: false }));
+    check("T13 the customer's page, called for real, renders the newest shared revision with the customer's own view, from its payload, after one read",
+      current.thrown === null && current.reads === 1 && current.html.includes(COMPANY) &&
+      current.html === renderToStaticMarkup(createElement(PilotReportView, { payload: STORED, revision: 5, sharedAt: SHARED_AT })),
+      current.thrown ?? "");
+
+    const NOTICE = renderToStaticMarkup(createElement(PilotReportReplacedNotice, {}));
+    const replacedWithheld = await open(rowWith({ payload: null, newer_shared_revision: true }));
+    const replacedReturned = await open(rowWith({ payload: STORED, newer_shared_revision: true }));
+    check("T14 an earlier link renders exactly the replaced notice and nothing of the report, whether its payload is withheld or (with 20261109150000's read) still returned",
+      [replacedWithheld, replacedReturned].every((r) => r.thrown === null && r.reads === 1 && r.html === NOTICE &&
+        r.html.includes(copy.REPLACED_LINK_WORDS) && !r.html.includes(COMPANY) && !r.html.includes(DOMAIN)),
+      [replacedWithheld, replacedReturned].map((r) => r.thrown ?? "rendered").join(","));
+
+    const refused = [];
+    for (const rows of [
+      [],
+      null,
+      rowWith({ payload: STORED }),
+      rowWith({ payload: STORED, newer_shared_revision: null }),
+      rowWith({ payload: null, newer_shared_revision: false }),
+      rowWith({ payload: { pilotId: PILOT }, newer_shared_revision: false }),
+    ]) {
+      refused.push(await open(rows));
+    }
+    check("T15 no row, a row without the flag, a current row without a payload, and a payload that fails the type guard are each a 404, after one read",
+      NOT_FOUND.includes("404") && refused.every((r) => r.thrown === NOT_FOUND && r.reads === 1),
+      `${NOT_FOUND}: ${refused.map((r) => `${r.thrown}/${r.reads}`).join(",")}`);
+
+    const malformed = [];
+    for (const token of ["not-a-token", "C".repeat(64), "c".repeat(63), `${"c".repeat(64)}0`]) {
+      malformed.push(await open(rowWith({ payload: STORED, newer_shared_revision: false }), token));
+    }
+    check("T16 a malformed token is a 404 before any read, and the page made no other request",
+      malformed.every((r) => r.thrown === NOT_FOUND && r.reads === 0) && strays === 0,
+      `${malformed.map((r) => `${r.thrown}/${r.reads}`).join(",")} strays ${strays}`);
+  } finally {
+    (globalThis as unknown as { fetch: unknown }).fetch = networkOff;
+    for (const [name, value] of [["NEXT_PUBLIC_SUPABASE_URL", saved.url], ["SUPABASE_SERVICE_ROLE_KEY", saved.key]] as const) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
 readerRefusesForeignEvidence()
   .then((ok) => {
     check("I6a the real reader refuses evidence from another project: the build answers EVIDENCE_OUTSIDE_PILOT and nothing is saved", ok);
   })
   .catch((error) => check("I6a the real reader refuses evidence from another project", false, String(error)))
+  .then(() => customerPageChecks())
+  .catch((error) => check("T13 the customer's page checks ran", false, String(error)))
   .finally(() => {
     console.log(`\n${total - failures}/${total} checks passed.`);
     if (failures > 0) {

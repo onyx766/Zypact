@@ -291,6 +291,20 @@ export function withoutOpenAiUtm(normalized: { url: string; domain: string }): {
   return { url: url.slice(0, queryAt) + (rest.length > 0 ? `?${rest.join("&")}` : "") + fragment, domain: normalized.domain };
 }
 
+/**
+ * D-061 — a URL given from outside (a suggested action's link) in the form
+ * the provider's rule gives the URLs it extracts, so the two compare as
+ * equal: normalized as every rule does, and for the ChatGPT engine without
+ * OpenAI's `utm_source=openai` pair (openai-responses-sources/1), exactly as
+ * `openAiCandidate` reads a source. Any other provider: normalized only.
+ * Null when the URL is unusable.
+ */
+export function normalizeProviderSourceUrl(raw: unknown, provider?: string | null): { url: string; domain: string } | null {
+  const normalized = normalizeSourceUrl(raw);
+  if (!normalized) return null;
+  return provider === "openai_chatgpt" ? withoutOpenAiUtm(normalized) : normalized;
+}
+
 function openAiCandidate(url: unknown, title: unknown): Candidate | null {
   const normalized = normalizeSourceUrl(url);
   return normalized ? { ...withoutOpenAiUtm(normalized), title: cleanTitle(title) } : null;

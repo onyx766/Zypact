@@ -120,8 +120,18 @@ export function requestConfiguration(rawBody: unknown): string | null {
   return canonicalJson(config);
 }
 
-/** Whether a raw provider response carries search results, in either the Sonar or the Agent shape. */
-export function searchResultsPresence(rawBody: unknown): "present" | "absent" | null {
+/**
+ * Whether a raw provider response carries search results, in either the
+ * Sonar or the Agent shape; or, for a ChatGPT protocol (D-061), in the
+ * OpenAI Responses shape: "present" when at least one `web_search_call`
+ * output item has a non-empty `action.sources` list (the sources its search
+ * returned, which the adapter requests through `include`), "absent"
+ * otherwise. The protocol's provider decides the shape, as it decides the
+ * source rule (extract-provider-sources.ts), so a Sonar or Agent body reads
+ * exactly as before. An observation kept as evidence, never a compared
+ * field, so the fingerprint version stays mf-1.
+ */
+export function searchResultsPresence(rawBody: unknown, provider?: string | null): "present" | "absent" | null {
   if (typeof rawBody !== "string") return null;
   let json: unknown;
   try {
@@ -131,6 +141,15 @@ export function searchResultsPresence(rawBody: unknown): "present" | "absent" | 
   }
   if (!json || typeof json !== "object") return null;
   const body = json as Record<string, unknown>;
+  if (provider === "openai_chatgpt") {
+    const searched = (Array.isArray(body.output) ? body.output : []).some((item) => {
+      const it = (item ?? {}) as Record<string, unknown>;
+      if (it.type !== "web_search_call") return false;
+      const action = (it.action ?? {}) as Record<string, unknown>;
+      return Array.isArray(action.sources) && action.sources.length > 0;
+    });
+    return searched ? "present" : "absent";
+  }
   if (Array.isArray(body.search_results) && body.search_results.length > 0) return "present";
   if (Array.isArray(body.output)) {
     const found = body.output.some((item) => {
@@ -298,7 +317,8 @@ export async function readPhaseMeasurement(
     if (analysisRequest === null) return fail("a counted attempt has no readable analysis request body");
 
     const served = fingerprintRawResponseBody(probeOk[0].raw_response_body);
-    const search = searchResultsPresence(probeOk[0].raw_response_body);
+    // D-061 — read in the shape of the protocol's engine.
+    const search = searchResultsPresence(probeOk[0].raw_response_body, protocol.provider);
     if (served === UNREADABLE_FINGERPRINT || search === null) {
       return fail("a counted attempt has no readable provider response");
     }

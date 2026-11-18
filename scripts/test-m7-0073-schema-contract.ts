@@ -217,16 +217,39 @@ const FN =
   // redefinition.
   const definitionRe = (name: string) =>
     new RegExp(`(create|drop|alter)\\s+(or\\s+replace\\s+)?(function|index)[\\s\\S]{0,120}?\\b${name}\\b`, "i");
+  // Reviewed exception (D-061, 2026-11-17): ChatGPT phase B replaces the
+  // baseline index with one live baseline per version PER ENGINE, so a
+  // pilot question can have a ChatGPT baseline on its one approved version
+  // without minting a second version (the identity this file protects).
+  // Only that migration may touch the baseline index, and only by creating
+  // the per-engine index, with this index's predicate, BEFORE dropping this
+  // one; scripts/test-chatgpt-phase-b-schema.ts and -db.ts prove two
+  // Perplexity baselines on one version stay refused. The retest index and
+  // create_retest_protocol have no exception.
+  const BASELINE_INDEX_REPLACER = "20261109180000_chatgpt_measurement.sql";
+  const replacesBaselineIndexAsReviewed = (f: string, stripped: string) => {
+    const create = stripped.search(/create unique index protocols_one_live_baseline_per_engine\s+on public\.protocols \(\s*buyer_question_version_id,[^;]*?\)\s+where status in \('approved', 'active'\)\s+and baseline_protocol_id is null;/i);
+    const drop = stripped.indexOf("drop index public.protocols_one_live_baseline_per_version;");
+    // It drops the old index and never creates or alters it.
+    return f === BASELINE_INDEX_REPLACER && create >= 0 && drop > create
+      && !/(create|alter)\s+(or\s+replace\s+)?(function|index)[\s\S]{0,120}?\bprotocols_one_live_baseline_per_version\b/i.test(stripped);
+  };
   const laterClean = (list: ReturnType<typeof ledger>) => list
     .filter((x) => x.n > 73)
-    .every(({ sql }) => {
+    .every(({ f, sql }) => {
       const stripped = sql
         .replace(/\/\*[\s\S]*?\*\//g, "")
         .replace(/^\s*--.*$/gm, "");
-      return ["create_retest_protocol", "protocols_one_live_baseline_per_version", "protocols_one_live_retest_per_baseline"]
-        .every((name) => !definitionRe(name).test(stripped));
+      return ["create_retest_protocol", "protocols_one_live_retest_per_baseline"]
+        .every((name) => !definitionRe(name).test(stripped))
+        && (!definitionRe("protocols_one_live_baseline_per_version").test(stripped) || replacesBaselineIndexAsReviewed(f, stripped));
     });
   assert("no later migration redefines it or the indexes", laterClean(ledger()));
+  const baselineIndexTouchers = ledger().filter((x) => x.n > 73).filter(({ sql }) =>
+    definitionRe("protocols_one_live_baseline_per_version").test(sql.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*--.*$/gm, "")));
+  assert("the baseline index is touched only by the reviewed per-engine replacement (D-061), created before the drop",
+    baselineIndexTouchers.every(({ f, sql }) => replacesBaselineIndexAsReviewed(f, sql.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*--.*$/gm, ""))),
+    baselineIndexTouchers.map((x) => x.f).join(", ") || "none");
 
   // QD-6: a timestamped migration is examined, never skipped.
   for (const { label, extra, allow } of INVALID_MIGRATION_NAMES) {
@@ -237,6 +260,10 @@ const FN =
   for (const sql of [
     "create or replace function public.create_retest_protocol(p_a uuid)\nreturns void language sql as $x$ select 1 $x$;",
     "drop index if exists public.protocols_one_live_retest_per_baseline;",
+    // Any other migration touching the baseline index is still caught, even
+    // one copying the reviewed replacement.
+    "drop index if exists public.protocols_one_live_baseline_per_version;",
+    "create unique index protocols_one_live_baseline_per_engine\n  on public.protocols (buyer_question_version_id, provider)\n  where status in ('approved', 'active')\n    and baseline_protocol_id is null;\ndrop index public.protocols_one_live_baseline_per_version;",
   ]) {
     assert(`a timestamped migration is caught: ${sql.split("(")[0].split(";")[0]}`,
       !laterClean(ledger({ [TIMESTAMP_FIXTURE]: sql })));

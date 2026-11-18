@@ -1,5 +1,9 @@
 /**
  * D-056 phase A — the ChatGPT engine in the worker, switch off by default.
+ * D-061 phase B — the schema flag is set, and with the switch on the
+ * runtime must absorb every slot of a claim (section 2), and the worker
+ * refuses to start unless the connected schema lists live_openai_chatgpt
+ * (protocol_worker_capabilities, section 7).
  *
  * Offline: the in-memory ledger, fake fetch, synthetic bodies shaped like the
  * stored 2026-11-17 confirmation-run responses. No network, no database, no
@@ -20,6 +24,7 @@ import { isFlexResourceUnavailable } from "@/lib/probes/openai-flex";
 import { normalizeUrl, runPerplexityProbe, PerplexityProbeFailure } from "@/lib/probes/perplexity";
 import { buildChatGptEngine, chatGptAnswerFromBody } from "@/lib/protocol-worker/chatgpt-engine";
 import {
+  allSlotsBudgetWithChatGptMs,
   CHATGPT_WORKER_SCHEMA_READY,
   claimBudgetMs,
   claimBudgetWithChatGptMs,
@@ -241,8 +246,11 @@ async function main(): Promise<void> {
     SUPABASE_SERVICE_ROLE_KEY: "SENTINEL-1", PERPLEXITY_API_KEY: "SENTINEL-2", OPENAI_API_KEY: "SENTINEL-3",
     ...over,
   });
+  // The approved values (D-059), as the Fly files carry them, 7 slots included:
+  // with the switch on the whole claim must fit the runtime (D-061).
   const ON = { WORKER_CHATGPT_ENABLED: "true", OPENAI_PROBE_API_KEY: "SENTINEL-4", WORKER_CHATGPT_TIMEOUT_MS: "290000",
-    WORKER_LEASE_SECONDS: "330", WORKER_READY_STALE_MS: "240000", WORKER_MAX_RUNTIME_SECONDS: "2400" };
+    WORKER_LEASE_SECONDS: "330", WORKER_READY_STALE_MS: "240000", WORKER_MAX_RUNTIME_SECONDS: "2400",
+    WORKER_MAX_SLOTS_PER_CLAIM: "7" };
   const refusal = (env: Record<string, string | undefined>, ready = true): WorkerConfigError | null => {
     try { resolveExecutionPlan(env, { chatgptSchemaReady: ready }); return null; } catch (e) { if (e instanceof WorkerConfigError) return e; throw e; }
   };
@@ -261,9 +269,20 @@ async function main(): Promise<void> {
     baseCfg.claimBudgetMs === claimBudgetMs(45000, 10000));
   check("off: no ChatGPT variable is read (an absent key and timeout are fine)",
     cfgOf(liveEnv({ WORKER_CHATGPT_TIMEOUT_MS: "nonsense" }), false).chatgpt.enabled === false);
-  check("the schema is not ready yet (phase B)", CHATGPT_WORKER_SCHEMA_READY === false);
+  // D-061 — phase B's migration (20261109180000) makes the schema ready.
+  check("the schema is ready (phase B, D-061)", CHATGPT_WORKER_SCHEMA_READY === true);
   const notReady = refusal(liveEnv(ON), false);
-  check("on before phase B: refused, naming the switch", !!notReady && notReady.variables.includes("WORKER_CHATGPT_ENABLED"));
+  check("on, in a build whose schema is not ready (explicit false): still refused, naming the switch",
+    !!notReady && notReady.variables.includes("WORKER_CHATGPT_ENABLED"));
+  // No override at all: what the entry point resolves.
+  const plain = (env: Record<string, string | undefined>) => {
+    try { return resolveExecutionPlan(env); } catch (e) { if (e instanceof WorkerConfigError) return e; throw e; }
+  };
+  const unforced = plain(liveEnv(ON));
+  check("on, with no override: the approved values are accepted, with the ChatGPT timeout",
+    !(unforced instanceof WorkerConfigError) && unforced.mode === "live" &&
+    unforced.config.chatgpt.enabled === true && unforced.config.chatgpt.callTimeoutMs === 290000,
+    unforced instanceof WorkerConfigError ? unforced.variables.join(",") : unforced.mode);
   const good = cfgOf(liveEnv(ON));
   check("on, with the recommended bounds: enabled with its own timeout",
     good.chatgpt.enabled === true && good.chatgpt.callTimeoutMs === 290000);
@@ -282,6 +301,58 @@ async function main(): Promise<void> {
     check(`on, ${label}: refused, naming ${variable}`, !!e && e.variables.includes(variable), e ? e.variables.join(",") : "accepted");
   }
   check("no refusal message carries a value", [refusal(liveEnv({ ...ON, OPENAI_PROBE_API_KEY: undefined }))].every((e) => !!e && !e.message.includes("SENTINEL")));
+
+  // D-061 — with the switch on the runtime must absorb the WHOLE claim:
+  // slots x (max(provider, ChatGPT timeout) + provider timeout) + grace.
+  check("the whole-claim budget at the approved values: 7 x (290000 + 45000) + 10000 = 2355000 ms",
+    allSlotsBudgetWithChatGptMs(7, 45000, 290000, 10000) === 2_355_000);
+  check("…one slot of it is the per-claim budget, and a ChatGPT leg shorter than Perplexity's gives D-036's 640 s",
+    allSlotsBudgetWithChatGptMs(1, 45000, 290000, 10000) === claimBudgetWithChatGptMs(45000, 290000, 10000) &&
+    allSlotsBudgetWithChatGptMs(7, 45000, 1000, 10000) === 7 * 2 * 45000 + 10000);
+  for (const [label, over] of [
+    ["runtime 2,300 s", { WORKER_MAX_RUNTIME_SECONDS: "2300" }],
+    ["runtime 2,355 s, equal to the whole claim (the relation is strict)", { WORKER_MAX_RUNTIME_SECONDS: "2355" }],
+    ["8 slots at 2,400 s", { WORKER_MAX_SLOTS_PER_CLAIM: "8" }],
+    ["the default 32 slots at 2,400 s", { WORKER_MAX_SLOTS_PER_CLAIM: undefined }],
+    ["a 297 s ChatGPT timeout at 2,400 s (inside the lease, past the runtime)", { WORKER_CHATGPT_TIMEOUT_MS: "297000" }],
+  ] as const) {
+    const e = plain(liveEnv({ ...ON, ...over }));
+    check(`on, ${label}: refused, naming the runtime and the slots`,
+      e instanceof WorkerConfigError && e.variables.includes("WORKER_MAX_RUNTIME_SECONDS") && e.variables.includes("WORKER_MAX_SLOTS_PER_CLAIM"),
+      e instanceof WorkerConfigError ? e.variables.join(",") : "accepted");
+  }
+  for (const [label, over] of [
+    ["runtime 2,400 s (the approved value)", {}],
+    ["runtime 2,356 s, one second above the whole claim", { WORKER_MAX_RUNTIME_SECONDS: "2356" }],
+    ["6 slots at 2,100 s", { WORKER_MAX_SLOTS_PER_CLAIM: "6", WORKER_MAX_RUNTIME_SECONDS: "2100" }],
+  ] as const) {
+    const p = plain(liveEnv({ ...ON, ...over }));
+    check(`on, ${label}: accepted`, !(p instanceof WorkerConfigError) && p.mode === "live" && p.config.chatgpt.enabled === true,
+      p instanceof WorkerConfigError ? p.variables.join(",") : "");
+  }
+  const wholeClaim = plain(liveEnv({ ...ON, WORKER_MAX_RUNTIME_SECONDS: "2300" }));
+  check("the whole-claim refusal states the rule and carries no value",
+    wholeClaim instanceof WorkerConfigError && wholeClaim.message.includes("WORKER_MAX_SLOTS_PER_CLAIM x (max(") &&
+    !/\d{3,}/.test(wholeClaim.message) && !wholeClaim.message.includes("SENTINEL"),
+    wholeClaim instanceof WorkerConfigError ? wholeClaim.message : "accepted");
+  // Off: nothing changes. The whole-claim rule is not applied, so the same
+  // values it refuses with the switch on are accepted, and the per-claim
+  // rule still sets the smallest runtime (101 s at the canary values).
+  for (const [label, over] of [
+    ["the ON values at 2,300 s with the switch false", { ...ON, WORKER_CHATGPT_ENABLED: "false", WORKER_MAX_RUNTIME_SECONDS: "2300" }],
+    ["7 slots at D-036's 900 s", { WORKER_MAX_SLOTS_PER_CLAIM: "7", WORKER_MAX_RUNTIME_SECONDS: "900" }],
+    ["the default 32 slots at 101 s", { WORKER_MAX_RUNTIME_SECONDS: "101" }],
+  ] as const) {
+    const p = plain(liveEnv(over));
+    check(`off, ${label}: accepted, as before`, !(p instanceof WorkerConfigError) && p.mode === "live" &&
+      p.config.chatgpt.enabled === false && p.config.claimBudgetMs === claimBudgetMs(45000, 10000),
+      p instanceof WorkerConfigError ? p.variables.join(",") : "");
+  }
+  const offAt100 = plain(liveEnv({ WORKER_MAX_RUNTIME_SECONDS: "100" }));
+  check("off, 100 s: still refused by the per-claim rule alone, which names no slot count",
+    offAt100 instanceof WorkerConfigError && offAt100.variables.includes("WORKER_MAX_RUNTIME_SECONDS") &&
+    !offAt100.variables.includes("WORKER_MAX_SLOTS_PER_CLAIM"),
+    offAt100 instanceof WorkerConfigError ? offAt100.variables.join(",") : "accepted");
 
   /* ═══════ 3. through the worker ═══════ */
   console.log("\n[3] Through the worker, with the in-memory ledger");
@@ -559,6 +630,99 @@ async function main(): Promise<void> {
   }
   check("the benchmark imports the flex rule from lib", /from "@\/lib\/probes\/openai-flex"/.test(read("scripts/lib/chatgpt-benchmark.ts")) &&
     !/export function isFlexResourceUnavailable/.test(read("scripts/lib/chatgpt-benchmark.ts")));
+
+  /* ═══════ 7. startup: the connected schema must list the ChatGPT probe mode (D-061) ═══════ */
+  console.log("\n[7] Startup: with the switch on, the connected schema must list live_openai_chatgpt (D-061)");
+  {
+    const { checkChatGptSchema, CHATGPT_SCHEMA_CAPABILITY } = await import("@/lib/protocol-worker/chatgpt-engine");
+    check("the capability asked for is the ChatGPT engine's own probe mode",
+      CHATGPT_SCHEMA_CAPABILITY === "live_openai_chatgpt" && CHATGPT_SCHEMA_CAPABILITY === cp.probeMode);
+    let reads = 0;
+    const answering = (reply: () => Promise<unknown>) => () => { reads += 1; return reply(); };
+    // What PostgREST answers for a function the schema does not have (a database without 20261109180000).
+    const missingFunction = {
+      code: "PGRST202", message: "Could not find the function public.protocol_worker_capabilities without parameters in the schema cache",
+      details: "SENTINEL-DETAILS", hint: "SENTINEL-HINT",
+    };
+    const missing = await checkChatGptSchema(answering(async () => { throw missingFunction; }));
+    check("refused when the function is missing (a PostgREST error): a closed reason, read once",
+      !missing.ready && missing.reason === "capabilities_unreadable" && reads === 1, JSON.stringify(missing));
+    check("the refusal carries nothing from the database's error",
+      !/SENTINEL|PGRST|schema cache/.test(JSON.stringify(missing)));
+    const thrownSync = await checkChatGptSchema(() => { throw new Error("SENTINEL-no-client"); });
+    const rejected = await checkChatGptSchema(async () => { throw new Error("SENTINEL-unreachable"); });
+    check("refused when the read cannot even start or the database is unreachable",
+      !thrownSync.ready && thrownSync.reason === "capabilities_unreadable" && !rejected.ready && rejected.reason === "capabilities_unreadable");
+    for (const [label, reply] of [
+      ["an empty list", []],
+      ["another probe mode only", ["live_perplexity"]],
+      ["a near miss", ["live_openai_chatgpt ", "LIVE_OPENAI_CHATGPT"]],
+      ["the value, but not in a list", "live_openai_chatgpt"],
+      ["a list inside an object", { capabilities: ["live_openai_chatgpt"] }],
+      ["nothing", null],
+    ] as const) {
+      reads = 0;
+      const r = await checkChatGptSchema(answering(async () => reply));
+      check(`refused when the reply lacks the value (${label})`, !r.ready && r.reason === "capability_missing" && reads === 1, JSON.stringify(r));
+    }
+    for (const [label, reply] of [["exactly the value", ["live_openai_chatgpt"]], ["the value among others", ["future_mode", "live_openai_chatgpt"]]] as const) {
+      reads = 0;
+      const r = await checkChatGptSchema(answering(async () => reply));
+      check(`accepted when the reply lists it (${label}), read once`, r.ready === true && reads === 1);
+    }
+
+    // Through the real adapters' protocolWorkerCapabilities().
+    check("accepted through the memory adapter, which mirrors 20261109180000",
+      (await checkChatGptSchema(() => db.protocolWorkerCapabilities())).ready === true);
+    const { __setSupabaseAdapterClientForTests, supabaseAdapter } = await import("@/lib/db/supabase-adapter");
+    const rpcCalls: string[] = [];
+    const rpcClient = (reply: { data: unknown; error: unknown }) => ({
+      rpc: async (name: string) => { rpcCalls.push(name); return reply; },
+    }) as unknown as Parameters<typeof __setSupabaseAdapterClientForTests>[0];
+    const viaSupabase = async (reply: { data: unknown; error: unknown }) => {
+      __setSupabaseAdapterClientForTests(rpcClient(reply));
+      try {
+        return await checkChatGptSchema(() => supabaseAdapter.protocolWorkerCapabilities());
+      } finally {
+        __setSupabaseAdapterClientForTests(null);
+      }
+    };
+    const sbMissing = await viaSupabase({ data: null, error: missingFunction });
+    check("through the Supabase adapter: a missing function is a refusal, never a pass",
+      !sbMissing.ready && sbMissing.reason === "capabilities_unreadable" && rpcCalls[rpcCalls.length - 1] === "protocol_worker_capabilities");
+    const sbPresent = await viaSupabase({ data: ["live_openai_chatgpt"], error: null });
+    const sbLacking = await viaSupabase({ data: [], error: null });
+    const sbMalformed = await viaSupabase({ data: [1, "live_openai_chatgpt"], error: null });
+    check("through the Supabase adapter: accepted when listed, refused when absent or malformed",
+      sbPresent.ready === true && !sbLacking.ready && sbLacking.reason === "capability_missing"
+        && !sbMalformed.ready && sbMalformed.reason === "capabilities_unreadable");
+
+    // The wiring in the entry point: switch on only, before anything that can claim, reserve or send.
+    const enabledAt = entry.indexOf("if (cfg.chatgpt.enabled) {");
+    const depsAt = entry.indexOf("const deps: WorkerDeps = {");
+    const checkAt = entry.indexOf("checkChatGptSchema(");
+    const block = entry.slice(enabledAt, depsAt);
+    check("the check is called once, inside the switch-on branch only: with the switch off it is never called",
+      enabledAt > 0 && depsAt > enabledAt && checkAt > enabledAt && checkAt < depsAt
+        && entry.split("checkChatGptSchema(").length === 2 && entry.split("protocolWorkerCapabilities()").length === 2
+        && block.includes("checkChatGptSchema(() => getDb().protocolWorkerCapabilities())"));
+    check("…and the module that holds it is loaded only when the switch is on",
+      /cfg\.chatgpt\.enabled \? import\("@\/lib\/protocol-worker\/chatgpt-engine"\) : Promise\.resolve\(null\)/.test(entry)
+        && !/^import [^\n]*chatgpt-engine/m.test(entry));
+    check("it comes before the engine is built, the health server, the paid-execution gate and the loop: before any claim",
+      checkAt < entry.indexOf("buildChatGptEngine(") && checkAt < entry.indexOf("startHealthServer(cfg.healthPort")
+        && checkAt < entry.indexOf("paidExecutionGateFor(") && checkAt < entry.indexOf("await runWorkerLoop("));
+    const refusal = block.slice(block.indexOf("if (!schema.ready) {"), block.indexOf("const engine = "));
+    check("a refusal stops the start like the other startup refusals: one closed error line, then exit 78",
+      /console\.error\(JSON\.stringify\(\{\s*ts: new Date\(\)\.toISOString\(\), level: "error",\s*event: "worker_chatgpt_schema_refused", reason: schema\.reason, executionEnabled: true,\s*\}\)\);\s*process\.exit\(78\); \/\/ EX_CONFIG/.test(refusal),
+      refusal.slice(0, 300));
+    const fields = refusal.slice(refusal.indexOf("JSON.stringify({") + "JSON.stringify({".length, refusal.indexOf("}));"));
+    check("the refusal line has exactly the closed fields: no message, no error, no value",
+      fields.replace(/\s+/g, " ").trim()
+        === 'ts: new Date().toISOString(), level: "error", event: "worker_chatgpt_schema_refused", reason: schema.reason, executionEnabled: true,',
+      fields);
+    check("the other startup refusals exit the same way", (entry.match(/process\.exit\(78\); \/\/ EX_CONFIG/g) ?? []).length === 3);
+  }
 
   finished = true;
   clearInterval(keepAlive);

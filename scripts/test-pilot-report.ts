@@ -22,6 +22,15 @@
  *   V  the page and the Markdown render one presentation model; the
  *      founder's preview renders the same stored payload as the customer's
  *      page;
+ *   X  D-061, two engines: each engine's table, note and total count only
+ *      its own questions and name the others; no figure combines engines;
+ *      each engine's limitation sentence, verbatim; a measurement still
+ *      being collected or with no readable answer never shows "0 of 0";
+ *      the hero names only engines with a readable answer; ChatGPT's
+ *      sources read under its own rule; "how it was measured" names
+ *      ChatGPT's setting, tier and source rule; a slot on another engine or
+ *      another question blocks; stored one-engine revisions still render;
+ *      the reader reads each protocol's setting;
  *   W  wording: no forbidden claim, no overall score, no stored code on the
  *      page or in the Markdown, the D-053 limitation;
  *   T  the client page: token shape first, the shared-only read, noindex;
@@ -54,9 +63,15 @@ import * as copy from "@/lib/reports/pilot-report-copy";
 import { presentationStrings, presentPilotReport } from "@/lib/reports/pilot-report-presentation";
 import { isPilotReportPayload, type PilotReportPayload } from "@/lib/reports/pilot-report-types";
 import { buildAndSavePilotReport } from "@/lib/reports/process-pilot-report";
+import { readPilotReportInput } from "@/lib/reports/read-pilot-evidence";
 import { renderPilotReportMarkdown } from "@/lib/reports/render-pilot-report-markdown";
-import { DEPENDENCE_LIMITATION, PERPLEXITY_SURFACE_LIMITATION } from "@/lib/reports/surface-limitations";
+import { CHATGPT_SURFACE_LIMITATION, DEPENDENCE_LIMITATION, PERPLEXITY_SURFACE_LIMITATION } from "@/lib/reports/surface-limitations";
 import type { BuildProtocolReportInput, EvidenceAttemptInput, EvidenceResultInput } from "@/lib/reports/protocol-report-types";
+import {
+  extractProviderSources,
+  OPENAI_RESPONSES_SOURCES_RULE_VERSION,
+  PROVIDER_SOURCES_RULE_VERSION,
+} from "@/lib/source-insights/extract-provider-sources";
 
 (globalThis as unknown as { fetch: unknown }).fetch = () => {
   throw new Error("network disabled");
@@ -515,6 +530,296 @@ check("V7 the page and the Markdown both render the one presentation model and r
   !/payload\.(brand|competitors|sources|questions|engines|conditions|limitations|methodNotes)/.test(viewSrc) &&
   !/payload\.(brand|competitors|sources|questions|engines|conditions|limitations|methodNotes)/.test(mdSrc));
 
+/* ---------------------------------------------------------------- X: two engines (D-061) */
+
+const GPT_MODEL = "gpt-5.4-2026-03-05";
+const GPT_SETTING = "openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05";
+const G2_PAGE = "https://www.g2.com/categories/x";
+
+/** A stored Responses body, shaped like the confirmation run's: search sources, and url_citation links carrying OpenAI's tag. */
+function chatgptBody(text: string, cited: string[], returned: string[] = []): string {
+  return JSON.stringify({
+    id: "resp_x",
+    object: "response",
+    status: "completed",
+    error: null,
+    model: GPT_MODEL,
+    service_tier: "flex",
+    output: [
+      { type: "web_search_call", id: "ws_1", status: "completed", action: { type: "search", query: "q", sources: [...cited, ...returned].map((url) => ({ type: "url", url })) } },
+      {
+        type: "message",
+        id: "msg_1",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text, annotations: cited.map((url, i) => ({ type: "url_citation", start_index: 0, end_index: 5, url: `${url}?utm_source=openai`, title: `Source ${i + 1}` })) }],
+      },
+    ],
+  });
+}
+
+interface ChatGptOpts {
+  jobStatus?: string | null;
+  settingVersion?: string | null;
+  provider?: string;
+  questionText?: string;
+}
+
+/** The same pilot question with a ChatGPT slot added beside its Perplexity one. */
+function withChatGpt(q: PilotReportQuestionInput, runs: RunSpec[], opts: ChatGptOpts = {}): PilotReportQuestionInput {
+  const protocolId = uid(9500 + q.ordinal);
+  const text = opts.questionText ?? q.slots[0].evidence.question.text;
+  const ev = evidence(protocolId, text, runs.map((r) => ({ ...r, body: r.body === undefined ? chatgptBody("Options include Vanta.", [G2_PAGE]) : r.body })));
+  ev.protocol = { ...ev.protocol, provider: opts.provider ?? "openai_chatgpt", model: GPT_MODEL };
+  ev.results = ev.results.map((r) => ({ ...r, providerModel: GPT_MODEL }));
+  return {
+    ...q,
+    slots: [
+      ...q.slots,
+      {
+        engine: "openai_chatgpt",
+        protocolId,
+        jobStatus: opts.jobStatus === undefined ? "succeeded" : opts.jobStatus,
+        evidence: ev,
+        execution: runs.length > 0 ? { firstOn: "2026-11-20", lastOn: "2026-11-21" } : { firstOn: null, lastOn: null },
+        answerModes: runs.length > 0 ? ["live_openai_chatgpt"] : [],
+        settingVersion: opts.settingVersion === undefined ? GPT_SETTING : opts.settingVersion,
+      },
+    ],
+  };
+}
+
+// Question 1 on both engines, both finished; question 2 on both, its ChatGPT
+// answers still being collected (none readable yet); question 3 on Perplexity only.
+const two = buildPilotReport(input([
+  withChatGpt(question(1, q1Runs), five([true, false, true, true, true])),
+  withChatGpt(question(2, q2Runs), [{ status: "in_progress" }, { status: "reserved" }], { jobStatus: "running" }),
+  question(3, q3Runs),
+]));
+const tp = two.payload;
+const tView = presentPilotReport(tp);
+const tPage = renderPage(tp);
+const tMd = renderPilotReportMarkdown(tp);
+const tMdFlat = flat(tMd);
+const gptBrand = tp.brand.find((s) => s.engine === "openai_chatgpt")!;
+const pplxBrand = tp.brand.find((s) => s.engine === "perplexity_sonar")!;
+const gptEngine = tp.engines.find((e) => e.engine === "openai_chatgpt")!;
+const sectionOf = (v: ReturnType<typeof presentPilotReport>, key: string) => v.sections.find((s) => s.key === key)!;
+const condOf = (v: ReturnType<typeof presentPilotReport>, engine: string) => v.conditions.find((c) => c.key === `conditions-${engine}`)!;
+
+check("X1 each engine's table and total count only the questions measured on it: ChatGPT's rows are questions 1 and 2, its total 4 of 5 from question 1 alone; Perplexity's section equals the one-engine report's",
+  gptBrand.rows.map((r) => r.ordinal).join() === "1,2" && gptBrand.portfolio?.numerator === 4 && gptBrand.portfolio?.denominator === 5 &&
+  gptBrand.portfolio?.includedOrdinals.join() === "1" && gptBrand.portfolio?.leftOutOrdinals.join() === "2" &&
+  JSON.stringify(pplxBrand) === JSON.stringify(perplexity),
+  JSON.stringify(gptBrand.portfolio));
+const combined = `${pplxBrand.portfolio!.numerator + gptBrand.portfolio!.numerator} of ${pplxBrand.portfolio!.denominator + gptBrand.portfolio!.denominator}`;
+check("X2 no figure combines engines: each total is its own engine's rows only, the two engines' sum appears nowhere, and every table section belongs to one engine",
+  tp.brand.every((s) => !s.portfolio || s.portfolio.numerator === s.rows.filter((r) => s.portfolio!.includedOrdinals.includes(r.ordinal)).reduce((n, r) => n + (r.numerator ?? 0), 0)) &&
+  !tPage.includes(combined) && !tMd.includes(combined) &&
+  tView.sections.every((s) => /^(brand|competitors|sources)-(perplexity_sonar|openai_chatgpt)$/.test(s.key)) &&
+  !/combined across engines|all engines combined/.test(`${tPage}\n${tMd}`.toLowerCase()), combined);
+check("X3 each engine's section carries its own required limitation, verbatim, on the page and in the Markdown, with the dependence warning by every table and the causal footer",
+  condOf(tView, "openai_chatgpt").paragraphs.join() === CHATGPT_SURFACE_LIMITATION &&
+  condOf(tView, "perplexity_sonar").paragraphs.join() === PERPLEXITY_SURFACE_LIMITATION &&
+  [tPage, tMdFlat].every((t) => [CHATGPT_SURFACE_LIMITATION, PERPLEXITY_SURFACE_LIMITATION, DEPENDENCE_LIMITATION, PILOT_CAUSAL_LIMIT].every((s) => t.includes(s))) &&
+  tView.sections.filter((s) => s.key.startsWith("brand-")).length === 2 &&
+  tView.sections.filter((s) => s.key.startsWith("brand-")).every((s) => s.notes.includes(DEPENDENCE_LIMITATION)));
+const q2View = tView.questions.find((q) => q.key === uid(8002))!;
+const q3View = tView.questions.find((q) => q.key === uid(8003))!;
+check("X4 a live question not measured on ChatGPT is named, never counted: in the engine note, under ChatGPT's table and in its own section, and in no ChatGPT row or total",
+  JSON.stringify(gptEngine.questionsNotMeasured) === "[3]" &&
+  gptEngine.note === "1 of 2 questions with at least one readable answer; not measured on ChatGPT for question 3." &&
+  sectionOf(tView, "brand-openai_chatgpt").notes.includes("Not measured on ChatGPT, so not in this table or its total: question 3.") &&
+  q3View.lines.includes("ChatGPT: not measured for this question.") &&
+  !gptBrand.rows.some((r) => r.ordinal === 3) && !gptBrand.portfolio!.leftOutOrdinals.includes(3) &&
+  JSON.stringify(tp.engines.find((e) => e.engine === "perplexity_sonar")!.questionsNotMeasured) === "[]" &&
+  [tPage, tMdFlat].every((t) => t.includes("not measured on ChatGPT for question 3")),
+  gptEngine.note);
+const gptRow2 = sectionOf(tView, "brand-openai_chatgpt").table!.rows.find((r) => r[0] === "2")!;
+check("X5 a ChatGPT measurement still being collected never shows \"0 of 0\": its row and its question section say so in words, beside its counts",
+  !/\b0 of 0\b/.test(tPage) && !/\b0 of 0\b/.test(tMd) &&
+  gptRow2[1] === "Not finished" && gptRow2[2] === "No readable answer yet" && gptRow2[4].includes("2 still being collected") &&
+  q2View.lines.includes("ChatGPT (Not finished): no readable answer yet; the measurement has not finished.") &&
+  q2View.lines.some((l) => l.startsWith("Attempts: 2 attempted of 5 planned") && l.includes("2 still being collected")) &&
+  two.structural.some((r) => r.status === "needs_review" && r.reason === "Question 2: 2 ChatGPT answers are still being collected."),
+  JSON.stringify(gptRow2));
+
+// ChatGPT added to questions 1 and 2 and still queued: no attempt, no answer.
+const queued = buildPilotReport(input([
+  withChatGpt(question(1, q1Runs), [], { jobStatus: "queued" }),
+  withChatGpt(question(2, q2Runs), [], { jobStatus: "queued" }),
+  question(3, q3Runs),
+]));
+const qView = presentPilotReport(queued.payload);
+const qPage = renderPage(queued.payload);
+const qMd = renderPilotReportMarkdown(queued.payload);
+const heroLast = (pl: PilotReportPayload) => {
+  const hero = presentPilotReport(pl).heroCopy;
+  return hero[hero.length - 1];
+};
+check("X6 the hero names only the engines that produced a readable answer",
+  heroLast(queued.payload).includes("Results show what Perplexity answered during the pilot;") &&
+  heroLast(tp).includes("Results show what Perplexity and ChatGPT answered during the pilot;") &&
+  !qPage.includes("what Perplexity and ChatGPT answered"), heroLast(queued.payload));
+check("X7 an engine with slots but no readable answer yet never prints \"0 of 0\": no total, its rows and sections say why, and its note gives the counts",
+  !/\b0 of 0\b/.test(qPage) && !/\b0 of 0\b/.test(qMd) &&
+  sectionOf(qView, "brand-openai_chatgpt").notes.includes("No question has finished with a readable answer, so there is no total.") &&
+  !sectionOf(qView, "brand-openai_chatgpt").notes.some((n) => n.startsWith("Total across") || n.startsWith("Left out")) &&
+  sectionOf(qView, "brand-openai_chatgpt").table!.rows.every((r) => r[1] === "Not started" && r[2] === "No answer yet") &&
+  ["competitors", "sources"].every((k) => sectionOf(qView, `${k}-openai_chatgpt`).notes.includes("There is no readable ChatGPT answer yet, so there is nothing to show here.")) &&
+  qView.questions[0].lines.includes("ChatGPT (Not started): no answer has been collected yet.") &&
+  qView.questions[0].lines.includes("Attempts: 0 attempted of 5 planned: 0 completed, 0 failed, 0 excluded after review, 0 without a readable result.") &&
+  queued.payload.engines.find((e) => e.engine === "openai_chatgpt")!.note ===
+    "0 of 2 questions with at least one readable answer; 2 not started; not measured on ChatGPT for question 3.",
+  JSON.stringify(sectionOf(qView, "brand-openai_chatgpt").notes));
+const stoppedGpt = buildPilotReport(input([withChatGpt(question(1, q1Runs), [{ status: "failed" }, { status: "failed" }], { jobStatus: "failed" })]));
+const sView = presentPilotReport(stoppedGpt.payload);
+check("X7b a ChatGPT measurement that stopped with no readable answer says so in its row, its line and its sections, never \"0 of 0\"",
+  !/\b0 of 0\b/.test(renderPage(stoppedGpt.payload)) && !/\b0 of 0\b/.test(renderPilotReportMarkdown(stoppedGpt.payload)) &&
+  sectionOf(sView, "brand-openai_chatgpt").table!.rows[0][2] === "No readable answer" &&
+  sView.questions[0].lines.includes("ChatGPT (Stopped before finishing): it stopped before producing a readable answer.") &&
+  ["competitors", "sources"].every((k) => sectionOf(sView, `${k}-openai_chatgpt`).notes.includes("No readable ChatGPT answer is reported, so there is nothing to show here.")));
+
+// What readIntegritySignals gives a measurement with no completed attempt: both per-answer checks false by construction.
+const signalsWith = (b: ReturnType<typeof buildPilotReport>, withAttempts: boolean): PilotQuestionSignals[] =>
+  b.payload.questions.flatMap((q) =>
+    q.measurements.map((m) => ({
+      ordinal: q.ordinal,
+      engine: m.engine,
+      retired: q.retired,
+      completedAttempts: m.counts.completed,
+      ...(withAttempts ? { attempts: m.counts.attempted } : {}),
+      signals: m.counts.completed === 0 ? { ...GOOD, hasPaidCallReservation: false, hasCompleteEvidenceHashes: false } : GOOD,
+    }))
+  );
+const queuedI = integrityOf(queued, signalsWith(queued, true));
+const queuedUnknown = integrityOf(queued, signalsWith(queued, false));
+check("X8 a queued ChatGPT measurement with no attempt holds the report once, by its \"has not finished\" reason, without the per-answer reasons that are false by construction; with its attempt count unknown they still run",
+  queuedI.status === "needs_review" && queuedI.reasons.includes("Question 1: the ChatGPT measurement has not finished.") &&
+  !queuedI.reasons.some((r) => r.startsWith("Question 1 (ChatGPT):") || r.startsWith("Question 2 (ChatGPT):")) &&
+  queuedUnknown.status === "needs_review" && queuedUnknown.reasons.some((r) => r.startsWith("Question 1 (ChatGPT):")),
+  JSON.stringify(queuedI.reasons));
+const stoppedI = integrityOf(stoppedGpt, signalsWith(stoppedGpt, true));
+check("X8b a live measurement with attempts but no completed answer still runs every per-answer check",
+  stoppedI.status === "needs_review" && stoppedI.reasons.some((r) => r.startsWith("Question 1 (ChatGPT):")), JSON.stringify(stoppedI.reasons));
+check("X8c the build passes each measurement's attempt count to the integrity rule", /attempts: m\.counts\.attempted/.test(proc0));
+const finishedEmpty = buildPilotReport(input([withChatGpt(question(1, q1Runs), [], { jobStatus: "succeeded" })]));
+check("X8d defence in depth: a measurement marked finished with no recorded attempt is held for review",
+  finishedEmpty.structural.some((r) => r.status === "needs_review" && r.reason === "Question 1: the ChatGPT measurement is marked finished but has no recorded attempt.") &&
+  integrityOf(finishedEmpty, signalsWith(finishedEmpty, true)).status === "needs_review");
+
+const gptReport1 = tp.questions[0].measurements.find((m) => m.engine === "openai_chatgpt")!.report;
+const gptSources = tp.sources.find((s) => s.engine === "openai_chatgpt")!;
+const sampleBody = chatgptBody("Options include Vanta.", [G2_PAGE]);
+check("X9 ChatGPT's answers are read under openai-responses-sources/1: each linked citation found with OpenAI's tag removed, and counted in ChatGPT's own source table; the rule is recorded per engine",
+  gptReport1.sourceInsights?.extractionVersion === OPENAI_RESPONSES_SOURCES_RULE_VERSION &&
+  gptReport1.sourceInsights.runsWithSourceEvidence === 5 &&
+  gptReport1.sourceInsights.runs.every((r) => r.cited.length === 1 && r.cited[0].url === G2_PAGE) &&
+  gptSources.rows.find((r) => r.category === "review_platform")?.cells.find((c) => c.ordinal === 1)?.citedInRuns === 5 &&
+  JSON.stringify(tp.conditions.find((c) => c.engine === "openai_chatgpt")!.sourceRule) === JSON.stringify([{ value: OPENAI_RESPONSES_SOURCES_RULE_VERSION, ordinals: [1, 2] }]) &&
+  JSON.stringify(tp.conditions.find((c) => c.engine === "perplexity_sonar")!.sourceRule) === JSON.stringify([{ value: PROVIDER_SOURCES_RULE_VERSION, ordinals: [1, 2, 3] }]) &&
+  // The rule matters: the same body read without the provider (as a Perplexity Agent body) has no source at all.
+  extractProviderSources(sampleBody, sha(sampleBody)).cited.length === 0,
+  JSON.stringify(gptReport1.sourceInsights?.runs[0]));
+const gptConditionsText = [
+  "ChatGPT: how it was measured",
+  "Engine: ChatGPT's model, through OpenAI's API (not the ChatGPT app).",
+  `Model: ${GPT_MODEL}.`,
+  `Setting version: ${GPT_SETTING}.`,
+  `Service tier: ${copy.SETTING_TIER_WORDS["openai-responses-websearch-v4"]}.`,
+  `Web search: ${copy.SETTING_SEARCH_WORDS.auto}.`,
+  "Answers: live answers from OpenAI's API.",
+  `Sources: ${copy.SOURCE_RULE_WORDS[OPENAI_RESPONSES_SOURCES_RULE_VERSION]}.`,
+];
+const pplxCond = condOf(tView, "perplexity_sonar");
+check("X10 \"how it was measured\" for ChatGPT names the engine in words, the model, the setting version, the flex tier, web search and the source rule, on the page and in the Markdown; Perplexity's names its own rule and no setting",
+  gptConditionsText.every((t) => tPage.includes(t) && tMdFlat.includes(t)) &&
+  /flex tier/.test(copy.SETTING_TIER_WORDS["openai-responses-websearch-v4"]) &&
+  pplxCond.notes.includes(`Sources: ${copy.SOURCE_RULE_WORDS[PROVIDER_SOURCES_RULE_VERSION]}.`) &&
+  !pplxCond.notes.some((n) => /^(Setting version|Service tier|Web search):/.test(n)),
+  gptConditionsText.filter((t) => !tPage.includes(t) || !tMdFlat.includes(t)).join(" | "));
+
+const mismatched = buildPilotReport(input([withChatGpt(question(1, q1Runs), five([true, true, true]), { provider: "perplexity_sonar" })]));
+check("X11 a slot whose protocol is on another engine blocks the report, and its section still carries its own engine's sentence",
+  mismatched.structural.some((r) => r.status === "blocked" && r.reason === "Question 1: its ChatGPT measurement's protocol is for another engine.") &&
+  integrityOf(mismatched).status === "blocked" &&
+  condOf(presentPilotReport(mismatched.payload), "openai_chatgpt").paragraphs.join() === CHATGPT_SURFACE_LIMITATION);
+const otherText = buildPilotReport(input([withChatGpt(question(1, q1Runs), five([true, true, true]), { questionText: "Which tools suit a very different team?" })]));
+const otherHashQ = withChatGpt(question(1, q1Runs), five([true, true, true]));
+otherHashQ.slots[1].evidence.question = { ...otherHashQ.slots[1].evidence.question, hash: sha("another version") };
+const otherHash = buildPilotReport(input([otherHashQ]));
+const sameQuestionReason = "Question 1: its measurements on different engines are not of the same approved question.";
+check("X12 slots of one question whose approved text or hash differ block the report; the two-engine pilot has no blocking reason",
+  [otherText, otherHash].every((b) => b.structural.some((r) => r.status === "blocked" && r.reason === sameQuestionReason) && integrityOf(b).status === "blocked") &&
+  !two.structural.some((r) => r.status === "blocked") && !queued.structural.some((r) => r.status === "blocked"));
+
+const mixedSetting = buildPilotReport(input([
+  withChatGpt(question(1, q1Runs), five([true, true, true])),
+  withChatGpt(question(2, q1Runs), five([true, true, true]), { settingVersion: "openai-responses-websearch-v3:auto:gpt-5.4-2026-03-05" }),
+]));
+const noSetting = buildPilotReport(input([withChatGpt(question(1, q1Runs), five([true, true, true]), { settingVersion: null })]));
+const msMd = flat(renderPilotReportMarkdown(mixedSetting.payload));
+check("X13 ChatGPT questions under different settings are listed with their questions and held for review; ChatGPT answers with no recorded setting are held too; Perplexity, which records none, never is",
+  mixedSetting.structural.some((r) => r.status === "needs_review" && r.reason === "ChatGPT questions were not all measured under the same setting.") &&
+  msMd.includes(`Setting version: ${GPT_SETTING} (question 1); openai-responses-websearch-v3:auto:gpt-5.4-2026-03-05 (question 2).`) &&
+  msMd.includes(`Service tier: ${copy.SETTING_TIER_WORDS["openai-responses-websearch-v4"]} (question 1); OpenAI's standard tier (question 2).`) &&
+  noSetting.structural.some((r) => r.status === "needs_review" && r.reason === "Some ChatGPT answers have no recorded setting.") &&
+  integrityOf(noSetting).status === "needs_review" &&
+  !built.structural.some((r) => /setting/.test(r.reason)) && JSON.stringify(p.conditions[0].settingVersion) === "[]",
+  msMd.slice(0, 0));
+
+// Report code may not import the adapter (P1), so its words are pinned to the adapter's source text.
+const adapterSrc = readFileSync("lib/probes/chatgpt.ts", "utf8");
+const families = [...adapterSrc.matchAll(/"(openai-responses-websearch-v\d+)": Object\.freeze\(\{[^}]*serviceTier: (null|"flex")/g)].map((m) => ({ family: m[1], flex: m[2] === '"flex"' }));
+const searchModes = (/const CHATGPT_SEARCH_MODES: ReadonlySet<string> = new Set\(\[([^\]]*)\]\)/.exec(adapterSrc)?.[1] ?? "").split(",").map((s) => s.trim().replace(/"/g, "")).filter(Boolean);
+const approvedSetting = /export const CHATGPT_APPROVED_SETTING_VERSION: string \| null = "([^"]+)";/.exec(adapterSrc)?.[1] ?? "";
+check("X14 the report's setting words cover exactly the adapter's setting families and search modes, say flex where the adapter sends flex, and the approved setting is the one the fixtures use",
+  families.length >= 3 && JSON.stringify(Object.keys(copy.SETTING_TIER_WORDS).sort()) === JSON.stringify(families.map((f) => f.family).sort()) &&
+  families.every((f) => (f.flex ? /flex tier/ : /standard tier/).test(copy.SETTING_TIER_WORDS[f.family])) &&
+  searchModes.length === 2 && JSON.stringify(Object.keys(copy.SETTING_SEARCH_WORDS).sort()) === JSON.stringify([...searchModes].sort()) &&
+  approvedSetting === GPT_SETTING && copy.settingTierWords(approvedSetting) === copy.SETTING_TIER_WORDS["openai-responses-websearch-v4"] &&
+  copy.settingSearchWords(approvedSetting) === copy.SETTING_SEARCH_WORDS.auto,
+  JSON.stringify({ families, searchModes, approvedSetting }));
+check("X15 the source-rule words cover exactly the two rules, and an unknown setting or rule is said to be unknown, never guessed",
+  JSON.stringify(Object.keys(copy.SOURCE_RULE_WORDS).sort()) === JSON.stringify([OPENAI_RESPONSES_SOURCES_RULE_VERSION, PROVIDER_SOURCES_RULE_VERSION].sort()) &&
+  copy.sourceRuleWords("provider-sources/0") === copy.UNKNOWN_SOURCE_RULE_WORDS &&
+  copy.sourceRuleWords("constructor") === copy.UNKNOWN_SOURCE_RULE_WORDS &&
+  copy.settingTierWords("openai-responses-websearch-v9:auto:gpt-x") === copy.UNKNOWN_SETTING_WORDS &&
+  copy.settingSearchWords("openai-responses-websearch-v4:sometimes:gpt-x") === copy.UNKNOWN_SETTING_WORDS &&
+  copy.settingTierWords("constructor:auto:gpt-x") === copy.UNKNOWN_SETTING_WORDS &&
+  copy.settingTierWords("openai-responses-websearch-v4") === copy.UNKNOWN_SETTING_WORDS &&
+  copy.settingTierWords("") === "not recorded" && copy.settingSearchWords("") === "not recorded");
+
+/** A revision as built before D-061: the same payload without the fields D-061 added. */
+function asBeforeD061(pl: PilotReportPayload): PilotReportPayload {
+  const c = JSON.parse(JSON.stringify(pl)) as PilotReportPayload;
+  for (const e of c.engines) delete e.questionsNotMeasured;
+  for (const k of c.conditions) {
+    delete k.settingVersion;
+    delete k.sourceRule;
+  }
+  for (const q of c.questions) for (const m of q.measurements) delete m.settingVersion;
+  return c;
+}
+const oldOne = asBeforeD061(p);
+const oldTwo = asBeforeD061(tp);
+const oldPage = renderPage(oldOne);
+const oldMd = flat(renderPilotReportMarkdown(oldOne));
+const oldTwoPage = renderPage(oldTwo);
+check("X16 a stored revision built before D-061 still passes the type guard and renders, with every required sentence and no gap",
+  isPilotReportPayload(oldOne) && isPilotReportPayload(oldTwo) &&
+  conditionsText.every((t) => oldPage.includes(t) && oldMd.includes(t)) &&
+  [oldPage, oldMd, oldTwoPage, flat(renderPilotReportMarkdown(oldTwo))].every((t) => !/undefined|NaN|\[object Object\]/.test(t)) &&
+  oldTwoPage.includes(CHATGPT_SURFACE_LIMITATION) && !oldPage.includes("Sources: read") && !oldTwoPage.includes("Setting version") &&
+  oldPage.includes(`ChatGPT: ${ENGINE_NOT_MEASURED_NOTE}`) && oldPage.includes("ChatGPT: not measured for this question."),
+  conditionsText.filter((t) => !oldPage.includes(t)).join(" | "));
+check("X16b for a pilot measured on Perplexity only, D-061 adds exactly one visible line, the source rule; everything else reads as before",
+  JSON.stringify(pageText(oldOne)) === JSON.stringify(pageText(p).filter((t) => !t.startsWith("Sources: "))) &&
+  pageText(p).filter((t) => t.startsWith("Sources: ")).length === 1);
+check("X17 every string of the two-engine presentation appears on the page and in the Markdown",
+  pageText(tp).every((t) => tPage.includes(flat(t).trim()) && (tMdFlat.includes(flat(t).trim()) || tMdFlat.includes(flat(t).replace(/\|/g, "\\|").trim()))),
+  pageText(tp).filter((t) => !tPage.includes(flat(t).trim()) || !tMdFlat.includes(flat(t).trim())).slice(0, 3).join(" | "));
+
 /* ---------------------------------------------------------------- I6a: the real reader with foreign evidence */
 
 type Row = Record<string, unknown>;
@@ -560,16 +865,66 @@ async function readerRefusesForeignEvidence(): Promise<boolean> {
   return result.outcome === "EVIDENCE_OUTSIDE_PILOT" && result.artifactId === null && calls.length === 0;
 }
 
+/** D-061 — the real reader: both engines' slots, and each protocol's recorded setting (a non-string one is not a setting). */
+async function readerReadsSettingVersion(): Promise<boolean> {
+  const PQ1 = uid(8101);
+  const PQ2 = uid(8102);
+  const PPLX = uid(9101);
+  const GPT = uid(9102);
+  const GPT_ODD = uid(9103);
+  const QV = uid(7101);
+  const text = "Which analytics tools suit a team of 1?";
+  const protocol = (id: string, provider: string, modelConfig: unknown) => ({
+    id, project_id: PROJECT, buyer_question_version_id: QV, provider, surface: "answer", model_config: modelConfig,
+    planned_baseline_runs: 5, methodology_version: 1, analyzer_version: 1, entity_resolution_version: 1,
+  });
+  const client = stubClient(
+    {
+      pilots: [{ id: PILOT, project_id: PROJECT, company_name: COMPANY, website_url: `https://${DOMAIN}`, normalized_domain: DOMAIN, starts_on: "2026-11-18", ends_on: "2027-02-16", status: "active" }],
+      projects: [{ id: PROJECT, company_name: COMPANY, domain: DOMAIN }],
+      pilot_questions: [
+        { id: PQ1, pilot_id: PILOT, project_id: PROJECT, ordinal: 1, question_provenance: "customer_supplied", customer_approved_on: "2026-11-18", retired_at: null },
+        { id: PQ2, pilot_id: PILOT, project_id: PROJECT, ordinal: 2, question_provenance: "customer_supplied", customer_approved_on: "2026-11-18", retired_at: null },
+      ],
+      pilot_question_protocols: [
+        { pilot_question_id: PQ1, project_id: PROJECT, engine: "perplexity_sonar", phase: "baseline", protocol_id: PPLX },
+        { pilot_question_id: PQ1, project_id: PROJECT, engine: "openai_chatgpt", phase: "baseline", protocol_id: GPT },
+        { pilot_question_id: PQ2, project_id: PROJECT, engine: "openai_chatgpt", phase: "baseline", protocol_id: GPT_ODD },
+      ],
+      protocols: [
+        protocol(PPLX, "perplexity_sonar", { model: "sonar" }),
+        protocol(GPT, "openai_chatgpt", { model: GPT_MODEL, setting_version: GPT_SETTING }),
+        protocol(GPT_ODD, "openai_chatgpt", { model: GPT_MODEL, setting_version: 4 }),
+      ],
+      buyer_question_versions: [{ id: QV, prompt_text: text, prompt_hash: sha(text), version_number: 1, intent_type: "shortlist", provenance: "operator", approved_at: "2026-11-18T00:00:00Z" }],
+    },
+    []
+  );
+  const read = await readPilotReportInput(client as never, PILOT);
+  const slot = (ordinal: number, engine: string) => read?.questions.find((q) => q.ordinal === ordinal)?.slots.find((s) => s.engine === engine);
+  return (
+    read?.questions[0].slots.length === 2 &&
+    slot(1, "openai_chatgpt")?.settingVersion === GPT_SETTING &&
+    slot(1, "openai_chatgpt")?.evidence.protocol.provider === "openai_chatgpt" &&
+    slot(1, "openai_chatgpt")?.evidence.protocol.model === GPT_MODEL &&
+    slot(1, "perplexity_sonar")?.settingVersion === null &&
+    slot(2, "openai_chatgpt")?.settingVersion === null
+  );
+}
+
 /* ---------------------------------------------------------------- W */
 
 const SECTION_19 = ["you lost the sale", "cannot find you", "overall ai visibility", "caused the lift", "we control what", "we guarantee", "no competitor offers"];
 const copyTexts = Object.values(copy).flatMap((v) => (typeof v === "string" ? [v] : typeof v === "object" ? Object.values(v as Record<string, string>) : []));
-const pages = [renderPage(p), renderPage(withRetired.payload), renderPage(unfinished.payload), renderPage(p, { preview: true })];
+// D-061 — the two-engine renders (finished, still collecting, queued, stopped) are scanned too.
+const twoEnginePages = [tPage, qPage, renderPage(stoppedGpt.payload), renderPage(tp, { preview: true })];
+const twoEngineMds = [tMd, qMd, renderPilotReportMarkdown(stoppedGpt.payload), renderPilotReportMarkdown(mixedSetting.payload)];
+const pages = [renderPage(p), renderPage(withRetired.payload), renderPage(unfinished.payload), renderPage(p, { preview: true }), ...twoEnginePages];
 // The two sentences METHODOLOGY §4 and §7 require verbatim are left out of the phrase scan ("not guaranteed" is a required negation).
 const MANDATED = [PERPLEXITY_SURFACE_LIMITATION, DEPENDENCE_LIMITATION].map((t) => t.toLowerCase());
 const allText = MANDATED.reduce(
   (t, m) => t.split(m).join(" "),
-  [md, renderPilotReportMarkdown(withRetired.payload), renderPilotReportMarkdown(unfinished.payload), ...pages, ...copyTexts, ...PILOT_LIMITATIONS, ...p.methodNotes, PILOT_CAUSAL_LIMIT, readFileSync("components/report/pilot-report-view.tsx", "utf8")]
+  [md, renderPilotReportMarkdown(withRetired.payload), renderPilotReportMarkdown(unfinished.payload), ...twoEngineMds, ...pages, ...copyTexts, ...PILOT_LIMITATIONS, ...p.methodNotes, PILOT_CAUSAL_LIMIT, readFileSync("components/report/pilot-report-view.tsx", "utf8")]
     .join("\n")
     .toLowerCase()
 );
@@ -579,7 +934,7 @@ check("W1 no forbidden claim phrase in the Markdown, the copy, the method notes 
 check("W2 no score, overall figure or combined-engine wording", !/\bscore\b|\boverall\b|combined across engines|all engines combined/.test(allText.replace(/never a score|it is not a score/g, "")));
 const STORED_CODES = ["customer_supplied", "founder_supplied", "observed_consistently_in_sample", "not_observed_consistently_in_sample", "mixed_in_sample", "insufficient_evidence", "perplexity_sonar", "openai_chatgpt", "integrity_passed", "needs_review", "abandoned_exhausted", "not_finished", "review_platform"];
 const STORED_CODES_ALL = [...STORED_CODES, "live_perplexity", "simulated", "in_progress", "excluded_no_result", "timed_out", "perplexity-sonar"];
-const renderedAll = [md, renderPilotReportMarkdown(withRetired.payload), ...pages].join("\n");
+const renderedAll = [md, renderPilotReportMarkdown(withRetired.payload), ...twoEngineMds, ...pages].join("\n");
 check("W3 no stored code reaches the Markdown or the rendered page (customer view and preview)",
   STORED_CODES_ALL.every((c) => !renderedAll.includes(c)), STORED_CODES_ALL.filter((c) => renderedAll.includes(c)).join(","));
 check("W4 the D-053 limitation is stated", md.includes("Results show what these engines answered during the pilot. They don't represent every AI tool or every buyer."));
@@ -688,6 +1043,11 @@ readerRefusesForeignEvidence()
     check("I6a the real reader refuses evidence from another project: the build answers EVIDENCE_OUTSIDE_PILOT and nothing is saved", ok);
   })
   .catch((error) => check("I6a the real reader refuses evidence from another project", false, String(error)))
+  .then(() => readerReadsSettingVersion())
+  .then(
+    (ok) => check("X18 the real reader reads both engines' slots and each protocol's recorded setting; a protocol with none, or a non-string one, gives none", ok),
+    (error) => check("X18 the real reader reads each protocol's recorded setting", false, String(error))
+  )
   .finally(() => {
     console.log(`\n${total - failures}/${total} checks passed.`);
     if (failures > 0) {

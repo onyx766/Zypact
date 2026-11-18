@@ -95,13 +95,32 @@ is the gap §6 step 5 closes.
 Secrets are expected to be set already. The Supabase URL and project ref, the
 service-role key, the Perplexity key and the analysis-provider key live in `fly
 secrets` and are absent from the config by design. Do not add them to the toml:
-the eleven `[env]` values are contract-locked, and the hosting contract fails on a
-twelfth.
+the fourteen `[env]` values are contract-locked, and the hosting contract fails on
+a fifteenth.
+
+One more worker secret exists and is **not** expected yet: `OPENAI_PROBE_API_KEY`,
+the ChatGPT measurement project's key (D-050), never the analysis key. It is set
+with `fly secrets` on the worker only, at the step that turns
+`WORKER_CHATGPT_ENABLED` on, and not before. It never goes in the toml or on the
+web host. With the switch off the worker neither needs it nor reads it.
 
 > **2026-11-17:** D-056's phase A (PR #121, merged) added the eleventh `[env]`
 > value, `WORKER_CHATGPT_ENABLED = "false"`, and the hosting contract locks it.
 > Check (d) in §6 confirms it on the machine. The production sequence is in
 > [`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md), step 6.
+
+> **2026-11-17, D-061 (ChatGPT phase B):** the values the founder approved under
+> D-059 make it fourteen. `WORKER_MAX_RUNTIME_SECONDS` goes from `"900"` to
+> `"2400"`, and three values are added: `WORKER_LEASE_SECONDS = "330"`,
+> `WORKER_READY_STALE_MS = "240000"` and `WORKER_CHATGPT_TIMEOUT_MS = "290000"`.
+> They size the worker for a 290 s ChatGPT call while the switch stays `"false"`:
+> 7 slots × (290 s + 45 s) + 10 s = 2,355 s < 2,400 s; 290 s + 10 s < 330 s; and
+> 240 s > the 110 s heartbeat (lease / 3). The lease and readiness values change
+> Perplexity jobs as soon as they are deployed. A crashed job keeps its lease, and
+> its Run stays blocked, for up to 330 s (the code default is 60 s). `/readyz`
+> reports a wedged worker after 4 minutes (the code default is 1). No earlier Fly
+> file set either value, so what the running machine uses today is not recorded.
+> Check (c) in §6 confirms all of them on the machine.
 
 ## 6. The sequence
 
@@ -145,11 +164,11 @@ Four things to check in step 5, in order:
 |---|-------|-------------|
 | a | Machine ID is unchanged from step 2 | Go to §7 |
 | b | State is `stopped` | `flyctl machine stop <ID> -a zypact-protocol-worker`, then record the observation in §3 |
-| c | `WORKER_MAX_SLOTS_PER_CLAIM` is `7` and `WORKER_MAX_RUNTIME_SECONDS` is `900` in the machine's env | The deploy did not land. Do not run a retest; `1` slot cannot complete a 5-run plan (D-036) |
-| d | `WORKER_CHATGPT_ENABLED` is exactly `false` in the machine's env (D-056) | Stop. Do not start the machine; redeploy from the release commit. With anything but `"true"` the engine is off, but a value other than `false` means the config is not the committed one |
+| c | In the machine's env: `WORKER_MAX_SLOTS_PER_CLAIM` is `7`, `WORKER_MAX_RUNTIME_SECONDS` is `2400`, `WORKER_LEASE_SECONDS` is `330`, `WORKER_READY_STALE_MS` is `240000` and `WORKER_CHATGPT_TIMEOUT_MS` is `290000` (D-036, D-061) | The deploy did not land. Do not start the machine. `1` slot cannot complete a 5-run plan (D-036), and a machine without the D-061 values must not have its ChatGPT switch turned on |
+| d | `WORKER_CHATGPT_ENABLED` is exactly `false` in the machine's env (D-056), until the separate step that turns it on through its own pull request and deploy (D-061) | Stop. Do not start the machine; redeploy from the release commit. With anything but `"true"` the engine is off, but a value other than `false` means the config is not the committed one |
 
-Check (c) is the only direct evidence that D-036 took effect. Record the values
-you observed, not the values you expected.
+Check (c) is the only direct evidence that D-036 and D-061 took effect. Record the
+values you observed, not the values you expected.
 
 **Provenance (PR-2).** Record the commit passed in step 4b and the digest
 `npm run verify:worker-provenance -- <sha>` prints for it. The image reports

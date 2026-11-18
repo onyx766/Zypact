@@ -1,9 +1,10 @@
 /**
  * D-055 — reads everything the combined pilot report is built from: the
  * pilot, its project (the brand the worker measured against), every pilot
- * question including retired ones, each question's engine slots, each
- * slot's job status, and each slot's protocol evidence through the same
- * reader a one-question report uses.
+ * question including retired ones, each question's engine slots (both
+ * engines), each slot's job status, each slot's recorded setting (D-061),
+ * and each slot's protocol evidence through the same reader a one-question
+ * report uses.
  *
  * Reads only. Identity comes from the pilot's own tables, never from the
  * caller: a protocol reaches the report only through `pilot_question_protocols`
@@ -66,6 +67,24 @@ export async function readPilotReportInput(
   }
 
   const protocolIds = slotRows.map((s) => String(s.protocol_id));
+
+  // D-061 — each protocol's recorded setting (model_config.setting_version).
+  // A ChatGPT protocol's names its model, search mode and service tier; a
+  // Perplexity protocol records none, which is null here, never a guess.
+  const settingVersion = new Map<string, string>();
+  if (protocolIds.length > 0) {
+    const { data, error: pError } = await client.from("protocols").select("id,model_config").in("id", protocolIds);
+    if (pError) throw pError;
+    for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+      const config = r.model_config;
+      const value =
+        config && typeof config === "object" && !Array.isArray(config)
+          ? (config as Record<string, unknown>).setting_version
+          : undefined;
+      if (typeof value === "string" && value.trim()) settingVersion.set(String(r.id), value);
+    }
+  }
+
   const jobStatus = new Map<string, string>();
   if (protocolIds.length > 0) {
     const { data, error: jError } = await client
@@ -139,6 +158,7 @@ export async function readPilotReportInput(
         evidence,
         execution: { firstOn: window.first, lastOn: window.last },
         answerModes: [...(modesByProtocol.get(protocolId) ?? [])].sort(),
+        settingVersion: settingVersion.get(protocolId) ?? null,
       });
     }
     questions.push({

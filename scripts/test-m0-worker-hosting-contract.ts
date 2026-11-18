@@ -33,6 +33,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import path from "node:path";
+import { resolveExecutionPlan, WorkerConfigError } from "@/lib/protocol-worker/execution-mode";
 import { SOURCE_ROOTS } from "@/lib/protocol-worker/source-digest";
 import { sourceDigestAtCommit } from "./worker-provenance-git";
 
@@ -54,6 +55,59 @@ function code(src: string, comment: string): string[] {
     .map((l) => l.trim())
     .filter((l) => l !== "" && !l.startsWith(comment));
 }
+
+/**
+ * D-036 / D-059 / D-061 — a live config's bounds, as arithmetic on its own
+ * semantic lines. A function of the lines rather than of one file, so the
+ * negative proofs in section 4 run the SAME parse and the SAME rules on a
+ * copy with one value pushed past its bound. A missing or malformed value
+ * parses as NaN, and every comparison with NaN is false, so it can only fail.
+ */
+function liveBounds(lines: readonly string[]) {
+  const intOf = (key: string): number => Number.parseInt(
+    (lines.find((l) => l.startsWith(`${key} =`))?.match(/"(\d+)"/) ?? [])[1] ?? "", 10);
+  const values = {
+    slots: intOf("WORKER_MAX_SLOTS_PER_CLAIM"),
+    runtimeMs: intOf("WORKER_MAX_RUNTIME_SECONDS") * 1000,
+    providerMs: intOf("WORKER_PROVIDER_TIMEOUT_MS"),
+    chatgptMs: intOf("WORKER_CHATGPT_TIMEOUT_MS"),
+    graceMs: intOf("WORKER_GRACE_MS"),
+    leaseMs: intOf("WORKER_LEASE_SECONDS") * 1000,
+    readyStaleMs: intOf("WORKER_READY_STALE_MS"),
+  };
+  const longerCallMs = Math.max(values.providerMs, values.chatgptMs);
+  const worstCaseMs = values.slots * (longerCallMs + values.providerMs) + values.graceMs;
+  const heartbeatMs = Math.ceil(values.leaseMs / 3);
+  return {
+    values, longerCallMs, worstCaseMs, heartbeatMs,
+    declared: Object.values(values).every((n) => Number.isSafeInteger(n) && n > 0),
+    runtimeOk: worstCaseMs < values.runtimeMs,
+    leaseOk: longerCallMs + values.graceMs < values.leaseMs,
+    readyOk: values.readyStaleMs > heartbeatMs,
+    slotsOk: values.slots >= 5,
+  };
+}
+
+/**
+ * D-061 — what the startup-gate cross-check in section 4 adds to a config's
+ * own [env] lines: a fixture identity and sentinel credentials. None of them
+ * is real, none is read from the environment, and the file's own values
+ * override any of them.
+ */
+const GATE_REF = "abcdefghijklmnopqrst";
+const GATE_FIXTURE: Readonly<Record<string, string>> = {
+  ZYPACT_MOCK_MODE: "off",
+  WORKER_ID: "hosting-contract-fixture",
+  NEXT_PUBLIC_SUPABASE_URL: `https://${GATE_REF}.supabase.co`,
+  WORKER_EXPECTED_SUPABASE_PROJECT_REF: GATE_REF,
+  WORKER_LIVE_CONFIRM: `LIVE:${GATE_REF}`,
+  LLM_PROVIDER: "openai",
+  OPENAI_MODEL: "gpt-4o-mini-2024-07-18",
+  SUPABASE_SERVICE_ROLE_KEY: "SENTINEL-NOT-A-KEY",
+  PERPLEXITY_API_KEY: "SENTINEL-NOT-A-KEY",
+  OPENAI_API_KEY: "SENTINEL-NOT-A-KEY",
+  OPENAI_PROBE_API_KEY: "SENTINEL-NOT-A-KEY",
+};
 
 // ═══════════════════════════════════════════════ 1. Dockerfile.worker
 {
@@ -295,16 +349,27 @@ function code(src: string, comment: string): string[] {
     // D-036: a slot is one baseline run, and 7 is the protocol run_cap, so a
     // job can finish inside the claim that started it.
     ['WORKER_MAX_SLOTS_PER_CLAIM', '7'],
-    ['WORKER_MAX_RUNTIME_SECONDS', '900'],
+    // D-059 / D-061: every slot at its worst case with the ChatGPT leg,
+    // 7 x (290 + 45) s + 10 s = 2,355 s (it was 900 under D-036).
+    ['WORKER_MAX_RUNTIME_SECONDS', '2400'],
     ['WORKER_PROVIDER_TIMEOUT_MS', '45000'],
     ['WORKER_EXIT_AFTER_CLAIMED_JOB', 'true'],
     ['WORKER_MAX_THROTTLED_RETRIES', '0'],
     ['WORKER_HEALTH_HOST', '0.0.0.0'],
     ['WORKER_HEALTH_PORT', '8080'],
     ['WORKER_GRACE_MS', '10000'],
+    // D-059 / D-061: a 290 s call plus the grace fits inside the lease, and
+    // readiness outlasts the heartbeat (lease / 3). Both apply to Perplexity
+    // jobs as soon as the file is deployed.
+    ['WORKER_LEASE_SECONDS', '330'],
+    ['WORKER_READY_STALE_MS', '240000'],
     // D-056: the ChatGPT engine is off, stated explicitly, in every file.
     ['WORKER_CHATGPT_ENABLED', 'false'],
+    // D-059 / D-061: the ChatGPT call's own deadline, stated while the
+    // switch is off so the bounds above are checked against it.
+    ['WORKER_CHATGPT_TIMEOUT_MS', '290000'],
   ] as const;
+  assert("the [env] contract is fourteen values (D-061)", ENV.length === 14, String(ENV.length));
   assert("[env] exists", lines.includes("[env]"));
   for (const [k, v] of ENV) {
     assert(`[env] carries ${k} = "${v}"`,
@@ -317,6 +382,13 @@ function code(src: string, comment: string): string[] {
     envBlock.replace(/\n/g, " | "));
   assert("no credential-shaped key anywhere in the template",
     !/(SERVICE_ROLE|API_KEY|_TOKEN|_SECRET|PERPLEXITY|OPENAI|ANTHROPIC|SUPABASE)/i.test(body));
+  // D-061 — the three names added to [env] are bounds, not credentials, and
+  // must stay out of the pattern above, or the check would have to be
+  // loosened to admit them.
+  for (const name of ["WORKER_LEASE_SECONDS", "WORKER_READY_STALE_MS", "WORKER_CHATGPT_TIMEOUT_MS"]) {
+    assert(`${name} is not a credential-shaped name`,
+      !/(SERVICE_ROLE|API_KEY|_TOKEN|_SECRET|PERPLEXITY|OPENAI|ANTHROPIC|SUPABASE)/i.test(name), name);
+  }
 
   // A top-level check, because a worker has no service to hang one on.
   assert("a top-level [checks] table exists", lines.includes("[checks]"));
@@ -486,26 +558,103 @@ function code(src: string, comment: string): string[] {
       // and no report could ever be built from one (D-036).
       //
       // What a live config must guarantee instead is that its runtime can
-      // absorb every slot it permits, each slot at its worst case: two
-      // provider calls that both run to the timeout. A ceiling below that
-      // would let the deadline cut a job off mid-run, which is exactly the
-      // stranded state a one-start-one-job worker cannot recover from alone.
-      const intOf = (key: string): number => Number.parseInt(
-        (lines.find((l) => l.startsWith(`${key} =`))?.match(/"(\d+)"/) ?? [])[1] ?? "", 10);
-      const slots = intOf("WORKER_MAX_SLOTS_PER_CLAIM");
-      const runtimeMs = intOf("WORKER_MAX_RUNTIME_SECONDS") * 1000;
-      const timeoutMs = intOf("WORKER_PROVIDER_TIMEOUT_MS");
-      const graceMs = intOf("WORKER_GRACE_MS");
-      const worstCaseMs = slots * 2 * timeoutMs + graceMs;
-      assert(`${env} declares its slot, runtime, timeout and grace bounds`,
-        [slots, runtimeMs, timeoutMs, graceMs].every((n) => Number.isSafeInteger(n) && n > 0),
-        `${slots} / ${runtimeMs} / ${timeoutMs} / ${graceMs}`);
-      assert(`${env}'s runtime absorbs every permitted slot at its worst case`,
-        worstCaseMs < runtimeMs, `${worstCaseMs} ms needed vs ${runtimeMs} ms allowed`);
+      // absorb every slot it permits, each slot at its worst case. A ceiling
+      // below that would let the deadline cut a job off mid-run, which is
+      // exactly the stranded state a one-start-one-job worker cannot recover
+      // from alone.
+      //
+      // D-059 / D-061 — a slot's provider call may now be ChatGPT, bounded
+      // by its own deadline, so a slot's worst case is the LONGER provider
+      // call and then the analysis call. The ChatGPT timeout is read from the
+      // file whether or not the switch is on: the bounds are deployed before
+      // the switch is turned on, and turning it on must not need them
+      // changed. D-036's `slots x 2 x timeout + grace` gave 640 s and would
+      // have kept passing without checking anything about ChatGPT.
+      const b = liveBounds(lines);
+      const v = b.values;
+      assert(`${env} declares its slot, runtime, timeout, ChatGPT timeout, grace, lease and readiness bounds`,
+        b.declared,
+        `${v.slots} / ${v.runtimeMs} / ${v.providerMs} / ${v.chatgptMs} / ${v.graceMs} / ${v.leaseMs} / ${v.readyStaleMs}`);
+      assert(`${env}'s runtime absorbs every permitted slot at its worst case (the longer provider call, then the analysis call)`,
+        b.runtimeOk, `${b.worstCaseMs} ms needed vs ${v.runtimeMs} ms allowed`);
+      // The worker's own rule: a call that runs to its deadline, plus the
+      // shutdown grace, must finish inside the lease it holds.
+      assert(`${env}'s longer provider call plus the grace fits inside the lease`,
+        b.leaseOk, `${b.longerCallMs + v.graceMs} ms vs ${v.leaseMs} ms`);
+      // During a long call the heartbeat, every lease / 3, is the only
+      // database contact. A readiness window inside that interval would
+      // report a working worker as wedged.
+      assert(`${env}'s readiness window outlasts the heartbeat interval (lease / 3)`,
+        b.readyOk, `${v.readyStaleMs} ms vs ${b.heartbeatMs} ms`);
       // A slot count below a 5-run plan is the defect itself, restated as a
       // number, and it must not return.
       assert(`${env} permits enough slots for a 5-run baseline to finish in one claim`,
-        slots >= 5, String(slots));
+        b.slotsOk, String(v.slots));
+
+      // Negative proofs. Each rule is re-run through the same parse on this
+      // file's own lines with ONE value pushed just past its bound, so each
+      // check above is passing because of the property it names.
+      const pushed = (key: string, value: number) => liveBounds(
+        lines.map((l) => (l.startsWith(`${key} =`) ? `${key} = "${value}"` : l)));
+      const runtimeAtWorst = pushed("WORKER_MAX_RUNTIME_SECONDS", Math.floor(b.worstCaseMs / 1000));
+      assert("a runtime at the worst case, not above it, would fail — the relation is strict",
+        !runtimeAtWorst.runtimeOk && runtimeAtWorst.declared, String(runtimeAtWorst.values.runtimeMs));
+      assert("D-036's 900 s runtime would now fail",
+        !pushed("WORKER_MAX_RUNTIME_SECONDS", 900).runtimeOk);
+      // The smallest ChatGPT timeout the runtime cannot absorb fails it, one
+      // millisecond less passes, and the lease holds both: the runtime rule
+      // reads the ChatGPT timeout although this file's switch is off.
+      const ctPast = Math.ceil((v.runtimeMs - v.graceMs) / v.slots) - v.providerMs;
+      const ctAt = pushed("WORKER_CHATGPT_TIMEOUT_MS", ctPast);
+      const ctBelow = pushed("WORKER_CHATGPT_TIMEOUT_MS", ctPast - 1);
+      assert("a ChatGPT timeout the runtime cannot absorb would fail, though the switch is off",
+        !ctAt.runtimeOk && ctAt.leaseOk && ctBelow.runtimeOk && ctBelow.leaseOk,
+        `${ctPast} ms: ${ctAt.worstCaseMs} vs ${v.runtimeMs}`);
+      const noCt = liveBounds(lines.filter((l) => !l.startsWith("WORKER_CHATGPT_TIMEOUT_MS =")));
+      assert("a file without the ChatGPT timeout fails, rather than falling back to the provider timeout",
+        !noCt.declared && !noCt.runtimeOk && !noCt.leaseOk, String(noCt.worstCaseMs));
+      const slotsPast = Math.floor((v.runtimeMs - v.graceMs) / (b.longerCallMs + v.providerMs)) + 1;
+      assert("one slot more than the runtime absorbs would fail",
+        !pushed("WORKER_MAX_SLOTS_PER_CLAIM", slotsPast).runtimeOk, String(slotsPast));
+      assert("four slots would fail the 5-run rule", !pushed("WORKER_MAX_SLOTS_PER_CLAIM", 4).slotsOk);
+      const leaseAtCall = pushed("WORKER_LEASE_SECONDS", Math.floor((b.longerCallMs + v.graceMs) / 1000));
+      assert("a lease equal to the longer call plus the grace would fail",
+        !leaseAtCall.leaseOk && leaseAtCall.readyOk, String(leaseAtCall.values.leaseMs));
+      assert("a readiness window equal to the heartbeat interval would fail",
+        !pushed("WORKER_READY_STALE_MS", b.heartbeatMs).readyOk, String(b.heartbeatMs));
+      // Raising the lease alone moves the heartbeat out with it.
+      const leaseRaised = pushed("WORKER_LEASE_SECONDS", Math.ceil((3 * v.readyStaleMs) / 1000));
+      assert("a lease raised until its heartbeat reaches the readiness window would fail",
+        !leaseRaised.readyOk && leaseRaised.leaseOk, String(leaseRaised.values.leaseMs));
+
+      // The same values through the worker's OWN startup gate, with the
+      // switch turned on the way its later production step will turn it on:
+      // this file's [env] lines, plus a fixture identity and sentinel
+      // credentials that are not real. It ties the arithmetic above to the
+      // code that enforces it at startup, so the two cannot drift apart.
+      const fileEnv: Record<string, string> = {};
+      for (const l of lines) {
+        const m = l.match(/^([A-Z][A-Z0-9_]*) = "([^"]*)"$/);
+        if (m) fileEnv[m[1]] = m[2];
+      }
+      const switchedOn = (over: Record<string, string> = {}): Record<string, string> => ({
+        ...GATE_FIXTURE, ...fileEnv, WORKER_CHATGPT_ENABLED: "true", ...over,
+      });
+      const gate = (e: Record<string, string>): string => {
+        try {
+          const p = resolveExecutionPlan(e);
+          return p.mode === "live" && p.config.chatgpt.enabled ? "live+chatgpt" : `other:${p.mode}`;
+        } catch (err) {
+          if (err instanceof WorkerConfigError) return `refused:${err.variables.join(",")}`;
+          throw err;
+        }
+      };
+      assert(`${env}'s bounds pass the worker's own startup gate with the ChatGPT switch on`,
+        gate(switchedOn()) === "live+chatgpt", gate(switchedOn()));
+      const atWorst = gate(switchedOn({ WORKER_MAX_RUNTIME_SECONDS: String(Math.floor(b.worstCaseMs / 1000)) }));
+      assert("…and the gate refuses the runtime this contract refuses, naming the runtime and the slots",
+        atWorst.startsWith("refused:") && atWorst.includes("WORKER_MAX_RUNTIME_SECONDS")
+          && atWorst.includes("WORKER_MAX_SLOTS_PER_CLAIM"), atWorst);
     }
 
     const body = lines.join("\n");

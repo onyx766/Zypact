@@ -246,6 +246,8 @@ assert("PF-21 the expected tail is the last applied version, and the row count i
     && SQL.includes(`(select count(*) from ledger) = ${80 + 1 + appliedVersions.length}`));
 assert("PF-22 the 0069 pre-state of approve_and_launch_snapshot_baseline is pinned (computed on a disposable stack with every migration before 20261109130000)",
   SQL.includes("= '710dfb5cb84ce09a94040ebb84086025'"));
+assert("PF-22b the 0054 pre-state of persist_probe_result_for_job, which 20261109180000 (D-061) redefines, is pinned (computed on a disposable stack at the recorded state)",
+  /'persist_probe_result_for_job is exactly as 0054 left it \(md5 of its definition\)',\s*\(select coalesce\(md5\(pg_get_functiondef\(oid\)\), 'missing'\) from persist\) = 'd812b7f4c606e03ea171113f9fbc9762',/.test(SQL));
 assert("PF-23 the queue is checked empty (P6.3) as well as nothing claimed or running (P6.1)",
   /status = 'queued'\) = 0/.test(SQL) && /status in \('claimed', 'running'\)\) = 0/.test(SQL));
 assert("PF-24 the header says this baseline has never been run against production", /has NEVER been\s*\n?-- run against production/.test(SQL));

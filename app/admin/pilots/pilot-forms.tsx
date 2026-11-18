@@ -3,13 +3,36 @@
 import { useMemo, useState } from "react";
 import { Plus, X } from "lucide-react";
 
-import { CLOSE_PILOT_PROMPT, pilotRunConfirmationText } from "@/lib/pilots/copy";
+import type { PilotQuestionEngine } from "@/lib/db/types";
+import {
+  ADD_CHATGPT_BUTTON_LABEL,
+  ADD_CHATGPT_PROMPT,
+  ADD_CHATGPT_TO_ALL_BUTTON_LABEL,
+  ADD_QUESTION_ALSO_CHATGPT_LABEL,
+  addChatGptToAllPrompt,
+  addChatGptToAllSummary,
+  addQuestionPanelNote,
+  CLOSE_PILOT_PROMPT,
+  PILOT_REVIEW_BUTTON_LABEL,
+  PILOT_REVIEW_RESOLUTION_PROMPT,
+  pilotRetryPrompt,
+  pilotRunConfirmationText,
+  RETIRE_BOTH_ENGINES_NOTE,
+  RETIRE_PILOT_QUESTION_PROMPT,
+} from "@/lib/pilots/copy";
 import { SHARE_NEEDS_REVIEW_PROMPT, SHARE_PASSED_PROMPT } from "@/lib/reports/pilot-report-copy";
 
 /**
  * D-054 — the founder's pilot controls. Each form sends a fresh
  * idempotency key per opened form, so a repeated press after a lost
  * response replays instead of creating a second pilot or question.
+ *
+ * D-061 — two engines. Run and Retry name their engine in the body; a
+ * ChatGPT measurement is added per question or to every question without
+ * one, one call after another; a measurement held for review is resolved
+ * here; Retire stays per question and stops it on both engines. Whether
+ * ChatGPT is connected comes from the page, which reads the web host's gate
+ * at request time; the routes check it again.
  */
 
 type Issues = Record<string, string[]>;
@@ -151,7 +174,16 @@ export function NewPilotPanel() {
   );
 }
 
-export function AddQuestionPanel({ pilotId, disabled }: { pilotId: string; disabled: boolean }) {
+export function AddQuestionPanel({
+  pilotId,
+  disabled,
+  chatgptConnected,
+}: {
+  pilotId: string;
+  disabled: boolean;
+  /** D-061 — the web host's ChatGPT gate, read by the page at request time. */
+  chatgptConnected: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const [key, setKey] = useState(newKey);
   const [values, setValues] = useState({
@@ -160,6 +192,9 @@ export function AddQuestionPanel({ pilotId, disabled }: { pilotId: string; disab
     customerApprovalRef: "",
     customerApprovedOn: today(),
   });
+  // D-061 — off unless ticked: a queued ChatGPT measurement raises the
+  // spending room every later start needs, so it is never added silently.
+  const [addChatGpt, setAddChatGpt] = useState(false);
   const [issues, setIssues] = useState<Issues>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -172,12 +207,19 @@ export function AddQuestionPanel({ pilotId, disabled }: { pilotId: string; disab
     setIssues({});
     setError(null);
     try {
-      const { ok, payload } = await post(`/api/internal/pilots/${pilotId}/questions`, { ...values, idempotencyKey: key });
+      const { ok, payload } = await post(`/api/internal/pilots/${pilotId}/questions`, {
+        ...values,
+        idempotencyKey: key,
+        addChatGpt: chatgptConnected && addChatGpt,
+      });
       if (!ok) {
         if (payload?.issues) setIssues(payload.issues as Issues);
         setError(payload?.error ?? "The question could not be added.");
         return;
       }
+      // D-061 — the question was added but its ChatGPT measurement was not:
+      // say so before the page reloads, where it shows as not measured.
+      if (payload?.chatgptAdded === false && typeof payload.detail === "string") window.alert(payload.detail);
       window.location.reload();
     } catch {
       setError("The request did not reach the server.");
@@ -205,10 +247,7 @@ export function AddQuestionPanel({ pilotId, disabled }: { pilotId: string; disab
       <div className="zpa-new-audit-head">
         <div>
           <h2>Add an approved question</h2>
-          <p className="zpa-muted">
-            Only a question the customer has approved in writing. Adding it queues its Perplexity
-            measurement; nothing runs or is charged until you press Run for it.
-          </p>
+          <p className="zpa-muted">{addQuestionPanelNote(chatgptConnected)}</p>
         </div>
         <button type="button" className="zpa-icon-btn" onClick={() => setOpen(false)} disabled={busy} aria-label="Cancel">
           <X size={18} />
@@ -256,6 +295,15 @@ export function AddQuestionPanel({ pilotId, disabled }: { pilotId: string; disab
           <input type="date" value={values.customerApprovedOn} onChange={(e) => set("customerApprovedOn", e.target.value)} />
           <FieldError issues={issues} field="customerApprovedOn" />
         </label>
+        {chatgptConnected ? (
+          <fieldset className="zpa-field zpa-field-wide">
+            <span>ChatGPT</span>
+            <label>
+              <input type="checkbox" checked={addChatGpt} onChange={(e) => setAddChatGpt(e.target.checked)} />{" "}
+              {ADD_QUESTION_ALSO_CHATGPT_LABEL}
+            </label>
+          </fieldset>
+        ) : null}
         <div className="zpa-new-audit-foot">
           {error ? <p className="zpa-new-audit-error">{error}</p> : null}
           <button type="submit" className="zpa-btn zpa-btn-primary" disabled={busy}>
@@ -270,6 +318,8 @@ export function AddQuestionPanel({ pilotId, disabled }: { pilotId: string; disab
 export interface QuestionControlState {
   pilotId: string;
   pilotQuestionId: string;
+  /** D-061 — the engine of this measurement; Run and Retry name it in their body. */
+  engine: PilotQuestionEngine;
   jobStatus: string | null;
   stale: boolean;
   plannedRuns: number | null;
@@ -278,7 +328,7 @@ export interface QuestionControlState {
   pilotOpen: boolean;
 }
 
-/** Run for a queued (or lapsed) measurement; Retry for one that stopped at the provider. */
+/** Run for a queued (or lapsed) measurement; Retry for one that stopped at the provider. One engine's. */
 export function QuestionControls(state: QuestionControlState) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -292,7 +342,9 @@ export function QuestionControls(state: QuestionControlState) {
     setBusy(true);
     setMessage(null);
     try {
-      const { payload } = await post(`/api/internal/pilots/${state.pilotId}/questions/${state.pilotQuestionId}/run`, {});
+      const { payload } = await post(`/api/internal/pilots/${state.pilotId}/questions/${state.pilotQuestionId}/run`, {
+        engine: state.engine,
+      });
       setMessage(payload?.detail ?? payload?.error ?? "No answer from the server.");
     } catch {
       setMessage("The request did not reach the server.");
@@ -302,7 +354,7 @@ export function QuestionControls(state: QuestionControlState) {
   }
 
   async function retry() {
-    const note = window.prompt("Why retry this run? (10-2000 characters, kept with the retry)");
+    const note = window.prompt(pilotRetryPrompt(state.engine));
     if (!note) return;
     setBusy(true);
     setMessage(null);
@@ -310,6 +362,7 @@ export function QuestionControls(state: QuestionControlState) {
       const { payload } = await post(`/api/internal/pilots/${state.pilotId}/questions/${state.pilotQuestionId}/retry`, {
         note,
         idempotencyKey: retryKey,
+        engine: state.engine,
       });
       setMessage(payload?.detail ?? payload?.error ?? "No answer from the server.");
     } catch {
@@ -374,15 +427,16 @@ export function ClosePilotButton({ pilotId }: { pilotId: string }) {
  * D-054 — retires a question whose measurement stopped and cannot go on.
  * The database decides: a measurement that can still be retried, or one
  * that is running, is refused with the reason shown here.
+ *
+ * D-061 — per question, never per engine: it looks at every engine's
+ * measurement, and retiring stops the question on both.
  */
 export function RetireQuestionButton({ pilotId, pilotQuestionId }: { pilotId: string; pilotQuestionId: string }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   async function retire() {
-    const reason = window.prompt(
-      "Why retire this question? (10-2000 characters)\n\nIts measurement stopped and cannot go on. The question and its evidence are kept, it no longer counts toward the limit, it can never be run again, and you can add the same approved question again."
-    );
+    const reason = window.prompt(RETIRE_PILOT_QUESTION_PROMPT);
     if (!reason) return;
     setBusy(true);
     setMessage(null);
@@ -404,6 +458,153 @@ export function RetireQuestionButton({ pilotId, pilotQuestionId }: { pilotId: st
     <div className="zpa-actions">
       <button type="button" className="zpa-btn zpa-btn-sm zpa-btn-warn" onClick={retire} disabled={busy}>
         Retire question
+      </button>
+      <p className="zpa-muted">{RETIRE_BOTH_ENGINES_NOTE}</p>
+      {message ? <p className="zpa-action-note">{message}</p> : null}
+    </div>
+  );
+}
+
+function addEngineUrl(pilotId: string, pilotQuestionId: string): string {
+  return `/api/internal/pilots/${pilotId}/questions/${pilotQuestionId}/engines`;
+}
+
+/**
+ * D-061 — adds the ChatGPT measurement to one question. It queues it and
+ * starts nothing: the founder then presses Run for it on ChatGPT.
+ */
+export function AddChatGptButton({ pilotId, pilotQuestionId }: { pilotId: string; pilotQuestionId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function add() {
+    if (!window.confirm(ADD_CHATGPT_PROMPT)) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const { ok, payload } = await post(addEngineUrl(pilotId, pilotQuestionId), { engine: "openai_chatgpt" });
+      if (ok) {
+        window.location.reload();
+        return;
+      }
+      setMessage(payload?.error ?? "ChatGPT could not be added.");
+    } catch {
+      setMessage("The request did not reach the server.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="zpa-actions">
+      <button type="button" className="zpa-btn zpa-btn-sm" onClick={add} disabled={busy}>
+        {busy ? "Adding…" : ADD_CHATGPT_BUTTON_LABEL}
+      </button>
+      {message ? <p className="zpa-action-note">{message}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * D-061 — adds the ChatGPT measurement to every live question without one,
+ * one call after another (never in parallel), and says how many were added.
+ * Each call is the per-question add: it replays on a question that already
+ * has ChatGPT, and starts nothing.
+ */
+export function AddChatGptToAllButton({ pilotId, pilotQuestionIds }: { pilotId: string; pilotQuestionIds: string[] }) {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function addAll() {
+    if (pilotQuestionIds.length === 0 || !window.confirm(addChatGptToAllPrompt(pilotQuestionIds.length))) return;
+    setBusy(true);
+    setMessage(null);
+    let added = 0;
+    let firstRefusal: string | null = null;
+    try {
+      for (const pilotQuestionId of pilotQuestionIds) {
+        let refusal: string | null = null;
+        try {
+          const { ok, payload } = await post(addEngineUrl(pilotId, pilotQuestionId), { engine: "openai_chatgpt" });
+          if (ok) added += 1;
+          else refusal = typeof payload?.error === "string" ? payload.error : "ChatGPT could not be added.";
+        } catch {
+          refusal = "The request did not reach the server.";
+        }
+        if (refusal !== null && firstRefusal === null) firstRefusal = refusal;
+      }
+      if (added === pilotQuestionIds.length) {
+        window.location.reload();
+        return;
+      }
+      setMessage(`${addChatGptToAllSummary(added, pilotQuestionIds.length, firstRefusal)} Refresh the page to see them.`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="zpa-actions">
+      <button type="button" className="zpa-btn zpa-btn-sm" onClick={addAll} disabled={busy}>
+        {busy ? "Adding…" : ADD_CHATGPT_TO_ALL_BUTTON_LABEL}
+      </button>
+      {message ? <p className="zpa-action-note">{message}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * D-061 — resolves one engine's measurement held for review, with the
+ * request page's two resolutions and note rules. It runs and spends
+ * nothing; the job comes from the pilot's own tables, not from this form.
+ */
+export function ResolveReviewControls({
+  pilotId,
+  pilotQuestionId,
+  engine,
+}: {
+  pilotId: string;
+  pilotQuestionId: string;
+  engine: PilotQuestionEngine;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function resolve(resolution: "excluded_and_completed" | "failed") {
+    const note = window.prompt(PILOT_REVIEW_RESOLUTION_PROMPT[resolution]);
+    if (!note) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const { ok, payload } = await post(`/api/internal/pilots/${pilotId}/questions/${pilotQuestionId}/review`, {
+        engine,
+        resolution,
+        note,
+      });
+      if (ok) {
+        window.location.reload();
+        return;
+      }
+      setMessage(payload?.error ?? "The review could not be recorded.");
+    } catch {
+      setMessage("The request did not reach the server.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="zpa-actions">
+      <button
+        type="button"
+        className="zpa-btn zpa-btn-sm zpa-btn-amber-ghost"
+        onClick={() => resolve("excluded_and_completed")}
+        disabled={busy}
+      >
+        {PILOT_REVIEW_BUTTON_LABEL.excluded_and_completed}
+      </button>
+      <button type="button" className="zpa-btn zpa-btn-sm zpa-btn-warn" onClick={() => resolve("failed")} disabled={busy}>
+        {PILOT_REVIEW_BUTTON_LABEL.failed}
       </button>
       {message ? <p className="zpa-action-note">{message}</p> : null}
     </div>

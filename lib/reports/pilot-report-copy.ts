@@ -58,6 +58,90 @@ export const ANSWER_MODE_WORDS: Record<string, string> = {
 };
 export const UNKNOWN_ANSWER_MODE_WORDS = "an answer mode this report does not recognise";
 
+/*
+ * D-061 — the setting a ChatGPT protocol records (`<family>:<search>:<model>`,
+ * lib/probes/chatgpt.ts) and the rule each engine's sources are read under,
+ * in words. Keyed by literal so this module keeps no runtime import (the
+ * console's client code loads it); test-pilot-report pins the keys to the
+ * adapter's setting families and search modes and to the source-rule
+ * constants.
+ */
+export const SETTING_TIER_WORDS: Record<string, string> = {
+  "openai-responses-websearch-v2": "OpenAI's standard tier",
+  "openai-responses-websearch-v3": "OpenAI's standard tier",
+  "openai-responses-websearch-v4":
+    "OpenAI's flex tier, which serves the same model at a lower price and more slowly; a request it refuses for lack of capacity is counted as a failed attempt",
+};
+export const SETTING_SEARCH_WORDS: Record<string, string> = {
+  auto: "available on every answer, and the model decides when to search",
+  required: "required on every answer",
+};
+export const UNKNOWN_SETTING_WORDS = "a setting this report does not recognise";
+
+/** A table's own entry, never an inherited property ("constructor"). */
+const own = (table: Record<string, string>, key: string): string | undefined =>
+  Object.hasOwn(table, key) ? table[key] : undefined;
+
+/** The service tier a recorded setting version names, in words. */
+export function settingTierWords(version: string): string {
+  if (version === "") return "not recorded";
+  const parts = version.split(":");
+  return (parts.length === 3 ? own(SETTING_TIER_WORDS, parts[0]) : undefined) ?? UNKNOWN_SETTING_WORDS;
+}
+
+/** Whether a recorded setting version searches the web, in words. */
+export function settingSearchWords(version: string): string {
+  if (version === "") return "not recorded";
+  const parts = version.split(":");
+  return (parts.length === 3 ? own(SETTING_SEARCH_WORDS, parts[1]) : undefined) ?? UNKNOWN_SETTING_WORDS;
+}
+
+/** The rule a question's sources were read under, in words. */
+export function sourceRuleWords(rule: string): string {
+  return own(SOURCE_RULE_WORDS, rule) ?? UNKNOWN_SOURCE_RULE_WORDS;
+}
+
+export const SOURCE_RULE_WORDS: Record<string, string> = {
+  "provider-sources/1":
+    "read from each stored answer by fixed rule provider-sources/1. A source is cited when the answer points to it with a numbered reference, and returned but not cited when the engine returned it and the answer does not point to it",
+  "openai-responses-sources/1":
+    "read from each stored answer by fixed rule openai-responses-sources/1. A source is cited when the answer links to it, and returned but not cited when the engine's web search returned it and the answer does not link to it. A tracking tag OpenAI adds to some links is removed before links are compared",
+};
+export const UNKNOWN_SOURCE_RULE_WORDS = "read by a rule this report does not recognise";
+
+/*
+ * D-061 — a measurement with no readable answer yet, in words. Never "0 of
+ * 0": a measurement still being collected, or one that produced nothing
+ * readable, says so, beside its attempt counts.
+ */
+
+/** The brand table's "Named in" cell for a measurement with no readable answer. */
+export const NO_READABLE_ANSWER_CELL: Record<PilotQuestionMeasurementState, string> = {
+  not_started: "No answer yet",
+  not_finished: "No readable answer yet",
+  stopped: "No readable answer",
+  measured: "No readable answer",
+};
+
+/** A question section's line for such a measurement, after "<engine> (<state>): ". */
+export const NO_READABLE_ANSWER_LINE: Record<PilotQuestionMeasurementState, string> = {
+  not_started: "no answer has been collected yet.",
+  not_finished: "no readable answer yet; the measurement has not finished.",
+  stopped: "it stopped before producing a readable answer.",
+  measured: "it finished without a readable answer.",
+};
+
+/**
+ * An engine's other-brands and source sections when no readable answer of it
+ * is reported: still being measured, or nothing to report (no answer was
+ * readable, or the questions with one are retired, which are never counted).
+ */
+export function engineNothingReadableWords(engineLabel: string, stillMeasuring: boolean): string {
+  return stillMeasuring
+    ? `There is no readable ${engineLabel} answer yet, so there is nothing to show here.`
+    : `No readable ${engineLabel} answer is reported, so there is nothing to show here.`;
+}
+
 export function pct(value: number): string {
   return `${Math.round(value * 100)}%`;
 }

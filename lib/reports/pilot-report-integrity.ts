@@ -11,7 +11,11 @@
  * collect still passes the same evidence and hash checks. Only the checks
  * that need a collected answer to mean anything (a reservation and a hash
  * per counted answer) are skipped for a retired question that collected
- * none, because they are false by construction there.
+ * none, because they are false by construction there. D-061: the same two
+ * checks are skipped for a live measurement with no attempt at all (a
+ * ChatGPT measurement just added and still queued), which reserved and
+ * collected nothing; the builder's "has not finished" reason already holds
+ * the report, so it is named once instead of three times.
  *
  * The text checks read every string the page shows (the shared presentation
  * model) as well as the Markdown, so a phrase cannot reach the customer
@@ -38,6 +42,11 @@ export interface PilotQuestionSignals {
   retired: boolean;
   /** Completed attempts of this question on this engine. */
   completedAttempts: number;
+  /**
+   * D-061 — every recorded attempt of this question on this engine. Absent:
+   * not known, so the per-answer checks always run.
+   */
+  attempts?: number;
   signals: ProtocolIntegritySignals;
 }
 
@@ -64,7 +73,7 @@ export function evaluatePilotReportIntegrity(input: {
   }
 
   for (const q of [...input.questionSignals].sort((a, b) => a.ordinal - b.ordinal)) {
-    const nothingCollected = q.retired && q.completedAttempts === 0;
+    const nothingCollected = q.completedAttempts === 0 && (q.retired || q.attempts === 0);
     const signals = nothingCollected
       ? { ...q.signals, hasPaidCallReservation: true, hasCompleteEvidenceHashes: true }
       : q.signals;

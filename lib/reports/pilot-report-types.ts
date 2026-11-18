@@ -68,6 +68,13 @@ export interface PilotReportQuestionEngine {
   execution: PilotExecutionWindow;
   /** How each answer was obtained (probe_runs.probe_mode), deduplicated. */
   answerModes: string[];
+  /**
+   * D-061 — the protocol's recorded setting (`model_config.setting_version`):
+   * a ChatGPT protocol's names its model, search mode and service tier; null
+   * when the protocol records none (a Perplexity protocol). Absent on
+   * revisions built before D-061.
+   */
+  settingVersion?: string | null;
   /** The question's own report, exactly as `buildProtocolReport` built it. */
   report: ProtocolReportPayload;
 }
@@ -96,6 +103,12 @@ export interface PilotReportEngineSummary {
   /** Live questions on this engine with no attempt yet. */
   questionsNotStarted: number;
   questionsRetired: number;
+  /**
+   * D-061 — when the engine is measured on some questions: the live questions
+   * with no measurement on it, by ordinal. They are in none of this engine's
+   * figures, and are named instead. Absent on revisions built before D-061.
+   */
+  questionsNotMeasured?: number[];
   note: string;
 }
 
@@ -115,6 +128,18 @@ export interface PilotEngineConditions {
   answerMode: PilotConditionValue[];
   methodologyVersion: PilotConditionValue[];
   analyzerVersion: PilotConditionValue[];
+  /**
+   * D-061 — the recorded setting versions ("" for a question that records
+   * none); empty when no question of the engine records one, as for
+   * Perplexity. Absent on revisions built before D-061.
+   */
+  settingVersion?: PilotConditionValue[];
+  /**
+   * D-061 — the rule each question's stored answers were read under for
+   * sources (its report's `sourceInsights.extractionVersion`). Absent on
+   * revisions built before D-061.
+   */
+  sourceRule?: PilotConditionValue[];
   executedFrom: string | null;
   executedTo: string | null;
 }

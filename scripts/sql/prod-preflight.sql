@@ -77,6 +77,7 @@ pending_functions(name) as (values
   ('pilot_report_artifacts_guard'), ('save_pilot_report_artifact'), ('share_pilot_report_artifact'), ('read_shared_pilot_report'),
   ('pilot_actions_append_only'), ('pilot_action_evidence_check'), ('save_pilot_action'), ('review_pilot_action'),
   ('withdraw_pilot_action'),
+  ('pilot_question_protocols_consistency'), ('add_pilot_question_engine'), ('protocol_worker_capabilities'),
   ('set_workspace_website'), ('take_diagnostic_rate_limit'), ('record_site_diagnostic'), ('get_site_diagnostic'),
   ('save_brand_profile'), ('get_workspace_state'),
   ('add_question_draft'), ('revise_question_draft'), ('list_question_drafts'),
@@ -94,6 +95,9 @@ reconcile as (
 launch as (
   select to_regprocedure('public.approve_and_launch_snapshot_baseline(uuid,uuid,jsonb,text)') as oid,
          to_regprocedure('public.approve_and_launch_snapshot_baseline(uuid,uuid,jsonb,text,text)') as oid5
+),
+persist as (
+  select to_regprocedure('public.persist_probe_result_for_job(uuid,uuid,uuid,jsonb)') as oid
 ),
 checks(id, label, pass, observed) as (
   -- P1 target identity --------------------------------------------------
@@ -127,9 +131,9 @@ checks(id, label, pass, observed) as (
   union all
   select 'P2.4', 'no held, reserved or pending version is recorded',
          not exists (select 1 from ledger where version in
-           ('0081', '0082', '0084', '0085', '20261109130000', '20261109140000', '20261109150000', '20261109160000', '20261110120000', '20261111120000', '20261112120000', '20261113120000', '20261114120000', '20261118120000', '20261119120000', '20261120120000')),
+           ('0081', '0082', '0084', '0085', '20261109130000', '20261109140000', '20261109150000', '20261109160000', '20261109180000', '20261110120000', '20261111120000', '20261112120000', '20261113120000', '20261114120000', '20261118120000', '20261119120000', '20261120120000')),
          (select coalesce(string_agg(version, ',' order by version), 'none') from ledger where version in
-           ('0081', '0082', '0084', '0085', '20261109130000', '20261109140000', '20261109150000', '20261109160000', '20261110120000', '20261111120000', '20261112120000', '20261113120000', '20261114120000', '20261118120000', '20261119120000', '20261120120000'))
+           ('0081', '0082', '0084', '0085', '20261109130000', '20261109140000', '20261109150000', '20261109160000', '20261109180000', '20261110120000', '20261111120000', '20261112120000', '20261113120000', '20261114120000', '20261118120000', '20261119120000', '20261120120000'))
   union all
   select 'P2.5', 'ledger has exactly 85 rows (no unknown version)',
          (select count(*) from ledger) = 85, (select count(*)::text from ledger)
@@ -138,7 +142,8 @@ checks(id, label, pass, observed) as (
          (select count(*) from ledger where version in (select version from applied_versions)) = 4,
          (select count(*)::text from ledger where version in (select version from applied_versions))
 
-  -- P3 pinned function states: 0083's result, and the function pilot step 1 redefines
+  -- P3 pinned function states: 0083's result, and the functions pilot step 1
+  -- and ChatGPT phase B (20261109180000, D-061) redefine
   union all
   select 'P3.1', 'reconcile_attempt_for_job is exactly as 0083 left it (md5 of its definition, the reserved procedure''s post_def)',
          (select coalesce(md5(pg_get_functiondef(oid)), 'missing') from reconcile) = '721e487901b2272708e38565b7070c53',
@@ -157,6 +162,10 @@ checks(id, label, pass, observed) as (
   union all
   select 'P3.4', 'the five-argument approve_and_launch_snapshot_baseline does not exist yet',
          (select oid5 is null from launch), null
+  union all
+  select 'P3.5', 'persist_probe_result_for_job is exactly as 0054 left it (md5 of its definition)',
+         (select coalesce(md5(pg_get_functiondef(oid)), 'missing') from persist) = 'd812b7f4c606e03ea171113f9fbc9762',
+         (select coalesce(md5(pg_get_functiondef(oid)), 'missing') from persist)
 
   -- P4 what is applied exists; nothing pending exists ----------------------
   union all
@@ -164,7 +173,7 @@ checks(id, label, pass, observed) as (
          (select count(*) from pending_tables t where to_regclass('public.' || t.name) is not null) = 0,
          (select coalesce(string_agg(t.name, ','), 'none') from pending_tables t where to_regclass('public.' || t.name) is not null)
   union all
-  select 'P4.2', 'none of the 38 pending public functions exists, nor any _p1_, _p2_, _e1_ or _q4_ helper',
+  select 'P4.2', 'none of the 41 pending public functions exists, nor any _p1_, _p2_, _e1_ or _q4_ helper',
          (select count(*) from pg_proc p where p.pronamespace = 'public'::regnamespace
             and (p.proname in (select name from pending_functions)
                  or p.proname like '\_p1\_%' or p.proname like '\_p2\_%' or p.proname like '\_e1\_%' or p.proname like '\_q4\_%')) = 0,

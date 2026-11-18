@@ -195,6 +195,37 @@ async function main(): Promise<void> {
     searchResultsPresence(JSON.stringify({ output: [{ type: "search_results", results: [{ id: 1 }] }] })) === "present");
   check("search results: none returned", searchResultsPresence(JSON.stringify({ search_results: [] })) === "absent");
   check("search results: unreadable", searchResultsPresence("{x") === null);
+  // D-061 — the OpenAI Responses shape, read for a ChatGPT protocol only.
+  const sources = [{ type: "url", url: "https://vendor.example/pricing?utm_source=openai" }];
+  const wsc = (action: unknown) => ({ type: "web_search_call", id: "ws_1", status: "completed", action });
+  const responses = (output: unknown) => JSON.stringify({ id: "resp_1", object: "response", model: "gpt-5.4-2026-03-05", output });
+  const withSources = responses([{ type: "reasoning" }, wsc({ type: "search", query: "q", sources }), { type: "message", content: [] }]);
+  check("search results: ChatGPT, a web_search_call with sources → present", searchResultsPresence(withSources, "openai_chatgpt") === "present");
+  check("search results: ChatGPT, one search with sources is enough beside one without",
+    searchResultsPresence(responses([wsc({ type: "search", sources: [] }), wsc({ type: "search", sources })]), "openai_chatgpt") === "present");
+  for (const [label, output] of [
+    ["empty sources", [wsc({ type: "search", query: "q", sources: [] })]],
+    ["no sources key", [wsc({ type: "search", query: "q" })]],
+    ["sources not a list", [wsc({ type: "search", sources: "https://vendor.example" })]],
+    ["only an open_page action", [wsc({ type: "open_page", url: "https://vendor.example" })]],
+    ["no action", [{ type: "web_search_call", id: "ws_1", status: "completed" }]],
+    ["sources on another item type", [{ type: "message", action: { sources } }]],
+    ["no search call at all", [{ type: "message", content: [] }]],
+    ["output not a list", { web_search_call: { action: { sources } } }],
+  ] as const) {
+    check(`search results: ChatGPT, ${label} → absent`, searchResultsPresence(responses(output), "openai_chatgpt") === "absent");
+  }
+  check("search results: ChatGPT, unreadable → null", searchResultsPresence("{x", "openai_chatgpt") === null
+    && searchResultsPresence(null, "openai_chatgpt") === null && searchResultsPresence("[1]", "openai_chatgpt") === "absent");
+  const sonarBody = JSON.stringify({ search_results: [{ url: "u" }] });
+  const agentBody = JSON.stringify({ output: [{ type: "search_results", results: [{ id: 1 }] }] });
+  check("search results: Sonar and Agent bodies read exactly as before, with or without their provider",
+    searchResultsPresence(sonarBody, "perplexity_sonar") === "present" && searchResultsPresence(agentBody, "perplexity_agent") === "present"
+      && searchResultsPresence(JSON.stringify({ search_results: [] }), "perplexity_sonar") === "absent"
+      && searchResultsPresence(sonarBody, null) === searchResultsPresence(sonarBody));
+  check("search results: the provider decides the shape: a Responses body under a Perplexity provider reads as before (absent), a Sonar body under ChatGPT is not read as Sonar",
+    searchResultsPresence(withSources, "perplexity_agent") === "absent" && searchResultsPresence(withSources) === "absent"
+      && searchResultsPresence(sonarBody, "openai_chatgpt") === "absent" && searchResultsPresence(agentBody, "openai_chatgpt") === "absent");
   check("canonical JSON ignores key order", canonicalJson({ b: 1, a: { d: 2, c: 3 } }) === canonicalJson({ a: { c: 3, d: 2 }, b: 1 }));
 
   /* ═══════ 2. compatible ═══════ */
@@ -227,6 +258,28 @@ async function main(): Promise<void> {
     check("a phase whose runs differ only in search presence is consistent", p.status === "consistent", JSON.stringify(p));
     check("with the split recorded: 4 with results, 1 without",
       p.status === "consistent" && p.observations.searchResultsPresent === 4 && p.observations.searchResultsAbsent === 1);
+    // D-061 — a ChatGPT phase is read in the Responses shape, through its protocol's provider.
+    const gptBody = (withSearch: boolean) => JSON.stringify({
+      id: "resp_7", object: "response", model: "gpt-5.4-2026-03-05", status: "completed",
+      output: [
+        { type: "web_search_call", id: "ws_1", status: "completed",
+          action: { type: "search", query: "q", sources: withSearch ? [{ type: "url", url: "https://x.example" }] : [] } },
+        { type: "message", content: [{ type: "output_text", text: "answer" }] },
+      ],
+    });
+    const gpt = await readPhaseMeasurement(fakeDb(phase("gpt", { provider: "openai_chatgpt", rawResponse: gptBody(true) })).client, "gpt", PROJECT);
+    check("a ChatGPT phase counts its searches in the Responses shape: 5 with results",
+      gpt.status === "consistent" && gpt.observations.searchResultsPresent === 5 && gpt.observations.searchResultsAbsent === 0, JSON.stringify(gpt));
+    const gptNone = await readPhaseMeasurement(fakeDb(phase("gpt0", { provider: "openai_chatgpt", rawResponse: gptBody(false) })).client, "gpt0", PROJECT);
+    check("…and 5 without when its searches returned no sources, still consistent",
+      gptNone.status === "consistent" && gptNone.observations.searchResultsAbsent === 5, JSON.stringify(gptNone));
+    check("…under the ChatGPT endpoint and the unchanged fingerprint version mf-1",
+      gpt.status === "consistent" && gpt.fingerprint.endpoint.value === "https://api.openai.com/v1/responses"
+        && gpt.fingerprint.version === "mf-1" && MEASUREMENT_FINGERPRINT_VERSION === "mf-1");
+    const sameShapeAsAgent = await readPhaseMeasurement(
+      fakeDb(phase("agent-like", { provider: "perplexity_agent", rawResponse: gptBody(true) })).client, "agent-like", PROJECT);
+    check("the same body under a Perplexity provider is read as before: no search_results item, so absent",
+      sameShapeAsAgent.status === "consistent" && sameShapeAsAgent.observations.searchResultsAbsent === 5, JSON.stringify(sameShapeAsAgent));
   }
 
   /* ═══════ 2c. the endpoint is an assumption, stated as one ═══════ */

@@ -283,6 +283,27 @@ async function runLive(cfg: LiveWorkerConfig, build: BuildProvenance): Promise<v
       // worst case that cannot be priced, stops the worker before any claim.
       let chatgpt: WorkerDeps["chatgpt"];
       if (cfg.chatgpt.enabled) {
+        // D-061 — and only against a database that can record a ChatGPT
+        // attempt (20261109180000). Asked here, before the engine, the
+        // health server, the paid-execution gate and any claim. A missing
+        // function (a database without the migration), a failed read or a
+        // reply without the capability refuses the start with EX_CONFIG,
+        // exactly as the other startup refusals do, so a worker switched on
+        // ahead of the migration reserves and sends nothing. Nothing is
+        // claimed, leased or open yet, so the immediate exit loses nothing.
+        // With the switch off the module that holds the check is never
+        // loaded, so it is never called.
+        const schema = chatgptEngineModule
+          ? await chatgptEngineModule.checkChatGptSchema(() => getDb().protocolWorkerCapabilities())
+          : ({ ready: false, reason: "capabilities_unreadable" } as const);
+        if (!schema.ready) {
+          // A closed reason label only: never the database's message.
+          console.error(JSON.stringify({
+            ts: new Date().toISOString(), level: "error",
+            event: "worker_chatgpt_schema_refused", reason: schema.reason, executionEnabled: true,
+          }));
+          process.exit(78); // EX_CONFIG
+        }
         const engine = chatgptEngineModule?.buildChatGptEngine({
           callTimeoutMs: cfg.chatgpt.callTimeoutMs,
           probeMode: "live_openai_chatgpt",

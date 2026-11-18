@@ -32,9 +32,16 @@ export interface PromptProbeAggregate {
 }
 
 export interface ProbeSetSummary {
+  /** Perplexity and simulated rows: the rows this summary reads. */
   total: number;
   livePerplexity: number;
   simulated: number;
+  /**
+   * D-061 — ChatGPT rows (probe mode `live_openai_chatgpt`) given to the
+   * summary and left out of every figure in it: they are neither live
+   * Perplexity nor simulated.
+   */
+  chatGptRowsLeftOut: number;
   includedMode: ReportProbeMode;
   excludedModes: ReportProbeMode[];
   mainProbeResults: ProbeResult[];
@@ -62,6 +69,22 @@ function timeValue(s: string | null | undefined): number {
 
 function isLive(row: ProbeResult): boolean {
   return row.probeMode === "live_perplexity";
+}
+
+/**
+ * D-061 — a ChatGPT answer (probe mode `live_openai_chatgpt`). The legacy
+ * request report reads Perplexity and simulated answers only: a ChatGPT row
+ * is neither live Perplexity nor simulated, and adding it to a Perplexity
+ * figure would combine two engines (D-053 item 3). Every reader here leaves
+ * it out.
+ */
+export function isChatGptProbeRow(row: Pick<ProbeResult, "probeMode">): boolean {
+  return row.probeMode === "live_openai_chatgpt";
+}
+
+/** D-061 — the rows a legacy Perplexity reader may read: every row but ChatGPT's. */
+export function withoutChatGptRows<T extends Pick<ProbeResult, "probeMode">>(rows: T[]): T[] {
+  return rows.filter((r) => !isChatGptProbeRow(r));
 }
 
 function keyForPrompt(row: ProbeResult): string {
@@ -107,9 +130,11 @@ export function sortProbeResultsNewestFirst(rows: ProbeResult[]): ProbeResult[] 
  * Perplexity rows. We intentionally do NOT de-duplicate live rows by prompt
  * anymore: multi-run probes need every run so mentionRate can be computed.
  * Older simulated rows remain visible as historical/test context.
+ *
+ * D-061 — a ChatGPT row is never selected, as live or as simulated.
  */
 export function selectMainReportProbeResults(rows: ProbeResult[]): ProbeResult[] {
-  const sorted = sortProbeResultsNewestFirst(rows);
+  const sorted = sortProbeResultsNewestFirst(withoutChatGptRows(rows));
   const live = sorted.filter(isLive);
   return live.length > 0 ? live : sorted;
 }
@@ -135,7 +160,8 @@ export function buildPromptProbeAggregates(
   rows: ProbeResult[],
   options: ProbeSelectionOptions = {},
 ): PromptProbeAggregate[] {
-  const sorted = sortProbeResultsNewestFirst(rows);
+  // D-061 — a ChatGPT row is never part of a legacy aggregate.
+  const sorted = sortProbeResultsNewestFirst(withoutChatGptRows(rows));
   const byKey = new Map<string, ProbeResult[]>();
   for (const row of sorted) {
     const key = keyForPrompt(row);
@@ -207,7 +233,10 @@ export function buildProbeSetSummary(
   gapMap: GapMapRow | null = null,
   options: ProbeSelectionOptions = {},
 ): ProbeSetSummary {
-  const sorted = sortProbeResultsNewestFirst(rows);
+  // D-061 — ChatGPT rows are counted as left out, and read nowhere below:
+  // not as live Perplexity, not as simulated, not as historical.
+  const read = withoutChatGptRows(rows);
+  const sorted = sortProbeResultsNewestFirst(read);
   const live = sorted.filter(isLive);
   const simulated = sorted.filter((r) => !isLive(r));
   const mainProbeResults = selectMainReportProbeResults(sorted);
@@ -227,9 +256,10 @@ export function buildProbeSetSummary(
   );
 
   return {
-    total: rows.length,
+    total: read.length,
     livePerplexity: live.length,
     simulated: simulated.length,
+    chatGptRowsLeftOut: rows.length - read.length,
     includedMode: live.length > 0 ? "live_perplexity" : "simulated",
     excludedModes: live.length > 0 && simulated.length > 0 ? ["simulated"] : [],
     mainProbeResults,

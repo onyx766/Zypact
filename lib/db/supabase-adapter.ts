@@ -12,6 +12,9 @@ import type {
   AddPilotQuestionInput,
   AddPilotQuestionOutcome,
   AddPilotQuestionResult,
+  AddPilotQuestionEngineInput,
+  AddPilotQuestionEngineOutcome,
+  AddPilotQuestionEngineResult,
   ClosePilotInput,
   ClosePilotOutcome,
   RetirePilotQuestionInput,
@@ -910,9 +913,13 @@ function mapProbeRun(r: ProbeRunDbRow): ProbeRun {
 }
 
 function coerceProbeMode(v: unknown): ProbeMode {
-  // The CHECK constraint guarantees `'simulated' | 'live_perplexity'`, but read
-  // paths still guard against pre-migration rows in dev environments.
-  return v === "live_perplexity" ? "live_perplexity" : "simulated";
+  // The CHECK constraints guarantee `'simulated' | 'live_perplexity'`, and
+  // `'live_openai_chatgpt'` from 20261109180000 (D-061), but read paths
+  // still guard against pre-migration rows in dev environments. A ChatGPT
+  // row keeps its own mode: it is never relabelled as simulated.
+  if (v === "live_perplexity") return "live_perplexity";
+  if (v === "live_openai_chatgpt") return "live_openai_chatgpt";
+  return "simulated";
 }
 
 function coerceEvidenceProvenance(v: unknown): EvidenceBankProvenance {
@@ -2168,6 +2175,45 @@ export const supabaseAdapter: DbAdapter = {
       protocolId: added ? (ids[1] as string) : null,
       jobId: added ? (ids[2] as string) : null,
     };
+  },
+
+  async addPilotQuestionEngine(input: AddPilotQuestionEngineInput): Promise<AddPilotQuestionEngineResult> {
+    const { data, error } = await getClient().rpc("add_pilot_question_engine", {
+      p_pilot_id: input.pilotId,
+      p_pilot_question_id: input.pilotQuestionId,
+      p_engine: input.engine,
+      p_added_by: input.addedBy,
+    });
+    if (error) throw error;
+    const REJECT = "addPilotQuestionEngine: the RPC reply did not satisfy the closed D-061 contract.";
+    const rows = Array.isArray(data) ? data : data === null || data === undefined ? [] : [data];
+    if (rows.length !== 1) throw new Error(REJECT);
+    const reply = rows[0] as Record<string, unknown>;
+    const OUTCOMES: readonly AddPilotQuestionEngineOutcome[] = [
+      "ADDED", "ALREADY_ADDED", "PILOT_NOT_FOUND", "QUESTION_NOT_FOUND", "PILOT_CLOSED", "PILOT_ENDED",
+      "QUESTION_RETIRED", "VERSION_NOT_APPROVED", "HASH_MISMATCH",
+    ];
+    const outcome = reply.outcome;
+    if (typeof outcome !== "string" || !OUTCOMES.includes(outcome as AddPilotQuestionEngineOutcome)) throw new Error(REJECT);
+    const added = outcome === "ADDED" || outcome === "ALREADY_ADDED";
+    const ids = [reply.protocol_id, reply.job_id];
+    if (added !== ids.every((v) => typeof v === "string")) throw new Error(REJECT);
+    return {
+      outcome: outcome as AddPilotQuestionEngineOutcome,
+      protocolId: added ? (ids[0] as string) : null,
+      jobId: added ? (ids[1] as string) : null,
+    };
+  },
+
+  async protocolWorkerCapabilities(): Promise<string[]> {
+    // A database without 20261109180000 has no such function: PostgREST
+    // answers an error, which is thrown, so a caller fails closed.
+    const { data, error } = await getClient().rpc("protocol_worker_capabilities");
+    if (error) throw error;
+    if (!Array.isArray(data) || !data.every((v) => typeof v === "string")) {
+      throw new Error("protocolWorkerCapabilities: the RPC reply was not a list of capability names.");
+    }
+    return [...(data as string[])];
   },
 
   async closePilot(input: ClosePilotInput): Promise<ClosePilotOutcome> {

@@ -943,8 +943,13 @@ async function main(): Promise<void> {
   const pricingSrc = fs.readFileSync("lib/probes/chatgpt-pricing.ts", "utf8");
   check("B4 the pricing module cannot make a call", !/fetch\(|process\.env|from "@\/lib\/probes\/chatgpt"/.test(pricingSrc));
   const scriptImporters = importers("scripts").map((p) => p.replace(/\\/g, "/")).sort();
-  check("B5 only the benchmark and the two ChatGPT tests import the adapter under scripts/",
-    JSON.stringify(scriptImporters) === JSON.stringify(["scripts/benchmark-chatgpt-models.ts", "scripts/lib/chatgpt-benchmark.ts", "scripts/test-chatgpt-adapter.ts", "scripts/test-chatgpt-worker.ts"]), scriptImporters.join(", "));
+  // D-061 — the phase B schema test reads the adapter's approved setting constants, to prove
+  // add_pilot_question_engine's SQL literals equal them (B-overview item 6); it makes no call.
+  check("B5 only the benchmark and the three ChatGPT tests import the adapter under scripts/",
+    JSON.stringify(scriptImporters) === JSON.stringify([
+      "scripts/benchmark-chatgpt-models.ts", "scripts/lib/chatgpt-benchmark.ts", "scripts/test-chatgpt-adapter.ts",
+      "scripts/test-chatgpt-phase-b-schema.ts", "scripts/test-chatgpt-worker.ts",
+    ]), scriptImporters.join(", "));
   check("B3 the adapter never reads the analysis key", !/process\.env\.OPENAI_API_KEY\b/.test(fs.readFileSync("lib/probes/chatgpt.ts", "utf8")));
 
   /* N: validity note -------------------------------------------------- */

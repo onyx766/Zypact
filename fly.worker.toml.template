@@ -13,6 +13,8 @@
 # Supabase URL, the service-role key, the Perplexity key and the analysis
 # provider key are NOT set here and never will be: they belong in
 # `fly secrets`, which stores them encrypted and refuses to read them back.
+# The same holds for the ChatGPT measurement key, which is set only at the
+# step that turns the ChatGPT switch on (D-061).
 #
 # This machine is a WORKER. It has no `http_service`, no `[[services]]`, no
 # public port, no allocated IP address and no volume. The only surface it
@@ -38,9 +40,13 @@ kill_timeout = 30
   # protocol run_cap: a 5-run plan plus 2 retries finishes in one claim.
   # The one-job bound is WORKER_EXIT_AFTER_CLAIMED_JOB, below. (D-036)
   WORKER_MAX_SLOTS_PER_CLAIM = "7"
-  # 7 slots x (2 x 45 s provider timeout) + grace = ~640 s worst case; a
-  # measured 5-run baseline takes 91-102 s. (D-036)
-  WORKER_MAX_RUNTIME_SECONDS = "900"
+  # Every slot at its worst case: the longer provider call (ChatGPT, 290 s),
+  # then the analysis call (45 s), plus the grace once:
+  # 7 x (290 + 45) s + 10 s = 2,355 s < 2,400 s. Sized for ChatGPT while
+  # its switch below is still off, so turning it on changes no bound. A
+  # measured 5-run Perplexity baseline takes 91-102 s. (D-036, D-059, D-061)
+  WORKER_MAX_RUNTIME_SECONDS = "2400"
+  # The Perplexity call and the analysis call, each bounded separately.
   WORKER_PROVIDER_TIMEOUT_MS = "45000"
   WORKER_EXIT_AFTER_CLAIMED_JOB = "true"
   WORKER_MAX_THROTTLED_RETRIES = "0"
@@ -53,10 +59,27 @@ kill_timeout = 30
   # cooperative. 10000 ms against 30 s leaves the invariant with room, and
   # the contract now checks it numerically instead of trusting a default.
   WORKER_GRACE_MS = "10000"
-  # D-056 — the ChatGPT engine stays off. Turning it on is its own founder-
-  # authorised step after phase B's migration; with it off the adapter is
-  # never loaded and an openai_chatgpt protocol is refused before admission.
+  # A 290 s ChatGPT call plus the grace must finish inside the lease:
+  # 290 s + 10 s = 300 s < 330 s. (D-059, D-061) It applies to Perplexity
+  # jobs too as soon as this file is deployed: a crashed job keeps its
+  # lease, and a Run of it stays blocked, for up to 330 s (the code
+  # default is 60 s).
+  WORKER_LEASE_SECONDS = "330"
+  # During a long call the heartbeat, every lease / 3 = 110 s, is the only
+  # database contact, so readiness must outlast it: 240 s > 110 s.
+  # (D-059, D-061) Perplexity jobs too, once deployed: /readyz reports a
+  # wedged worker after 4 minutes (the code default is 1 minute).
+  WORKER_READY_STALE_MS = "240000"
+  # D-056 — the ChatGPT engine stays off. Turning it on is a later
+  # production step through its own pull request, after phase B's
+  # migration (20261109180000) is applied (D-061); with it off the adapter
+  # is never loaded and an openai_chatgpt protocol is refused before
+  # admission.
   WORKER_CHATGPT_ENABLED = "false"
+  # The ChatGPT call's own deadline, read only with the switch on. Stated
+  # while it is off so the runtime and lease above are sized against it,
+  # and the hosting contract checks them with it. (D-059, D-061)
+  WORKER_CHATGPT_TIMEOUT_MS = "290000"
 
 # Top-level check, not an `http_service` check: this app serves no public
 # traffic, so there is no service to hang a check on. Fly's prober reaches

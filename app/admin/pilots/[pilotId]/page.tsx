@@ -155,6 +155,7 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
     <AdminShell
       email={user.email}
       active="pilots"
+      layout="flow"
       health={
         over
           ? { ok: false, title: pilot.status === "closed" ? "Pilot closed" : "Past end date", note: "Its questions are no longer measured." }

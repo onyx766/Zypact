@@ -60,6 +60,7 @@ export default async function PilotReportPreviewPage({
     <AdminShell
       email={user.email}
       active="pilots"
+      layout="flow"
       health={
         revision.integrityStatus === "integrity_passed"
           ? { ok: true, title: INTEGRITY_WORDS.integrity_passed, note: `Revision ${revision.revision}` }

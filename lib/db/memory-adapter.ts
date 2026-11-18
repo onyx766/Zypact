@@ -1553,7 +1553,10 @@ export const memoryAdapter: DbAdapter = {
    * D-054 — mirrors retire_pilot_question, branch for branch; D-061 — over
    * every slot of the question (each engine's baseline) and every retest of
    * each: refused while any is active; retired once at least one slot's job
-   * stopped for good (abandoned, or failed and not retryable per slot).
+   * stopped for good (abandoned, or failed and not retryable per slot), and
+   * only while no other slot, and no retest of any slot, holds a run that
+   * has not finished (a reserved or in-progress attempt, or a claimed or
+   * running job, lease lapsed or not).
    */
   async retirePilotQuestion(input: RetirePilotQuestionInput): Promise<RetirePilotQuestionOutcome> {
     const store = getStore();
@@ -1576,6 +1579,7 @@ export const memoryAdapter: DbAdapter = {
     }
     let stopped = false;
     let retryable = false;
+    const stoppedProtocolIds = new Set<string>();
     for (const slot of slots.filter((s) => s.phase === "baseline")) {
       const job = [...store.protocolExecutionJobs.values()].find((j) => j.protocolId === slot.protocolId);
       if (!job || (job.status !== "failed" && job.status !== "abandoned_exhausted")) continue;
@@ -1595,9 +1599,24 @@ export const memoryAdapter: DbAdapter = {
         slotRetryable = sourceOk && capOk;
       }
       if (slotRetryable) retryable = true;
-      else stopped = true;
+      else {
+        stopped = true;
+        stoppedProtocolIds.add(slot.protocolId);
+      }
     }
     if (!stopped) return retryable ? "QUESTION_RETRYABLE" : "QUESTION_NOT_STOPPED";
+    // As the SQL: the stopped slots aside, every slot and every retest of
+    // any slot, with the report save's attempt test and any claimed or
+    // running job, whatever its lease.
+    const unfinished = slots.some((s) =>
+      [...store.protocols.values()]
+        .filter((p) => (p.id === s.protocolId || p.baselineProtocolId === s.protocolId) && !stoppedProtocolIds.has(p.id))
+        .some((p) =>
+          [...store.protocolExecutionJobs.values()].some((j) => j.protocolId === p.id && (j.status === "claimed" || j.status === "running"))
+          || [...store.protocolAttempts.values()].some((a) => a.protocolId === p.id && (a.status === "reserved" || a.status === "in_progress"))
+        )
+    );
+    if (unfinished) return "QUESTION_JOB_ACTIVE";
     const retired = [...store.pilotQuestions.values()].filter((q) => q.pilotId === pilot.id && q.retiredAt !== null).length;
     if (retired >= 5) return "RETIRE_LIMIT_REACHED";
     store.pilotQuestions.set(question.id, { ...question, retiredBy: input.retiredBy, retiredAt: nowIso(), retireReason: reason });

@@ -2,17 +2,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { requireFounderForPage } from "@/lib/auth/founder";
-import type { PilotQuestionEngine } from "@/lib/db/types";
 import { revisionActionsCurrent, STALE_REVISION_WORDS } from "@/lib/pilots/action-rules";
 import { currentReportableVersionIds, listPilotActionsForAdmin } from "@/lib/pilots/action-store";
 import {
   ENGINE_NOT_CONNECTED,
-  ENGINE_NOT_CONNECTED_CONTROLS_NOTE,
-  ENGINE_NOT_MEASURED,
   PILOT_QUESTION_RETIRED_LABEL,
   pilotEngines,
-  pilotHeldReasonText,
-  pilotJobStatusLabel,
   pilotProvenanceLabel,
 } from "@/lib/pilots/copy";
 import { pilotChatGptEnabled } from "@/lib/pilots/engines";
@@ -29,16 +24,14 @@ import { getReportServiceClient } from "@/lib/reports/service-client";
 import { publicSiteUrl } from "@/lib/seo/site";
 import { AdminShell } from "../../admin-shell";
 import {
-  AddChatGptButton,
   AddChatGptToAllButton,
   AddQuestionPanel,
   BuildPilotReportButton,
   ClosePilotButton,
-  QuestionControls,
-  ResolveReviewControls,
   RetireQuestionButton,
 } from "../pilot-forms";
 import { PilotActionsPanel } from "../pilot-action-forms";
+import { PilotEngineCell } from "../pilot-engine-cell";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -101,50 +94,6 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
   const withoutChatGpt = questions
     .filter((q) => q.retiredAt === null && q.engines.openai_chatgpt === null)
     .map((q) => q.id);
-
-  const engineCell = (q: PilotQuestionRow, engine: PilotQuestionEngine, connected: boolean) => {
-    const m = q.engines[engine];
-    if (!m) {
-      return (
-        <>
-          <p className="zpa-muted">{ENGINE_NOT_MEASURED}</p>
-          {engine === "openai_chatgpt" && canAddChatGpt && q.retiredAt === null ? (
-            <AddChatGptButton pilotId={pilot.id} pilotQuestionId={q.id} />
-          ) : null}
-        </>
-      );
-    }
-    return (
-      <>
-        <p>{pilotJobStatusLabel(m.jobStatus, m.stale)}</p>
-        <p className="zpa-muted">
-          {m.completedRuns} of {m.plannedRuns ?? "?"} runs completed
-          {m.failedRuns > 0 ? `, ${m.failedRuns} failed` : ""}
-        </p>
-        {m.jobStatus === "needs_review" ? (
-          <>
-            <p className="zpa-muted">{pilotHeldReasonText(m.needsReviewReason, engine)}</p>
-            <ResolveReviewControls pilotId={pilot.id} pilotQuestionId={q.id} engine={engine} />
-          </>
-        ) : null}
-        {connected ? (
-          <QuestionControls
-            pilotId={pilot.id}
-            pilotQuestionId={q.id}
-            engine={engine}
-            jobStatus={m.jobStatus}
-            stale={m.stale}
-            plannedRuns={m.plannedRuns}
-            runCap={m.runCap}
-            spendCapUsd={m.spendCapUsd}
-            pilotOpen={!over && !notStarted && q.retiredAt === null}
-          />
-        ) : (
-          <p className="zpa-muted">{ENGINE_NOT_CONNECTED_CONTROLS_NOTE}</p>
-        )}
-      </>
-    );
-  };
 
   return (
     <AdminShell
@@ -235,7 +184,18 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
                     <p className="zpa-muted">{q.customerApprovedOn}</p>
                   </td>
                   {engines.map((e) => (
-                    <td key={e.key}>{engineCell(q, e.key, e.connected)}</td>
+                    <td key={e.key}>
+                      <PilotEngineCell
+                        pilotId={pilot.id}
+                        pilotQuestionId={q.id}
+                        engine={e.key}
+                        measurement={q.engines[e.key]}
+                        connected={e.connected}
+                        canAddChatGpt={canAddChatGpt}
+                        retired={q.retiredAt !== null}
+                        pilotOpen={!over && !notStarted && q.retiredAt === null}
+                      />
+                    </td>
                   ))}
                 </tr>
               ))}

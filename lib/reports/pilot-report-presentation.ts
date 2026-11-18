@@ -19,6 +19,7 @@ import {
   actionEvidenceWords,
   actionReviewedWords,
   ANSWER_MODE_WORDS,
+  endedAfterReviewWords,
   engineNothingReadableWords,
   LABEL_WORDS,
   NO_READABLE_ANSWER_CELL,
@@ -26,7 +27,9 @@ import {
   PILOT_REPORT_TITLE,
   PORTFOLIO_WEIGHTING_WORDS,
   PROVIDER_WORDS,
+  RETIRED_ONE_OF_SEVERAL_WORDS,
   RETIRED_WORDS,
+  retiredMeasurementWords,
   settingSearchWords,
   settingTierWords,
   sourceRuleWords,
@@ -166,18 +169,36 @@ function conditionsSection(c: PilotEngineConditions): PilotPresentationSection {
   };
 }
 
+/**
+ * D-061 (review of phase B, engineer) — whether a stored payload was built
+ * before D-061. Every revision built since carries `questionsNotMeasured` on
+ * each engine (an empty list included); none built before does. The page
+ * re-renders a stored payload with this code, while the stored Markdown
+ * keeps the words it was saved with, so a revision built before D-061 keeps
+ * the words of that time wherever D-061 changed them: "0 of 0 readable
+ * answers" in a row and a question line, the hero's engines, the total line
+ * and the empty other-brand and source notes. The page then still says what
+ * its stored Markdown says (METHODOLOGY §16 gate 14).
+ */
+export function builtBeforeD061(payload: PilotReportPayload): boolean {
+  return !payload.engines.some((e) => Array.isArray(e.questionsNotMeasured));
+}
+
 export function presentPilotReport(payload: PilotReportPayload): PilotPresentation {
   const { subject, window } = payload;
+  const beforeD061 = builtBeforeD061(payload);
   const live = payload.questions.filter((q) => !q.retired);
   const retiredCount = payload.questions.length - live.length;
   const measured = payload.engines.filter((e) => e.measured);
   const notMeasured = payload.engines.filter((e) => !e.measured);
-  // D-061 — the hero names only the engines that produced a readable answer.
-  const answered = measured.filter((e) => e.questionsWithReadableAnswer > 0);
+  // D-061 — the hero names only the engines that produced a readable answer
+  // (a revision built before D-061 named every measured engine).
+  const answered = beforeD061 ? measured : measured.filter((e) => e.questionsWithReadableAnswer > 0);
   const summaryOf = (engine: PilotEngineKey) => payload.engines.find((e) => e.engine === engine);
   // D-061 — an engine with no readable answer at all says why, in words:
   // still being measured on some live question, or nothing it returned was readable.
   const nothingReadable = (engine: PilotEngineKey): string | null => {
+    if (beforeD061) return null;
     if ((summaryOf(engine)?.questionsWithReadableAnswer ?? 0) > 0) return null;
     const stillMeasuring = live.some((q) =>
       q.measurements.some((m) => m.engine === engine && (m.state === "not_started" || m.state === "not_finished"))
@@ -199,7 +220,7 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
     const label = engineLabel(section.engine);
     const p = section.portfolio;
     const notes: string[] = [];
-    if (p && p.includedOrdinals.length === 0) {
+    if (p && p.includedOrdinals.length === 0 && !beforeD061) {
       // D-061 — no question has finished with a readable answer: no total,
       // and never "named in 0 of 0".
       notes.push(p.heterogeneity);
@@ -229,7 +250,7 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
             : [
                 String(r.ordinal),
                 STATE_WORDS[r.state],
-                r.denominator === 0 ? NO_READABLE_ANSWER_CELL[r.state] : `${r.numerator} of ${r.denominator} readable answers`,
+                r.denominator === 0 && !beforeD061 ? NO_READABLE_ANSWER_CELL[r.state] : `${r.numerator} of ${r.denominator} readable answers`,
                 rangeWords(r.intervalLow, r.intervalHigh),
                 attemptWords(r.counts),
                 LABEL_WORDS[r.label],
@@ -301,19 +322,25 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
 
   const questions: PilotPresentationQuestion[] = payload.questions.map((q) => {
     const lines: string[] = [];
+    // D-061 (review of phase B) — a question retired with more than one
+    // measurement: retiring needed one of them to stop for good, and the
+    // other may have finished, so each engine's line says how far it got.
+    const severalRetired = q.retired && q.measurements.length > 1 && !beforeD061;
     for (const m of q.measurements) {
       const label = engineLabel(m.engine);
       if (q.retired) {
-        lines.push(`${label} (retired): ${attemptWords(m.counts)}.`);
+        lines.push(`${label} (${severalRetired ? retiredMeasurementWords(m.state) : "retired"}): ${attemptWords(m.counts)}.`);
         continue;
       }
       const o = m.report.observation;
       lines.push(
-        o.denominator === 0
+        o.denominator === 0 && !beforeD061
           ? // D-061 — no readable answer yet, or none at all: said in words, beside the counts below.
             `${label} (${STATE_WORDS[m.state]}): ${NO_READABLE_ANSWER_LINE[m.state]}`
           : `${label} (${STATE_WORDS[m.state]}): named in ${o.numerator} of ${o.denominator} readable answers; likely range ${rangeWords(o.interval?.low ?? null, o.interval?.high ?? null)}.`
       );
+      // D-061 (review of phase B) — a review ended it: how many planned answers it completed, and that it is not in the total.
+      if (m.state === "ended_after_review") lines.push(endedAfterReviewWords(m.counts.completed, m.counts.planned));
       lines.push(`Attempts: ${attemptWords(m.counts)}.`);
       if (m.report.competitorsObserved.length > 0) {
         lines.push(`Other brands named: ${m.report.competitorsObserved.map((c) => `${c.name} (${c.runsMentionedIn})`).join(", ")}.`);
@@ -326,7 +353,7 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
       key: q.pilotQuestionId,
       heading: `${q.ordinal}. ${q.text}`,
       meta: `${pilotProvenanceLabel(q.provenance)}. Approved by the customer on ${q.customerApprovedOn}.${
-        q.retired ? ` ${RETIRED_WORDS}${q.retiredOn ? ` (${q.retiredOn})` : ""}` : ""
+        q.retired ? ` ${severalRetired ? RETIRED_ONE_OF_SEVERAL_WORDS : RETIRED_WORDS}${q.retiredOn ? ` (${q.retiredOn})` : ""}` : ""
       }`,
       lines,
     };

@@ -273,8 +273,9 @@ async function main(): Promise<void> {
   const restoredRetire = rBlocks.length === 2
     ? newRetire.replace(rBlocks[0].text, "").replace(rBlocks[1].text, oldBlock)
     : "";
-  check("S36 retire has two marked blocks: three declarations, then the slot checks",
-    rBlocks.length === 2 && rBlocks[0].code === "  v_stopped boolean := false;\n  v_retryable boolean := false;\n  v_slot_retryable boolean;\n"
+  check("S36 retire has two marked blocks: four declarations, then the slot checks",
+    rBlocks.length === 2
+      && rBlocks[0].code === "  v_stopped boolean := false;\n  v_retryable boolean := false;\n  v_slot_retryable boolean;\n  v_stopped_protocols uuid[] := '{}';\n"
       && newRetire.indexOf(rBlocks[0].text) < newRetire.indexOf("\nbegin\n"));
   check("S37 retire_pilot_question is 20261109140000's definition byte for byte outside the marked declarations and block",
     oldBlock.length > 2000 && restoredRetire === oldRetire);
@@ -290,6 +291,23 @@ async function main(): Promise<void> {
   check("S40 one stopped slot retires the question; otherwise RETRYABLE when a slot can be retried, else NOT_STOPPED; the 5-retirement limit stays",
     block.includes("if not v_stopped then\n    if v_retryable then\n      return query select 'QUESTION_RETRYABLE'::text;\n    else\n      return query select 'QUESTION_NOT_STOPPED'::text;")
       && newRetire.includes("if v_retired >= 5 then") && newRetire.indexOf(block) < newRetire.indexOf("if v_retired >= 5 then"));
+  // DB-1 (review of phase B) — a stopped slot retires the question only when
+  // nothing else of it holds an unfinished run, with the report save's
+  // attempt test (20261109160000) and any claimed or running job.
+  const blockCode = (rBlocks[1]?.code ?? "").replace(/\s+/g, " ");
+  const openCheck = squash(between(block, "  if exists (\n    select 1\n      from public.pilot_question_protocols pqp\n      join public.protocols pr\n        on pr.id = pqp.protocol_id or pr.baseline_protocol_id = pqp.protocol_id\n      left join",
+    "    return query select 'QUESTION_JOB_ACTIVE'::text;\n"));
+  const saveSrc = read(path.join(DIR, "20261109160000_pilot_actions.sql"));
+  const saveAttemptTest = squash(between(saveSrc, "         or exists (\n           select 1\n             from public.protocol_attempts a", "and a.status in ('reserved', 'in_progress'))"));
+  check("S40b once a slot stopped, any other slot, and any retest of any slot, holding a reserved or in-progress attempt or a claimed or running job (lease lapsed or not) refuses QUESTION_JOB_ACTIVE; the stopped slots are left out",
+    blockCode.includes("v_stopped := true; v_stopped_protocols := v_stopped_protocols || v_slot_protocol_id;")
+      && openCheck.includes("where pqp.pilot_question_id = v_question.id and pr.id <> all (v_stopped_protocols)")
+      && openCheck.includes("j.status in ('claimed', 'running') or exists")
+      && !openCheck.includes("lease_expires_at") && !openCheck.includes("pqp.phase")
+      && saveAttemptTest.length > 0 && openCheck.includes(saveAttemptTest.replace(/^or exists \(/, "exists ("))
+      && block.indexOf("'QUESTION_NOT_STOPPED'::text") < block.indexOf("and pr.id <> all (v_stopped_protocols)")
+      && block.lastIndexOf("'QUESTION_JOB_ACTIVE'::text") > block.indexOf("if not v_stopped then"),
+    openCheck);
 
   // 7. The capability probe, and every privilege.
   check("S41 protocol_worker_capabilities() returns exactly live_openai_chatgpt, immutable SQL",
@@ -463,6 +481,40 @@ async function main(): Promise<void> {
     (await retire(p2, r2.pilotQuestionId!)) === "QUESTION_RETRYABLE");
   setJob(r2.jobId!, { status: "abandoned_exhausted" }); // test setup: Perplexity abandoned
   check("M17 once the other slot stopped for good, the question is retired", (await retire(p2, r2.pilotQuestionId!)) === "RETIRED");
+
+  // DB-1 (review of phase B): one slot stopped for good does not retire the
+  // question while the other slot holds a run that has not finished.
+  const r3 = await newQuestion(p2, 12);
+  const r3c = await addEngine(p2, r3.pilotQuestionId!);
+  const r3Project = store().protocolExecutionJobs.get(r3.jobId!)!.projectId;
+  setJob(r3c.jobId!, { status: "failed", failureReason: "PROVIDER_ADAPTER_NOT_ENABLED", currentAttemptId: null }); // test setup: ChatGPT refused before admission
+  const retried = randomUUID();
+  const attemptRow = (status: string) => ({
+    id: retried, projectId: r3Project, jobId: r3.jobId!, protocolId: r3.protocolId!, status,
+    terminalizedAt: status === "completed" ? new Date().toISOString() : null, baselineOrdinal: 1, retryOfAttemptId: randomUUID(),
+  });
+  (store().protocolAttempts as Map<string, unknown>).set(retried, attemptRow("reserved")); // test setup: an approved Retry
+  setJob(r3.jobId!, { status: "queued", currentAttemptId: retried }); // ...not yet Run
+  check("M17b a Retry approved on Perplexity but not yet Run (queued, attempt reserved) keeps the question: QUESTION_JOB_ACTIVE",
+    (await retire(p2, r3.pilotQuestionId!)) === "QUESTION_JOB_ACTIVE");
+  (store().protocolAttempts as Map<string, unknown>).set(retried, attemptRow("in_progress"));
+  setJob(r3.jobId!, { status: "running", leaseExpiresAt: new Date(Date.now() - 60_000).toISOString() }); // test setup: its worker stopped part-way
+  check("M17c a Perplexity run whose worker stopped part-way (lease lapsed, attempt in progress) keeps it too",
+    (await retire(p2, r3.pilotQuestionId!)) === "QUESTION_JOB_ACTIVE");
+  (store().protocolAttempts as Map<string, unknown>).set(retried, attemptRow("completed"));
+  check("M17d a claimed or running job keeps it whatever its lease, even with no open attempt",
+    (await retire(p2, r3.pilotQuestionId!)) === "QUESTION_JOB_ACTIVE");
+  setJob(r3.jobId!, { status: "succeeded", leaseExpiresAt: null, currentAttemptId: null }); // test setup: it finished
+  check("M17e once that run finished, the question is retired", (await retire(p2, r3.pilotQuestionId!)) === "RETIRED");
+  const r4 = await newQuestion(p2, 13);
+  const solo = randomUUID();
+  (store().protocolAttempts as Map<string, unknown>).set(solo, {
+    id: solo, projectId: r3Project, jobId: r4.jobId!, protocolId: r4.protocolId!, status: "reserved",
+    terminalizedAt: null, baselineOrdinal: 1, retryOfAttemptId: randomUUID(),
+  }); // test setup: an approved Retry on the only slot
+  setJob(r4.jobId!, { status: "queued", currentAttemptId: solo });
+  check("M17f one slot: the same reserved Retry answers as before D-061 (not stopped)",
+    (await retire(p2, r4.pilotQuestionId!)) === "QUESTION_NOT_STOPPED");
 
   // The probe-run CHECKs at start, and the platform at persist.
   const p3 = await newPilot("phase-b-m3.example");

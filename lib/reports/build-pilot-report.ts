@@ -83,6 +83,12 @@ export interface PilotReportSlotInput {
   answerModes: string[];
   /** D-061 — the protocol's `model_config.setting_version`; null or absent when it records none. */
   settingVersion?: string | null;
+  /**
+   * D-061 (review of phase B) — the job's `review_resolution`: how a review
+   * ended it, or null. `excluded_and_completed` marks a measurement a review
+   * ended (resolve_protocol_job_review), whatever its answers. Absent: not read.
+   */
+  reviewResolution?: string | null;
 }
 
 export interface PilotReportQuestionInput {
@@ -166,10 +172,39 @@ export function countAttempts(evidence: BuildProtocolReportInput, report: Protoc
   };
 }
 
-function measurementState(jobStatus: string | null, attempted: number): PilotQuestionMeasurementState {
+/**
+ * D-061 (review of phase B) — the planned baseline answers a measurement
+ * completed: its distinct baseline ordinals, 1 to planned, with a completed
+ * attempt (a retried ordinal counts once).
+ */
+export function completedPlannedAnswers(evidence: BuildProtocolReportInput, planned: number): number {
+  const ordinals = new Set<number>();
+  for (const a of evidence.attempts) {
+    if (a.status === "completed" && a.attemptKind === "baseline" && typeof a.baselineOrdinal === "number"
+      && a.baselineOrdinal >= 1 && a.baselineOrdinal <= planned) {
+      ordinals.add(a.baselineOrdinal);
+    }
+  }
+  return ordinals.size;
+}
+
+/**
+ * D-061 (review of phase B) — a succeeded job that a review ended. 0050's
+ * completion gate marks a job succeeded only once every planned ordinal has
+ * a completed answer, so fewer completed planned answers than planned means
+ * resolve_protocol_job_review(excluded_and_completed) ended it; its recorded
+ * resolution says so directly. Either one is enough (engineer): the count is
+ * defence in depth for a reader that did not pass the resolution.
+ */
+function endedByReview(slot: PilotReportSlotInput, planned: number): boolean {
+  return slot.jobStatus === "succeeded"
+    && (slot.reviewResolution === "excluded_and_completed" || completedPlannedAnswers(slot.evidence, planned) < planned);
+}
+
+function measurementState(jobStatus: string | null, attempted: number, endedAfterReview = false): PilotQuestionMeasurementState {
   switch (jobStatus) {
     case "succeeded":
-      return "measured";
+      return endedAfterReview ? "ended_after_review" : "measured";
     case "claimed":
     case "running":
       return "not_finished";
@@ -385,7 +420,7 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
       });
       text = text || report.question.text;
       const counts = countAttempts(ev, report);
-      const state = measurementState(slot.jobStatus, counts.attempted);
+      const state = measurementState(slot.jobStatus, counts.attempted, endedByReview(slot, counts.planned));
       measurements.push({
         engine: slot.engine,
         protocolId: slot.protocolId,
@@ -400,7 +435,7 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
       // D-061 — defence in depth: a finished job always has attempts. The
       // integrity rule skips the per-answer checks of a live measurement with
       // no attempt, so this one must never pass as finished.
-      if (!retired && state === "measured" && counts.attempted === 0) {
+      if (!retired && slot.jobStatus === "succeeded" && counts.attempted === 0) {
         structural.push({
           status: "needs_review",
           reason: `Question ${q.ordinal}: the ${engineLabel(slot.engine)} measurement is marked finished but has no recorded attempt.`,
@@ -412,7 +447,10 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
           reason:
             state === "stopped"
               ? `Question ${q.ordinal}: the ${engineLabel(slot.engine)} measurement stopped before it finished.`
-              : `Question ${q.ordinal}: the ${engineLabel(slot.engine)} measurement has not finished.`,
+              : state === "ended_after_review"
+                ? // D-061 (review of phase B) — never read as finished (METHODOLOGY §7: no silent stop at a convenient sample).
+                  `Question ${q.ordinal}: the ${engineLabel(slot.engine)} measurement ended after review with ${counts.completed} of ${counts.planned} planned answers completed.`
+                : `Question ${q.ordinal}: the ${engineLabel(slot.engine)} measurement has not finished.`,
         });
       }
       if (counts.inProgress > 0) {
@@ -540,11 +578,15 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
   const methodNotes = [
     `Each question's figures come from its own approved protocol and its own answers. The table rows are the question sections' figures, repeated.`,
     `Labels follow rule ${PILOT_LABEL_RULE}: with at least ${MIN_READABLE_FOR_LABEL} readable answers, "named in every answer", "named in no answer" or "named in some answers"; with fewer, "not enough answers". The counts are always shown beside the label.`,
-    "The total line adds up readable answers over the questions that finished, each answer counting once. Questions that are retired or not finished are left out of it and named. It is not a score.",
+    "The total line adds up readable answers over the questions that finished, each answer counting once. Questions that are retired, not finished, or ended after review are left out of it and named. It is not a score.",
     `Competitor names are grouped across questions by rule ${PILOT_COMPETITOR_RULE}: the same name apart from spacing and capital letters. Names were read from each answer by an analysis model, so different spellings of one company can appear separately. These are totals across questions, not results for any one question.`,
     `Source types come from the fixed list ${SOURCE_TYPE_LIST_VERSION}. A run counts once per type, whatever the number of pages of that type it cited.`,
     "Failed and excluded answers stay in each question's own count of attempts. They are never counted as an answer that did not name the brand.",
-    "A retired question's measurement could not finish. It shows its attempt counts only, with no rate, range or reading, and it is left out of every total.",
+    // D-061 (review of phase B) — retiring needs one measurement that could
+    // not finish and stops the question on every engine, so another
+    // measurement of it may have finished; its figures are not reported either.
+    "A question is retired when one of its measurements could not finish, and retiring stops it on every engine. A retired question shows its attempt counts only, with no rate, range or reading, even for a measurement that had finished, and it is left out of every total.",
+    "A measurement that a review ended (after an answer that was never confirmed, such as a timed-out call) may have fewer completed answers than planned. It shows its own figures with its counts, is marked as ended after review rather than finished, and is left out of the total.",
   ];
 
   const payload: PilotReportPayload = {
@@ -594,7 +636,13 @@ function engineNote(
   retired: number,
   notMeasured: number[]
 ): string {
-  const parts = [`${withReadable} of ${live} question${live === 1 ? "" : "s"} with at least one readable answer`];
+  // D-061 (review of phase B) — no live question on this engine (every one
+  // measured on it is retired): said in words, never "0 of 0".
+  const parts = [
+    live === 0
+      ? "no live question is measured on it"
+      : `${withReadable} of ${live} question${live === 1 ? "" : "s"} with at least one readable answer`,
+  ];
   if (notStarted > 0) parts.push(`${notStarted} not started`);
   if (retired > 0) parts.push(`${retired} retired`);
   if (notMeasured.length > 0) parts.push(`not measured on ${label} for ${questionOrdinalsWords(notMeasured)}`);

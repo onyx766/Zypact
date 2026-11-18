@@ -25,6 +25,17 @@
  *      retest of one, is running or requested; retired when the ChatGPT job
  *      failed for good while Perplexity completed; RETRYABLE while the only
  *      stopped slot can be retried;
+ *   O  (review of phase B) a slot stopped for good never retires a question
+ *      whose other slot, or a retest of any slot, holds a run that has not
+ *      finished: a Retry approved but not yet Run, a run whose worker
+ *      stopped part-way, a run held for review, a retest claimed with a
+ *      lapsed lease; each is retired once that run is finished, and the
+ *      report save is then never left stuck; one slot keeps its earlier
+ *      outcome; the header's switch-off query counts what it says;
+ *   G  (review of phase B) the migration's ten preconditions, each made to
+ *      refuse inside a rolled-back transaction after the header's own
+ *      recovery statements restore the state before it (which proves that
+ *      recovery too);
  *   C  protocol_worker_capabilities() as service_role;
  *   X  privileges, SECURITY DEFINER and search_path.
  *
@@ -33,7 +44,9 @@
  * only rows that are not evidence (a run request's status, a lease time, a
  * pilot's dates, a draft protocol, a pilot question row pointing at an
  * unapproved version) and says so. 0054's persist is created under a test
- * name for the replay proof and dropped in the same session.
+ * name for the replay proof and dropped in the same session. The G cases
+ * also close leftover attempts, change a CHECK, an index, a provider or a
+ * probe run's platform, and every one of them is rolled back (G12).
  *
  * Runs against a DISPOSABLE Supabase Postgres with every migration applied
  * (scripts/run-p2-workspace-db-local.sh). Opt-in: SKIP (exit 2) without
@@ -41,7 +54,7 @@
  */
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import { db, lit, makeChecker, requireContainer, row } from "./lib/workspace-db";
@@ -248,9 +261,133 @@ function background(sql: string): { done: Promise<string> } {
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/* ------------------------------------------------- the migration's own guards (G) */
+
+const MIGRATION_FILE = "supabase/migrations/20261109180000_chatgpt_measurement.sql";
+const fileText = (name: string) => readFileSync(path.join(process.cwd(), "supabase/migrations", name), "utf8");
+/** From `start` through the first `end` after it, inclusive; throws when either is missing (a moved source must fail loudly). */
+function span(src: string, start: string, end: string): string {
+  const s = src.indexOf(start);
+  const e = s < 0 ? -1 : src.indexOf(end, s);
+  if (s < 0 || e < 0) throw new Error(`span not found: ${start.slice(0, 60)}`);
+  return src.slice(s, e + end.length);
+}
+
+/**
+ * The migration header's first recovery, statement for statement and in its
+ * order, built from the files it names: what restores the state before
+ * 20261109180000 while no ChatGPT row exists.
+ */
+function headerRecovery(): string {
+  const s140 = fileText("20261109140000_pilot_questions.sql");
+  const s0054 = fileText("0054_m5_worker_probe_result_and_alert_outbox.sql");
+  const s0073 = fileText("0073_m7_retest_protocol_creation.sql");
+  const s0013 = fileText(readdirSync(path.join(process.cwd(), "supabase/migrations")).find((f) => f.startsWith("0013_"))!);
+  return [
+    "drop function if exists public.protocol_worker_capabilities();",
+    span(s140, "create or replace function public.retire_pilot_question(", "\n$$;\n"),
+    span(s140, "revoke all on function public.retire_pilot_question(uuid, uuid, uuid, text) from public;",
+      "grant execute on function public.retire_pilot_question(uuid, uuid, uuid, text) to service_role;"),
+    "drop function if exists public.add_pilot_question_engine(uuid, uuid, text, uuid);",
+    span(s0054, "create or replace function\n  public.persist_probe_result_for_job(",
+      "grant execute on function\n  public.persist_probe_result_for_job(uuid, uuid, uuid, jsonb) to service_role;\n"),
+    "drop trigger if exists pilot_question_protocols_consistency on public.pilot_question_protocols;",
+    "drop function if exists public.pilot_question_protocols_consistency();",
+    span(s140, "comment on table public.pilot_question_protocols is", ";\n"),
+    "alter table public.pilot_question_protocols drop constraint pilot_question_protocols_engine_check;",
+    "alter table public.pilot_question_protocols add constraint pilot_question_protocols_engine_check check (engine = 'perplexity_sonar');",
+    span(s0073, "create unique index if not exists protocols_one_live_baseline_per_version", ";\n"),
+    span(s0073, "comment on index public.protocols_one_live_baseline_per_version is", ";\n"),
+    "drop index if exists public.protocols_one_live_baseline_per_engine;",
+    // 0013 is idempotent: it drops both probe-mode CHECKs and re-adds them as it wrote them.
+    s0013,
+  ].join("\n");
+}
+
 async function main(): Promise<void> {
   console.log("test-chatgpt-phase-b-db");
   quiesce();
+
+  /* G: the migration's preconditions, each made to refuse ----------------- */
+  // Review of phase B (DB-4). Each case runs in one transaction as the owner:
+  // the header's recovery restores the state before 20261109180000 (no
+  // ChatGPT row exists yet in this container), attempts other suites left
+  // open are set aside, one condition is broken, and the migration file is
+  // re-run. The error ends the session, which rolls everything back; a re-run
+  // that does not refuse reaches the closing rollback.
+  {
+    const [, pilotG, projectG] = createPilot("pb-g.example");
+    const [, , pxG, jobPxG] = addQuestion(pilotG, question(60));
+    const MIGRATION = readFileSync(path.join(process.cwd(), MIGRATION_FILE), "utf8");
+    const RESTORE = headerRecovery();
+    // Test setup inside the transaction: the precondition refuses any open
+    // attempt, so attempts other suites left open are closed for the
+    // rehearsal (0047's reconcile_attempt), and rolled back with it.
+    const SET_ASIDE = `select count(*) from (select public.reconcile_attempt(pa.id, pa.project_id, 'cancelled', 0, null, 'test setup: set aside for the precondition rehearsal') from public.protocol_attempts pa where pa.status in ('reserved', 'in_progress')) s;`;
+    /** Test setup: a Run, the requested claim and an admitted attempt of the pilot's Perplexity job; optionally started on `platform` and closed. */
+    const attemptOf = (platform: string | null) => `do $g$
+declare v_out text; v_tok uuid; v_att uuid;
+begin
+  select r.outcome into v_out from public.request_protocol_job_run(${lit(jobPxG)}::uuid, ${lit(projectG)}::uuid, 'admin_pilot_run', ${lit(FOUNDER)}::uuid, 120) r;
+  if v_out is distinct from 'REQUESTED' then raise exception 'G setup: the run request answered %', v_out; end if;
+  select c.claim_token into v_tok from public.claim_requested_protocol_execution_job('w-g-setup', 300) c;
+  if v_tok is null then raise exception 'G setup: nothing was claimed'; end if;
+  select (a.attempt).id into v_att from public.admit_and_reserve_attempt_for_job(${lit(jobPxG)}::uuid, v_tok, ${lit(projectG)}::uuid, 'baseline', ${lit(`${jobPxG}:baseline:1`)}, 0.02, 0.02, null) a;
+  if v_att is null then raise exception 'G setup: nothing was reserved'; end if;
+${platform === null ? "" : `  perform 1 from public.create_probe_run_and_start_attempt_for_job(${lit(jobPxG)}::uuid, v_tok, ${lit(projectG)}::uuid, v_att, ${lit(platform)}, 'simulated');
+  perform 1 from public.reconcile_attempt(v_att, ${lit(projectG)}::uuid, 'cancelled', 0, null, 'G setup: closed');
+`}end $g$;`;
+    const rerun = (setup: string) => fails(`begin;\n${RESTORE}\n${SET_ASIDE}\n${setup}\n${MIGRATION}\nrollback;`, "supabase_admin");
+    const refusal = (setup: string, message: string) => {
+      const err = rerun(setup);
+      return { ok: err !== null && err.includes(message), detail: err === null ? "no error" : err.split("\n").find((l) => l.includes("ERROR")) ?? err };
+    };
+    /** The objects the migration creates or changes, and the evidence rows a setup touches: equal before and after the cases. */
+    const snapshot = () => admin(
+      `select string_agg(coalesce(md5(pg_get_functiondef(to_regprocedure(f))), 'missing'), ',' order by f) from unnest(array['public.persist_probe_result_for_job(uuid,uuid,uuid,jsonb)', 'public.retire_pilot_question(uuid,uuid,uuid,text)', 'public.add_pilot_question_engine(uuid,uuid,text,uuid)', 'public.protocol_worker_capabilities()', 'public.pilot_question_protocols_consistency()']) f;\n` +
+      `select string_agg(conname || '=' || pg_get_constraintdef(oid), ',' order by conname) from pg_constraint where conname in ('probe_runs_probe_mode_check', 'probe_results_probe_mode_check', 'pilot_question_protocols_engine_check', 'pilot_question_protocols_phase_check');\n` +
+      `select coalesce(to_regclass('public.protocols_one_live_baseline_per_engine')::text, 'none') || ',' || coalesce(to_regclass('public.protocols_one_live_baseline_per_version')::text, 'none') || ',' || (select count(*) from pg_trigger where tgname = 'pilot_question_protocols_consistency')::text || ',' || coalesce(obj_description('public.pilot_question_protocols'::regclass, 'pg_class'), '');\n` +
+      `select (select count(*) from public.protocol_attempts where status in ('reserved', 'in_progress')) || ',' || (select count(*) from public.protocol_attempts) || ',' || (select count(*) from public.probe_runs) || ',' || (select string_agg(provider, ',' order by provider) from (select distinct provider from public.protocols) d) || ',' || (select count(*) from public.protocol_job_run_requests) || ',' || (select status from public.protocol_execution_jobs where id = ${lit(jobPxG)}::uuid);`);
+    const before = snapshot();
+
+    const asIs = rerun("");
+    check("G1 the header's recovery statements, in its order, restore a state the migration accepts: re-run after them, it passes every guard (the control for G2 to G12)",
+      asIs === null, asIs ?? "");
+    const g2 = refusal("alter table public.probe_runs drop constraint probe_runs_probe_mode_check;\nalter table public.probe_runs add constraint probe_runs_probe_mode_check check (probe_mode in ('simulated', 'live_perplexity', 'live_other'));",
+      "20261109180000 precondition: probe_runs_probe_mode_check is not 0013's");
+    check("G2 the first precondition refuses a probe_runs probe-mode CHECK that is not 0013's", g2.ok, g2.detail);
+    const g3 = refusal("alter table public.probe_results drop constraint probe_results_probe_mode_check;",
+      "20261109180000 precondition: probe_results_probe_mode_check is not 0013's (found: missing)");
+    check("G3 the second precondition refuses a missing probe_results probe-mode CHECK", g3.ok, g3.detail);
+    const g4 = refusal("drop index public.protocols_one_live_baseline_per_version;",
+      "20261109180000 precondition: the one-live-baseline index is not 0073's (found: missing)");
+    check("G4 the third precondition refuses when 0073's index is missing", g4.ok, g4.detail);
+    const g5 = refusal("alter table public.pilot_question_protocols drop constraint pilot_question_protocols_engine_check;\nalter table public.pilot_question_protocols add constraint pilot_question_protocols_engine_check check (engine in ('perplexity_sonar', 'openai_chatgpt'));",
+      "20261109180000 precondition: pilot_question_protocols_engine_check is not 20261109140000's");
+    check("G5 the fourth precondition refuses a slot engine CHECK that is not 20261109140000's", g5.ok, g5.detail);
+    const g6 = refusal("alter table public.pilot_question_protocols drop constraint pilot_question_protocols_phase_check;\nalter table public.pilot_question_protocols add constraint pilot_question_protocols_phase_check check (phase in ('baseline', 'retest'));",
+      "20261109180000 precondition: pilot_question_protocols_phase_check is not 20261109140000's");
+    check("G6 the fifth precondition refuses a slot phase CHECK that is not 20261109140000's", g6.ok, g6.detail);
+    const g7 = refusal("create function public.protocol_worker_capabilities() returns text[] language sql as $g$ select array[]::text[] $g$;",
+      "20261109180000 precondition: an object this migration creates already exists");
+    const g7b = refusal("create index protocols_one_live_baseline_per_engine on public.protocols (id);",
+      "20261109180000 precondition: an object this migration creates already exists");
+    check("G7 the sixth precondition refuses when an object it creates already exists (the capability probe; the per-engine index)",
+      g7.ok && g7b.ok, `${g7.detail} | ${g7b.detail}`);
+    const g8 = refusal(`insert into public.protocols (project_id, buyer_question_version_id, baseline_protocol_id, provider, surface, model_config, planned_baseline_runs, planned_retest_runs, paraphrase_plan, unit_of_analysis, primary_metric, minimum_useful_change, sample_planning_method, sample_planning_assumptions, run_cap, spend_cap_usd, time_window_seconds, rate_limit_per_hour, concurrency_limit, retry_cap, observation_window_rule, analyzer_version, entity_resolution_version, methodology_version) select project_id, buyer_question_version_id, null, 'gemini', surface, model_config, planned_baseline_runs, planned_retest_runs, paraphrase_plan, unit_of_analysis, primary_metric, minimum_useful_change, sample_planning_method, sample_planning_assumptions, run_cap, spend_cap_usd, time_window_seconds, rate_limit_per_hour, concurrency_limit, retry_cap, observation_window_rule, analyzer_version, entity_resolution_version, methodology_version from public.protocols where id = ${lit(pxG)}::uuid;`,
+      "20261109180000 precondition: a protocol names a provider outside the closed set");
+    check("G8 the seventh precondition refuses a protocol (here a draft) whose provider is outside the closed set", g8.ok, g8.detail);
+    const g9 = refusal(attemptOf("chatgpt"), "20261109180000 precondition: a protocol attempt's probe run is not perplexity");
+    check("G9 the eighth precondition refuses a protocol attempt whose probe run is not perplexity (the attempt itself closed)", g9.ok, g9.detail);
+    const g10 = refusal(attemptOf(null), "20261109180000 precondition: a protocol attempt is reserved or in progress");
+    check("G10 the ninth precondition refuses a reserved attempt", g10.ok, g10.detail);
+    const g11 = refusal(`update public.protocols set provider = 'perplexity' where id = ${lit(pxG)}::uuid;`,
+      "20261109180000 precondition: an existing pilot slot does not match its protocol");
+    check("G11 the tenth precondition refuses a slot whose engine is not its protocol's provider (a provider inside the closed set)", g11.ok, g11.detail);
+    const after = snapshot();
+    check("G12 every re-run and its setup were rolled back: the functions, CHECKs, indexes, trigger and comment, the attempts, probe runs, providers, run requests and the setup job are as they were before G1",
+      before !== "" && after === before, after === before ? "" : `${before}\n  vs\n${after}`);
+  }
 
   /* M: probe modes ------------------------------------------------------- */
   check("M1 both probe-mode CHECKs accept exactly simulated, live_perplexity and live_openai_chatgpt",
@@ -329,11 +466,31 @@ async function main(): Promise<void> {
   const baseB2 = writtenB();
   check("A12 a retired question refuses, and nothing is written",
     abandonedB2 === "JOB_ATTEMPTS_EXHAUSTED" && retire(pilotB, pqB2) === "RETIRED" && addEngine(pilotB, pqB2)[0] === "QUESTION_RETIRED" && writtenB() === baseB2);
-  check("A13 a closed pilot refuses, but the existing slot still replays",
+  check("A13 a closed pilot refuses a question that has no ChatGPT slot yet, and nothing is written",
     psql(`select outcome from public.close_pilot(${lit(pilotB)}::uuid, ${lit(FOUNDER)}::uuid, 'The customer ended the pilot early.');`) === "CLOSED"
       && addEngine(pilotB, pqB)[0] === "PILOT_CLOSED" && writtenB() === baseB2);
-  check("A13b a slot added before the close still replays after it",
-    addEngine(pilotA, pqA)[0] === "ALREADY_ADDED");
+  // A slot added before its pilot was closed, or before it ended, replays
+  // with the same protocol and job (a repeated press after a lost response).
+  quiesce();
+  const [, pilotC, projectC] = createPilot("pb-c.example");
+  const [, pqC] = addQuestion(pilotC, question(40));
+  const [cAdded, cProto, cJob] = addEngine(pilotC, pqC);
+  const writtenC = () => [countIn("protocols", projectC), countIn("protocol_execution_jobs", projectC)].join(",");
+  const baseC = writtenC();
+  const closedC = psql(`select outcome from public.close_pilot(${lit(pilotC)}::uuid, ${lit(FOUNDER)}::uuid, 'The customer ended the pilot early.');`);
+  const [cAgain, cAgainProto, cAgainJob] = addEngine(pilotC, pqC);
+  check("A13b a ChatGPT slot added before its pilot was closed replays after the close: ALREADY_ADDED, the same protocol and job, nothing written",
+    cAdded === "ADDED" && closedC === "CLOSED" && cAgain === "ALREADY_ADDED" && cAgainProto === cProto && cAgainJob === cJob
+      && cProto !== "" && cJob !== "" && writtenC() === baseC, [cAdded, closedC, cAgain].join("|"));
+  const [, pilotD, projectD] = createPilot("pb-d.example");
+  const [, pqD] = addQuestion(pilotD, question(41));
+  const [dAdded, dProto, dJob] = addEngine(pilotD, pqD);
+  const baseD = [countIn("protocols", projectD), countIn("protocol_execution_jobs", projectD)].join(",");
+  admin(`update public.pilots set starts_on = current_date - 91, ends_on = current_date - 1 where id = ${lit(pilotD)}::uuid;`); // test setup: the pilot's dates pass
+  const [dAgain, dAgainProto, dAgainJob] = addEngine(pilotD, pqD);
+  check("A13c a ChatGPT slot added before its pilot ended replays after the end date: ALREADY_ADDED, the same protocol and job, nothing written",
+    dAdded === "ADDED" && dAgain === "ALREADY_ADDED" && dAgainProto === dProto && dAgainJob === dJob && dProto !== ""
+      && [countIn("protocols", projectD), countIn("protocol_execution_jobs", projectD)].join(",") === baseD, [dAdded, dAgain].join("|"));
 
   // The pilot row is held FOR UPDATE until the add commits.
   quiesce();
@@ -509,6 +666,153 @@ async function main(): Promise<void> {
   check("R12 with Perplexity still queued, the question is RETRYABLE, not retired", retire(pilotR, pqR2) === "QUESTION_RETRYABLE");
   check("R13 once Perplexity is abandoned, one slot has stopped for good and the question is retired",
     abandon(jobPxR2, projectR) === "JOB_ATTEMPTS_EXHAUSTED" && retire(pilotR, pqR2) === "RETIRED");
+
+  /* O: a stopped slot never retires a question whose other run is unfinished */
+  // Review of phase B (DB-1). Retiring makes Run and review refuse the
+  // question, so a run left open then could never close and would hold the
+  // pilot's report save for good (MEASUREMENT_IN_PROGRESS).
+  quiesce();
+  const [, pilotO, projectO] = createPilot("pb-o.example");
+  const openOf = (protocolId: string) =>
+    admin(`select coalesce(string_agg(status, ',' order by created_at), 'none') from public.protocol_attempts where protocol_id = ${lit(protocolId)}::uuid and status in ('reserved', 'in_progress');`);
+  const retiredOf = (pq: string) => admin(`select (retired_at is not null)::text from public.pilot_questions where id = ${lit(pq)}::uuid;`);
+  /** save_pilot_report_artifact's answer to an empty manifest: anything but MEASUREMENT_IN_PROGRESS gets past the in-progress check. */
+  const saveProbe = (pilotId: string, projectId: string) =>
+    row(psql(`select outcome from public.save_pilot_report_artifact(${lit(pilotId)}::uuid, ${lit(FOUNDER)}::uuid, '# probe', ${lit(JSON.stringify({ pilotId, projectId }))}::jsonb, '{"protocols":[],"attempts":[]}'::jsonb, 'needs_review', '["probe"]'::jsonb, now());`))[0];
+  /** As the worker with its ChatGPT switch off: claimed, then refused before admission (failed, not a provider error, so stopped for good). */
+  const stopChatGpt = (jobId: string, projectId: string) => {
+    const token = runAndClaim(jobId, projectId);
+    return token
+      ? psql(`select status from public.fail_protocol_execution_job(${lit(jobId)}::uuid, ${lit(token)}::uuid, ${lit(projectId)}::uuid, 'PROVIDER_ADAPTER_NOT_ENABLED');`)
+      : "";
+  };
+  /** Runs a claimed job's remaining planned slots to the completion gate; returns its last answer. */
+  const finishRemaining = (jobId: string, projectId: string, token: string) => {
+    let gate = "";
+    for (let i = 0; i < 5 && gate !== "SUCCEEDED" && token !== ""; i += 1) {
+      const attempt = admit(jobId, projectId, token, 0.02);
+      if (attempt === "" || startRun(jobId, projectId, token, attempt, "perplexity", "simulated") !== "STARTED") return "ADMISSION_FAILED";
+      gate = finishAttempt(jobId, projectId, token, attempt, "perplexity");
+    }
+    return gate;
+  };
+  /** The read-only query of the migration header's recovery note (DB-2), exactly as written there. */
+  const RECOVERY_QUERY = (() => {
+    const src = readFileSync(path.join(process.cwd(), "supabase/migrations/20261109180000_chatgpt_measurement.sql"), "utf8");
+    const lines = src.split("\n");
+    const start = lines.indexOf("--     The query (read-only; it reads no customer data):");
+    const out: string[] = [];
+    for (let i = start + 1; start >= 0 && i < lines.length; i += 1) {
+      if (!lines[i].startsWith("--       ")) break;
+      out.push(lines[i].slice("--       ".length));
+      if (lines[i].trimEnd().endsWith(";")) break;
+    }
+    return out.join("\n");
+  })();
+  const recoveryCounts = () => admin(`begin transaction read only;\n${RECOVERY_QUERY}\nrollback;`).split("\n")[0] ?? "";
+
+  // (a) A Retry approved on Perplexity but not yet Run; ChatGPT stopped for good.
+  const [, pqOa, pxOa, jobPxOa] = addQuestion(pilotO, question(50));
+  const [, cgOa, jobCgOa] = addEngine(pilotO, pqOa);
+  const cgStopped = stopChatGpt(jobCgOa, projectO);
+  quiesce();
+  const tokOa = runAndClaim(jobPxOa, projectO);
+  const failedOa = tokOa ? failAtProvider(jobPxOa, projectO, tokOa, "perplexity", "simulated", 0.02) : "";
+  quiesce();
+  const [retryOa, , reservedOa] = row(psql(`select outcome, coalesce(denial_code, ''), coalesce(new_attempt_id::text, '') from public.retry_failed_protocol_job(${lit(jobPxOa)}::uuid, ${lit(projectO)}::uuid, ${lit(FOUNDER)}::uuid, 'Perplexity returned HTTP 429 on run 1.', ${lit(failedOa)}::uuid, ${lit(randomUUID())});`));
+  check("O1 setup: ChatGPT stopped for good; Perplexity's Retry approved and not yet Run (queued, its attempt reserved)",
+    cgStopped === "FAILED" && jobState(jobCgOa).join(":") === "failed:PROVIDER_ADAPTER_NOT_ENABLED" && retryOa === "APPROVED"
+      && jobState(jobPxOa)[0] === "queued" && openOf(pxOa) === "reserved" && cgOa !== "", `${cgStopped}/${retryOa}/${jobState(jobPxOa).join(":")}`);
+  check("O2 (a) retiring is refused QUESTION_JOB_ACTIVE, the question stays live and the attempt stays reserved",
+    retire(pilotO, pqOa) === "QUESTION_JOB_ACTIVE" && retiredOf(pqOa) === "false" && openOf(pxOa) === "reserved");
+  check("O3 while that attempt is open the pilot's report save answers MEASUREMENT_IN_PROGRESS (retired now, it would answer so for good)",
+    saveProbe(pilotO, projectO) === "MEASUREMENT_IN_PROGRESS");
+  // The remedy the console names: press Run and let it finish.
+  const tokOa2 = runAndClaim(jobPxOa, projectO);
+  const startedOa = tokOa2 ? startRun(jobPxOa, projectO, tokOa2, reservedOa, "perplexity", "simulated") : "";
+  const firstGate = startedOa === "STARTED" ? finishAttempt(jobPxOa, projectO, tokOa2, reservedOa, "perplexity") : "";
+  const lastGate = firstGate === "NEXT_BASELINE_REQUIRED" ? finishRemaining(jobPxOa, projectO, tokOa2) : firstGate;
+  quiesce();
+  check("O4 once that Run finished the measurement, the question is retired, and the save gets past the in-progress check",
+    startedOa === "STARTED" && lastGate === "SUCCEEDED" && openOf(pxOa) === "none"
+      && retire(pilotO, pqOa) === "RETIRED" && saveProbe(pilotO, projectO) !== "MEASUREMENT_IN_PROGRESS",
+    `${startedOa}/${firstGate}/${lastGate}`);
+
+  // (b) A Perplexity run whose worker stopped part-way: lease lapsed, a sent call with no receipt.
+  const [, pqOb, pxOb, jobPxOb] = addQuestion(pilotO, question(51));
+  const [, , jobCgOb] = addEngine(pilotO, pqOb);
+  stopChatGpt(jobCgOb, projectO);
+  quiesce();
+  const tokOb = runAndClaim(jobPxOb, projectO);
+  const attOb = tokOb ? admit(jobPxOb, projectO, tokOb, 0.02) : "";
+  const startedOb = attOb ? startRun(jobPxOb, projectO, tokOb, attOb, "perplexity", "simulated") : "";
+  if (startedOb === "STARTED") {
+    const probeRun = admin(`select probe_run_id from public.protocol_attempts where id = ${lit(attOb)}::uuid;`);
+    const call = admin(`select id from public.protocol_external_calls where protocol_attempt_id = ${lit(attOb)}::uuid and call_kind = 'perplexity';`);
+    const body = `{"q":"${attOb}"}`;
+    psql(`select 1 from public.mark_external_call_sent_for_job(${lit(jobPxOb)}::uuid, ${lit(tokOb)}::uuid, ${lit(projectO)}::uuid, ${lit(call)}::uuid, ${lit(probeRun)}::uuid, 'perplexity', ${lit(body)}, ${lit(sha(body))});`);
+  }
+  quiesce(); // test setup: the worker died; its lease lapses
+  check("O5 (b) a run whose worker stopped part-way (running, lease lapsed, attempt in progress) keeps the question: QUESTION_JOB_ACTIVE",
+    startedOb === "STARTED" && jobState(jobPxOb)[0] === "running" && openOf(pxOb) === "in_progress"
+      && retire(pilotO, pqOb) === "QUESTION_JOB_ACTIVE" && retiredOf(pqOb) === "false");
+  // The remedy: Run again; the worker finds the unreceipted call and holds the job for review.
+  const tokOb2 = runAndClaim(jobPxOb, projectO);
+  const heldOb = tokOb2 ? row(psql(`select status from public.mark_protocol_execution_job_needs_review_for_ambiguity(${lit(jobPxOb)}::uuid, ${lit(tokOb2)}::uuid, ${lit(projectO)}::uuid);`))[0] : "";
+  quiesce();
+  check("O6 held for review with its attempt still in progress, the question is still kept",
+    jobState(jobPxOb)[0] === "needs_review" && openOf(pxOb) === "in_progress" && retire(pilotO, pqOb) === "QUESTION_JOB_ACTIVE", heldOb);
+  const reviewed = row(psql(`select status from public.resolve_protocol_job_review(${lit(jobPxOb)}::uuid, ${lit(projectO)}::uuid, ${lit(FOUNDER)}::uuid, 'failed', 'The Perplexity call may have been made; closing this run.');`))[0];
+  check("O7 once the review closed the run (excluded, never completed), the question is retired and the save gets past the in-progress check",
+    reviewed === "failed" && openOf(pxOb) === "none"
+      && admin(`select status from public.protocol_attempts where id = ${lit(attOb)}::uuid;`) === "excluded"
+      && retire(pilotO, pqOb) === "RETIRED" && saveProbe(pilotO, projectO) !== "MEASUREMENT_IN_PROGRESS", reviewed);
+
+  // A retest of the stopped slot, claimed and left with a lapsed lease (no attempt at all).
+  const [, pqOc, , jobPxOc] = addQuestion(pilotO, question(52));
+  const [, cgOc, jobCgOc] = addEngine(pilotO, pqOc);
+  stopChatGpt(jobCgOc, projectO);
+  quiesce();
+  const pxOcDone = completeJob(jobPxOc, projectO);
+  quiesce();
+  const retestOc = draftLike(cgOc, { baselineOf: cgOc });
+  const retestOcQueued = approve(retestOc, projectO) === "APPROVED"
+    && psql(`select status from public.enqueue_protocol_execution_job(${lit(retestOc)}::uuid, ${lit(projectO)}::uuid);`) === "QUEUED";
+  const retestOcJob = admin(`select id from public.protocol_execution_jobs where protocol_id = ${lit(retestOc)}::uuid;`);
+  const retestToken = runAndClaim(retestOcJob, projectO);
+  quiesce(); // test setup: its lease lapses
+  check("O8 a retest of any slot (here of the stopped ChatGPT slot) claimed with a lapsed lease keeps the question too",
+    pxOcDone === "SUCCEEDED" && retestOcQueued && retestToken !== "" && jobState(retestOcJob)[0] === "claimed"
+      && retire(pilotO, pqOc) === "QUESTION_JOB_ACTIVE" && retiredOf(pqOc) === "false");
+
+  // Control: one slot. The same reserved Retry answers as before D-061.
+  const [, pqOd, pxOd, jobPxOd] = addQuestion(pilotO, question(53));
+  const tokOd = runAndClaim(jobPxOd, projectO);
+  const failedOd = tokOd ? failAtProvider(jobPxOd, projectO, tokOd, "perplexity", "simulated", 0.02) : "";
+  quiesce();
+  const retryOd = row(psql(`select outcome from public.retry_failed_protocol_job(${lit(jobPxOd)}::uuid, ${lit(projectO)}::uuid, ${lit(FOUNDER)}::uuid, 'Perplexity returned HTTP 429 on run 1.', ${lit(failedOd)}::uuid, ${lit(randomUUID())});`))[0];
+  check("O9 one slot: a reserved Retry keeps the outcome it had before D-061 (QUESTION_NOT_STOPPED)",
+    retryOd === "APPROVED" && openOf(pxOd) === "reserved" && retire(pilotO, pqOd) === "QUESTION_NOT_STOPPED");
+
+  // DB-2: the header's read-only query names what the switch-off order waits for.
+  quiesce();
+  const [, pqOe] = addQuestion(pilotO, question(54));
+  const [, , jobCgOe] = addEngine(pilotO, pqOe);
+  const countsAt = () => recoveryCounts().split("|").map(Number);
+  const q0 = countsAt();
+  const [reqOe] = requestRun(jobCgOe, projectO);
+  const q1 = countsAt();
+  const [claimOe, , tokOe] = claim();
+  const q2 = countsAt();
+  quiesce(); // test setup: the worker stops; the lease lapses
+  const q3 = countsAt();
+  const delta = (a: number[], b: number[]) => b.map((v, i) => v - (a[i] ?? 0)).join(",");
+  check("O10 the recovery query in the migration header is read-only and counts a pending ChatGPT Run, a ChatGPT run in flight, and an unfinished one",
+    RECOVERY_QUERY.startsWith("select") && RECOVERY_QUERY.trimEnd().endsWith("as chatgpt_runs_unfinished;") && q0.length === 3 && q0.every((n) => Number.isInteger(n))
+      && reqOe === "REQUESTED" && delta(q0, q1) === "1,0,0"
+      && claimOe === "CLAIMED" && tokOe !== "" && delta(q0, q2) === "0,1,0"
+      && delta(q0, q3) === "0,0,1",
+    `${q0.join(",")} → ${q1.join(",")} → ${q2.join(",")} → ${q3.join(",")}`);
 
   /* C: the capability probe ---------------------------------------------- */
   check("C1 protocol_worker_capabilities() lists live_openai_chatgpt to service_role",

@@ -52,7 +52,11 @@
 --   6. retire_pilot_question: 20261109140000's definition byte for byte
 --      apart from marked declarations and one marked block, so the active,
 --      stopped and retryable checks cover every slot of the question (both
---      engines) and each slot's retests. The 5-retirement limit stays.
+--      engines) and each slot's retests. Once one slot has stopped for good,
+--      the question is retired only while no other slot, and no retest of
+--      any slot, holds a run that has not finished: a reserved or
+--      in-progress attempt, or a claimed or running job, lease lapsed or
+--      not. The 5-retirement limit stays.
 --   7. protocol_worker_capabilities(): what this schema lets the worker
 --      record. With the ChatGPT switch on, the worker reads it at startup
 --      and refuses to start unless it lists 'live_openai_chatgpt', so a
@@ -102,11 +106,58 @@
 --       drop both probe-mode CHECKs and re-add them as 0013 wrote them.
 --   * Once any ChatGPT row exists, recovery is forward only: evidence rows
 --     are insert-only, and the narrower CHECKs, slot CHECK and index would
---     no longer validate. Set WORKER_CHATGPT_ENABLED to "false" and redeploy
---     the worker (it then refuses a ChatGPT protocol before admission, and
---     nothing is reserved), unset ZYPACT_PILOT_CHATGPT_ENABLED on the web
---     host, and stop adding ChatGPT slots. A ChatGPT question that can no
---     longer finish is retired with its question (step 6).
+--     no longer validate. ChatGPT is switched off in this order, and no
+--     more ChatGPT slots are added:
+--       1. Run the read-only query below; each count should be 0. A run in
+--          flight finishes on its own. An unfinished run (a Retry approved
+--          but not yet Run, or a run whose worker stopped part-way) is
+--          finished first, with Run: with ChatGPT off it can be neither run
+--          nor retired, and it holds the pilot's report save. A run held
+--          for review can be resolved at any time, ChatGPT on or off.
+--       2. Unset ZYPACT_PILOT_CHATGPT_ENABLED on the web host and redeploy
+--          it: no ChatGPT Run, Retry or add can be pressed after that.
+--       3. Run the query again until chatgpt_runs_pending and
+--          chatgpt_runs_in_flight are both 0: a Run pressed just before
+--          step 2 is claimed and finishes under the worker that is still on.
+--       4. Only then set WORKER_CHATGPT_ENABLED to "false" and redeploy the
+--          worker. It refuses a ChatGPT protocol before admission, so
+--          nothing is reserved or sent.
+--     In the other order, a ChatGPT Run pressed between the two changes
+--     reaches a worker that refuses it before admission: its job is closed
+--     as failed (PROVIDER_ADAPTER_NOT_ENABLED), which no Retry takes, so
+--     that measurement is lost for good.
+--     The query (read-only; it reads no customer data):
+--       select
+--         (select count(*)
+--            from public.protocol_job_run_requests r
+--            join public.protocol_execution_jobs j on j.id = r.job_id
+--            join public.protocols p on p.id = j.protocol_id
+--           where p.provider = 'openai_chatgpt'
+--             and r.status = 'pending' and r.expires_at > now()) as chatgpt_runs_pending,
+--         (select count(*)
+--            from public.protocol_execution_jobs j
+--            join public.protocols p on p.id = j.protocol_id
+--           where p.provider = 'openai_chatgpt'
+--             and j.status in ('claimed', 'running')
+--             and j.lease_expires_at > now()) as chatgpt_runs_in_flight,
+--         (select count(*)
+--            from public.protocol_execution_jobs j
+--            join public.protocols p on p.id = j.protocol_id
+--           where p.provider = 'openai_chatgpt'
+--             and j.status <> 'needs_review'
+--             and not coalesce(j.status in ('claimed', 'running') and j.lease_expires_at > now(), false)
+--             and (j.status in ('claimed', 'running')
+--                  or exists (select 1 from public.protocol_attempts a
+--                              where a.protocol_id = p.id
+--                                and a.status in ('reserved', 'in_progress')))) as chatgpt_runs_unfinished;
+--     With ChatGPT off, a ChatGPT measurement that stopped for good
+--     (abandoned, or failed in a way no Retry takes) is retired with its
+--     question (step 6), and one held for review can still be resolved. One
+--     that is only waiting for Run, or failed at the provider and could
+--     still be retried, is neither run nor retried until ChatGPT is on
+--     again, and does not by itself let its question be retired (step 6
+--     answers not stopped, or retry instead); its question's Perplexity
+--     result is reported as usual.
 
 -- =======================================================================
 -- 0. Preconditions
@@ -1012,6 +1063,7 @@ declare
   v_stopped boolean := false;
   v_retryable boolean := false;
   v_slot_retryable boolean;
+  v_stopped_protocols uuid[] := '{}';
   -- D-061 end
 begin
   if p_pilot_id is null or p_pilot_question_id is null or p_retired_by is null
@@ -1060,10 +1112,11 @@ begin
   -- abandoned, or failed in a way the D-052 retry does not take (the same
   -- job, slot and run-cap gates as before, applied per slot). A slot that
   -- has not stopped, or that can still be retried, does not keep the
-  -- question once another slot has stopped: there is no per-engine
+  -- question once another slot has stopped, unless it holds a run that has
+  -- not finished (the last check below): there is no per-engine
   -- retirement, so the question is retired with every slot and its
-  -- approved text may be added again (D-054 item 9). With one slot this is
-  -- exactly the earlier rule and its outcomes.
+  -- approved text may be added again (D-054 item 9). With one slot (and no
+  -- retest of it) this is exactly the earlier rule and its outcomes.
   if exists (
     select 1
       from public.pilot_question_protocols pqp
@@ -1144,6 +1197,7 @@ begin
       v_retryable := true;
     else
       v_stopped := true;
+      v_stopped_protocols := v_stopped_protocols || v_slot_protocol_id;
     end if;
   end loop;
 
@@ -1153,6 +1207,43 @@ begin
     else
       return query select 'QUESTION_NOT_STOPPED'::text;
     end if;
+    return;
+  end if;
+
+  -- A slot that stopped for good retires the question on every engine, so
+  -- nothing else of it may be left half-done: no slot that has not stopped,
+  -- and no retest of any slot, may hold a reserved or in-progress attempt
+  -- or a claimed or running job, whether its lease is live or has lapsed.
+  -- Only a later Run of that job closes such a run (a run that stopped
+  -- part-way is held for review on the way), and a retired question refuses
+  -- every Run, so it would hold every later report save of the pilot
+  -- (save_pilot_report_artifact's MEASUREMENT_IN_PROGRESS, the same attempt
+  -- test) for good. A run already held for review is resolved instead, and
+  -- keeps the question too while its attempt is open. The two everyday
+  -- cases: a Retry approved but not yet Run (its job queued with a reserved
+  -- attempt), and a run whose worker stopped part-way (its job running with
+  -- a lapsed lease and an attempt in progress). The stopped slots
+  -- themselves are not read here, so a question with one slot reads only
+  -- that slot's retests (none exist before the pilot retest) and keeps the
+  -- earlier rule's outcomes.
+  if exists (
+    select 1
+      from public.pilot_question_protocols pqp
+      join public.protocols pr
+        on pr.id = pqp.protocol_id or pr.baseline_protocol_id = pqp.protocol_id
+      left join public.protocol_execution_jobs j on j.protocol_id = pr.id
+     where pqp.pilot_question_id = v_question.id
+       and pr.id <> all (v_stopped_protocols)
+       and (
+         j.status in ('claimed', 'running')
+         or exists (
+           select 1
+             from public.protocol_attempts a
+            where a.protocol_id = pr.id
+              and a.status in ('reserved', 'in_progress'))
+       )
+  ) then
+    return query select 'QUESTION_JOB_ACTIVE'::text;
     return;
   end if;
   -- D-061 end

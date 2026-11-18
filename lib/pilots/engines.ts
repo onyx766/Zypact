@@ -8,10 +8,18 @@
  * action in the pilot console that can lead to spending: adding ChatGPT to a
  * question, and Run and Retry of a ChatGPT measurement. Off, ChatGPT shows
  * as not connected and those routes refuse before reading anything. It is
- * set on the web host only after the worker's switch is on (a production
- * step). Resolving a measurement held for review and retiring a question
- * spend nothing and start nothing, so they stay open with the gate off: a
- * ChatGPT measurement can still be closed out after the gate is turned off.
+ * set on the web host only after the worker's switch is on, and unset
+ * before the worker's switch goes off (a production step, in that order).
+ * Resolving a measurement held for review and retiring a question spend
+ * nothing and start nothing, so they stay open with the gate off: a ChatGPT
+ * measurement held for review can still be resolved, and one that stopped
+ * for good is retired with its question. Not every ChatGPT measurement can
+ * be closed out that way: one only waiting for Run, one that failed at the
+ * provider and could still be retried, or one with a run that has not
+ * finished (a Retry approved but not yet Run, a run whose worker stopped
+ * part-way) can be neither run nor retried with the gate off, and on its
+ * own it does not let its question be retired; it waits until the gate is
+ * on again. The retire route says so in words (retireRefusalWords).
  *
  * Pure apart from the one environment read, which callers may inject.
  */

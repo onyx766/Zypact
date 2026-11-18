@@ -69,8 +69,18 @@ export interface PilotMeasurement {
   runCap: number | null;
   spendCapUsd: number | null;
   completedRuns: number;
+  /**
+   * Runs that ended without an answer: failed, timed out or cancelled, as the
+   * customer report counts them as failed (lib/reports/build-pilot-report.ts
+   * countAttempts).
+   */
   failedRuns: number;
+  /** D-061 (review of phase B) — runs left out by a review (`excluded`), as the report's "excluded after review". */
+  excludedRuns: number;
 }
+
+/** The attempt statuses the customer report counts as failed (countAttempts). */
+const FAILED_ATTEMPT_STATUSES: ReadonlySet<string> = new Set(["failed", "timed_out", "cancelled"]);
 
 function summary(row: Record<string, unknown>, questionCount: number): PilotSummary {
   return {
@@ -194,11 +204,14 @@ export async function loadPilot(
     const jobByProtocol = new Map(
       ((jobs.data ?? []) as Array<Record<string, unknown>>).map((j) => [String(j.protocol_id), j])
     );
-    const tally = new Map<string, { completed: number; failed: number }>();
+    // The customer report's buckets: a timed-out or cancelled run is failed,
+    // an excluded one is left out by review; neither is ever hidden.
+    const tally = new Map<string, { completed: number; failed: number; excluded: number }>();
     for (const a of (attempts.data ?? []) as Array<Record<string, unknown>>) {
-      const t = tally.get(String(a.protocol_id)) ?? { completed: 0, failed: 0 };
+      const t = tally.get(String(a.protocol_id)) ?? { completed: 0, failed: 0, excluded: 0 };
       if (a.status === "completed") t.completed += 1;
-      else if (a.status === "failed") t.failed += 1;
+      else if (FAILED_ATTEMPT_STATUSES.has(String(a.status))) t.failed += 1;
+      else if (a.status === "excluded") t.excluded += 1;
       tally.set(String(a.protocol_id), t);
     }
     for (const pr of (protocols.data ?? []) as Array<Record<string, unknown>>) {
@@ -220,6 +233,7 @@ export async function loadPilot(
         spendCapUsd: pr.spend_cap_usd === null || pr.spend_cap_usd === undefined ? null : Number(pr.spend_cap_usd),
         completedRuns: tally.get(id)?.completed ?? 0,
         failedRuns: tally.get(id)?.failed ?? 0,
+        excludedRuns: tally.get(id)?.excluded ?? 0,
       });
     }
   }

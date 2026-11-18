@@ -20,12 +20,51 @@ export const STATE_WORDS: Record<PilotQuestionMeasurementState, string> = {
   not_finished: "Not finished",
   not_started: "Not started",
   stopped: "Stopped before finishing",
+  // D-061 (review of phase B) — a review ended it: never "Finished".
+  ended_after_review: "Ended after review",
 };
 
 export const PORTFOLIO_WEIGHTING_WORDS = "Each readable answer counts once (unweighted).";
 
+/** A retired question with one measurement: retiring needs that measurement to have stopped for good. */
 export const RETIRED_WORDS =
   "Retired: its measurement could not finish. Only its attempt counts are shown, and it is left out of every total.";
+
+/**
+ * D-061 (review of phase B) — a retired question measured on more than one
+ * engine. Retiring needs only one of its measurements to have stopped for
+ * good, and stops the question on every engine, so another may have
+ * finished; each engine's line says which (retiredMeasurementWords).
+ */
+export const RETIRED_ONE_OF_SEVERAL_WORDS =
+  "Retired: one of its measurements could not finish, so the question was retired on every engine. Only its attempt counts are shown, even for a measurement that had finished, and it is left out of every total.";
+
+/**
+ * D-061 (review of phase B) — how far one engine's measurement of a retired
+ * question got before it was retired, after "<engine> (" in its line.
+ */
+export function retiredMeasurementWords(state: PilotQuestionMeasurementState): string {
+  switch (state) {
+    case "measured":
+      return "retired after this measurement finished";
+    case "ended_after_review":
+      return "retired after this measurement ended after review";
+    case "stopped":
+      return "retired; this measurement could not finish";
+    default:
+      return "retired before this measurement finished";
+  }
+}
+
+/**
+ * D-061 (review of phase B) — a measurement a review ended: how many of its
+ * planned answers were completed. It is never counted in a total.
+ */
+export function endedAfterReviewWords(completed: number, planned: number): string {
+  return `Ended after review with ${completed} of ${planned} planned answer${planned === 1 ? "" : "s"} completed${
+    completed < planned ? ", so this result rests on fewer answers than planned" : ""
+  }; it is not counted in the total.`;
+}
 
 /** The page's words around a stored revision. */
 export const PRIVATE_REPORT_WORDS = "Private report";
@@ -176,6 +215,7 @@ export const NO_READABLE_ANSWER_CELL: Record<PilotQuestionMeasurementState, stri
   not_finished: "No readable answer yet",
   stopped: "No readable answer",
   measured: "No readable answer",
+  ended_after_review: "No readable answer",
 };
 
 /** A question section's line for such a measurement, after "<engine> (<state>): ". */
@@ -184,6 +224,7 @@ export const NO_READABLE_ANSWER_LINE: Record<PilotQuestionMeasurementState, stri
   not_finished: "no readable answer yet; the measurement has not finished.",
   stopped: "it stopped before producing a readable answer.",
   measured: "it finished without a readable answer.",
+  ended_after_review: "a review ended it before it produced a readable answer.",
 };
 
 /**

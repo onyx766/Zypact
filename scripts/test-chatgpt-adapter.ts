@@ -965,9 +965,11 @@ async function main(): Promise<void> {
   ]) check(`N §4 note covers "${heading}"`, note.includes(`## ${heading}`));
   check("N the note states the required limitation", note.includes("It is not what users of the ChatGPT app see"));
   check("N the note names every setting family and the price table", Object.keys(CHATGPT_SETTING_FAMILIES).every((f) => note.includes(f)) && note.includes(OPENAI_PRICE_TABLE.version));
-  check("N the note records the founder's choice, the confirmation setting, and its approval for measurement on 2026-11-17, and says it is not wired",
+  check("N the note records the founder's choice, the confirmation setting, and its approval for measurement on 2026-11-17, and claims no live ChatGPT path: phase B built, not applied, switch off",
     note.includes(CHATGPT_CONFIRMATION_SETTING.version) && note.includes("2026-11-13") && /Approved for measurement by the founder on 2026-11-17/.test(note) &&
-    /not wired into any worker/.test(note) && note.includes("CHATGPT_APPROVED_SETTING_VERSION") &&
+    /phase B is built on branch `feat\/chatgpt-phase-b` \(D-061\), not applied, switch off/.test(note) &&
+    /The migration is not applied to any database, nothing is deployed, and `WORKER_CHATGPT_ENABLED` stays `"false"` in every Fly file, so no running worker has a live ChatGPT path/.test(note) &&
+    note.includes("CHATGPT_APPROVED_SETTING_VERSION") &&
     !note.includes("CHATGPT_APPROVED_MODEL") && CHATGPT_APPROVED_SETTING_VERSION === CHATGPT_CONFIRMATION_SETTING.version);
   check("N the note states the V1 claim boundary", note.includes("controlled OpenAI API responses, not observations of ChatGPT.com"));
   check("N the note records that no scraping service is used", /third-party ChatGPT scraping/.test(note));

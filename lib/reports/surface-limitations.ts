@@ -4,7 +4,7 @@
  * section 7 "Dependence warning") exists once and cannot drift per builder.
  */
 
-/** METHODOLOGY section 4. Verbatim; required on every Perplexity-only client artifact. */
+/** METHODOLOGY section 4. Verbatim; required on every client artifact that includes Perplexity Sonar. */
 export const PERPLEXITY_SURFACE_LIMITATION =
   "This is a directional measurement of Perplexity Sonar under the recorded conditions. It does not represent what every buyer sees across ChatGPT, Gemini, Copilot, Claude, or all AI systems.";
 

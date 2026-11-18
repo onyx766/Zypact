@@ -17,7 +17,11 @@
  *   R  D-061: the console's reads, keyed by question and engine;
  *   H  D-061: adding ChatGPT, the add-question follow-up, resolving a
  *      measurement held for review, and the Run and Retry routes' engine
- *      and gate checks, through the code the routes run.
+ *      and gate checks, through the code the routes run; (review of phase
+ *      B) the add-question route's reply when ChatGPT is not added, and the
+ *      retire route's words with the gate off;
+ *   V  (review of phase B) one engine's cell of the pilot page, rendered:
+ *      with the gate off ChatGPT offers no Run, Resume or Retry.
  *
  * The same rules against a real PostgreSQL are in test-pilot-questions-db.ts.
  * No database, no network, no provider.
@@ -702,9 +706,11 @@ async function main(): Promise<void> {
     infoCalls.length === 3 && handlerLeaks.length === 0 && !/console\.(?:info|log|error|warn)\(/.test(handlerSrc),
     `${infoCalls.length} ${handlerLeaks.join(",")}`);
   const page = read("app/admin/pilots/[pilotId]/page.tsx");
+  // Review of phase B (APP-8): the per-engine cell is its own component, rendered for real in section V.
+  const cell = read("app/admin/pilots/pilot-engine-cell.tsx");
   check("S24 the pilot page shows ChatGPT as not measured and provenance in words, never the stored code",
-    page.includes("{ENGINE_NOT_MEASURED}") && page.includes("pilotProvenanceLabel(q.questionProvenance)")
-      && !/>\s*\{q\.questionProvenance\}\s*</.test(page) && !/>\s*\{m\.jobStatus\}\s*</.test(page));
+    cell.includes("{ENGINE_NOT_MEASURED}") && page.includes("pilotProvenanceLabel(q.questionProvenance)")
+      && !/>\s*\{q\.questionProvenance\}\s*</.test(page) && ![page, cell].some((s) => />\s*\{m\.jobStatus\}\s*</.test(s)));
   const adminPage = read("app/admin/snapshot-requests/page.tsx");
   check("S25 the founder-experiments list leaves pilot protocols out in the query, before its 20-row limit",
     adminPage.includes('jobsQuery = jobsQuery.not("protocol_id", "in", `(${pilotIds.join(",")})`);')
@@ -779,7 +785,7 @@ async function main(): Promise<void> {
     }
     return false;
   };
-  const NEW_FILES = [engineRouteFile, reviewRouteFile, "lib/pilots/engine-routes.ts", "lib/pilots/engines.ts", "lib/reports/job-review.ts"];
+  const NEW_FILES = [engineRouteFile, reviewRouteFile, "lib/pilots/engine-routes.ts", "lib/pilots/engines.ts", "lib/reports/job-review.ts", "app/admin/pilots/pilot-engine-cell.tsx"];
   const starters = NEW_FILES.filter((f) => reachesFile(f, "lib/worker-control/fly-machine.ts")
     || reachesFile(f, "lib/probes/chatgpt.ts") || reachesFile(f, "lib/protocol-worker/chatgpt-engine.ts")
     || /startWorkerMachine|fly-machine/.test(read(f)));
@@ -792,16 +798,17 @@ async function main(): Promise<void> {
       && read(routeFiles.add).indexOf("addChatGptAfterQuestion(") > read(routeFiles.add).indexOf("getDb().addPilotQuestion("));
   check("S38 the page reads the ChatGPT gate at request time and builds one cell per engine from it (no engine constant)",
     page.includes("const chatgptConnected = pilotChatGptEnabled();") && page.includes("const engines = pilotEngines(chatgptConnected);")
-      && page.includes("{engines.map((e) => (") && page.includes("engineCell(q, e.key, e.connected)")
+      && page.includes("{engines.map((e) => (") && page.includes("<PilotEngineCell")
+      && page.includes("engine={e.key}") && page.includes("measurement={q.engines[e.key]}") && page.includes("connected={e.connected}")
       && !page.includes("PILOT_ENGINES") && !/q\.perplexity\b/.test(page));
-  check("S39 the page offers Run/Retry per engine only when connected, Resolve review when held, Add ChatGPT when the gate is on, and Retire per question once any engine stopped",
-    page.includes("{connected ? (\n          <QuestionControls") && page.includes("engine={engine}")
-      && page.includes('{m.jobStatus === "needs_review" ? (') && page.includes("<ResolveReviewControls pilotId={pilot.id} pilotQuestionId={q.id} engine={engine} />")
+  check("S39 the page passes each cell the gate's connection, Add ChatGPT when the gate is on, and the pilot's window; it offers Retire per question once any engine stopped (the cell's behaviour is rendered in section V)",
+    page.includes("canAddChatGpt={canAddChatGpt}") && page.includes("retired={q.retiredAt !== null}")
+      && page.includes("pilotOpen={!over && !notStarted && q.retiredAt === null}")
       && page.includes("const canAddChatGpt = chatgptConnected && !over;")
-      && page.includes('{engine === "openai_chatgpt" && canAddChatGpt && q.retiredAt === null ? (')
       && page.includes("{canAddChatGpt && withoutChatGpt.length > 0 ? (")
       && page.includes("Object.values(q.engines).some(stopped)")
-      && page.includes("chatgptConnected={chatgptConnected}"));
+      && page.includes("chatgptConnected={chatgptConnected}")
+      && !page.includes("<QuestionControls") && cell.includes("{p.connected ? (\n        <QuestionControls"));
   check("S40 the action-question list takes a live question measured on any engine",
     page.includes(".filter((q) => q.retiredAt === null && measuredOnAnyEngine(q))")
       && page.includes("Object.values(q.engines).some((m) => m !== null)"));
@@ -831,19 +838,34 @@ async function main(): Promise<void> {
     !/\d/.test(copy.pilotRunConfirmationText({ plannedRuns: null, runCap: null, spendCapUsd: null, stale: false })));
   // D-061 — ChatGPT's own Run confirmation, from its own plan and caps (7 / 2 / 4, D-059).
   const gptConfirm = copy.pilotRunConfirmationText({ plannedRuns: 5, runCap: 7, spendCapUsd: 4, stale: false, engine: "openai_chatgpt" });
-  check("C1b ChatGPT's Run confirmation: 5 answers on ChatGPT (OpenAI's API with web search), at most 7 runs, a 4.00 USD cap, its timing, and room under the daily limit; no promise it finishes today, no Perplexity figure",
+  // Review of phase B (APP-4): the timing is the worker's bound, not a typical maximum, and a Run with
+  // no room under the daily limit is refused by the paid-execution gate, never queued.
+  check("C1b ChatGPT's Run confirmation: 5 answers on ChatGPT (OpenAI's API with web search), at most 7 runs, a 4.00 USD cap, its typical timing and the worker's bound (a timeout holds it for review), and a refused Run when the daily limit has no room; no Perplexity figure",
     gptConfirm.startsWith("Run this pilot question on ChatGPT now?")
       && gptConfirm.includes("5 answers on ChatGPT (OpenAI's API with web search), at most 7 runs, a 4.00 USD cap for this question")
-      && gptConfirm.includes("Most answers take 30-60 seconds and the slowest about 2.5 minutes")
-      && gptConfirm.includes("under the daily spending limit a run may wait for room")
-      && !/\btoday\b|usually takes|in total/i.test(gptConfirm) && !gptConfirm.includes("Perplexity") && !gptConfirm.includes("$"), gptConfirm);
+      && gptConfirm.includes("Most answers take 30-60 seconds; a call is stopped after about 5 minutes and the measurement is then held for review.")
+      && gptConfirm.includes("If today's spending limit has no room, Run is refused; press it again later.")
+      && !/slowest|may wait for room|usually takes|in total/i.test(gptConfirm) && !gptConfirm.includes("Perplexity") && !gptConfirm.includes("$"), gptConfirm);
+  // "About 5 minutes" is the bound every Fly file sets (WORKER_CHATGPT_TIMEOUT_MS), and the paid gate refuses outright.
+  const flyTimeout = (file: string) => Number(/^\s*WORKER_CHATGPT_TIMEOUT_MS\s*=\s*"(\d+)"\s*$/m.exec(read(file))?.[1] ?? NaN);
+  const prodTimeout = flyTimeout("fly.worker.production.toml");
+  check("C1e \"stopped after about 5 minutes\" holds: production's WORKER_CHATGPT_TIMEOUT_MS is at most 300000 ms (and over 240000, so not much shorter), and every Fly file sets the same",
+    Number.isInteger(prodTimeout) && prodTimeout <= 300_000 && prodTimeout > 240_000
+      && ["fly.worker.staging.toml", "fly.worker.toml.template"].every((f) => flyTimeout(f) === prodTimeout)
+      && copy.CHATGPT_TIMING_WORDS.includes("stopped after about 5 minutes"), String(prodTimeout));
+  check("C1f the words for a full daily limit are the gate's behaviour: startWorkerMachine refuses before anything starts when the paid-execution gate says no",
+    /if \(!decision\.ok\) \{\s*return \{ ok: false, code: "paid_execution_blocked", detail: decision\.detail \};/.test(read("lib/worker-control/fly-machine.ts"))
+      && read("lib/worker-control/fly-machine.ts").indexOf("decision = await gate();") < read("lib/worker-control/fly-machine.ts").indexOf("requested = await runRequests.request(")
+      && /code: "spend_ceiling_reached"/.test(read("lib/worker-control/paid-execution-gate.ts")));
   check("C1c Perplexity's confirmation is unchanged when the engine is named",
     copy.pilotRunConfirmationText({ plannedRuns: 5, runCap: 7, spendCapUsd: 2, stale: false, engine: "perplexity_sonar" }) === confirm);
   check("C1d a lapsed ChatGPT measurement is resumed in words that name ChatGPT",
     copy.pilotRunConfirmationText({ plannedRuns: 5, runCap: 7, spendCapUsd: 4, stale: true, engine: "openai_chatgpt" })
       .startsWith("Resume this pilot question's ChatGPT measurement now?"));
   const gptUnknownPlan = copy.pilotRunConfirmationText({ plannedRuns: null, runCap: null, spendCapUsd: null, stale: false, engine: "openai_chatgpt" });
-  check("C2b ChatGPT with an unknown plan never invents numbers", !/\d/.test(gptUnknownPlan) && gptUnknownPlan.includes("may wait for room"), gptUnknownPlan);
+  check("C2b ChatGPT with an unknown plan never invents numbers, and says a long call is stopped and held for review, and that a full daily limit refuses the Run",
+    !/\d/.test(gptUnknownPlan) && gptUnknownPlan.includes("a call that takes too long is stopped and the measurement is then held for review")
+      && gptUnknownPlan.includes("If today's spending limit has no room, Run is refused; press it again later.") && !gptUnknownPlan.includes("may wait for room"), gptUnknownPlan);
   const HELD_CODES = ["perplexity_outcome_unknown", "analysis_outcome_unknown", "ambiguous_external_call_sent_without_receipt", "operator_retry_of_failed_job", null];
   const ENGINES = ["perplexity_sonar", "openai_chatgpt"] as const;
   const engineTexts = [
@@ -887,12 +909,48 @@ async function main(): Promise<void> {
     copy.RETIRE_PILOT_QUESTION_PROMPT.includes("Retiring stops this question on both engines, Perplexity and ChatGPT, even if one of its measurements could still go on")
       && copy.RETIRE_BOTH_ENGINES_NOTE.includes("Perplexity and ChatGPT alike")
       && copy.RETIRE_QUESTION_REFUSAL.QUESTION_JOB_ACTIVE.includes("on Perplexity or on ChatGPT"));
+  // Review of phase B (APP-1): the other engine's figures, finished ones included, are no longer reported.
+  check("C6f the retire prompt and the abandoned-run reply say the other engine's figures, finished ones included, are no longer reported, and that an unfinished run keeps the question",
+    copy.RETIRE_PILOT_QUESTION_PROMPT.includes("or has already finished")
+      && copy.RETIRE_PILOT_QUESTION_PROMPT.includes("its figures on the other engine, finished ones included, are no longer reported or counted in any total")
+      && copy.RETIRE_PILOT_QUESTION_PROMPT.includes("and while neither has a run that has not finished")
+      && copy.PILOT_JOB_ABANDONED_TEXT.includes("its figures on the other engine, finished ones included, are then no longer reported"));
+  // Review of phase B (DB-1): the refusal names the two everyday unfinished runs and what to do.
+  check("C6g the refusal for an unfinished run names a Retry not yet run and a run stopped part-way, and says to press Run (or resolve its review) first",
+    ["a Retry you approved but have not run yet", "a run whose worker stopped part-way", "a run held for review",
+      "Press Run for it on that engine and let it finish, or resolve its review, then retire the question."]
+      .every((t) => copy.RETIRE_QUESTION_REFUSAL.QUESTION_JOB_ACTIVE.includes(t)));
+  // Review of phase B (APP-5): with the web gate off, the refusals that send the founder to Retry or Run say ChatGPT must be on.
+  const st = (status: string, stale = false) => ({ status, stale });
+  const refusalText = copy.retireQuestionRefusalText;
+  check("C6h with the gate off, RETRYABLE whose retryable measurement is ChatGPT's says ChatGPT is switched off and must be turned back on to retry it",
+    refusalText("QUESTION_RETRYABLE", { chatgptConnected: false, engines: { perplexity_sonar: st("succeeded"), openai_chatgpt: st("failed") } }) === copy.RETIRE_RETRYABLE_CHATGPT_OFF
+      && refusalText("QUESTION_RETRYABLE", { chatgptConnected: false, engines: { perplexity_sonar: st("queued"), openai_chatgpt: st("failed") } }) === copy.RETIRE_RETRYABLE_CHATGPT_OFF
+      && copy.RETIRE_RETRYABLE_CHATGPT_OFF.includes("ChatGPT is switched off, so this measurement can't be retried now; turn ChatGPT back on to retry it."));
+  check("C6i with both failed and the gate off, Perplexity is to be retried and ChatGPT waits for the gate; with only Perplexity failed, the usual words",
+    refusalText("QUESTION_RETRYABLE", { chatgptConnected: false, engines: { perplexity_sonar: st("failed"), openai_chatgpt: st("failed") } }) === copy.RETIRE_RETRYABLE_BOTH_CHATGPT_OFF
+      && refusalText("QUESTION_RETRYABLE", { chatgptConnected: false, engines: { perplexity_sonar: st("failed"), openai_chatgpt: st("queued") } }) === copy.RETIRE_QUESTION_REFUSAL.QUESTION_RETRYABLE);
+  check("C6j with the gate off, an unfinished run that can only be ChatGPT's (queued or lease lapsed, beside a Perplexity that finished or stopped) says ChatGPT must be on to finish it; a live run or a Perplexity run keeps the usual words",
+    refusalText("QUESTION_JOB_ACTIVE", { chatgptConnected: false, engines: { perplexity_sonar: st("abandoned_exhausted"), openai_chatgpt: st("queued") } }) === copy.RETIRE_UNFINISHED_CHATGPT_OFF
+      && refusalText("QUESTION_JOB_ACTIVE", { chatgptConnected: false, engines: { perplexity_sonar: st("succeeded"), openai_chatgpt: st("running", true) } }) === copy.RETIRE_UNFINISHED_CHATGPT_OFF
+      && refusalText("QUESTION_JOB_ACTIVE", { chatgptConnected: false, engines: { perplexity_sonar: st("succeeded"), openai_chatgpt: st("running", false) } }) === copy.RETIRE_QUESTION_REFUSAL.QUESTION_JOB_ACTIVE
+      && refusalText("QUESTION_JOB_ACTIVE", { chatgptConnected: false, engines: { perplexity_sonar: st("queued"), openai_chatgpt: st("failed") } }) === copy.RETIRE_QUESTION_REFUSAL.QUESTION_JOB_ACTIVE
+      && refusalText("QUESTION_JOB_ACTIVE", { chatgptConnected: false, engines: { perplexity_sonar: st("abandoned_exhausted"), openai_chatgpt: st("needs_review") } }) === copy.RETIRE_QUESTION_REFUSAL.QUESTION_JOB_ACTIVE);
+  check("C6k with the gate on, without a ChatGPT measurement, or for any other refusal, the usual words",
+    (["QUESTION_RETRYABLE", "QUESTION_JOB_ACTIVE"] as const).every((o) =>
+      refusalText(o, { chatgptConnected: true, engines: { perplexity_sonar: st("abandoned_exhausted"), openai_chatgpt: st("failed") } }) === copy.RETIRE_QUESTION_REFUSAL[o]
+        && refusalText(o, { chatgptConnected: false, engines: { perplexity_sonar: st("failed"), openai_chatgpt: null } }) === copy.RETIRE_QUESTION_REFUSAL[o]
+        && refusalText(o, { chatgptConnected: false }) === copy.RETIRE_QUESTION_REFUSAL[o])
+      && refusalText("QUESTION_NOT_STOPPED", { chatgptConnected: false, engines: { perplexity_sonar: st("succeeded"), openai_chatgpt: st("queued") } }) === copy.RETIRE_QUESTION_REFUSAL.QUESTION_NOT_STOPPED);
+  check("C6l every gate-off refusal is in plain words with no stored code",
+    [copy.RETIRE_RETRYABLE_CHATGPT_OFF, copy.RETIRE_RETRYABLE_BOTH_CHATGPT_OFF, copy.RETIRE_UNFINISHED_CHATGPT_OFF, copy.RETIRE_QUESTION_REFUSAL.QUESTION_JOB_ACTIVE]
+      .every((t) => !/[A-Z]{2,}_[A-Z]|[a-z]+_[a-z]+/.test(t) && !FORBIDDEN_W1_PHRASES.some((ph) => t.toLowerCase().includes(ph))));
   check("C6d a held measurement names its own engine, never the stored reason code",
     copy.pilotHeldReasonText("perplexity_outcome_unknown", "openai_chatgpt").includes("a ChatGPT call may have been made")
       && copy.pilotHeldReasonText("perplexity_outcome_unknown", "perplexity_sonar").includes("a Perplexity call may have been made")
       && HELD_CODES.every((c) => ENGINES.every((e) => !copy.pilotHeldReasonText(c, e).includes("perplexity_") && !copy.pilotHeldReasonText(c, e).includes("_unknown"))));
-  check("C6e the Run route's reply names the engine and its timing",
-    copy.pilotRunStartedText("openai_chatgpt", 5) === "Measurement started for this question only: 5 planned runs on ChatGPT. Most answers take 30-60 seconds and the slowest about 2.5 minutes."
+  check("C6e the Run route's reply names the engine and its timing (typical, then the worker's bound and what a timeout does)",
+    copy.pilotRunStartedText("openai_chatgpt", 5) === "Measurement started for this question only: 5 planned runs on ChatGPT. Most answers take 30-60 seconds; a call is stopped after about 5 minutes and the measurement is then held for review."
       && copy.pilotRunStartedText("perplexity_sonar", 5) === "Measurement started for this question only: 5 planned runs on Perplexity, about 20 seconds each."
       && copy.pilotRunStartedText("openai_chatgpt", null) === "Measurement started for this question only.");
 
@@ -1072,13 +1130,26 @@ async function main(): Promise<void> {
     !!lq1 && lq1.engines.perplexity_sonar?.protocolId === PX1 && lq1.engines.perplexity_sonar?.engine === "perplexity_sonar"
       && lq1.engines.openai_chatgpt?.protocolId === GP1 && lq1.engines.openai_chatgpt?.engine === "openai_chatgpt",
     JSON.stringify(lq1?.engines));
-  check("R2 each engine keeps its own job, status, runs, caps and hold reason",
+  // Review of phase B (APP-7): a timed-out run is counted as failed, as the customer report counts it.
+  check("R2 each engine keeps its own job, status, runs, caps and hold reason; ChatGPT's timed-out run is counted as failed",
     lq1?.engines.perplexity_sonar?.jobId === JOB.px1 && lq1.engines.perplexity_sonar.jobStatus === "succeeded"
       && lq1.engines.perplexity_sonar.completedRuns === 5 && lq1.engines.perplexity_sonar.spendCapUsd === 2
-      && lq1.engines.perplexity_sonar.needsReviewReason === null
+      && lq1.engines.perplexity_sonar.needsReviewReason === null && lq1.engines.perplexity_sonar.failedRuns === 0
       && lq1.engines.openai_chatgpt?.jobId === JOB.gp1 && lq1.engines.openai_chatgpt.jobStatus === "needs_review"
-      && lq1.engines.openai_chatgpt.completedRuns === 2 && lq1.engines.openai_chatgpt.failedRuns === 0
+      && lq1.engines.openai_chatgpt.completedRuns === 2 && lq1.engines.openai_chatgpt.failedRuns === 1
+      && lq1.engines.openai_chatgpt.excludedRuns === 0
       && lq1.engines.openai_chatgpt.spendCapUsd === 4 && lq1.engines.openai_chatgpt.needsReviewReason === "perplexity_outcome_unknown");
+  const t7 = readTables();
+  t7.protocol_attempts.push(...attemptsOf(PX2, ["cancelled", "excluded", "reserved"]));
+  const px2Counted = (await reads.loadPilot(fakeClient(t7).client, RP))?.questions.find((q) => q.id === RQ2)?.engines.perplexity_sonar;
+  check("R2b the console counts runs as the customer report does: failed, timed out and cancelled as failed, excluded after review on its own, a run still open in neither",
+    px2Counted?.completedRuns === 1 && px2Counted.failedRuns === 2 && px2Counted.excludedRuns === 1
+      && copy.pilotRunsLine(px2Counted) === "1 of 5 runs completed, 2 failed, 1 excluded after review"
+      && copy.pilotRunsLine({ completedRuns: 5, plannedRuns: 5, failedRuns: 0, excludedRuns: 0 }) === "5 of 5 runs completed"
+      && copy.pilotRunsLine({ completedRuns: 0, plannedRuns: null, failedRuns: 1 }) === "0 of ? runs completed, 1 failed"
+      && read("lib/reports/build-pilot-report.ts").includes('const FAILED_STATUSES = new Set(["failed", "timed_out", "cancelled"]);')
+      && read("lib/pilots/reads.ts").includes('const FAILED_ATTEMPT_STATUSES: ReadonlySet<string> = new Set(["failed", "timed_out", "cancelled"]);'),
+    JSON.stringify(px2Counted));
   check("R3 a question measured on Perplexity only has no ChatGPT measurement (null, never zero), and its own lapsed lease",
     !!lq2 && lq2.engines.openai_chatgpt === null && lq2.engines.perplexity_sonar?.protocolId === PX2
       && lq2.engines.perplexity_sonar.stale === true && lq2.engines.perplexity_sonar.failedRuns === 1);
@@ -1327,6 +1398,47 @@ async function main(): Promise<void> {
       reviewLines.length >= 3 && reviewLines.every((l) => !("note" in l)) && handlerLogs.every((l) => !l.includes(NOTE.trim())));
   }
 
+  // Review of phase B (APP-5): the retire route's words with the gate off read each engine's job of the question.
+  {
+    const retireTables = (px: Record<string, unknown>, gp: Record<string, unknown> | null): Rows => ({
+      pilots: [{ id: VP, status: "active", starts_on: daysAgo(1), ends_on: daysAhead(89) }],
+      pilot_questions: [{ id: VQ, pilot_id: VP, retired_at: null }],
+      pilot_question_protocols: [
+        { pilot_question_id: VQ, protocol_id: VPX, engine: "perplexity_sonar", phase: "baseline" },
+        ...(gp ? [{ pilot_question_id: VQ, protocol_id: VGP, engine: "openai_chatgpt", phase: "baseline" }] : []),
+      ],
+      protocol_execution_jobs: [
+        { id: VJPX, project_id: VPROJ, protocol_id: VPX, lease_expires_at: null, next_baseline_ordinal: 2, ...px },
+        ...(gp ? [{ id: VJGP, project_id: VPROJ, protocol_id: VGP, lease_expires_at: null, next_baseline_ordinal: 2, ...gp }] : []),
+      ],
+      protocols: [{ id: VPX, planned_baseline_runs: 5 }, { id: VGP, planned_baseline_runs: 5 }],
+    });
+    const NOW = Date.now();
+    const words = (fc: ReturnType<typeof fakeClient>, outcome: Parameters<typeof handlers.retireRefusalWords>[2], gateOn: boolean) =>
+      handlers.retireRefusalWords(() => fc.client, idsV, outcome, gateOn, () => NOW);
+    const retryableGpt = fakeClient(retireTables({ status: "succeeded" }, { status: "failed" }));
+    check("H41 retire refusal with the gate off: a retryable ChatGPT measurement is named, with the gate as the reason it can't be retried now",
+      (await words(retryableGpt, "QUESTION_RETRYABLE", false)) === copy.RETIRE_RETRYABLE_CHATGPT_OFF
+        && retryableGpt.reads.some((r) => r.table === "protocol_execution_jobs"));
+    const lapsed = fakeClient(retireTables({ status: "abandoned_exhausted" },
+      { status: "running", lease_expires_at: new Date(NOW - 60_000).toISOString() }));
+    const live = fakeClient(retireTables({ status: "abandoned_exhausted" },
+      { status: "running", lease_expires_at: new Date(NOW + 60_000).toISOString() }));
+    check("H42 an unfinished ChatGPT run whose lease lapsed is named, with the gate as the reason; one still running keeps the usual words",
+      (await words(lapsed, "QUESTION_JOB_ACTIVE", false)) === copy.RETIRE_UNFINISHED_CHATGPT_OFF
+        && (await words(live, "QUESTION_JOB_ACTIVE", false)) === copy.RETIRE_QUESTION_REFUSAL.QUESTION_JOB_ACTIVE);
+    const untouched = fakeClient(retireTables({ status: "succeeded" }, { status: "failed" }));
+    const other = await words(untouched, "PILOT_CLOSED", false);
+    const gateOn = await words(untouched, "QUESTION_RETRYABLE", true);
+    const noGpt = fakeClient(retireTables({ status: "failed" }, null));
+    check("H43 with the gate on, or for any other refusal, nothing is read and the fixed words come back; with no ChatGPT measurement, the usual words",
+      other === copy.RETIRE_QUESTION_REFUSAL.PILOT_CLOSED && gateOn === copy.RETIRE_QUESTION_REFUSAL.QUESTION_RETRYABLE && untouched.reads.length === 0
+        && (await words(noGpt, "QUESTION_RETRYABLE", false)) === copy.RETIRE_QUESTION_REFUSAL.QUESTION_RETRYABLE);
+    const broken = await handlers.retireRefusalWords(() => { throw new Error("SENTINEL-CLIENT"); }, idsV, "QUESTION_RETRYABLE", false);
+    check("H44 a client that cannot be built, or a read that fails, falls back to the fixed words (never thrown, never echoed)",
+      broken === copy.RETIRE_QUESTION_REFUSAL.QUESTION_RETRYABLE);
+  }
+
   // The Run and Retry routes themselves, with a founder session: the engine
   // and the gate are checked before anything is read or started. A body that
   // passes them reaches the slot read, which needs the service client; with
@@ -1404,12 +1516,135 @@ async function main(): Promise<void> {
   process.env.SNAPSHOT_APPROVAL_ENABLED = "false";
   const retryKilled = await retryWith({ ...RETRY, ...GPT });
   check("H40 Retry: the kill switch still comes first", retryKilled.status === 503, JSON.stringify(retryKilled));
+  process.env.SNAPSHOT_APPROVAL_ENABLED = "true";
+
+  // Review of phase B (APP-8): the add-question route itself, with a founder session and the memory database,
+  // when ChatGPT is asked for and does not get added (the gate is off, or the follow-up call fails).
+  const addRoute = await import("@/app/api/internal/pilots/[pilotId]/questions/route");
+  const aPilot = await db.createPilot(createInput("pilot-h4.example"));
+  const addBody = (n: number, over: Record<string, unknown> = {}) => ({
+    questionText: question(n), questionProvenance: "customer_supplied", customerApprovalRef: "Email of 12 Nov",
+    customerApprovedOn: today(), idempotencyKey: randomUUID(), addChatGpt: true, ...over,
+  });
+  const addWith = async (body: unknown) => {
+    const r = await addRoute.POST(jsonPost(body), { params: Promise.resolve({ pilotId: aPilot.pilotId! }) });
+    return { status: r.status, body: (await r.json()) as Record<string, unknown> };
+  };
+  const slotsOfText = (n: number) => {
+    const qRow = [...store().pilotQuestions.values()].find((q) => q.pilotId === aPilot.pilotId
+      && store().buyerQuestionVersions.get((q as unknown as { buyerQuestionVersionId: string }).buyerQuestionVersionId)?.promptText === question(n));
+    return qRow ? slotsOf(qRow.id).map((s) => s.engine).sort().join(",") : "none";
+  };
+  delete process.env.ZYPACT_PILOT_CHATGPT_ENABLED;
+  const offAdd = await addWith(addBody(960));
+  check("H45 add-question with ChatGPT asked for and the gate off: the question is added (201) with its Perplexity measurement only, chatgptAdded false, and the reply says ChatGPT was not added and why",
+    offAdd.status === 201 && offAdd.body.ok === true && offAdd.body.chatgptAdded === false
+      && offAdd.body.detail === `Question added and its Perplexity measurement queued; ChatGPT was not added. ${copy.PILOT_CHATGPT_NOT_CONNECTED_YET} Nothing runs until you press Run for it.`
+      && slotsOfText(960) === "perplexity_sonar", JSON.stringify(offAdd));
+  process.env.ZYPACT_PILOT_CHATGPT_ENABLED = "true";
+  // The route's getDb() is this same memory adapter object; its follow-up call is made to fail for one request.
+  const memoryAdapterRef = db as { addPilotQuestionEngine: DbAdapter["addPilotQuestionEngine"] };
+  const realAddEngine = memoryAdapterRef.addPilotQuestionEngine;
+  memoryAdapterRef.addPilotQuestionEngine = async () => { throw Object.assign(new Error("SENTINEL-FOLLOW-UP"), { code: "P0001" }); };
+  let failedAdd: Awaited<ReturnType<typeof addWith>>;
+  try {
+    failedAdd = await addWith(addBody(961));
+  } finally {
+    memoryAdapterRef.addPilotQuestionEngine = realAddEngine;
+  }
+  check("H46 add-question with the gate on and the ChatGPT follow-up failing: the question stays with Perplexity (201), chatgptAdded false, in words, and the error is never echoed",
+    failedAdd.status === 201 && failedAdd.body.chatgptAdded === false
+      && failedAdd.body.detail === `Question added and its Perplexity measurement queued; ChatGPT was not added. ${copy.ADD_CHATGPT_FAILED_TEXT} Nothing runs until you press Run for it.`
+      && !JSON.stringify(failedAdd.body).includes("SENTINEL") && slotsOfText(961) === "perplexity_sonar", JSON.stringify(failedAdd));
+  const okAddRoute = await addWith(addBody(962));
+  const plainAdd = await addWith(addBody(963, { addChatGpt: undefined }));
+  check("H47 controls: with the gate on and the follow-up working, both measurements are queued (chatgptAdded true); without asking, ChatGPT is not tried (chatgptAdded null)",
+    okAddRoute.status === 201 && okAddRoute.body.chatgptAdded === true && slotsOfText(962) === "openai_chatgpt,perplexity_sonar"
+      && plainAdd.status === 201 && plainAdd.body.chatgptAdded === null && slotsOfText(963) === "perplexity_sonar", JSON.stringify([okAddRoute.body, plainAdd.body]));
+  delete process.env.ZYPACT_PILOT_CHATGPT_ENABLED;
+
+  // ...and the retire route with the gate off: without a service client it falls back to the fixed words, never fails.
+  const retireRoute = await import("@/app/api/internal/pilots/[pilotId]/questions/[pilotQuestionId]/retire/route");
+  const rq = await db.addPilotQuestion(addInput(aPilot.pilotId!, question(964)));
+  const rqChatGpt = await db.addPilotQuestionEngine({ pilotId: aPilot.pilotId!, pilotQuestionId: rq.pilotQuestionId!, engine: "openai_chatgpt", addedBy: FOUNDER });
+  setJob(rqChatGpt.jobId!, { status: "failed", failureReason: "provider_error", currentAttemptId: null, nextBaselineOrdinal: 1 }); // test setup: a ChatGPT provider failure
+  (store().protocolAttempts as unknown as Map<string, unknown>).set(randomUUID(), {
+    id: randomUUID(), projectId: aPilot.projectId!, jobId: rqChatGpt.jobId!, protocolId: rqChatGpt.protocolId!, status: "failed",
+    terminalizedAt: new Date().toISOString(), baselineOrdinal: 1, retryOfAttemptId: null,
+  }); // test setup: its failed attempt in slot 1, retryable
+  const retireRes = await retireRoute.POST(jsonPost({ reason: "ChatGPT cannot go on for this question." }),
+    { params: Promise.resolve({ pilotId: aPilot.pilotId!, pilotQuestionId: rq.pilotQuestionId! }) });
+  const retireBody = (await retireRes.json()) as Record<string, unknown>;
+  check("H48 the retire route answers a retryable ChatGPT measurement with the gate off (409, QUESTION_RETRYABLE) in fixed words when the engines cannot be read; the question stays",
+    retireRes.status === 409 && retireBody.outcome === "QUESTION_RETRYABLE" && retireBody.error === copy.RETIRE_QUESTION_REFUSAL.QUESTION_RETRYABLE
+      && (store().pilotQuestions.get(rq.pilotQuestionId!) as unknown as { retiredAt: string | null }).retiredAt === null, JSON.stringify(retireBody));
+  const retireSrc = read("app/api/internal/pilots/[pilotId]/questions/[pilotQuestionId]/retire/route.ts");
+  check("H49 the retire route words a refusal through retireRefusalWords with a lazily built service client and the gate read at request time, after the database answered",
+    retireSrc.includes("await retireRefusalWords(\n    getReportServiceClient,\n    { pilotId, pilotQuestionId },\n    outcome,\n    pilotChatGptEnabled()\n  );")
+      && retireSrc.indexOf("getDb().retirePilotQuestion(") < retireSrc.indexOf("retireRefusalWords(")
+      && !retireSrc.includes("RETIRE_QUESTION_REFUSAL["));
   __setSupabaseServerClientForTests(null);
   for (const [k, v] of [["SNAPSHOT_FOUNDER_EMAILS", savedEnv.founders], ["SNAPSHOT_APPROVAL_ENABLED", savedEnv.approval],
     ["ZYPACT_PILOT_CHATGPT_ENABLED", savedEnv.gate]] as const) {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
+
+  /* V: one engine's cell, rendered (review of phase B, APP-8) --------------- */
+  // The cell the pilot page renders per question and engine (S38, S39 check
+  // the page passes it the gate's connection), rendered for real: with the
+  // web gate off, ChatGPT offers no Run, Resume or Retry, whatever its state.
+  console.log("\n[V] one engine's cell, rendered");
+  (globalThis as unknown as { React: unknown }).React = require("react");
+  const { renderToStaticMarkup } = require("react-dom/server") as { renderToStaticMarkup: (el: unknown) => string };
+  const { createElement } = require("react") as { createElement: (...args: unknown[]) => unknown };
+  const { PilotEngineCell } = await import("@/app/admin/pilots/pilot-engine-cell");
+  const measurement = (engine: "perplexity_sonar" | "openai_chatgpt", over: Record<string, unknown> = {}) => ({
+    engine, protocolId: randomUUID(), jobId: randomUUID(), jobStatus: "queued", needsReviewReason: null, stale: false,
+    plannedRuns: 5, runCap: 7, spendCapUsd: engine === "openai_chatgpt" ? 4 : 2, completedRuns: 0, failedRuns: 0, excludedRuns: 0, ...over,
+  });
+  const cellHtml = (engine: "perplexity_sonar" | "openai_chatgpt", m: Record<string, unknown> | null, o: { connected: boolean; canAddChatGpt?: boolean; retired?: boolean; pilotOpen?: boolean }) =>
+    renderToStaticMarkup(createElement(PilotEngineCell, {
+      pilotId: randomUUID(), pilotQuestionId: randomUUID(), engine, measurement: m === null ? null : measurement(engine, m),
+      connected: o.connected, canAddChatGpt: o.canAddChatGpt ?? o.connected, retired: o.retired ?? false, pilotOpen: o.pilotOpen ?? true,
+    }));
+  const RUN = />Run<\/button>/;
+  const RESUME = />Resume<\/button>/;
+  const RETRY_BUTTON = />Retry failed run<\/button>/;
+  const gateOff = { connected: false };
+  const offCells = [
+    cellHtml("openai_chatgpt", { jobStatus: "queued" }, gateOff),
+    cellHtml("openai_chatgpt", { jobStatus: "running", stale: true }, gateOff),
+    cellHtml("openai_chatgpt", { jobStatus: "failed", failedRuns: 1 }, gateOff),
+  ];
+  check("V1 gate off: a queued, a lapsed and a failed ChatGPT measurement offer no Run, Resume or Retry, and each says Run and Retry are off",
+    offCells.every((h) => !RUN.test(h) && !RESUME.test(h) && !RETRY_BUTTON.test(h) && h.includes(copy.ENGINE_NOT_CONNECTED_CONTROLS_NOTE)),
+    offCells.map((h) => h.slice(0, 120)).join(" | "));
+  const heldOff = cellHtml("openai_chatgpt", { jobStatus: "needs_review", needsReviewReason: "perplexity_outcome_unknown" }, gateOff);
+  check("V2 gate off: a held ChatGPT measurement still offers both review resolutions (they spend nothing), and no Run",
+    heldOff.includes(copy.PILOT_REVIEW_BUTTON_LABEL.excluded_and_completed) && heldOff.includes(copy.PILOT_REVIEW_BUTTON_LABEL.failed)
+      && heldOff.includes(copy.pilotHeldReasonText("perplexity_outcome_unknown", "openai_chatgpt")) && !RUN.test(heldOff));
+  const onCells = {
+    queued: cellHtml("openai_chatgpt", { jobStatus: "queued" }, { connected: true }),
+    lapsed: cellHtml("openai_chatgpt", { jobStatus: "running", stale: true }, { connected: true }),
+    failed: cellHtml("openai_chatgpt", { jobStatus: "failed", failedRuns: 1 }, { connected: true }),
+    closed: cellHtml("openai_chatgpt", { jobStatus: "queued" }, { connected: true, pilotOpen: false }),
+  };
+  check("V3 controls, gate on: the same ChatGPT measurements offer Run, Resume and Retry, and none once the pilot is over or the question retired",
+    RUN.test(onCells.queued) && RESUME.test(onCells.lapsed) && RETRY_BUTTON.test(onCells.failed)
+      && !RUN.test(onCells.closed) && !onCells.queued.includes(copy.ENGINE_NOT_CONNECTED_CONTROLS_NOTE));
+  check("V4 Perplexity is never behind the gate: with ChatGPT off (Perplexity is always connected) it offers Run and Retry",
+    RUN.test(cellHtml("perplexity_sonar", { jobStatus: "queued" }, { connected: true, canAddChatGpt: false }))
+      && RETRY_BUTTON.test(cellHtml("perplexity_sonar", { jobStatus: "failed", failedRuns: 1 }, { connected: true, canAddChatGpt: false })));
+  const ADD = new RegExp(`>${copy.ADD_CHATGPT_BUTTON_LABEL}</button>`);
+  check("V5 a question without ChatGPT reads \"Not measured\", never zero, and offers Add ChatGPT only when the gate allows it and the question is live",
+    [cellHtml("openai_chatgpt", null, gateOff), cellHtml("openai_chatgpt", null, { connected: true }), cellHtml("openai_chatgpt", null, { connected: true, retired: true })]
+      .every((h) => h.includes(copy.ENGINE_NOT_MEASURED) && !/\b0 of\b/.test(h))
+      && !ADD.test(cellHtml("openai_chatgpt", null, gateOff)) && ADD.test(cellHtml("openai_chatgpt", null, { connected: true }))
+      && !ADD.test(cellHtml("openai_chatgpt", null, { connected: true, retired: true }))
+      && !ADD.test(cellHtml("perplexity_sonar", null, { connected: true })));
+  check("V6 the cell counts runs as the customer report does (APP-7): failed (a timeout included) and excluded after review",
+    cellHtml("openai_chatgpt", { jobStatus: "succeeded", completedRuns: 3, failedRuns: 1, excludedRuns: 1 }, gateOff).includes("3 of 5 runs completed, 1 failed, 1 excluded after review"));
 
   console.log(`\n${checks - failures}/${checks} checks passed.`);
   console.log(failures === 0 ? "Pilot questions PASSED." : `${failures} check(s) failed. Pilot questions FAILED.`);

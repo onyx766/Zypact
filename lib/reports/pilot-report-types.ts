@@ -25,12 +25,21 @@ export interface PilotReportSubject {
   normalizedDomain: string;
 }
 
-/** How far a question's measurement got, in the report's own words. */
+/**
+ * How far a question's measurement got, in the report's own words.
+ *
+ * D-061 (review of phase B) — `ended_after_review`: the job succeeded only
+ * because a review ended it (resolve_protocol_job_review with
+ * `excluded_and_completed`), so fewer planned answers may have been made
+ * than planned. Never "finished", never in a total. Absent on revisions
+ * built before it.
+ */
 export type PilotQuestionMeasurementState =
   | "measured"
   | "not_finished"
   | "not_started"
-  | "stopped";
+  | "stopped"
+  | "ended_after_review";
 
 /**
  * The pilot's own count of a question's attempts on one engine, by stored

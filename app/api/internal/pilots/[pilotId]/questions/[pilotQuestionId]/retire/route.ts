@@ -2,8 +2,10 @@ import { NextResponse } from "next/server";
 
 import { requireFounderForRoute } from "@/lib/auth/founder";
 import { getDb } from "@/lib/db";
-import { RETIRE_QUESTION_REFUSAL } from "@/lib/pilots/copy";
+import { retireRefusalWords } from "@/lib/pilots/engine-routes";
+import { pilotChatGptEnabled } from "@/lib/pilots/engines";
 import { UUID_PATTERN } from "@/lib/pilots/validate";
+import { getReportServiceClient } from "@/lib/reports/service-client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,6 +21,13 @@ const MAX_REASON_LENGTH = 2000;
  * row and all evidence are kept. The question stops counting toward the
  * limit, its approved text may be added again, and the database refuses
  * any later Run or retry of it. Nothing is started or reserved here.
+ *
+ * D-061 — the database looks at every engine's measurement of the question.
+ * A refusal is answered in fixed words; with the web host's ChatGPT gate
+ * off, a refusal that sends the founder to Retry or Run reads the
+ * question's engines so it can say when the measurement meant is ChatGPT's,
+ * which cannot be retried or run until ChatGPT is switched on again
+ * (retireRefusalWords). Nothing is read before the database has answered.
  */
 export async function POST(
   request: Request,
@@ -75,8 +84,14 @@ export async function POST(
   if (outcome === "RETIRED") {
     return NextResponse.json({ ok: true, outcome }, { status: 200 });
   }
+  const error = await retireRefusalWords(
+    getReportServiceClient,
+    { pilotId, pilotQuestionId },
+    outcome,
+    pilotChatGptEnabled()
+  );
   return NextResponse.json(
-    { ok: false, outcome, error: RETIRE_QUESTION_REFUSAL[outcome] },
+    { ok: false, outcome, error },
     { status: outcome === "PILOT_NOT_FOUND" || outcome === "QUESTION_NOT_FOUND" ? 404 : 409 }
   );
 }

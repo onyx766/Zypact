@@ -14,10 +14,17 @@
 -- run against production.
 --
 -- One read-only transaction, rolled back at the end. It reads catalog
--- metadata, the migration ledger and four counts. It prints check ids,
--- PASS/FAIL, versions, hashes and counts: no row of customer data, no email,
--- no evidence, no token. Every check that must pass has pass = true or false;
--- informational rows have pass = null.
+-- metadata, the migration ledger and counts: of jobs, attempts, probe runs,
+-- protocols and sessions. It prints check ids, PASS/FAIL, versions, hashes
+-- and counts: no row of customer data, no email, no evidence, no token.
+-- Every check that must pass has pass = true or false; informational rows
+-- have pass = null.
+--
+-- P6.4, P7.1 and P7.2 (review of ChatGPT phase B, D-061) read the data
+-- 20261109180000's own preconditions read, with the same tests, so a state
+-- that migration would refuse is found here first: an attempt reserved or in
+-- progress, a protocol provider outside its closed set, a protocol attempt's
+-- probe run on another platform than 'perplexity'.
 --
 -- The check set is built once (the checks CTE). One statement turns it into
 -- the printed lines and the FAIL count. The last line printed is the verdict,
@@ -225,6 +232,26 @@ checks(id, label, pass, observed) as (
   select 'P6.3', 'no protocol job is queued (the worker redeploy needs an empty queue)',
          (select count(*) from public.protocol_execution_jobs where status = 'queued') = 0,
          (select count(*)::text from public.protocol_execution_jobs where status = 'queued')
+  union all
+  select 'P6.4', 'no protocol attempt is reserved or in progress (20261109180000 refuses to apply while one is)',
+         (select count(*) from public.protocol_attempts pa where pa.status in ('reserved', 'in_progress')) = 0,
+         (select count(*)::text from public.protocol_attempts pa where pa.status in ('reserved', 'in_progress'))
+
+  -- P7 the data 20261109180000's preconditions read (D-061) ----------------
+  union all
+  select 'P7.1', 'every protocol names a provider 20261109180000 accepts (perplexity, perplexity_sonar, perplexity_agent, openai_chatgpt)',
+         (select count(*) from public.protocols p
+           where p.provider not in ('perplexity', 'perplexity_sonar', 'perplexity_agent', 'openai_chatgpt')) = 0,
+         (select count(*)::text from public.protocols p
+           where p.provider not in ('perplexity', 'perplexity_sonar', 'perplexity_agent', 'openai_chatgpt'))
+  union all
+  select 'P7.2', 'every probe run of a protocol attempt is perplexity (20261109180000 keeps their results'' replay hashes)',
+         (select count(*) from public.protocol_attempts pa
+            join public.probe_runs pr on pr.id = pa.probe_run_id
+           where pr.platform <> 'perplexity') = 0,
+         (select count(*)::text from public.protocol_attempts pa
+            join public.probe_runs pr on pr.id = pa.probe_run_id
+           where pr.platform <> 'perplexity')
 )
 select string_agg(format('%-5s %-4s %s | %s', c.id,
                          case when i.id is not null then 'info' when c.pass is true then 'PASS' else 'FAIL' end,

@@ -23,7 +23,7 @@ import { NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { FounderRouteGuard } from "@/lib/auth/founder";
-import type { AddPilotQuestionEngineOutcome, DbAdapter } from "@/lib/db/types";
+import type { AddPilotQuestionEngineOutcome, DbAdapter, RetirePilotQuestionOutcome } from "@/lib/db/types";
 import {
   ADD_CHATGPT_DONE_TEXT,
   ADD_CHATGPT_FAILED_TEXT,
@@ -34,6 +34,9 @@ import {
   PILOT_REVIEW_NOT_HELD_TEXT,
   PILOT_REVIEW_REFUSED_TEXT,
   pilotEngineNotOnQuestionText,
+  RETIRE_QUESTION_REFUSAL,
+  retireQuestionRefusalText,
+  type RetireEngineState,
 } from "@/lib/pilots/copy";
 import { pilotChatGptEnabled, pilotEngineFromBody } from "@/lib/pilots/engines";
 import { resolvePilotQuestionTarget } from "@/lib/pilots/reads";
@@ -171,6 +174,51 @@ export async function addChatGptAfterQuestion(
     return { added: false, outcome: result.outcome, words: ADD_ENGINE_REFUSAL[result.outcome] };
   } catch {
     return { added: false, outcome: "FAILED", words: ADD_CHATGPT_FAILED_TEXT };
+  }
+}
+
+/* ---------------------------------------------------------------- a retire refusal, in words */
+
+/**
+ * D-061 (review of phase B) — the retire route's words for a refusal. Only
+ * when the web gate is off and the refusal sends the founder to Retry
+ * (QUESTION_RETRYABLE) or to Run (QUESTION_JOB_ACTIVE) does it read each
+ * engine's job of the question, so the words can say the measurement meant
+ * is ChatGPT's and that ChatGPT must be switched on first
+ * (retireQuestionRefusalText). Reads only, and the client is built only
+ * then; a read that fails falls back to the fixed words, and nothing is
+ * logged.
+ */
+export async function retireRefusalWords(
+  client: () => SupabaseClient,
+  ids: { pilotId: string; pilotQuestionId: string },
+  outcome: Exclude<RetirePilotQuestionOutcome, "RETIRED">,
+  chatgptEnabled: boolean,
+  now: () => number = Date.now
+): Promise<string> {
+  if (chatgptEnabled || (outcome !== "QUESTION_RETRYABLE" && outcome !== "QUESTION_JOB_ACTIVE")) {
+    return RETIRE_QUESTION_REFUSAL[outcome];
+  }
+  try {
+    const c = client();
+    const [px, gpt] = await Promise.all([
+      resolvePilotQuestionTarget(c, ids.pilotId, ids.pilotQuestionId, "perplexity_sonar"),
+      resolvePilotQuestionTarget(c, ids.pilotId, ids.pilotQuestionId, "openai_chatgpt"),
+    ]);
+    const state = (t: Awaited<ReturnType<typeof resolvePilotQuestionTarget>>): RetireEngineState | null => {
+      if (!t?.job) return null;
+      const lease = t.job.leaseExpiresAt ? Date.parse(t.job.leaseExpiresAt) : Number.NaN;
+      return {
+        status: t.job.status,
+        stale: (t.job.status === "claimed" || t.job.status === "running") && !Number.isNaN(lease) && lease <= now(),
+      };
+    };
+    return retireQuestionRefusalText(outcome, {
+      chatgptConnected: false,
+      engines: { perplexity_sonar: state(px), openai_chatgpt: state(gpt) },
+    });
+  } catch {
+    return RETIRE_QUESTION_REFUSAL[outcome];
   }
 }
 

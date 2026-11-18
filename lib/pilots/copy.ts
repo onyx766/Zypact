@@ -46,29 +46,83 @@ export const RETIRE_QUESTION_REFUSAL: Record<Exclude<RetirePilotQuestionOutcome,
   PILOT_NOT_FOUND: "This pilot no longer exists.",
   QUESTION_NOT_FOUND: "This question is not part of this pilot.",
   PILOT_CLOSED: "This pilot is closed, so its questions are final.",
-  // D-061 — the database now looks at every engine's measurement of the question.
+  // D-061 — the database now looks at every engine's measurement of the
+  // question, and (review of phase B) keeps a question whose other
+  // measurement has a run that has not finished: retiring would leave that
+  // run open for good and hold every later report build.
   QUESTION_JOB_ACTIVE:
-    "One of this question's measurements, on Perplexity or on ChatGPT, is running or about to start. Wait for it to finish.",
+    "One of this question's measurements, on Perplexity or on ChatGPT, is running, about to start, or has a run that has not finished: a Retry you approved but have not run yet, a run whose worker stopped part-way, or a run held for review. Press Run for it on that engine and let it finish, or resolve its review, then retire the question.",
   QUESTION_NOT_STOPPED: "Only a question with a measurement that stopped and cannot go on can be retired.",
   QUESTION_RETRYABLE:
     "This question's stopped measurement failed at the AI provider and can still be retried. Retry it instead.",
   RETIRE_LIMIT_REACHED: "This pilot already has 5 retired questions, the most it may have.",
 };
 
+/*
+ * D-061 (review of phase B) — the two refusals that send the founder to Run
+ * or Retry, when the measurement they mean is ChatGPT's and the web gate is
+ * off, so neither can be pressed. The database names no engine; the retire
+ * route reads each engine's job (retireRefusalWords, lib/pilots/engine-routes.ts).
+ */
+export const RETIRE_RETRYABLE_CHATGPT_OFF =
+  "This question's ChatGPT measurement failed at the AI provider and can still be retried, so the question is not retired. ChatGPT is switched off, so this measurement can't be retried now; turn ChatGPT back on to retry it.";
+export const RETIRE_RETRYABLE_BOTH_CHATGPT_OFF =
+  "This question's Perplexity measurement failed at the AI provider and can still be retried: retry it instead. Its ChatGPT measurement can be retried too, but ChatGPT is switched off, so it can't be retried now; turn ChatGPT back on to retry it.";
+export const RETIRE_UNFINISHED_CHATGPT_OFF =
+  "This question's ChatGPT measurement has a run that has not finished (a Retry you approved but have not run yet, or a run whose worker stopped part-way), so the question is not retired. ChatGPT is switched off, so that run can't be finished now; turn ChatGPT back on, press Run for it on ChatGPT and let it finish, then retire the question.";
+
+/** One engine's measurement as the retire route reads it: its job's status, and whether its lease lapsed. */
+export interface RetireEngineState {
+  status: string;
+  stale: boolean;
+}
+
+/**
+ * D-061 (review of phase B) — the retire route's words for a refusal. With
+ * the web gate on, or for any other refusal, the fixed words above. With it
+ * off, a QUESTION_RETRYABLE whose failed measurement is ChatGPT's, and a
+ * QUESTION_JOB_ACTIVE whose unfinished run can only be ChatGPT's (a queued
+ * ChatGPT job or one whose lease lapsed, beside a Perplexity measurement
+ * that finished or stopped), say that ChatGPT must be switched on first.
+ * When the database answers QUESTION_RETRYABLE, no slot stopped for good, so
+ * every failed slot is a retryable one.
+ */
+export function retireQuestionRefusalText(
+  outcome: Exclude<RetirePilotQuestionOutcome, "RETIRED">,
+  gate: {
+    chatgptConnected: boolean;
+    engines?: Partial<Record<PilotQuestionEngine, RetireEngineState | null>>;
+  }
+): string {
+  const words = RETIRE_QUESTION_REFUSAL[outcome];
+  const gpt = gate.engines?.openai_chatgpt ?? null;
+  if (gate.chatgptConnected || !gpt) return words;
+  const px = gate.engines?.perplexity_sonar ?? null;
+  if (outcome === "QUESTION_RETRYABLE" && gpt.status === "failed") {
+    return px?.status === "failed" ? RETIRE_RETRYABLE_BOTH_CHATGPT_OFF : RETIRE_RETRYABLE_CHATGPT_OFF;
+  }
+  const gptUnfinished = gpt.status === "queued" || ((gpt.status === "claimed" || gpt.status === "running") && gpt.stale);
+  const pxDone = px === null || px.status === "succeeded" || px.status === "failed" || px.status === "abandoned_exhausted";
+  if (outcome === "QUESTION_JOB_ACTIVE" && gptUnfinished && pxDone) return RETIRE_UNFINISHED_CHATGPT_OFF;
+  return words;
+}
+
 /**
  * D-061 — the retire prompt. There is no per-engine retirement: retiring
  * stops the question on both engines, and one engine's measurement that
- * stopped for good is enough, even while the other could still go on.
+ * stopped for good is enough, even while the other could still go on or
+ * has finished. The report then shows the retired question's attempt
+ * counts only: a finished measurement's figures are no longer reported.
  */
 export const RETIRE_PILOT_QUESTION_PROMPT =
-  "Why retire this question? (10-2000 characters)\n\nRetiring stops this question on both engines, Perplexity and ChatGPT, even if one of its measurements could still go on. It is allowed once one of them has stopped and cannot go on. The question and its evidence are kept, it no longer counts toward the limit, it can never be run again on either engine, and you can add the same approved question again.";
+  "Why retire this question? (10-2000 characters)\n\nRetiring stops this question on both engines, Perplexity and ChatGPT, even if one of its measurements could still go on or has already finished. It is allowed once one of them has stopped and cannot go on, and while neither has a run that has not finished. The report then shows only its attempt counts: its figures on the other engine, finished ones included, are no longer reported or counted in any total. The question and its evidence are kept, it no longer counts toward the limit, it can never be run again on either engine, and you can add the same approved question again.";
 
 /** D-061 — shown beside Retire: there is no per-engine retirement. */
 export const RETIRE_BOTH_ENGINES_NOTE = "Retiring stops this question on Perplexity and ChatGPT alike.";
 
 /** The pilot console's words for a Run of a measurement abandoned after too many worker stops. */
 export const PILOT_JOB_ABANDONED_TEXT =
-  "This measurement's worker stopped too many times, so it is now marked abandoned. Retire the question from the pilot page; you can then add it again.";
+  "This measurement's worker stopped too many times, so it is now marked abandoned. Retire the question from the pilot page; you can then add it again. Retiring stops the question on every engine, and its figures on the other engine, finished ones included, are then no longer reported.";
 
 /** The close prompt. It says what closing does and does not do. */
 export const CLOSE_PILOT_PROMPT =
@@ -250,6 +304,23 @@ export function pilotProvenanceLabel(code: string): string {
   return "Supplier not recorded";
 }
 
+/**
+ * D-061 (review of phase B) — one engine's runs in the console, counted as
+ * the customer report counts them: a timed-out or cancelled run is failed,
+ * and a run left out by a review is "excluded after review". None is hidden.
+ */
+export function pilotRunsLine(m: {
+  completedRuns: number;
+  plannedRuns: number | null;
+  failedRuns: number;
+  excludedRuns?: number;
+}): string {
+  const parts = [`${m.completedRuns} of ${m.plannedRuns ?? "?"} runs completed`];
+  if (m.failedRuns > 0) parts.push(`${m.failedRuns} failed`);
+  if ((m.excludedRuns ?? 0) > 0) parts.push(`${m.excludedRuns} excluded after review`);
+  return parts.join(", ");
+}
+
 /** A protocol job's status, in words for the founder. */
 export function pilotJobStatusLabel(status: string | null, stale: boolean): string {
   if (status === null) return "No measurement";
@@ -280,9 +351,13 @@ export function pilotJobStatusLabel(status: string | null, stale: boolean): stri
  *
  * D-061 — per engine. Perplexity's words are unchanged (and are what an
  * absent engine gets). ChatGPT's come from its own plan and caps, with the
- * timing of the 2026-11-17 confirmation run (most answers 30-60 seconds,
- * the slowest about 2.5 minutes), and never promise the measurement
- * finishes today: under the daily spending limit a Run may wait for room.
+ * typical timing of the 2026-11-17 confirmation run (most answers 30-60
+ * seconds) and the bound the worker enforces: a ChatGPT call is stopped
+ * after WORKER_CHATGPT_TIMEOUT_MS (290 s in every Fly file, "about 5
+ * minutes"), and that timeout holds the measurement for review (D-056
+ * item 6). They never promise the measurement finishes today. A Run with no
+ * room under the daily spending limit is refused outright, before anything
+ * starts (the paid-execution gate in startWorkerMachine), never queued.
  */
 export function pilotRunConfirmationText(plan: {
   plannedRuns: number | null;
@@ -329,7 +404,8 @@ function chatGptRunConfirmationText(plan: {
       verb +
       "\n\nOnly this question's ChatGPT measurement runs, on ChatGPT (OpenAI's API with web search). Every run makes " +
       "two real, paid calls (one ChatGPT answer and one analysis), within the limits fixed when ChatGPT was added. " +
-      "ChatGPT answers take longer than Perplexity's, and under the daily spending limit a run may wait for room."
+      "ChatGPT answers take longer than Perplexity's; a call that takes too long is stopped and the measurement is " +
+      "then held for review. If today's spending limit has no room, Run is refused; press it again later."
     );
   }
   return (
@@ -339,16 +415,24 @@ function chatGptRunConfirmationText(plan: {
     " on ChatGPT (OpenAI's API with web search), at most " +
     runCap + " run" + (runCap === 1 ? "" : "s") + ", a " +
     spendCapUsd.toFixed(2) + " USD cap for this question. Every run makes two real, paid calls " +
-    "(one ChatGPT answer and one analysis). Most answers take 30-60 seconds and the slowest about 2.5 minutes; " +
-    "under the daily spending limit a run may wait for room."
+    "(one ChatGPT answer and one analysis). " + CHATGPT_TIMING_WORDS +
+    " If today's spending limit has no room, Run is refused; press it again later."
   );
 }
+
+/**
+ * D-061 — ChatGPT's timing in words: typical, then the worker's bound
+ * (WORKER_CHATGPT_TIMEOUT_MS, 290 s; test:pilot-questions ties "about 5
+ * minutes" to the Fly files) and what a timeout does (D-056 item 6).
+ */
+export const CHATGPT_TIMING_WORDS =
+  "Most answers take 30-60 seconds; a call is stopped after about 5 minutes and the measurement is then held for review.";
 
 /** D-061 — the Run route's reply once the worker was started for one engine's measurement. */
 export function pilotRunStartedText(engine: PilotQuestionEngine, plannedRuns: number | null): string {
   if (typeof plannedRuns !== "number" || plannedRuns <= 0) return "Measurement started for this question only.";
   const runs = `${plannedRuns} planned run${plannedRuns === 1 ? "" : "s"}`;
   return engine === "openai_chatgpt"
-    ? `Measurement started for this question only: ${runs} on ChatGPT. Most answers take 30-60 seconds and the slowest about 2.5 minutes.`
+    ? `Measurement started for this question only: ${runs} on ChatGPT. ${CHATGPT_TIMING_WORDS}`
     : `Measurement started for this question only: ${runs} on Perplexity, about 20 seconds each.`;
 }

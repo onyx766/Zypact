@@ -324,6 +324,7 @@ Each entry records:
 - **No fallback:** when the canary pair is configured, the worker uses the targeted surface and only the targeted surface. Any outcome other than `CLAIMED` ends the run fail-closed. The worker may not retry, may not fall back to the global claim, and may not claim any other job — a lost race must end the canary rather than process a different job.
 - **Post-claim verification:** after `CLAIMED`, and before `admitAndReserveAttemptForJob`, any reservation, any spend or any provider transport, a read-only check must confirm that the claimed job carries no prior external call, reservation, probe run or receipt; that the job still belongs to the claim token and the worker identifier the claim returned; and that its project, its protocol and its admissibility still match the D-030 preflight. Any anomaly stops the canary with no fallback, no retry and no spend.
 - **Privileges:** D-031 grants execute only to service_role and adds no new direct table privilege.
+  - **2026-11-17 (D-060):** migration `20261109170000` revokes `service_role`'s EXECUTE on the global claim and on this targeted claim, ahead of the revoke D-037's held 0085 plans. Neither function's body changes. A Phase 3D canary would need a re-grant by decision.
 - **Validation requirement:** the implementation is not accepted on a memory-adapter contract alone, which cannot demonstrate SQL locking. It requires a static contract over the migration text, contracts over both database adapters, and a real local PostgreSQL test exercising `FOR UPDATE NOWAIT` and concurrent racing callers, proving one winner, a `JOB_LOCKED` or `JOB_NOT_ELIGIBLE` loser, and exactly one increment of `attempt_count`. The tests must further prove zero mutation and a null `job`/`claim_token` payload for each of the three failure outcomes, the argument-validation guards and their SQLSTATE `22023`, and the byte-identical signature and body of the global claim function.
 - **Effect:** this decision defines the targeting contract and the conditions under which a later authorization may permit its implementation and use. It does not itself authorize a Fly or Supabase mutation, a migration application, a provider call, a job creation, a Machine start, a deployment, a smoke run or a Phase 3D run. With no canary pair configured, worker behaviour is unchanged.
 - **Revisit trigger:** any modification, drop or overload of the global claim function; more than one targeted job; any fallback to the global claim; any retry after a refused targeted claim; any relaxation of the four eligibility conditions; a persistent canary variable in source configuration; a changed candidate-selection rule, outcome set or result-column naming; or any production use.
@@ -1270,6 +1271,7 @@ Each item below departed from a document that governed before this approval: V1_
   - **D-037.** The held 0084/0085 plan must also cover the three functions this migration redefines: `request_protocol_job_run`, `claim_requested_protocol_execution_job` and `retry_failed_protocol_job`.
   - **Interventions on pilot baselines.** The intervention console lists every baseline, so a pilot question's baseline can already be chosen for an intervention. Its retest is gated by the pilot (items 5, 7, 10), but its Outcome Card would have no recipient, because a pilot has no request. This belongs to the pilot retest step.
   - **The older claims.** `claim_protocol_execution_job` (0054) and `claim_protocol_execution_job_by_id` (0059) are unchanged and do not check pilots. The live runner uses only the requested claim (D-052); they remain for the M5 test harnesses. A process that still used an older claim could take a pilot's queued job, including a closed pilot's. A worker running older code is such a process.
+    - **2026-11-17 (D-060): closed by D-060's revoke.** Migration `20261109170000` revokes both from `service_role` (and restates their revokes from `public`, `anon` and `authenticated`), so no API role can call either. Neither function is redefined or dropped. No suite that calls them applies `20261109170000`: each applies a bounded migration set that ends before it. Three of them call as `service_role` and would need to move to the requested claim or the owner path before their set reached it: PG-9 (0001–0081 and 0083) and `test:m5-a-stack-runtime` (up to 0056), both over PostgREST with the service-role key, and `test:m5-0059-runtime` (up to 0059), through `set role service_role` (D-060 item 4).
   - **A retry reserved just before a close.** Its reservation stays held on a job that can no longer be run, and counts toward the worker's 24-hour spend ceiling until it ages out. Nothing is spent.
   - **Concurrency.** The Run/close interleaving rests on the `FOR SHARE`/`FOR UPDATE` row lock, which the static tests check. No test races two sessions.
 - **Tests:**
@@ -1371,6 +1373,7 @@ Each item below departed from a document that governed before this approval: V1_
   - each *(engineer)* rule above, in particular whether the total line should be shown at all;
   - whether the first report waits for recommended actions;
   - whether an older shared link should stop working when a newer revision is shared. Today it keeps working and says a newer one exists.
+  - **2026-11-17: answered by D-059 items 7, 8 and 9** (approved by the founder on 2026-11-17). Keep the per-engine total line (item 7). The first report may be shared before suggested actions exist, and actions are added in an update (item 8). An older shared link stops working once a newer revision is shared (item 9); D-060 builds that, so item 8 above ("says when a newer revision has been shared") is replaced by D-060's notice once `20261109170000` is applied. The other *(engineer)* rules above stay proposed.
 - **Not established:**
   - no browser walk-through of the pages;
   - no report built from real pilot evidence. The payload is tested on fixtures, and the save, share and read on a disposable database with an attempt produced through the worker's own functions.
@@ -1473,6 +1476,7 @@ Each item below departed from a document that governed before this approval: V1_
      - At 20 USD a 15-question baseline takes about 3 days.
   5. **Flex refusals:** a failed attempt plus a manual Retry, as built. Automatic retries only once refusal rates are known.
   6. **Approve the source rule `openai-responses-sources/1`**, as D-044 was approved for Perplexity.
+  - **2026-11-17: approved by D-059 items 1 to 6** (the founder, 2026-11-17, "I agree.", relayed). They will be implemented by ChatGPT phase B (planned as D-061, PR B; not built, and D-061 is not yet recorded). The daily ceiling (item 4) is a production value, set at its own step on both hosts ([`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md) Part C).
 - **Phase B (not built):**
   - a migration:
     - the probe-mode value;
@@ -1576,6 +1580,7 @@ Each item below departed from a document that governed before this approval: V1_
   - the *(engineer)* rules above, especially the limits (30 actions, 10 links) and that a withdrawal is final;
   - whether the report should also list the stored responses' full fingerprints in an evidence appendix, rather than the first twelve characters beside each link;
   - whether a reviewer other than the writer should be required once the team has more than one person.
+  - **2026-11-17: the limits (30 suggested actions per pilot, 10 links per action), the final withdrawal and one reviewer (the founder) per action are approved by D-059 items 10 to 12.** Not counting withdrawn actions toward the 30 (item 3's "in use") is this entry's *(engineer)* rule, still proposed: the founder's item 10 names 30 per pilot only. D-060 adds the console's pre-check for 30 and words the withdrawal as final. The fingerprint appendix was not asked and stays open, as do the other *(engineer)* rules above (for example 50 versions per action).
 - **Not built:**
   - starting a registered intervention (M7) from an action. Registration exists in the admin console (`/admin/interventions`), and the customer's note says the team registers a test with them; prefilling it from an action does not exist;
   - ChatGPT answers as evidence: they are linkable once ChatGPT is wired (D-056), and the build will use the question's own source rule.
@@ -1596,6 +1601,7 @@ Each item below departed from a document that governed before this approval: V1_
 - **Decision:**
   1. **Renumber the four pilot migrations** to `20261109130000` (step 1), `20261109140000` (questions), `20261109150000` (report) and `20261109160000` (actions). They then sit directly after S1 and before P1, keep their names, and have unchanged SQL; only header comments that state an order or a version change.
   2. **Apply them in that order** with the named-file procedure, each separately authorised, `expected_prev` chaining from `20261109120000`. P1 to Q4 follow later, behind their own gates, with `expected_prev=20261109160000` for P1.
+     - **2026-11-17 (D-060):** P1's `expected_prev` is the ledger tail at the time P1 is applied. With `20261109170000` and any later migration in the pilot window (strictly between `20261109160000` and `20261110120000`, item 4) applied in between, that is the last of them, not necessarily `20261109160000`.
   3. **Re-baseline the read-only preflight** to the recorded post-S1 state (`PROD_PREFLIGHT_SPEC.md`):
      - tail `20261109120000` and 85 rows;
      - 0083, Q2′-1, Q2′-2 and S1 checked present, with their 25 tables and 12 public functions;
@@ -1638,3 +1644,92 @@ Each item below departed from a document that governed before this approval: V1_
   - a preflight run at a state other than its baseline;
   - a production migration numbered at or after `20261110120000` while P1 to Q4 are unapplied (item 4);
   - any apply without `-v target_sysid`, or any preflight run without `-v expected_sysid`.
+
+## D-059 — The founder's rulings on the pilot's open questions (14-point list)
+
+- **Date:** 2026-11-17
+- **Status:** **Approved by the founder on 2026-11-17** (written reply, relayed: "I agree."). The reply is read as answering the consolidated 14-point decision message the engineer relayed together with the production-plan message, as recommended there; item 13 was not answered. On the same day the user asked the engineer to implement everything on the engineering side.
+- **No production step is authorised by D-059** beyond what D-058 already authorised (the release order, and step 1, the read-only preflight). Every other production step still needs its own authorisation (D-051 item 4).
+- **The rulings, and where each is or will be implemented.** Items 1 to 6 will be implemented by ChatGPT phase B, planned as D-061 (PR B). Phase B is not built and D-061 is not yet recorded; "phase B" below means that planned work.
+
+| # | Ruling | Where |
+|---|---|---|
+| 1 | ChatGPT call timeout 290 s. | Phase B (planned D-061, PR B; not built). |
+| 2 | Worker lease 330 s, readiness window 240 s, runtime ceiling 2,400 s (40 minutes). | Phase B (planned D-061). These reopen D-029, D-030, D-034 and D-036. |
+| 3 | ChatGPT per-question protocol caps: `run_cap` 7, `retry_cap` 2, `spend_cap_usd` 4. | Phase B (planned D-061). |
+| 4 | Daily ceiling 10 USD on the first supervised ChatGPT day, then 20 USD. | Phase B (planned D-061) will record it. It is a production value (`ZYPACT_DAILY_SPEND_CEILING_USD`), set at its own step on both hosts ([`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md) Part C, item 3). |
+| 5 | A flex-tier capacity refusal is a failed answer; the team presses Retry. Nothing is resent automatically. | As built in D-056 item 5; phase B (planned D-061). |
+| 6 | ChatGPT's cited sources are read from the links in its answers (rule `openai-responses-sources/1`), as approved for Perplexity (D-044). | As built in D-056 item 7; phase B (planned D-061). |
+| 7 | Keep the per-engine total line: a count across questions, beside each question's own result, with no percentage. | **Already built:** D-055 item 3 (`lib/reports/build-pilot-report.ts`, rendered by `lib/reports/pilot-report-presentation.ts`). |
+| 8 | The first report may be shared before suggested actions exist; actions are added in an update. | **Already built:** D-055 item 7 and D-057 items 6 and 7. `save_pilot_report_artifact` (20261109160000, lines 786–848) treats a missing action list as empty, refuses `integrity_passed` only when actions are listed, and refuses `ACTIONS_INCOMPLETE` only for a reviewed, current action left out; `share_pilot_report_artifact`'s D-057 block (lines 957–993) does the same. With no reviewed action the report has no actions section (D-057 item 5). |
+| 9 | When an updated report revision is shared, the older link stops working. | **D-060** (migration `20261109170000`). |
+| 10 | Limits: 30 suggested actions per pilot, 10 evidence links per action. | **Already built:** D-057 item 3. `save_pilot_action` (20261109160000) counts actions not withdrawn under the pilot row lock (line 384) and takes 1 to 10 links (line 332), with the `position between 1 and 10` CHECK (line 127). Not counting withdrawn actions toward the 30 is D-057's *(engineer)* rule, still proposed; this item names 30 per pilot only. D-060 adds the console's pre-check for 30. |
+| 11 | Withdrawing an action is final. | **Already built:** D-057 items 3 and 7. The four action tables are append-only through triggers (lines 206–233), there is one withdrawal per action (line 177), and save and review refuse `ACTION_WITHDRAWN` (lines 396–397, 525–526). No path undoes one. D-060 makes the withdraw prompt say so. |
+| 12 | One reviewer (the founder) per action is enough. | **Already built:** D-057 item 3. `review_pilot_action` (line 488) takes one reviewer and the confirmation, and compares the reviewer with no writer. |
+| 13 | Who does the security review of the customer login. | **Unanswered; still open** (D-045's gate). |
+| 14 | Prepare the step-by-step production plan. | **Done:** [`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md) (D-058). |
+
+- **What it closes,** with dated notes in each entry: D-055 *Open for the founder* (items 7, 8 and 9); D-056 *For the founder* (items 1 to 6); and the limits, the final withdrawal and the single reviewer in D-057 *Open for the founder* (items 10 to 12).
+- **What stays open:** item 13; D-057's evidence appendix of full fingerprints, which was not asked; and every *(engineer)* rule the 14 points did not name, for example D-057's 50 versions per action, D-057's rule that withdrawn actions do not count toward the 30, and D-060's own rules, such as its item 5 (the rule before a worker redeploy).
+- **Revisit trigger:**
+  - the founder answers item 13, or says the reply meant something other than this record;
+  - a ChatGPT timeout, bound, cap or ceiling set to a value other than items 1 to 4;
+  - an automatic resend of a flex refusal;
+  - an older shared link that still opens its report;
+  - a change to the action limits, the final withdrawal or the single review.
+
+## D-060 — An older shared pilot report link stops working; unscoped claims are revoked
+
+- **Date:** 2026-11-17
+- **Status:** Built on branch `feat/pilot-decisions-link-withdrawal`, from `main` at `d03363f`. It implements D-059 item 9, the app side of D-059 items 10 and 11, and closes D-054's open item "The older claims". Rules marked *(engineer)* are **proposed for founder confirmation**. Migration `20261109170000_pilot_links_and_claim_scope.sql` is **not applied to any Supabase project**, and nothing is deployed. The pull request adds a migration, so the founder is told in advance (D-041); CI's Level 2 job applies it to a disposable database.
+- **Builds on:** D-052 (a Run names its job; the requested claim), D-054, D-055 (the shared-only read), D-057, D-058 (the numbering window), D-059 and D-037 (the held 0085).
+- **Revisits:** D-031, whose targeted claim it granted to `service_role` only; item 4 revokes that grant (dated note in D-031).
+- **Decision:**
+  1. **The older link stops working, enforced in the database.** `read_shared_pilot_report` is redefined with the same signature and output columns, so its grants are kept (and restated). For a shared, non-blocked revision whose pilot has a later shared revision, it returns the row with `payload` NULL and `newer_shared_revision` true. Otherwise it answers as before.
+     - Only a later *shared* revision replaces an earlier one. An unshared revision never does, and a blocked one can never be shared.
+     - Nothing is deleted. The table stays append-only and the earlier payload is still stored; only the read withholds it.
+     - The earlier report therefore never reaches the web server. The web app before this change already turns a missing payload into a 404, so applying the migration before the web deploy is safe.
+  2. **The customer page answers three ways** (`readSharedPilotReport`): current (the report), replaced, or not found (404).
+     - Replaced is decided by the flag before the payload, so no payload is passed on even if a payload came back, as it would if the read were rolled back to 20261109150000's *(engineer)*. Anything the read does not promise fails closed as not found.
+     - A replaced link shows a short noindex notice and nothing else: no report content, revision, date or token, and no hint of the newer link. Its words *(engineer)*: "This link has been replaced by a newer version of this report. Please use the most recent link the Zypact team sent you."
+     - The old banner ("A newer revision of this report has been shared with you…") is removed: a page that renders a report is always its pilot's newest shared revision.
+  3. **The founder console** *(engineer)* marks an earlier shared revision "Replaced — its link no longer opens" and shows no link for it, on the pilot page and on that revision's preview. The share confirmations and the pilot page's report note say that the previous shared link stops working once a newer revision is shared.
+  4. **The unscoped claims are revoked** *(engineer)*. `claim_protocol_execution_job(text, integer)` (0050, redefined by 0054) and `claim_protocol_execution_job_by_id(text, integer, uuid, uuid)` (0059) lose EXECUTE for `service_role`; their revokes from `public`, `anon` and `authenticated` are restated.
+     - Neither is dropped or redefined. `test:m5-0059-schema` and `test:m5-0060-schema` pin their bodies; their [2b] guards match only create, drop and alter, and stay green.
+     - **No suite that calls them applies `20261109170000`:** each applies a bounded migration set that ends before it. The 0050 to 0054 runtimes and `test:m7-0077-runtime` (up to 0077) call them as the database owner, and `test:m5-0060-runtime` (up to 0060) through a SECURITY DEFINER helper. Three call them as `service_role`: PG-9 (0001–0081 and 0083, and it refuses timestamped files) and `test:m5-a-stack-runtime` (up to 0056), both over PostgREST with the service-role key, and `test:m5-0059-runtime` (up to 0059), through `set role service_role`. Each of the three would be refused (42501) once its set reached this migration, so before that it must move to the requested claim or the owner path ([`SPEND_LEDGER_GATE.md`](SPEND_LEDGER_GATE.md) §11 note).
+     - **Checked first:** no web route, neither `scripts/run-protocol-worker.ts` nor `scripts/run-pipeline-once.ts` (which spawns it), and nothing in `lib/worker-control/**` calls either. Only the two adapters and the worker loop's `global` branch name them, and no live entry point sets `global` (`scripts/run-protocol-worker.ts` sets `requested`). `test:pilot-links-claims` C8 and C9 keep it so.
+     - The held 0085 (D-037) planned the same revoke; for these two it becomes a no-op ([`SPEND_LEDGER_GATE.md`](SPEND_LEDGER_GATE.md)).
+  5. **What it means for redeploys** *(engineer)*, **proposed for founder confirmation.** With the unscoped claims revoked and the live worker on the requested claim, a queued job without a pending run request is inert.
+     - The proposal: once `20261109170000` is applied, the "empty queue before a redeploy" rule becomes **no job holds a live lease and no run request is pending**, before every worker redeploy and worker-secret change ([`WORKER_DEPLOY_RUNBOOK.md`](WORKER_DEPLOY_RUNBOOK.md) §3 and §6, [`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md)). It replaces the runbook's earlier caution, "keep the empty queue rule anyway until a deploy has been observed under D-052", which the 14 points did not name.
+     - **Until the founder confirms it, the empty-queue rule stays in force** for every worker redeploy and worker-secret change. Step 6 of the production plan runs with an empty queue in any case (P6.3 at step 1, and no approval or Run from step 2 to step 7). The relaxed rule matters from step 11 onwards, when pilot jobs stay queued, for example at Part C's worker redeploy.
+     - The preflight's P6.3 (no queued job) stays as it is for the current baseline: the deployed old worker uses the global claim until the migration is applied.
+     - After the migration, a worker image from before D-052 cannot claim at all (permission denied, so it fails closed). Rolling the worker back means an image built at or after D-052, or a separately authorised re-grant.
+  6. **App-side limits** (D-059 items 10 and 11). `MAX_PILOT_ACTIONS_IN_USE = 30` sits beside `MAX_ACTION_EVIDENCE` in `lib/pilots/action-copy.ts`.
+     - The console disables **Write a suggested action** at the limit, counting actions not withdrawn (D-057's *(engineer)* rule, still proposed; item 10 names 30 per pilot), and says why.
+     - The database answers `LIMIT_REACHED` for both of its limits. The console words it as the action limit for a new action and as the 50-version limit for an edit *(engineer)*.
+     - The withdraw prompt says a withdrawal is final and cannot be undone.
+     - The SQL limits stay authoritative.
+- **Migration** `20261109170000_pilot_links_and_claim_scope.sql`:
+  - **Preconditions:** the table and the read with 20261109150000's columns, both unscoped claims, and a requested claim that `service_role` can execute, so the worker keeps a claim.
+  - **The read**, with one block marked `D-060 begin`/`D-060 end`; otherwise 20261109150000's body byte for byte (`test:pilot-links-claims` L5).
+  - **The revokes.**
+  - **Postconditions:** no API role can call either unscoped claim (which also catches a grant through PUBLIC or a role membership); the requested claim and the read stay executable by `service_role`; the read is SECURITY DEFINER and STABLE with its pinned search_path.
+  - **Release:** directly after `20261109160000`, with `expected_prev=20261109160000`, and before the worker and web app built from the same release commit are deployed. Its version is in both P2.4 lists of the preflight; it creates nothing and redefines no existing production function, so no other preflight change is needed.
+- **Recovery:** in the migration's header.
+  - **Older links.** Re-running 20261109150000 §5 restores the old read function only. The payloads were never deleted, but that step alone reopens no older link:
+    - with D-060's web app deployed, the customer still sees the replaced notice, by design (item 2; `test:pilot-links-claims` A2, `test:pilot-report` T14);
+    - production's web deployment from before plan step 7 (last deployed 2026-11-09) has no pilot report page, so promoting it (step 7's rollback) turns every pilot link into a 404, the newest included;
+    - a web build from before D-060 that has the pilot page (for example one built from `main` at `d03363f`, never deployed) serves earlier links only with the restored function; with D-060's function it 404s them and serves the newest.
+
+    Reopening older links therefore needs both the restored function and a separately authorised deploy of such a build.
+  - **The claims.** `grant execute … to service_role` restores either claim, only by decision; 0085 revokes them again.
+- **Tests:** `npm run test:pilot-links-claims` (new, offline), `scripts/test-pilot-links-and-claims-db.ts` (new, run by `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db`), and updated `test:pilot-report`, `test:pilot-actions` and `scripts/test-pilot-report-db.ts` R5. Results in `CURRENT_STATUS.md` §36.
+- **Not established:**
+  - no browser walk-through of the notice or the console;
+  - nothing about production. If production's `service_role` held EXECUTE through a role membership, the postcondition would refuse and the apply would roll back; the disposable database shows no such membership.
+- **Revisit trigger:**
+  - an earlier shared link that opens its report;
+  - a page that shows any report content, or the newer link, for a replaced link;
+  - a code path that calls either unscoped claim with the service-role client;
+  - either unscoped claim granted back to `service_role`;
+  - 0085 prepared for production (its revoke list).

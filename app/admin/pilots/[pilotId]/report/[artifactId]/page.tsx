@@ -3,11 +3,11 @@ import { notFound } from "next/navigation";
 
 import { PilotReportView } from "@/components/report/pilot-report-view";
 import { requireFounderForPage } from "@/lib/auth/founder";
-import { revisionActionsCurrent, STALE_REVISION_WORDS } from "@/lib/pilots/action-rules";
+import { revisionActionsCurrent } from "@/lib/pilots/action-rules";
 import { currentReportableVersionIds } from "@/lib/pilots/action-store";
 import { loadPilot } from "@/lib/pilots/reads";
 import { UUID_PATTERN } from "@/lib/pilots/validate";
-import { INTEGRITY_WORDS } from "@/lib/reports/pilot-report-copy";
+import { INTEGRITY_WORDS, PREVIEW_SHARE_NOTE_WORDS, previewStatusWords } from "@/lib/reports/pilot-report-copy";
 import { isPilotReportPayload } from "@/lib/reports/pilot-report-types";
 import { readPilotReportRevision } from "@/lib/reports/process-pilot-report";
 import { getReportServiceClient } from "@/lib/reports/service-client";
@@ -88,9 +88,7 @@ export default async function PilotReportPreviewPage({
         )}
         {canShare ? (
           <>
-            <p className="zpa-muted">
-              Read the whole revision below first. Sharing creates the private link and the revision can no longer change.
-            </p>
+            <p className="zpa-muted">{PREVIEW_SHARE_NOTE_WORDS}</p>
             <SharePilotReportButton
               pilotId={pilotId}
               artifactId={revision.id}
@@ -98,25 +96,20 @@ export default async function PilotReportPreviewPage({
             />
           </>
         ) : (
+          // D-060 — a shared revision says whether its link still opens (scripts/test-pilot-links-and-claims.ts A8).
           <p className="zpa-muted">
-            {revision.sharedAt
-              ? "This revision has been shared. Its link is on the pilot page."
-              : revision.integrityStatus === "blocked"
-                ? "This revision failed its checks and can never be shared."
-                : !revision.isLatest
-                  ? "A newer revision exists. Only the newest revision can be shared."
-                  : STALE_REVISION_WORDS}
+            {previewStatusWords({
+              sharedAt: revision.sharedAt,
+              replaced: revision.replaced,
+              integrityStatus: revision.integrityStatus,
+              isLatest: revision.isLatest,
+              stale,
+            })}
           </p>
         )}
       </div>
 
-      <PilotReportView
-        payload={revision.payload}
-        revision={revision.revision}
-        sharedAt={revision.sharedAt}
-        newerSharedRevision={false}
-        preview
-      />
+      <PilotReportView payload={revision.payload} revision={revision.revision} sharedAt={revision.sharedAt} preview />
     </AdminShell>
   );
 }

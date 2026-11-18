@@ -17,7 +17,11 @@
  *   G  the guard: content never changes, a shared revision never changes,
  *      no row is deleted, a blocked revision cannot be marked shared;
  *   R  read_shared_pilot_report: only a shared, non-blocked revision for a
- *      well-formed token, and whether a newer one has been shared;
+ *      well-formed token. Since 20261109170000 (D-059 item 9, D-060), once a
+ *      later revision is shared, an earlier one's link answers no payload
+ *      and the "newer revision shared" flag; an unshared or blocked later
+ *      revision replaces nothing (scripts/test-pilot-links-and-claims-db.ts
+ *      covers the rest);
  *   X  privileges.
  *
  * The attempts are produced through the worker's own RPCs (a provider
@@ -147,8 +151,13 @@ function save(pilotId: string, payload: Record<string, unknown>, manifest: Manif
 const share = (artifactId: string, pilotId: string, ack: boolean) =>
   row(psql(`select outcome, coalesce(public_token, '') from public.share_pilot_report_artifact(${lit(artifactId)}::uuid, ${lit(pilotId)}::uuid, ${lit(FOUNDER)}::uuid, ${ack});`));
 
+/**
+ * revision|flag|payload: "null" only when the payload is NULL (withheld,
+ * 20261109170000), the payload's pilot id when it has one, "no-pilot-id"
+ * for any other payload; "" when no row comes back.
+ */
 const readShared = (token: string) =>
-  psql(`select revision::text || '|' || newer_shared_revision::text || '|' || (payload ->> 'pilotId') from public.read_shared_pilot_report(${lit(token)});`);
+  psql(`select revision::text || '|' || newer_shared_revision::text || '|' || case when payload is null then 'null' else coalesce(payload ->> 'pilotId', 'no-pilot-id') end from public.read_shared_pilot_report(${lit(token)});`);
 
 const count = (pilotId: string) => admin(`select count(*) from public.pilot_report_artifacts where pilot_id = ${lit(pilotId)}::uuid;`);
 
@@ -263,8 +272,13 @@ async function main(): Promise<void> {
   check("R3 a blocked revision's token reads nothing", readShared(token4) === "");
   check("R4 a malformed token reads nothing", readShared("not-a-token") === "" && readShared(token3.toUpperCase()) === "");
   const [, art5] = save(pilotA, payloadA, good);
-  share(art5, pilotA, false);
-  check("R5 an earlier shared revision says a newer one has been shared", readShared(token3) === `3|true|${pilotA}`);
+  const unsharedLater = readShared(token3);
+  const [r5, token5] = share(art5, pilotA, false);
+  // D-059 item 9, D-060 (20261109170000): the earlier link stops working.
+  check("R5 once a later revision is shared, the earlier link reads no payload and the flag, and the newest reads its own; before that share, the later unshared revision replaced nothing",
+    unsharedLater === `3|false|${pilotA}` && r5 === "SHARED" &&
+    readShared(token3) === "3|true|null" && readShared(token5) === `5|false|${pilotA}`,
+    `${unsharedLater} / ${readShared(token3)} / ${readShared(token5)}`);
 
   /* X --------------------------------------------------------------- */
   for (const role of ["anon", "authenticated"] as const) {

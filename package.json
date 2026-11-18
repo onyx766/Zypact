@@ -164,6 +164,7 @@
     "test:pilot-questions": "tsx scripts/test-pilot-questions.ts",
     "test:pilot-report": "tsx scripts/test-pilot-report.ts",
     "test:pilot-actions": "tsx scripts/test-pilot-actions.ts",
+    "test:pilot-links-claims": "tsx scripts/test-pilot-links-and-claims.ts",
     "test:source-insights": "tsx scripts/test-source-insights.ts",
     "source-insights:audit": "tsx scripts/source-insights-audit.ts"
   },

@@ -149,6 +149,10 @@ The gate covers the protocol-job ledger only. Five database entry points are cei
 - `start_attempt(uuid, uuid, uuid)`
 - `reconcile_attempt(uuid, uuid, text, numeric, uuid, text)`
 
+> **2026-11-17 (D-060):** the first two were revoked early. Migration `20261109170000_pilot_links_and_claim_scope.sql` revokes both claims from `service_role` and restates their revokes from `public`, `anon` and `authenticated`, without redefining or dropping either. Once it is applied, 0085's revoke of these two becomes a no-op; the other three are unchanged and still wait for 0085. `enable_paid_execution`'s check that the five legacy paths are revoked (section 10) is unaffected: it finds these two already revoked.
+>
+> Three suites call these two claims as `service_role`: PG-9 (`scripts/test-pg9-paid-gate-runtime.ts`: its fixture claims, its direct claims and its worker loop, which takes the global branch, all over PostgREST with the service-role key), `test:m5-a-stack-runtime` and `test:m5-0059-runtime`. Each is unaffected today only because its migration set ends before `20261109170000` (PG-9's allowlist is 0001–0081 and 0083, and it refuses every timestamped file). Before PG-9's allowlist is extended to timestamped migrations that reach `20261109170000` (the PR-B plan in section 14 extends it for a new run), its fixture claims, direct claims and worker loop must move to the requested claim (`claimScope: "requested"`) or to the owner path; otherwise its roster fails at the first claim with `42501`. The same holds for the other two if their sets are ever extended.
+
 Paid calls made outside the ledger cannot be seen by any database control:
 
 - `scripts/mvp-scan.ts` (raw M4 admission and a direct probe);

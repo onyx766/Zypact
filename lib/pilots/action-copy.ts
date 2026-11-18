@@ -14,13 +14,30 @@ export const PILOT_ACTION_TEXT_FIELDS = [
 ] as const;
 
 export const MIN_ACTION_EVIDENCE = 1;
+/** D-059 item 10 (approved by the founder): at most 10 links per action; save_pilot_action enforces it too. */
 export const MAX_ACTION_EVIDENCE = 10;
+/**
+ * D-059 item 10 (approved by the founder): at most 30 suggested actions per
+ * pilot. Not counting withdrawn actions toward the 30 is D-057's (engineer)
+ * rule, still proposed. The console checks it before offering a new action;
+ * save_pilot_action's limit is the authoritative one.
+ */
+export const MAX_PILOT_ACTIONS_IN_USE = 30;
+/** D-057 (engineer): at most 50 versions per action; save_pilot_action enforces it. */
+export const MAX_PILOT_ACTION_VERSIONS = 50;
 
-/** The founder console's words for a save, review or withdrawal the database refused. */
+/** Shown in place of a new action once the pilot is at its limit (D-059 item 10). */
+export const ACTION_LIMIT_NOTE = `This pilot has ${MAX_PILOT_ACTIONS_IN_USE} suggested actions in use, the most a pilot may have, so no new one can be written. Withdrawn actions do not count toward the limit.`;
+
+/**
+ * The founder console's words for a save, review or withdrawal the database refused.
+ * LIMIT_REACHED here is the action limit; an edit refused at the version
+ * limit reads VERSION_LIMIT_REACHED_WORDS (savePilotActionRefusalWords).
+ */
 export const SAVE_PILOT_ACTION_REFUSAL: Record<string, string> = {
   PILOT_NOT_FOUND: "This pilot no longer exists.",
   CONFLICT: "This form was already used for different wording. Close it and open it again.",
-  LIMIT_REACHED: "This pilot has reached the number of suggested actions, or this action its number of edits.",
+  LIMIT_REACHED: `This pilot already has ${MAX_PILOT_ACTIONS_IN_USE} suggested actions in use, the most a pilot may have. Withdrawn actions do not count toward the limit.`,
   ACTION_NOT_FOUND: "This suggested action no longer exists.",
   ACTION_WITHDRAWN: "This suggested action was withdrawn and can no longer be edited. Write a new one.",
   VERSION_CONFLICT: "Someone saved a newer version of this action. Reload the page and edit the newest one.",
@@ -29,6 +46,20 @@ export const SAVE_PILOT_ACTION_REFUSAL: Record<string, string> = {
   QUESTION_RETIRED: "One of the linked answers belongs to a retired question.",
   SOURCE_NOT_IN_ANSWER: "One of the linked sources is not among that answer's own sources. Pick it again from the list.",
 };
+
+/** An edit refused because the action already has its most versions (save_pilot_action answers LIMIT_REACHED). */
+export const VERSION_LIMIT_REACHED_WORDS = `This action already has ${MAX_PILOT_ACTION_VERSIONS} versions, the most one action may have, so it cannot be edited again. If it needs to change, withdraw it and write a new one.`;
+
+/**
+ * The words for a refused save. The database answers LIMIT_REACHED for both
+ * limits: for a new action it is the action limit (only a new action is
+ * counted against it), for an edit the version limit (only an edit adds a
+ * version to an existing action).
+ */
+export function savePilotActionRefusalWords(outcome: string, edit: boolean): string {
+  if (outcome === "LIMIT_REACHED" && edit) return VERSION_LIMIT_REACHED_WORDS;
+  return SAVE_PILOT_ACTION_REFUSAL[outcome] ?? "The action could not be saved.";
+}
 
 export const REVIEW_PILOT_ACTION_REFUSAL: Record<string, string> = {
   PILOT_NOT_FOUND: "This pilot no longer exists.",
@@ -54,9 +85,9 @@ export const WITHDRAW_PILOT_ACTION_REFUSAL: Record<string, string> = {
 export const REVIEW_PILOT_ACTION_PROMPT =
   "I have read this suggested action, the stored answers it links to (shown under each link) and the sources it names, and it says nothing they do not show. Mark it reviewed? Only reviewed actions appear in a report: a report built before this review can no longer be shared, so build the report again. Any later edit needs a new review.";
 
-/** The founder's prompt before a withdrawal (D-057). */
+/** The founder's prompt before a withdrawal (D-057). A withdrawal is final (D-059 item 11). */
 export const WITHDRAW_PILOT_ACTION_PROMPT =
-  "Why withdraw this suggested action? (10-2000 characters)\n\nIt is kept with its history and can no longer be edited. A report built while it was shown can no longer be shared: build the report again. A report already shared keeps what it showed.";
+  "Why withdraw this suggested action? (10-2000 characters)\n\nA withdrawal is final: it cannot be undone. The action is kept with its history and can no longer be edited. A report built while it was shown can no longer be shared: build the report again. A report already shared keeps what it showed.";
 
 /** Shown with the Edit button and on the edit form (D-057). */
 export const EDIT_PILOT_ACTION_NOTE =

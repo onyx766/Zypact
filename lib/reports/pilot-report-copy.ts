@@ -3,6 +3,7 @@
  * Shared by the client page and the Markdown, so no stored code reaches a
  * reader and both say the same thing.
  */
+import { STALE_REVISION_WORDS } from "@/lib/pilots/action-copy";
 import type { PilotQuestionLabel, PilotQuestionMeasurementState } from "@/lib/reports/pilot-report-types";
 
 export const PILOT_REPORT_TITLE = "Pilot report";
@@ -30,8 +31,62 @@ export const RETIRED_WORDS =
 export const PRIVATE_REPORT_WORDS = "Private report";
 export const PREVIEW_BANNER_WORDS =
   "Preview for the founder. This revision has not been shared; the customer sees exactly this page once it is.";
-export const NEWER_REVISION_WORDS =
-  "A newer revision of this report has been shared with you. This page shows an earlier one.";
+
+/**
+ * D-060 (engineer wording) — what an earlier link shows once a later revision
+ * of the same report has been shared (D-059 item 9). The page shows nothing
+ * else: no report content, revision, date, token or pointer to the new link.
+ */
+export const REPLACED_LINK_WORDS =
+  "This link has been replaced by a newer version of this report. Please use the most recent link the Zypact team sent you.";
+
+/** D-060 — the founder console's label for a shared revision whose link stopped working (D-059 item 9). */
+export const REPLACED_REVISION_WORDS = "Replaced — its link no longer opens";
+
+/** D-060 — the same, on that revision's preview. */
+export const REPLACED_REVISION_PREVIEW_WORDS =
+  "This revision was shared, and a later revision has been shared since, so its link no longer opens. The link that opens is the newest shared revision's, on the pilot page.";
+
+/**
+ * D-060 — the pilot page's note on the newest shared revision when it is
+ * older than every revision listed above it, none of which has been shared;
+ * the list reads it beside them so its link stays on the page.
+ */
+export const OLDER_SHARED_REVISION_WORDS =
+  "Older than the revisions listed above, none of which has been shared. This is the link that opens.";
+
+/** D-060 — the pilot page's report note: sharing a newer revision ends the earlier link (D-059 item 9). */
+export const SHARING_ENDS_EARLIER_LINK_WORDS =
+  "Once a newer revision is shared, the link to the one shared before it stops working.";
+
+/** The preview's note above Share (D-055); its last sentence is D-060's (D-059 item 9). */
+export const PREVIEW_SHARE_NOTE_WORDS =
+  "Read the whole revision below first. Sharing creates the private link and the revision can no longer change. The link to any earlier revision you shared then stops working.";
+
+/** The preview's status line when Share is not offered (D-055, D-057, D-060). */
+export const SHARED_REVISION_PREVIEW_WORDS = "This revision has been shared. Its link is on the pilot page.";
+export const BLOCKED_REVISION_PREVIEW_WORDS = "This revision failed its checks and can never be shared.";
+export const NOT_LATEST_REVISION_PREVIEW_WORDS = "A newer revision exists. Only the newest revision can be shared.";
+
+/**
+ * The preview's status line, or null when Share is offered: a shared
+ * revision says whether its link still opens (D-060); otherwise a blocked
+ * revision, an older one and an out-of-date one (D-057) each say why they
+ * cannot be shared.
+ */
+export function previewStatusWords(r: {
+  sharedAt: string | null;
+  replaced: boolean;
+  integrityStatus: string;
+  isLatest: boolean;
+  stale: boolean;
+}): string | null {
+  if (r.sharedAt) return r.replaced ? REPLACED_REVISION_PREVIEW_WORDS : SHARED_REVISION_PREVIEW_WORDS;
+  if (r.integrityStatus === "blocked") return BLOCKED_REVISION_PREVIEW_WORDS;
+  if (!r.isLatest) return NOT_LATEST_REVISION_PREVIEW_WORDS;
+  if (r.stale) return STALE_REVISION_WORDS;
+  return null;
+}
 
 export function revisionChipWords(revision: number, generatedOn: string, sharedOn: string | null): string {
   return sharedOn
@@ -109,13 +164,16 @@ export const SHARE_PILOT_REPORT_REFUSAL: Record<
   NOT_LATEST: "A newer revision of this report exists. Share the newest one.",
 };
 
-/** The founder's confirmation before sharing a revision that needs review. Shown only on the preview. */
+/**
+ * The founder's confirmation before sharing a revision that needs review. Shown only on the preview.
+ * D-060: both prompts say the link to an earlier shared revision stops working (D-059 item 9).
+ */
 export const SHARE_NEEDS_REVIEW_PROMPT =
-  "I have read this revision in full on this page, and every reason it needs review. Share it? Sharing creates a private link that anyone holding it can open, and the revision can no longer change.";
+  "I have read this revision in full on this page, and every reason it needs review. Share it? Sharing creates a private link that anyone holding it can open, and the revision can no longer change. Once it is shared, the link to any earlier revision of this report stops working.";
 
 /** The founder's confirmation before sharing a revision that passed its checks. Shown only on the preview. */
 export const SHARE_PASSED_PROMPT =
-  "I have read this revision in full on this page. Share it? Sharing creates a private link that anyone holding it can open, and the revision can no longer change.";
+  "I have read this revision in full on this page. Share it? Sharing creates a private link that anyone holding it can open, and the revision can no longer change. Once it is shared, the link to any earlier revision of this report stops working.";
 
 export const INTEGRITY_WORDS: Record<"integrity_passed" | "needs_review" | "blocked", string> = {
   integrity_passed: "Passed its checks",

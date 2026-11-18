@@ -4,8 +4,10 @@ import { useState } from "react";
 import { Plus, X } from "lucide-react";
 
 import {
+  ACTION_LIMIT_NOTE,
   EDIT_PILOT_ACTION_NOTE,
   MAX_ACTION_EVIDENCE,
+  MAX_PILOT_ACTIONS_IN_USE,
   PILOT_ACTION_STATUS_WORDS,
   PILOT_ACTION_TEXT_FIELDS,
   REVIEW_PILOT_ACTION_PROMPT,
@@ -85,6 +87,10 @@ export function PilotActionsPanel({
   actions: PilotActionView[];
 }) {
   const [editing, setEditing] = useState<PilotActionView | "new" | null>(null);
+  // D-059 item 10 — at most 30 actions per pilot. Not counting withdrawn ones
+  // is D-057's (engineer) rule, still proposed. The database refuses the 31st
+  // action in use too (save_pilot_action, LIMIT_REACHED).
+  const atLimit = actions.filter((a) => a.status !== "withdrawn").length >= MAX_PILOT_ACTIONS_IN_USE;
 
   return (
     <div>
@@ -97,15 +103,18 @@ export function PilotActionsPanel({
           onClose={() => setEditing(null)}
         />
       ) : (
-        <button
-          type="button"
-          className="zpa-btn zpa-btn-primary"
-          disabled={questions.length === 0}
-          onClick={() => setEditing("new")}
-        >
-          <Plus size={16} strokeWidth={2.2} />
-          Write a suggested action
-        </button>
+        <>
+          <button
+            type="button"
+            className="zpa-btn zpa-btn-primary"
+            disabled={questions.length === 0 || atLimit}
+            onClick={() => setEditing("new")}
+          >
+            <Plus size={16} strokeWidth={2.2} />
+            Write a suggested action
+          </button>
+          {atLimit ? <p className="zpa-muted">{ACTION_LIMIT_NOTE}</p> : null}
+        </>
       )}
 
       {actions.length === 0 ? (

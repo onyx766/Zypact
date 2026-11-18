@@ -177,6 +177,50 @@ h3 {
   .hero-proof { margin-top: 22px; }
   .hero-visual { min-width: 0; min-height: 440px; }
 }
+
+/* Reflex V3 refined type hierarchy: type and spacing only, not layout/behavior. */
+h1,h2,h3 {text-wrap:balance;}
+.statement-card h2,.community-left h2,.center-header h2,.use-case-intro h2,
+.principles-header h2,.faq h2,.final-cta h2 {letter-spacing:-.048em;line-height:1.16;}
+.statement-card p,.community-left p,.center-header p,.use-case-intro p,
+.principles-header p,.principle-grid p,.workflow-item p,.use-case-card p,
+.faq-items details p,.final-cta p {line-height:1.68;overflow-wrap:break-word;}
+.workflow-item h3,.principle-grid h3,.use-case-card h3 {line-height:1.3;letter-spacing:-.025em;}
+.faq-items summary{font-weight:600;line-height:1.48;}
+.eyebrow,.section-pill {font-size:11px;letter-spacing:.04em;line-height:1.4;}
+@media (min-width:861px){
+ .statement-card h2{font-size:clamp(2rem,2.8vw,2.95rem);max-width:21ch;}
+ .community-left h2{font-size:clamp(2.2rem,3.05vw,3.25rem);}
+ .center-header h2,.use-case-intro h2,.principles-header h2{font-size:clamp(2.12rem,3vw,3.3rem);}
+ .faq h2{font-size:clamp(2.05rem,2.8vw,3rem);}
+ .final-cta h2{font-size:clamp(2.15rem,3.2vw,3.7rem);}
+ .use-case-card h3,.workflow-item h3,.principle-grid h3{font-size:clamp(1.05rem,1.28vw,1.3rem);}
+ .statement-card p,.community-left p,.center-header p,.use-case-intro p,
+ .principles-header p,.final-cta p{font-size:15px;}
+ .workflow-item p,.use-case-card p,.principle-grid p,.faq-items details p{font-size:14px;}
+ .faq-items summary{font-size:15px;}
+}
+@media (max-width:860px){
+ .statement-card h2{font-size:clamp(2.15rem,5.5vw,3rem);}
+ .community-left h2{font-size:clamp(2.2rem,5.8vw,3.1rem);}
+ .center-header h2,.use-case-intro h2,.principles-header h2{font-size:clamp(2rem,5.6vw,3rem);}
+ .faq h2{font-size:clamp(2rem,5.6vw,2.8rem);}
+ .final-cta h2{font-size:clamp(2.15rem,5.6vw,3.05rem);}
+ .statement-card p,.community-left p,.center-header p,.use-case-intro p,
+ .principles-header p,.final-cta p,.workflow-item p,.use-case-card p,
+ .principle-grid p,.faq-items details p{font-size:14px;}
+ .faq-items summary{font-size:15px;}
+}
+@media(max-width:540px){
+ .statement-card h2{font-size:clamp(2.08rem,7.5vw,2.85rem);}
+ .community-left h2{font-size:clamp(2.12rem,8vw,2.85rem);}
+ .center-header h2,.use-case-intro h2,.principles-header h2{font-size:clamp(1.98rem,7.3vw,2.65rem);}
+ .faq h2{font-size:clamp(1.98rem,7vw,2.5rem);}
+ .final-cta h2{font-size:clamp(2.05rem,7.5vw,2.7rem);}
+ .workflow-item h3,.principle-grid h3,.use-case-card h3{font-size:17px;}
+ .card-disclaimer,.footer-brand p,.footer-links a,.copyright{font-size:12px;line-height:1.55;}
+}
+
 </style>
 </head>
 <body>

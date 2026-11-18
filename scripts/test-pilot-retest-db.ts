@@ -518,6 +518,35 @@ async function main(): Promise<void> {
       "20261109190000 precondition: an intervention, protocol or Outcome Card already references a pilot slot's protocol");
     check("G7 precondition 6 refuses an intervention, or a retest protocol, already on a pilot slot's protocol (planted after the set-aside)",
       g7.ok && g7b.ok, `${g7.detail} | ${g7b.detail}`);
+    // The branches G2 to G7 leave untested (engineer, review C1 DB-4).
+    const notApplied = "20261109190000 precondition: 20261109180000 is not applied (a function or the per-engine index is missing)";
+    const g9 = [
+      refusal("drop index public.protocols_one_live_baseline_per_engine;", notApplied),
+      refusal("drop function public.add_pilot_question_engine(uuid, uuid, text, uuid);", notApplied),
+      refusal("drop function public.pilot_question_protocols_consistency() cascade;", notApplied),
+    ];
+    check("G9 precondition 2 also refuses the per-engine index, add_pilot_question_engine, or the consistency function missing",
+      g9.every((g) => g.ok), g9.map((g) => g.detail).join(" | "));
+    const M7_SIGNATURES = [
+      ["register_intervention", "uuid,uuid,text,text,text,text,text,jsonb,text,text,text,timestamptz,integer", "uuid, uuid, text, text, text, text, text, jsonb, text, text, text, timestamptz, integer"],
+      ["approve_intervention", "uuid,uuid,uuid", "uuid, uuid, uuid"],
+      ["confirm_intervention_implementation", "uuid,uuid,uuid,jsonb,text,text", "uuid, uuid, uuid, jsonb, text, text"],
+      ["abandon_intervention", "uuid,uuid,uuid,text", "uuid, uuid, uuid, text"],
+      ["create_retest_protocol", "uuid,uuid,uuid", "uuid, uuid, uuid"],
+      ["enqueue_protocol_execution_job", "uuid,uuid,integer", "uuid, uuid, integer"],
+    ];
+    const g10 = M7_SIGNATURES.map(([fn, sig, args]) =>
+      refusal(`drop function public.${fn}(${args});`, `20261109190000 precondition: public.${fn}(${sig}) is missing`));
+    check("G10 precondition 3 refuses each of the other six wrapped functions missing, by its signature",
+      g10.every((g) => g.ok), g10.map((g) => g.detail).join(" | "));
+    // Test setup, rolled back: an Outcome Card row on the pilot slot's protocol,
+    // planted under replica (no foreign key or trigger fires), alone of the three.
+    const g11 = refusal(`${REPLICA}
+insert into public.outcome_card_artifacts (intervention_id, project_id, baseline_protocol_id, retest_protocol_id, markdown, payload, generated_at, integrity_status, integrity_reasons, public_token)
+values (gen_random_uuid(), ${lit(projectG)}::uuid, ${lit(pxG)}::uuid, gen_random_uuid(), 'x', '{}'::jsonb, now(), 'needs_review', '["x"]'::jsonb, ${lit(`${randomUUID().replace(/-/g, "")}ggggggggggg`)});
+${ORIGIN}`,
+      "20261109190000 precondition: an intervention, protocol or Outcome Card already references a pilot slot's protocol");
+    check("G11 precondition 6 refuses an Outcome Card row already on a pilot slot's protocol (planted after the set-aside)", g11.ok, g11.detail);
     const after = snapshot();
     check("G8 every re-run and its setup were rolled back: the functions, the slot constraints, the triggers, the rows and the comment are as before G1",
       before !== "" && after === before && pqG !== "", after === before ? "" : `${before}\n  vs\n${after}`);
@@ -719,10 +748,14 @@ create trigger zz_retest_atomicity_b after insert on public.pilot_retest_members
   const [pOut, pCount] = prepare(pilotR, groupR);
   const retestsR = membersR.map((m) => retestOf(m[0]));
   const retestRows = retestsR.map((rp, i) => admin(`select (p.baseline_protocol_id = ${lit(membersR[i][3])}::uuid)::text || '|' || p.provider || '|' || p.status || '|' || p.planned_baseline_runs || '|' || (p.minimum_useful_change ->> 'value') || '|' || p.detectable_change_at_plan || '|' || (p.buyer_question_version_id = b.buyer_question_version_id)::text || '|' || j.status
+       || '|' || p.run_cap || '/' || p.retry_cap || '/' || trim_scale(p.spend_cap_usd) || '|' || ((p.run_cap, p.retry_cap, p.spend_cap_usd) = (b.run_cap, b.retry_cap, b.spend_cap_usd))::text
      from public.protocols p join public.protocols b on b.id = p.baseline_protocol_id join public.protocol_execution_jobs j on j.protocol_id = p.id where p.id = ${lit(rp)}::uuid;`));
-  check("P4 PREPARED 4: each member has an approved retest of its baseline on its engine, 5 planned runs, a smallest useful change of 0.60, a detectable change of 0.6 at plan, a queued job and a retest slot naming it",
+  // DB-3 (engineer): the caps are the baseline's, run/retry/spend: ChatGPT 7/2/4 (D-059), Perplexity 7/2/2 (20261109140000).
+  const capsOf = (engine: string) => (engine === "openai_chatgpt" ? "7/2/4" : "7/2/2");
+  check("P4 PREPARED 4: each member has an approved retest of its baseline on its engine, 5 planned runs, a smallest useful change of 0.60, a detectable change of 0.6 at plan, a queued job, a retest slot naming it, and its baseline's run, retry and spend caps (ChatGPT 7/2/4, Perplexity 7/2/2)",
     pOut === "PREPARED" && pCount === "4" && retestsR.every((r) => r !== "")
-      && retestRows.every((r, i) => r === `true|${membersR[i][2]}|approved|5|0.60|0.6|true|queued`), retestRows.join(" ; "));
+      && membersR.some((m) => m[2] === "openai_chatgpt") && membersR.some((m) => m[2] === "perplexity_sonar")
+      && retestRows.every((r, i) => r === `true|${membersR[i][2]}|approved|5|0.60|0.6|true|queued|${capsOf(membersR[i][2])}|true`), retestRows.join(" ; "));
   check("P5 a replay answers ALREADY_PREPARED with the same count; a prepare step is recorded once",
     prepare(pilotR, groupR).join("|").startsWith("ALREADY_PREPARED|4|")
       && count(`public.pilot_retest_steps where pilot_retest_id = ${lit(groupR)}::uuid and step = 'prepare'`) === 1);
@@ -810,6 +843,15 @@ create trigger zz_retest_atomicity_b after insert on public.pilot_retest_members
   const [, groupF] = register(pilotF, [f1.pq]);
   confirm(pilotF, groupF);
   closeWindow(groupF);
+  // DB-3 (engineer): a retest created under other caps than its baseline's is
+  // refused by the readback (test setup, rolled back: a test-only trigger
+  // raises the spend cap of every new retest protocol).
+  const capDrift = probeFails(`create function public.zp_test_cap_drift() returns trigger language plpgsql as $t$ begin new.spend_cap_usd := new.spend_cap_usd + 1; return new; end $t$;
+grant execute on function public.zp_test_cap_drift() to public;
+create trigger zz_test_cap_drift before insert on public.protocols for each row when (new.baseline_protocol_id is not null) execute function public.zp_test_cap_drift();`, PREPARE(pilotF, groupF)) ?? "";
+  check("P6 the readback refuses a retest whose caps are not its baseline's (pilot_retest_prepare_failed:retest_protocol); nothing is prepared",
+    capDrift.includes("pilot_retest_prepare_failed:retest_protocol")
+      && admin(`select (retests_prepared_at is null)::text from public.pilot_retests where id = ${lit(groupF)}::uuid;`) === "true", capDrift.split("\n")[0]);
   prepare(pilotF, groupF);
   const jobF = jobOf(retestOf(membersOf(groupF)[0][0]));
   visit(jobF, projectF, "perplexity", "retest", { attempts: 1, providerError: true });
@@ -923,6 +965,20 @@ create trigger zz_retest_atomicity_b after insert on public.pilot_retest_members
   const plain = buildInputs(pilotE);
   const [plainOut, plainArt] = row(psql(`select outcome || '|' || coalesce(artifact_id::text, '') from public.save_pilot_report_artifact(${lit(pilotE)}::uuid, ${lit(FOUNDER)}::uuid, '# Pilot report', ${lit(JSON.stringify({ pilotId: pilotE, projectId: projectE }))}::jsonb, ${lit(JSON.stringify({ protocols: plain.protocols, attempts: plain.attempts }))}::jsonb, 'integrity_passed', '[]'::jsonb, now());`));
   check("V14 with no group, a revision without any retest key saves integrity_passed and shares as before", plainOut === "SAVED" && psql(SHARE(pilotE, plainArt)) === "SHARED");
+  // DB-1 (engineer): the share re-checks M1. Question F's Perplexity retest
+  // failed at the provider with one answer and may be retried, so it is not
+  // final and the revision saves without its card. Once the pilot has ended or
+  // is closed (test setup, rolled back), that retest is final without any row
+  // the other staleness checks compare having changed.
+  quiesce();
+  const fInputs = buildInputs(pilotF);
+  const [fSaveOut, fArt] = row(psql(SAVE(pilotF, fInputs, [])));
+  const fShareOpen = probe("", SHARE(pilotF, fArt));
+  const fShareEnded = probe(`update public.pilots set starts_on = current_date - 91, ends_on = current_date - 1 where id = ${lit(pilotF)}::uuid;`, SHARE(pilotF, fArt));
+  const fShareClosed = probe(`update public.pilots set status = 'closed', closed_by = ${lit(FOUNDER)}::uuid, closed_at = now(), close_reason = 'Test setup, rolled back.' where id = ${lit(pilotF)}::uuid;`, SHARE(pilotF, fArt));
+  check("V15 a revision saved while a retest could still be retried shares (rolled back), but once the pilot ended or closed that retest is final without its card: RETESTS_STALE",
+    finality(jobF).fn === false && fSaveOut === "SAVED" && fShareOpen === "SHARED" && fShareEnded === "RETESTS_STALE" && fShareClosed === "RETESTS_STALE",
+    [fSaveOut, fShareOpen, fShareEnded, fShareClosed].join(" / "));
 
   /* B: abandonment and later groups --------------------------------------- */
   const [, pilotB, projectB] = createPilot("rt-b.example");
@@ -1047,6 +1103,32 @@ create trigger zz_retest_atomicity_b after insert on public.pilot_retest_members
   const plantedAbandon = psql(`select status from public.abandon_intervention(${lit(planted)}::uuid, ${lit(projectR)}::uuid, ${lit(FOUNDER)}::uuid, 'Recovery: a row registered outside a group.');`);
   check("K4 the recovery rule: a non-member intervention on a pilot baseline (planted, replica) cannot be approved, and can be abandoned",
     plantedApprove.includes("pilot_intervention_outside_retest") && plantedAbandon === "abandoned", `${plantedApprove} | ${plantedAbandon}`);
+  // K5 (review C1 DB-4): a step admits only its own transition for its own
+  // group. In one owner transaction (rolled back by the error), group N is
+  // recorded as live; then a generic M7 call on a member is still refused,
+  // whether it is another transition of that group's member or the same
+  // transition of another group's member. A fixture raise names a failed setup.
+  const writerProbe = (then: string) => ownerErr(`begin;
+do $k$
+declare v_out text;
+begin
+  select c.outcome into v_out from public.confirm_pilot_retest_implementation(${lit(pilotN)}::uuid, ${lit(groupN)}::uuid, ${lit(FOUNDER)}::uuid, current_date, ${lit("https://shop.example/compare")}, null, ${lit("The customer's web team published the page today.")}, true, null, true) c;
+  if v_out is distinct from 'IMPLEMENTED' then raise exception 'fixture: the confirm answered %', v_out; end if;
+  if (select count(*) from public.pilot_retest_steps st where st.xact_id = pg_current_xact_id() and st.step = 'confirm') <> 1 then
+    raise exception 'fixture: no confirm step in this transaction';
+  end if;
+  ${then}
+  raise exception 'fixture: the generic call was not refused';
+end $k$;
+rollback;`);
+  const memberN = membersOf(groupN)[0][4];
+  const memberS2 = membersOf(groupS2)[0][4];
+  const kAbandonSame = writerProbe(`perform 1 from public.abandon_intervention(${lit(memberN)}::uuid, ${lit(projectN)}::uuid, ${lit(FOUNDER)}::uuid, 'Test: outside the group step.');`);
+  const kConfirmOther = writerProbe(`perform 1 from public.confirm_intervention_implementation(${lit(memberS2)}::uuid, ${lit(projectS)}::uuid, ${lit(FOUNDER)}::uuid, '{"note":"test"}'::jsonb, null, null);`);
+  check("K5 after group N's confirm step in the same transaction, abandon_intervention on its member and confirm_intervention_implementation on another group's member are each refused (pilot_intervention_outside_retest)",
+    kAbandonSame.includes("pilot_intervention_outside_retest") && kConfirmOther.includes("pilot_intervention_outside_retest")
+      && admin(`select string_agg(distinct i.status, ',') from public.interventions i join public.pilot_retest_members m on m.intervention_id = i.id where m.pilot_retest_id in (${lit(groupN)}::uuid, ${lit(groupS2)}::uuid);`) === "approved",
+    `${kAbandonSame} | ${kConfirmOther}`);
 
   /* S (S4): a non-pilot intervention end to end beside a group step -------- */
   const nonPilot = admin(`with p as (insert into public.projects (domain) values ('rt-np.example') returning id),
@@ -1056,8 +1138,11 @@ create trigger zz_retest_atomicity_b after insert on public.pilot_retest_members
     insert into public.protocols (project_id, buyer_question_version_id, provider, surface, model_config, planned_baseline_runs, planned_retest_runs, unit_of_analysis, primary_metric, sample_planning_method, run_cap, spend_cap_usd, time_window_seconds, rate_limit_per_hour, concurrency_limit, retry_cap, paraphrase_plan)
     select v.project_id, v.id, 'perplexity_sonar', 'answer', '{"model":"sonar"}'::jsonb, 5, 0, 'buyer_question_version', 'presence_rate', 'fixed_operator_default_pending_pilot_calibration', 7, 2, 86400, 10, 1, 2, jsonb_build_array(jsonb_build_object('text', ${lit(question(99))}, 'hash', ${lit(sha(question(99)))})) from v returning id || '|' || project_id;`);
   const [npProtocol, npProject] = nonPilot.split("|");
+  // The group step is a withdrawal, which writes its step row (a note writes
+  // none, so it would prove nothing about the writer record).
   const npOut = psql(`begin;
-${NOTE(pilotN, groupN, { text: lit("Recorded in the same transaction as M7 work elsewhere.") })}
+${ABANDON(pilotN, groupN)}
+select count(*) from public.pilot_retest_steps where xact_id = pg_current_xact_id() and step = 'abandon' and pilot_retest_id = ${lit(groupN)}::uuid;
 select a.status from public.approve_protocol(${lit(npProtocol)}::uuid, ${lit(npProject)}::uuid, ${lit(FOUNDER)}::uuid) a;
 with i as (select * from public.register_intervention(${lit(npProject)}::uuid, ${lit(npProtocol)}::uuid, 'h', 'm', 'other', 't', 'o', '["x"]'::jsonb, null, null, null, null, 7))
 select i.status from i;
@@ -1069,8 +1154,8 @@ insert into public.outcome_card_artifacts (intervention_id, project_id, baseline
 select i.id, i.project_id, i.protocol_id, (select p.id from public.protocols p where p.baseline_protocol_id = i.protocol_id), 'x', '{}'::jsonb, now(), 'needs_review', '["x"]'::jsonb, repeat('b', 43)
   from public.interventions i where i.protocol_id = ${lit(npProtocol)}::uuid returning 'CARD';
 commit;`);
-  check("S5 outside the pilots M7 runs end to end (register, approve, confirm, early retest, retest protocol, card row) in the same transaction as a group step",
-    npOut.split("\n").join(",").startsWith("ADDED|") && npOut.split("\n").slice(1).join(",") === "APPROVED,proposed,approved,implemented,implemented,CREATED,CARD", npOut);
+  check("S5 outside the pilots M7 runs end to end (register, approve, confirm, early retest, retest protocol, card row) in the same transaction as a group step that wrote its step row (a withdrawal)",
+    npOut.split("\n").join(",") === "ABANDONED,1,APPROVED,proposed,approved,implemented,implemented,CREATED,CARD", npOut);
   const cardUpdate = ownerErr(`update public.outcome_card_artifacts set baseline_protocol_id = ${lit(m1Base)}::uuid where project_id = ${lit(npProject)}::uuid;`);
   check("S6 an Outcome Card row cannot be pointed at a pilot baseline afterwards (update refused)", cardUpdate.includes("pilot_outcome_card_lives_in_the_pilot_report"), cardUpdate);
 

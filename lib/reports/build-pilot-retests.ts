@@ -15,7 +15,10 @@
  *
  * Every registered text and note is linted again here (M4). A hit is never
  * shown: the value becomes PILOT_RETEST_WITHHELD_TEXT, the field is listed,
- * and the report needs review, naming the field.
+ * and the report needs review, naming the field. The evidence link and the
+ * source actions' titles are linted too (engineer); since the save compares
+ * them as stored, a hit keeps the value in the payload, lists it in
+ * `notShown` for the page and the Markdown to leave out, and needs review.
  */
 import type { PilotQuestionEngine } from "@/lib/db/types";
 import { lintPilotActionText } from "@/lib/pilots/action-rules";
@@ -46,7 +49,12 @@ import type {
   PilotReportRetestMember,
   PilotRetestText,
 } from "@/lib/reports/pilot-report-types";
-import { OUTCOME_REASON_WORDS, pilotOutcomeRuleNote, PILOT_RETEST_WITHHELD_TEXT } from "@/lib/reports/pilot-retest-copy";
+import {
+  NO_CHANGE_SHOWABLE_REASONS,
+  OUTCOME_REASON_WORDS,
+  pilotOutcomeRuleNote,
+  PILOT_RETEST_WITHHELD_TEXT,
+} from "@/lib/reports/pilot-retest-copy";
 import type { BuildProtocolReportInput, ProtocolReportPayload } from "@/lib/reports/protocol-report-types";
 
 /* ---------------------------------------------------------------- input (read-pilot-evidence.ts) */
@@ -222,6 +230,11 @@ export interface BuiltPilotRetests {
 const ENGINE_WORDS: Record<PilotEngineKey, string> = { perplexity_sonar: "Perplexity", openai_chatgpt: "ChatGPT" };
 const ENGINE_ORDER: readonly PilotQuestionEngine[] = ["perplexity_sonar", "openai_chatgpt"];
 const MIN_USEFUL_CHANGE = 0.6;
+/** compare-protocols.ts's readable-answer floor (OUTCOME_COMPARISON_PROPOSAL §6.2): at least 3, and 60% of the plan. */
+const MIN_READABLE_RUNS = 3;
+const MIN_READABLE_FRACTION_OF_PLAN = 0.6;
+const meetsReadableFloor = (readable: number, planned: number) =>
+  readable >= MIN_READABLE_RUNS && readable >= MIN_READABLE_FRACTION_OF_PLAN * planned;
 
 const iso = (instant: string) => new Date(instant).toISOString();
 const dayOf = (instant: string) => iso(instant).slice(0, 10);
@@ -310,6 +323,33 @@ export function buildPilotRetests(args: BuildPilotRetestsArgs): BuiltPilotRetest
         };
       });
     manifest.retestNotes.push(...notes.map((n) => n.id));
+
+    // APP-5 (engineer) — the evidence link and the source actions' titles are
+    // linted again too. The payload keeps each value exactly as stored (the
+    // save compares them with the stored group); a hit is only listed in
+    // `notShown`, so the page and the Markdown leave it out, and the report
+    // needs review, naming it.
+    const notShown: { evidenceUrl: boolean; sourceActionVersionIds: string[] } = { evidenceUrl: false, sourceActionVersionIds: [] };
+    if (g.implementedAt && g.wentLiveOn && g.evidenceUrl) {
+      const hits = lintPilotActionText(g.evidenceUrl);
+      if (hits.length > 0) {
+        notShown.evidenceUrl = true;
+        structural.push({
+          status: "needs_review",
+          reason: `${label}: the link to the live change uses wording this report may not use (${hits.map((h) => `"${h}"`).join(", ")}), so it is not shown.`,
+        });
+      }
+    }
+    for (const s of g.sourceActions) {
+      if (s.withdrawn || s.title === null) continue;
+      const hits = lintPilotActionText(s.title);
+      if (hits.length === 0) continue;
+      notShown.sourceActionVersionIds.push(s.versionId);
+      structural.push({
+        status: "needs_review",
+        reason: `${label}: the title of a suggested action it comes from uses wording this report may not use (${hits.map((h) => `"${h}"`).join(", ")}), so it is not shown.`,
+      });
+    }
 
     if (g.outcomeRule !== PILOT_OUTCOME_RULE) {
       structural.push({ status: "blocked", reason: `${label} follows an outcome rule this report does not know.` });
@@ -532,9 +572,20 @@ export function buildPilotRetests(args: BuildPilotRetestsArgs): BuiltPilotRetest
         structural.push({ status: "needs_review", reason: `${where} Outcome Card: the two measurements were not shown to be made the same way, so it is inconclusive.` });
       }
 
+      // APP-1 (engineer) — the smallest change a card could show exists only
+      // when the rule could give a status from its readable answers: both
+      // phases meet the readable-answer floor and the comparison did not stop
+      // early (another question, another setup, not measured the same way).
+      // Otherwise it is null, and the card says it cannot show any change.
       const bd = baselineReport.observation.denominator;
       const rd = retestReport.observation.denominator;
-      const sdc = oc.comparison.smallestDetectableChange ?? (bd > 0 && rd > 0 ? smallestDetectableChange(bd, rd) : null);
+      const stoppedEarly = reasonCodes.some((code) => NO_CHANGE_SHOWABLE_REASONS.includes(code));
+      const bothMeetFloor =
+        meetsReadableFloor(bd, baselineReport.protocol.plannedBaselineRuns) &&
+        meetsReadableFloor(rd, retestReport.protocol.plannedBaselineRuns);
+      const sdc = bothMeetFloor && !stoppedEarly
+        ? oc.comparison.smallestDetectableChange ?? smallestDetectableChange(bd, rd)
+        : null;
       const firstAnswer = Math.min(...slot.attempts.map((a) => ms(a.reservedAt)).filter((x) => !Number.isNaN(x)));
       const phase = (report: ProtocolReportPayload, phaseCounts: PilotAttemptCounts, exec: PilotExecutionWindow): PilotOutcomeCardPhase => ({
         protocolId: report.protocol.id,
@@ -625,6 +676,7 @@ export function buildPilotRetests(args: BuildPilotRetestsArgs): BuiltPilotRetest
       observationDays: g.observationDays,
       implementBy: g.implementBy,
       sourceActions: g.sourceActions.map((s) => ({ versionId: s.versionId, title: s.withdrawn ? null : s.title, withdrawn: s.withdrawn })),
+      notShown,
       implementation:
         g.implementedAt && g.wentLiveOn
           ? {
@@ -653,7 +705,7 @@ export function buildPilotRetests(args: BuildPilotRetestsArgs): BuiltPilotRetest
           if (Number.isNaN(latest) || latest < liveAt) continue;
           structural.push({
             status: "needs_review",
-            reason: `Question ${q.ordinal} (${ENGINE_WORDS[s.engine]}): some baseline answers were collected after the change registered on ${dayOf(g.registeredAt)} went live.`,
+            reason: `Question ${q.ordinal} (${ENGINE_WORDS[s.engine]}): some baseline answers may have been collected after the change registered on ${dayOf(g.registeredAt)} went live.`,
           });
           const list = collectedAfterChange.get(q.pilotQuestionId) ?? [];
           const entry = { registeredOn: dayOf(g.registeredAt), liveOn: new Date(liveAt).toISOString().slice(0, 10) };

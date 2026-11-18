@@ -62,16 +62,21 @@ export function outcomeStatusWords(status: OutcomeStatus, company: string): stri
   }
 }
 
-/** What each status means under rule pilot-outcome-card/1 (M2, M5). Fixed sentences. */
+/**
+ * What each status means under rule pilot-outcome-card/1 (M2, M5). Fixed
+ * sentences. (engineer, review C2 APP-2) The measured quantity is called the
+ * "difference" (after minus before), never "the change", so no sentence reads
+ * as if the customer's change produced it.
+ */
 export const OUTCOME_RULE_SENTENCES: Record<OutcomeStatus, string> = {
   increase_observed:
-    "Increase observed: the 95% range for the change is entirely above zero, and the change is at least 60 points.",
+    "Increase observed: the 95% range for the difference is entirely above zero, and the difference is at least 60 points.",
   decrease_observed:
-    "Decrease observed: the 95% range for the change is entirely below zero, and the change is at least 60 points.",
+    "Decrease observed: the 95% range for the difference is entirely below zero, and the difference is at least 60 points.",
   no_clear_change:
-    "No clear change: the 95% range stays within 60 points either way. A change of 60 points or more is ruled out; a smaller change may still exist and would not be visible here.",
+    "No clear change: the 95% range stays within 60 points either way. A difference of 60 points or more is ruled out; a smaller difference may still exist and would not be visible here.",
   inconclusive:
-    "Inconclusive: any other result, for example a range that still includes a change of 60 points, or too few readable answers. This is a limit of the number of answers, not evidence that nothing changed.",
+    "Inconclusive: any other result, for example a range that still includes a difference of 60 points, or too few readable answers. This is a limit of the number of answers, not evidence that nothing changed.",
 };
 
 /** The card's rule sentences, its own status first (§3.5 item 2). */
@@ -159,6 +164,22 @@ export const OUTCOME_REASON_WORDS: Record<string, string> = {
 };
 export const UNKNOWN_OUTCOME_REASON_WORDS = "another recorded reason";
 
+/**
+ * (engineer, review C2 APP-1) The reason prefixes with which the rule gives a
+ * card no status from its readable answers: the comparison stopped before
+ * any range was computed. A card with one of them shows no smallest change it
+ * could show, only cannotShowAnyChangeWords.
+ */
+export const NO_CHANGE_SHOWABLE_REASONS: readonly string[] = [
+  "BUYER_QUESTION_MISMATCH",
+  "PROTOCOL_IDENTITY_MISMATCH_UNDISCLOSED",
+  "MEASUREMENT_INCOMPATIBLE",
+  "MEASUREMENT_UNVERIFIABLE",
+  "BASELINE_BELOW_READABLE_RUN_FLOOR",
+  "RETEST_BELOW_READABLE_RUN_FLOOR",
+  "INTERVAL_COULD_NOT_BE_COMPUTED",
+];
+
 /** A reason prefix, in words; an unknown one never shows its code. */
 export function outcomeReasonWords(code: string): string {
   return Object.hasOwn(OUTCOME_REASON_WORDS, code) ? OUTCOME_REASON_WORDS[code] : UNKNOWN_OUTCOME_REASON_WORDS;
@@ -192,16 +213,23 @@ export function pointsWords(value: number): string {
 
 export const SMALLEST_CHANGE_THAT_COUNTS = "The smallest change that counts, set before the retest: 60 points.";
 
-export function smallestDetectableWords(points: number | null): string {
-  return points === null
-    ? "The smallest change this retest could show: it could not be computed, because a measurement has no readable answer."
-    : `The smallest change this retest could show: ${Math.round(points * 100)} points.`;
+export function smallestDetectableWords(points: number): string {
+  return `The smallest change this retest could show: ${Math.round(points * 100)} points.`;
+}
+
+/**
+ * (engineer, review C2 APP-1) In place of the smallest change a retest could
+ * show, when the rule can give it no status from its readable answers.
+ * `reasons` are the stopping reasons already in words.
+ */
+export function cannotShowAnyChangeWords(reasons: string[]): string {
+  return `This retest cannot show any change: ${reasons.length > 0 ? [...new Set(reasons)].join("; ") : UNKNOWN_OUTCOME_REASON_WORDS}.`;
 }
 
 export function shortRetestWords(readable: number, planned: number, sdc: number | null): string {
-  return `The retest has fewer than ${planned} readable answers (${readable} of ${planned}): the smallest change it could show is ${
-    sdc === null ? "not computable" : `${Math.round(sdc * 100)} points`
-  }, and 'no clear change' cannot be shown.`;
+  return sdc === null
+    ? `The retest has fewer than ${planned} readable answers (${readable} of ${planned}).`
+    : `The retest has fewer than ${planned} readable answers (${readable} of ${planned}): the smallest change it could show is ${Math.round(sdc * 100)} points, and 'no clear change' cannot be shown.`;
 }
 
 export function thresholdWords(text: string): string {
@@ -218,6 +246,13 @@ export function notMeasuredSameWayWords(differences: string[]): string {
 export const NO_CONTROLS_WORDS =
   "No control questions were measured, so wider changes in the engines cannot be told apart from this change.";
 export const NO_DEPARTURE_WORDS = "No departure from the registered retest was recorded.";
+/**
+ * (engineer, review C2 APP-4) In place of NO_DEPARTURE_WORDS when the change
+ * was recorded as not made exactly as registered (its departure is an
+ * implementation_issue note in the log).
+ */
+export const NOT_AS_REGISTERED_WORDS =
+  "You reported that the change was not made exactly as registered; see the log of other changes.";
 export const NOTE_AFTER_FIRST_ANSWER_WORDS = "recorded after this retest's first answer";
 export const NO_OTHER_CHANGES_WORDS = "No other change was recorded.";
 export const OTHER_CHANGES_HEADING = "Other changes we recorded";
@@ -237,18 +272,25 @@ export function approvedOnWords(day: string): string {
 export function registeredOnWords(registeredOn: string, implementBy: string): string {
   return `Registered on ${registeredOn}. To go live by ${implementBy}.`;
 }
+/** `evidenceUrl` is null when there is none or when it is not shown (EVIDENCE_LINK_NOT_SHOWN_WORDS follows then). */
 export function recordedLiveWords(i: { recordedOn: string; wentLiveOn: string; evidenceUrl: string | null; artifactSha256: string | null }): string {
   const evidence = [i.evidenceUrl, i.artifactSha256 ? `fingerprint ${i.artifactSha256.slice(0, 12)}` : null].filter(Boolean).join("; ");
   return `Recorded as live by the Zypact team on ${i.recordedOn}. You reported that the change went live on ${i.wentLiveOn}.${evidence ? ` Evidence: ${evidence}.` : ""}`;
 }
+/** (engineer, review C2 APP-5) The evidence link left out after the build's lint. */
+export const EVIDENCE_LINK_NOT_SHOWN_WORDS =
+  "The link to the live change is not shown because it uses wording this report may not use.";
 export function waitingPeriodWords(days: number, from: string, to: string): string {
   return `Waiting period: ${days} days, from ${from} to ${to}.`;
 }
 export function waitingPeriodPlannedWords(days: number): string {
   return `Waiting period: ${days} days, from the day the change is recorded as live.`;
 }
-export function sourceActionWords(s: { title: string | null; withdrawn: boolean }): string {
-  return s.withdrawn || s.title === null ? "From a suggested action since withdrawn." : `From the suggested action "${s.title}".`;
+/** `notShown` (engineer, review C2 APP-5): the title was left out after the build's lint. */
+export function sourceActionWords(s: { title: string | null; withdrawn: boolean; notShown?: boolean }): string {
+  if (s.withdrawn || s.title === null) return "From a suggested action since withdrawn.";
+  if (s.notShown) return "From a suggested action whose title is not shown because it uses wording this report may not use.";
+  return `From the suggested action "${s.title}".`;
 }
 export const NOT_FROM_SUGGESTED_ACTION_WORDS = "Not from a suggested action in this report.";
 
@@ -259,9 +301,14 @@ export function abandonedGroupWords(a: { registeredOn: string; abandonedOn: stri
     : `A change registered on ${a.registeredOn} was withdrawn on ${a.abandonedOn}, before it was measured again.`;
 }
 
-/** A question whose baseline answers were collected after a change went live (M17). */
+/**
+ * A question whose baseline answers may have been collected after a change
+ * went live (M17). (engineer, review C2 APP-7) "May": the go-live instant is
+ * the earlier of the recorded moment and the reported day at 00:00 UTC, so an
+ * answer later than it is not shown to be later than the change itself.
+ */
 export function collectedAfterChangeWords(registeredOn: string, liveOn: string): string {
-  return `Some of these answers were collected after the change registered on ${registeredOn} went live (${liveOn}); they describe the engines after that change.`;
+  return `Some of these answers may have been collected after the change registered on ${registeredOn} went live (${liveOn}); those would describe the engines after that change.`;
 }
 
 export function outcomeCardHeading(ordinal: number, engineLabel: string): string {
@@ -282,11 +329,14 @@ export function phaseWords(phase: "Before" | "After", p: {
   return `${phase} the change: named in ${p.numerator} of ${p.denominator} readable answers; likely range ${p.rangeWords}. Attempts: ${p.attemptWords}. ${p.dates}`;
 }
 
+/** (engineer, review C2 APP-2) The card's block title for the measured difference. */
+export const DIFFERENCE_HEADING = "The difference";
+
 export function changeWords(c: { delta: number | null; low: number | null; high: number | null; reasons: string[] }): string {
   if (c.delta === null || c.low === null || c.high === null) {
-    return `No change could be computed: ${c.reasons.length > 0 ? c.reasons.join("; ") : UNKNOWN_OUTCOME_REASON_WORDS}.`;
+    return `No difference could be computed: ${c.reasons.length > 0 ? c.reasons.join("; ") : UNKNOWN_OUTCOME_REASON_WORDS}.`;
   }
-  return `The change: ${pointsWords(c.delta)} points (95% range ${pointsWords(c.low)} to ${pointsWords(c.high)} points).`;
+  return `Difference (after minus before): ${pointsWords(c.delta)} points (95% range ${pointsWords(c.low)} to ${pointsWords(c.high)} points).`;
 }
 
 export function evidenceWords(before: { number: number; sha12: string }[], after: { number: number; sha12: string }[]): string {
@@ -304,8 +354,10 @@ export const SOURCES_BEFORE_AFTER_HEADING = "Sources cited before and after";
 /**
  * The method note for rule pilot-outcome-card/1 (M16). (engineer) The spec's
  * "hybrid score interval" is written "hybrid interval (his method 10)": no
- * customer-visible text says "score" (common rules, W2).
+ * customer-visible text says "score" (common rules, W2). (engineer, review C2)
+ * No decision number appears in customer text (APP-3), and the measured
+ * quantity is "the difference" (APP-2).
  */
 export function pilotOutcomeRuleNote(company: string): string {
-  return `Outcome Cards follow rule pilot-outcome-card/1. Each compares one question on one engine, before and after the change, using readable answers only. The change is the share of readable answers naming ${company} after the change minus the share before; its 95% range is Newcombe's hybrid interval (his method 10) built from each phase's Wilson range. The smallest change that counts is 60 points, set before the retest, and 'no clear change' needs the whole range within 60 points (D-038). A phase needs at least 3 readable answers and at least 60% of its planned answers. Both phases must be measured the same way (measurement fingerprint mf-1). Sources are read by rule provider-sources/1 for Perplexity and openai-responses-sources/1 for ChatGPT and are compared without any status.`;
+  return `Outcome Cards follow rule pilot-outcome-card/1. Each compares one question on one engine, before and after the change, using readable answers only. The difference is the share of readable answers naming ${company} after the change minus the share before; its 95% range is Newcombe's hybrid interval (his method 10) built from each phase's Wilson range. The smallest change that counts is 60 points, set before the retest, and 'no clear change' needs the whole range within 60 points. A phase needs at least 3 readable answers and at least 60% of its planned answers. Both phases must be measured the same way (measurement fingerprint mf-1). Sources are read by rule provider-sources/1 for Perplexity and openai-responses-sources/1 for ChatGPT and are compared without any status.`;
 }

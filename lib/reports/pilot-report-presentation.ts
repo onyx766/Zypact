@@ -55,14 +55,19 @@ import {
   abandonedGroupWords,
   ACTION_TYPE_WORDS,
   approvedOnWords,
+  cannotShowAnyChangeWords,
   changeWords,
   collectedAfterChangeWords,
+  DIFFERENCE_HEADING,
+  EVIDENCE_LINK_NOT_SHOWN_WORDS,
   evidenceWords,
   MEASURED_SAME_WAY_WORDS,
   measurementFieldWords,
+  NO_CHANGE_SHOWABLE_REASONS,
   NO_CONTROLS_WORDS,
   NO_DEPARTURE_WORDS,
   NO_OTHER_CHANGES_WORDS,
+  NOT_AS_REGISTERED_WORDS,
   NOT_FROM_SUGGESTED_ACTION_WORDS,
   NOTE_AFTER_FIRST_ANSWER_WORDS,
   notMeasuredSameWayWords,
@@ -614,12 +619,15 @@ function cardPresentation(
           }),
         ],
       },
-      { title: "The change", lines: [changeWords({ delta: c.delta, low: c.intervalLow, high: c.intervalHigh, reasons: reasonWords })] },
+      { title: DIFFERENCE_HEADING, lines: [changeWords({ delta: c.delta, low: c.intervalLow, high: c.intervalHigh, reasons: reasonWords })] },
       {
         title: "The limits",
         lines: [
           SMALLEST_CHANGE_THAT_COUNTS,
-          smallestDetectableWords(c.smallestDetectableChange),
+          // (engineer, review C2 APP-1) A smallest change it could show only when the rule could give a status.
+          c.smallestDetectableChange === null
+            ? cannotShowAnyChangeWords(c.reasonCodes.filter((code) => NO_CHANGE_SHOWABLE_REASONS.includes(code)).map(outcomeReasonWords))
+            : smallestDetectableWords(c.smallestDetectableChange),
           PILOT_RETEST_LIMIT_SENTENCE,
           ...(card.shortRetest ? [shortRetestWords(card.retest.denominator, card.retest.planned, c.smallestDetectableChange)] : []),
         ],
@@ -661,7 +669,8 @@ function cardPresentation(
             return after.has(n.id) ? `${line} (${NOTE_AFTER_FIRST_ANSWER_WORDS})` : line;
           }),
           NO_CONTROLS_WORDS,
-          NO_DEPARTURE_WORDS,
+          // (engineer, review C2 APP-4) Never "no departure" when the change was reported as not made as registered.
+          group.implementation?.implementedAsRegistered === false ? NOT_AS_REGISTERED_WORDS : NO_DEPARTURE_WORDS,
         ],
       },
       { title: "The evidence", lines: [evidenceWords(card.baseline.answers, card.retest.answers)] },
@@ -719,15 +728,19 @@ export function presentRetests(payload: PilotReportPayload): PilotPresentationRe
               recordedLiveWords({
                 recordedOn: g.implementation.recordedAt.slice(0, 10),
                 wentLiveOn: g.implementation.wentLiveOn,
-                evidenceUrl: g.implementation.evidenceUrl,
+                // (engineer, review C2 APP-5) Left out when the build's lint found wording this report may not use.
+                evidenceUrl: g.notShown?.evidenceUrl ? null : g.implementation.evidenceUrl,
                 artifactSha256: g.implementation.artifactSha256,
               }),
+              ...(g.notShown?.evidenceUrl && g.implementation.evidenceUrl ? [EVIDENCE_LINK_NOT_SHOWN_WORDS] : []),
             ]
           : []),
         g.windowOpensAt && g.windowClosesAt
           ? waitingPeriodWords(g.observationDays, g.windowOpensAt.slice(0, 10), g.windowClosesAt.slice(0, 10))
           : waitingPeriodPlannedWords(g.observationDays),
-        ...(g.sourceActions.length > 0 ? g.sourceActions.map(sourceActionWords) : [NOT_FROM_SUGGESTED_ACTION_WORDS]),
+        ...(g.sourceActions.length > 0
+          ? g.sourceActions.map((a) => sourceActionWords({ ...a, notShown: (g.notShown?.sourceActionVersionIds ?? []).includes(a.versionId) }))
+          : [NOT_FROM_SUGGESTED_ACTION_WORDS]),
       ];
       const notesById = new Map(g.notes.map((n) => [n.id, n]));
       return {

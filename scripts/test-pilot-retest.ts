@@ -65,6 +65,7 @@ import {
   handleConfirmPilotRetest,
   handlePreparePilotRetests,
   handleRegisterPilotRetest,
+  MAX_REGISTER_BODY_BYTES,
   handleRequeuePilotRetest,
   type PilotRetestRouteDeps,
 } from "@/lib/pilots/retest-routes";
@@ -530,6 +531,25 @@ check("R12 a change withdrawn before it went live, and one withdrawn after, each
   (wl.retests?.withdrawn ?? []).includes("A change registered on 2026-12-01 and recorded as live on 2026-12-02 was withdrawn on 2026-12-05, before it was measured again.") &&
   wl.retests?.groups.length === 0);
 
+// APP-1 (engineer, review C2): a card claims a smallest change it could show only when the rule could give it a status.
+const fiveVsTwo = buildPilotReport(pilotInput(groups({ specs: SPECS.map((s) => (s[0] === 2 && s[1] === C ? [2, C, { runs: [true, true, "failed"], jobStatus: "failed", failureReason: "provider_error" }] : s)) as typeof SPECS }), { status: "closed" }));
+const fvtCard = (fiveVsTwo.payload.outcomeCards ?? []).find((c) => c.ordinal === 2 && c.engine === C);
+const fvtLines = cardStrings(presentPilotReport(fiveVsTwo.payload).retests!.groups[0].cards.find((c) => c.key === fvtCard?.memberId)!);
+check("R13 at 5 vs 2 (below the readable-answer floor) the card is inconclusive and shows no smallest change it could show: 'This retest cannot show any change: too few readable answers after the change', never 80 points",
+  fvtCard !== undefined && fvtCard.status === "inconclusive" && fvtCard.retest.denominator === 2 && fvtCard.comparison.smallestDetectableChange === null &&
+  fvtLines.includes(copy.cannotShowAnyChangeWords(["too few readable answers after the change"])) &&
+  fvtLines.includes("This retest cannot show any change: too few readable answers after the change.") &&
+  fvtLines.includes("The retest has fewer than 5 readable answers (2 of 5).") &&
+  !fvtLines.some((l) => l.startsWith("The smallest change this retest could show") || /\b80 points\b/.test(l)), JSON.stringify(fvtCard?.comparison));
+const incompLines = cardStrings(view.retests!.groups[0].cards.find((c) => c.key === cardOf(3, P)!.memberId)!);
+check("R14 an incompatible card (2/5 vs 2/5, both above the floor) shows no smallest change it could show, only that it cannot show any change because the two measurements were not made the same way",
+  cardOf(3, P)!.comparison.smallestDetectableChange === null &&
+  incompLines.includes("This retest cannot show any change: the two measurements were not made the same way.") &&
+  !incompLines.some((l) => l.startsWith("The smallest change this retest could show")));
+check("R15 every card with a status other than inconclusive, and every compatible card above the floor, keeps its smallest change it could show",
+  [[1, P], [1, C], [2, P], [5, P], [5, C]].every(([o, e]) => typeof cardOf(o as number, e as Engine)?.comparison.smallestDetectableChange === "number") &&
+  Math.round((cardOf(1, P)!.comparison.smallestDetectableChange ?? 0) * 100) === 60);
+
 /* ================================================================ C: a card's content */
 
 console.log("\n[C] a card's content");
@@ -548,18 +568,20 @@ check("C3 the four rule sentences under rule pilot-outcome-card/1, the card's ow
   inc.blocks[1].lines[0] === copy.OUTCOME_RULE_SENTENCES.increase_observed &&
   cardStrings(view.retests!.groups[0].cards.find((c) => c.key === cardOf(1, C)!.memberId)!).includes(copy.OUTCOME_RULE_SENTENCES.no_clear_change) &&
   view.retests!.groups[0].cards.find((c) => c.key === cardOf(1, C)!.memberId)!.blocks[1].lines[0] === copy.OUTCOME_RULE_SENTENCES.no_clear_change &&
-  copy.OUTCOME_RULE_SENTENCES.no_clear_change.includes("a smaller change may still exist") && copy.OUTCOME_RULE_SENTENCES.inconclusive.includes("not evidence that nothing changed"));
+  copy.OUTCOME_RULE_SENTENCES.no_clear_change.includes("a smaller difference may still exist") && copy.OUTCOME_RULE_SENTENCES.inconclusive.includes("not evidence that nothing changed"));
 const c5 = view.retests!.groups[0].cards.find((c) => c.key === cardOf(5, P)!.memberId)!;
 check("C4 before and after: named in k of n readable answers, the range, the attempts with failed and excluded, and the dates",
   incLines.some((l) => l.startsWith("Before the change: named in 0 of 5 readable answers; likely range 0%–43%.") && l.includes("Answers collected from 2026-11-19 to 2026-11-20.")) &&
   incLines.some((l) => l.startsWith("After the change: named in 5 of 5 readable answers") && l.includes("Answers collected on 2027-01-05.")) &&
   cardStrings(c5).some((l) => l.startsWith("After the change:") && l.includes("1 excluded after review") && l.includes("0 failed")));
-check("C5 the change in points with its 95% range",
+check("C5 the difference (after minus before) in points with its 95% range, under 'The difference' (APP-2)",
   incLines.includes(copy.changeWords({ delta: 1, low: cardOf(1, P)!.comparison.intervalLow, high: cardOf(1, P)!.comparison.intervalHigh, reasons: [] })) &&
-  incLines.some((l) => /^The change: \+100 points \(95% range \+\d+ to \+100 points\)\.$/.test(l)));
-check("C6 the limits: the smallest change that counts, the smallest this retest could show (always), and the 60-point sentence on every card",
+  incLines.some((l) => /^Difference \(after minus before\): \+100 points \(95% range \+\d+ to \+100 points\)\.$/.test(l)) &&
+  inc.blocks.some((b) => b.title === copy.DIFFERENCE_HEADING) && !incLines.some((l) => l.startsWith("The change:")));
+check("C6 the limits: the smallest change that counts, the smallest this retest could show or that it cannot show any change, and the 60-point sentence on every card",
   idx((l) => l === copy.SMALLEST_CHANGE_THAT_COUNTS) > 0 && idx((l) => l === "The smallest change this retest could show: 60 points.") > 0 &&
-  view.retests!.groups[0].cards.every((c) => cardStrings(c).includes(copy.PILOT_RETEST_LIMIT_SENTENCE) && cardStrings(c).some((l) => l.startsWith("The smallest change this retest could show:"))));
+  view.retests!.groups[0].cards.every((c) => cardStrings(c).includes(copy.PILOT_RETEST_LIMIT_SENTENCE) &&
+    cardStrings(c).filter((l) => l.startsWith("The smallest change this retest could show:") || l.startsWith("This retest cannot show any change:")).length === 1));
 check("C7 the customer's threshold in their words, and the below-limit line when they named a smaller change",
   incLines.includes(`What would change your next decision (your words): ${GOOD_TEXT.decisionThreshold}`) && incLines.includes(copy.THRESHOLD_BELOW_LIMIT_WORDS));
 const c3 = cardStrings(view.retests!.groups[0].cards.find((c) => c.key === cardOf(3, P)!.memberId)!);
@@ -583,7 +605,7 @@ check("C12 the reasons in words; an unknown prefix is 'another recorded reason';
   copy.reasonsWords(["SOMETHING_NEW"]) === "Recorded reasons: another recorded reason." &&
   incLines.includes(DEPENDENCE_LIMITATION) && inc.footer === NON_CAUSALITY_FOOTER && incLines[incLines.length - 1] === NON_CAUSALITY_FOOTER);
 check("C13 each card's blocks come in §3.5's order",
-  ["What each result means", "The question", "Before and after", "The change", "The limits", "Your threshold", "How it was measured", copy.SOURCES_BEFORE_AFTER_HEADING, "Context", "The evidence"]
+  ["What each result means", "The question", "Before and after", copy.DIFFERENCE_HEADING, "The limits", "Your threshold", "How it was measured", copy.SOURCES_BEFORE_AFTER_HEADING, "Context", "The evidence"]
     .map((t) => inc.blocks.findIndex((b) => b.title?.startsWith(t) ?? false)).every((v, i, a) => v > 0 && (i === 0 || v > a[i - 1])));
 check("C14 the question line: its version and fingerprint, the same on both measurements",
   incLines.includes(`Question 1, version 1 (fingerprint ${sha(qText(1)).slice(0, 12)}), the same on both measurements.`));
@@ -601,6 +623,46 @@ check("C16 the group: its labelled fields, 'registered once for questions …, e
   view.retests!.groups[0].lines.includes("Waiting period: 21 days, from 2026-12-02 to 2026-12-23.") &&
   view.retests!.groups[0].lines.includes("From a suggested action since withdrawn.") &&
   view.retests!.groups[0].fields.some((f) => f.label === "Why we expect it might matter (a hypothesis)" && f.text === GOOD_TEXT.hypothesis));
+
+// APP-3, APP-4, APP-5 (engineer, review C2).
+check("C17 no decision number appears in the method note or anywhere in the customer's page or Markdown (APP-3)",
+  !/\bD-\d{3}\b/.test(copy.pilotOutcomeRuleNote(COMPANY)) && !/\bD-\d{3}\b/.test(page) && !/\bD-\d{3}\b/.test(md) &&
+  copy.pilotOutcomeRuleNote(COMPANY).includes("rule pilot-outcome-card/1") && copy.pilotOutcomeRuleNote(COMPANY).includes(`The difference is the share of readable answers naming ${COMPANY} after the change minus the share before`));
+const notAsRegistered = groups();
+notAsRegistered.groups[1] = { ...notAsRegistered.groups[1], implementedAsRegistered: false };
+const narView = presentPilotReport(buildPilotReport(pilotInput(notAsRegistered)).payload);
+check("C18 a change reported as not made exactly as registered never shows 'no departure': every card says so instead (APP-4); one made as registered keeps 'no departure'",
+  narView.retests!.groups[0].cards.length === 6 &&
+  narView.retests!.groups[0].cards.every((c) => cardStrings(c).includes(copy.NOT_AS_REGISTERED_WORDS) && !cardStrings(c).includes(copy.NO_DEPARTURE_WORDS)) &&
+  view.retests!.groups[0].cards.every((c) => cardStrings(c).includes(copy.NO_DEPARTURE_WORDS) && !cardStrings(c).includes(copy.NOT_AS_REGISTERED_WORDS)));
+const LINTED_URL = "https://acme.test/guaranteed-results";
+const LINTED_TITLE = "Improve your ranking with a comparison page";
+const linkLint = groups();
+linkLint.groups[1] = {
+  ...linkLint.groups[1],
+  evidenceUrl: LINTED_URL,
+  sourceActions: [{ versionId: uid(52001), title: null, withdrawn: true }, { versionId: uid(52002), title: LINTED_TITLE, withdrawn: false }, { versionId: uid(52003), title: "Publish a comparison page", withdrawn: false }],
+};
+const llBuilt = buildPilotReport(pilotInput(linkLint));
+const llG = llBuilt.payload.retests![1];
+const llView = presentPilotReport(llBuilt.payload);
+const llAll = [renderPage(llBuilt.payload), renderPilotReportMarkdown(llBuilt.payload), presentationStrings(llView).join("\n")];
+check("C19 the evidence link and a source action's title are linted at build (APP-5): kept as stored in the payload (the save compares them), listed as not shown, left out of the page and the Markdown, said in words, and each needs review",
+  lintPilotActionText(LINTED_URL).length > 0 && lintPilotActionText(LINTED_TITLE).length > 0 &&
+  llG.implementation?.evidenceUrl === LINTED_URL && llG.sourceActions[1].title === LINTED_TITLE &&
+  llG.notShown?.evidenceUrl === true && JSON.stringify(llG.notShown?.sourceActionVersionIds) === JSON.stringify([uid(52002)]) &&
+  llAll.every((t) => !t.includes(LINTED_URL) && !t.includes(LINTED_TITLE) && !t.includes("guaranteed-results")) &&
+  llView.retests!.groups[0].lines.includes(copy.EVIDENCE_LINK_NOT_SHOWN_WORDS) &&
+  llView.retests!.groups[0].lines.includes(`Recorded as live by the Zypact team on 2026-12-02. You reported that the change went live on 2026-12-02. Evidence: fingerprint ${SHA.slice(0, 12)}.`) &&
+  llView.retests!.groups[0].lines.includes("From a suggested action whose title is not shown because it uses wording this report may not use.") &&
+  llView.retests!.groups[0].lines.includes('From the suggested action "Publish a comparison page".') &&
+  llView.retests!.groups[0].lines.includes("From a suggested action since withdrawn.") &&
+  llBuilt.structural.some((s) => s.status === "needs_review" && s.reason.startsWith("Retest 2: the link to the live change uses wording")) &&
+  llBuilt.structural.some((s) => s.status === "needs_review" && s.reason.startsWith("Retest 2: the title of a suggested action it comes from uses wording")) &&
+  !llBuilt.structural.some((s) => s.status === "blocked") &&
+  view.retests!.groups[0].lines.includes(`Recorded as live by the Zypact team on 2026-12-02. You reported that the change went live on 2026-12-02. Evidence: https://acme.test/compare; fingerprint ${SHA.slice(0, 12)}.`) &&
+  p.retests![1].notShown?.evidenceUrl === false && p.retests![1].notShown?.sourceActionVersionIds.length === 0,
+  JSON.stringify(llG.notShown));
 
 /* ================================================================ N: nothing combined */
 
@@ -757,7 +819,8 @@ check("K8 blocked: Δmin not 60 points, a retest answer before the window closed
 check("K9 M17: a live question's baseline answers collected after a change went live get the dated line, and need review",
   bad.payload.questions.find((q) => q.ordinal === 2)?.collectedAfterChange?.[0]?.liveOn === "2026-12-02" &&
   presentPilotReport(bad.payload).questions.find((q) => q.key === QID(2))!.lines.includes(copy.collectedAfterChangeWords("2026-12-01", "2026-12-02")) &&
-  bad.structural.some((s) => s.status === "needs_review" && /Question 2 \(Perplexity\): some baseline answers were collected after the change registered on 2026-12-01 went live/.test(s.reason)));
+  bad.structural.some((s) => s.status === "needs_review" && /Question 2 \(Perplexity\): some baseline answers may have been collected after the change registered on 2026-12-01 went live/.test(s.reason)) &&
+  copy.collectedAfterChangeWords("2026-12-01", "2026-12-02") === "Some of these answers may have been collected after the change registered on 2026-12-01 went live (2026-12-02); those would describe the engines after that change.");
 const textDiff = groups();
 const m2 = textDiff.groups[1].members[1];
 textDiff.groups[1].members[1] = { ...m2, intervention: { ...m2.intervention!, hypothesis: "A different hypothesis entirely here." } };
@@ -1020,16 +1083,30 @@ async function main(): Promise<void> {
   dbCalls.length = 0;
   const badId = await status(handleConfirmPilotRetest(post(GOOD_CONFIRM), { pilotId: PILOT, retestId: "nope" }, deps(ON)));
   const tooBig = await status(handleAddPilotRetestNote(post({ pad: "x".repeat(17_000) }), ids, deps(OFF)));
-  const maxRegister = await status(handleRegisterPilotRetest(post({ ...GOOD_REGISTER, ...Object.fromEntries(Object.keys(GOOD_TEXT).map((f) => [f, "y".repeat(f === "changeTitle" ? 120 : f === "changeTarget" ? 500 : f === "changeOwner" ? 200 : 2000)])) }), { pilotId: PILOT }, deps(ON)));
+  // APP-6: every text at its maximum in 3-byte characters (the most UTF-8 per character the parser counts), with the longest approval reference.
+  const maxText = Object.fromEntries(Object.keys(GOOD_TEXT).map((f) => [f, "語".repeat(f === "changeTitle" ? 120 : f === "changeTarget" ? 500 : f === "changeOwner" ? 200 : 2000)]));
+  const maxBody = { ...GOOD_REGISTER, ...maxText, customerApprovalRef: "語".repeat(300) };
+  const maxRegister = await status(handleRegisterPilotRetest(post(maxBody), { pilotId: PILOT }, deps(ON)));
   const callsAfterMax = dbCalls.length;
-  const hugeRegister = await status(handleRegisterPilotRetest(post({ ...GOOD_REGISTER, pad: "x".repeat(33_000) }), { pilotId: PILOT }, deps(ON)));
+  const hugeRegister = await status(handleRegisterPilotRetest(post({ ...GOOD_REGISTER, pad: "x".repeat(66_000) }), { pilotId: PILOT }, deps(ON)));
   const broken = await status(handleAbandonPilotRetest(post("{not json"), ids, deps(OFF)));
   const issues = await status(handleRegisterPilotRetest(post({ ...GOOD_REGISTER, hypothesis: "This guarantees more answers." }), { pilotId: PILOT }, deps(ON)));
   const callsAfterRefusals = dbCalls.length;
   check("H5 then the ids (400), the body size (413; a register body with every text at its maximum still fits) and shape (400), then the parsed and linted fields (400 with issues), before the database",
     badId.status === 400 && tooBig.status === 413 && broken.status === 400 && issues.status === 400 && Boolean((issues.body.issues as Record<string, string[]>)?.hypothesis) &&
-    hugeRegister.status === 413 && maxRegister.status === 409 && callsAfterMax === 1 && callsAfterRefusals === 1 && dbCalls.length === 1,
-    JSON.stringify([maxRegister.status, hugeRegister.status, dbCalls]));
+    hugeRegister.status === 413 && maxRegister.status === 409 && callsAfterMax === 1 && callsAfterRefusals === 1 && dbCalls.length === 1 &&
+    Buffer.byteLength(JSON.stringify(maxBody), "utf8") > 32_768 && Buffer.byteLength(JSON.stringify(maxBody), "utf8") <= MAX_REGISTER_BODY_BYTES && MAX_REGISTER_BODY_BYTES === 65_536,
+    JSON.stringify([maxRegister.status, hugeRegister.status, dbCalls, Buffer.byteLength(JSON.stringify(maxBody), "utf8")]));
+  check("H5b the console puts the three request-shape codes into words, and passes other words through (APP-6)",
+    founderCopy.retestRouteErrorText("request_body_too_large", "x") === founderCopy.RETEST_REQUEST_ERROR_WORDS.request_body_too_large &&
+    founderCopy.retestRouteErrorText("invalid_id", "x") === founderCopy.RETEST_REQUEST_ERROR_WORDS.invalid_id &&
+    founderCopy.retestRouteErrorText("invalid_body", "x") === founderCopy.RETEST_REQUEST_ERROR_WORDS.invalid_body &&
+    Object.values(founderCopy.RETEST_REQUEST_ERROR_WORDS).every((w) => !/_/.test(w)) &&
+    founderCopy.retestRouteErrorText(founderCopy.PILOT_RETEST_NOT_ENABLED, "x") === founderCopy.PILOT_RETEST_NOT_ENABLED &&
+    founderCopy.retestRouteErrorText(undefined, "fallback") === "fallback" &&
+    ["The change could not be registered.", "No answer from the server.", "The change could not be recorded as live.", "The note could not be added."]
+      .every((fb) => read("app/admin/pilots/pilot-retest-forms.tsx").includes(`retestRouteErrorText(payload?.error, "${fb}")`)) &&
+    !/payload\?\.error \?\?/.test(read("app/admin/pilots/pilot-retest-forms.tsx")));
   const reg2 = await status(handleRegisterPilotRetest(post(GOOD_REGISTER), { pilotId: PILOT }, deps(ON)));
   const conf2 = await status(handleConfirmPilotRetest(post(GOOD_CONFIRM), ids, deps(ON)));
   const prep2 = await status(handlePreparePilotRetests(post(""), ids, deps(ON)));

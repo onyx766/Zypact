@@ -246,12 +246,15 @@ begin
 end $$;
 
 -- 4. What this migration overwrites is 20261109160000's save and share: the
---    md5 of each body's exact source text (prosrc, the same on PostgreSQL 16
---    and 17). scripts/test-pilot-retest-schema.ts proves each literal is the
---    md5 of that body as it stands in 20261109160000's file.
+--    md5 of each body's source text (prosrc, the same on PostgreSQL 16 and
+--    17) with carriage returns removed, as the preflight hashes its pinned
+--    definitions since #132 (PF-30): a body applied with Windows line
+--    endings is the same code (engineer). The pins are unchanged.
+--    scripts/test-pilot-retest-schema.ts proves each literal is the md5 of
+--    that body as it stands in 20261109160000's file.
 do $$
 begin
-  if (select md5(p.prosrc) from pg_proc p
+  if (select md5(replace(p.prosrc, chr(13), '')) from pg_proc p
        where p.oid = to_regprocedure('public.save_pilot_report_artifact(uuid,uuid,text,jsonb,jsonb,text,jsonb,timestamptz)'))
      is distinct from 'e66f4dd316ff2f2cb250442b5fc119f2' then
     raise exception using
@@ -259,7 +262,7 @@ begin
       message = '20261109190000 precondition: save_pilot_report_artifact is not 20261109160000''s';
   end if;
 
-  if (select md5(p.prosrc) from pg_proc p
+  if (select md5(replace(p.prosrc, chr(13), '')) from pg_proc p
        where p.oid = to_regprocedure('public.share_pilot_report_artifact(uuid,uuid,uuid,boolean)'))
      is distinct from 'dc8b5f430f0d4ebd630e6793e64e669e' then
     raise exception using
@@ -1479,7 +1482,9 @@ begin
 
     -- The retest measures exactly what the member's baseline measured, with
     -- the plan and threshold the method fixes (5 runs, a smallest useful
-    -- change of 0.60, the detectable change recorded at approval).
+    -- change of 0.60, the detectable change recorded at approval), under the
+    -- baseline's own run, retry and spend caps (engineer: 0073 copies them,
+    -- and the readback proves it, so a retest never runs under other caps).
     if v_retest.baseline_protocol_id is distinct from v_member.baseline_protocol_id
        or v_retest.provider is distinct from v_baseline.provider
        or v_retest.provider is distinct from v_member.engine
@@ -1487,7 +1492,10 @@ begin
        or v_retest.status is distinct from 'approved'
        or v_retest.planned_baseline_runs is distinct from 5
        or (v_retest.minimum_useful_change ->> 'value')::numeric is distinct from 0.6
-       or v_retest.detectable_change_at_plan is null then
+       or v_retest.detectable_change_at_plan is null
+       or v_retest.run_cap is distinct from v_baseline.run_cap
+       or v_retest.retry_cap is distinct from v_baseline.retry_cap
+       or v_retest.spend_cap_usd is distinct from v_baseline.spend_cap_usd then
       raise exception using errcode = 'P0001', message = 'pilot_retest_prepare_failed:retest_protocol';
     end if;
 
@@ -3018,8 +3026,15 @@ begin
   -- build changes answers without adding one) and every retest attempt. A
   -- missing manifest key is an empty list, so a revision built before D-062
   -- is stale only once a group exists. The pilot row is held for share
-  -- above, and every group step and note takes it for update.
+  -- above, and every group step and note takes it for update. (engineer)
+  -- The cards are also still exactly the final retests (M1, as the save
+  -- checks it): finality depends on the pilot's status, today's date and the
+  -- question's retirement, which can change after the save without any row
+  -- the checks above compare, so a retest that was retryable at the save and
+  -- is final now makes the revision stale.
   declare
+    v_m_cards    jsonb := case when jsonb_typeof(v_art.manifest -> 'retestCards') = 'array'
+                               then v_art.manifest -> 'retestCards' else '[]'::jsonb end;
     v_m_retests  jsonb := case when jsonb_typeof(v_art.manifest -> 'retests') = 'array'
                                then v_art.manifest -> 'retests' else '[]'::jsonb end;
     v_m_notes    jsonb := case when jsonb_typeof(v_art.manifest -> 'retestNotes') = 'array'
@@ -3104,7 +3119,20 @@ begin
           where pq.pilot_id = p_pilot_id
             and s.phase = 'retest'
             and not exists (
-              select 1 from jsonb_array_elements(v_m_attempts) e where (e ->> 'id') = a.id::text)) then
+              select 1 from jsonb_array_elements(v_m_attempts) e where (e ->> 'id') = a.id::text))
+       or array(
+         select coalesce(c ->> 'memberId', '-') from jsonb_array_elements(v_m_cards) c order by 1)
+          is distinct from array(
+         select m.id::text
+           from public.pilot_retest_members m
+           join public.pilot_retests r on r.id = m.pilot_retest_id
+           join public.pilot_question_protocols s on s.pilot_retest_member_id = m.id
+           join public.protocol_execution_jobs j on j.protocol_id = s.protocol_id
+          where m.pilot_id = p_pilot_id
+            and r.abandoned_at is null
+            and exists (select 1 from public.protocol_attempts a where a.protocol_id = s.protocol_id)
+            and public.pilot_retest_job_is_final(j.id) is true
+          order by 1) then
       return query select 'RETESTS_STALE'::text, null::text;
       return;
     end if;
@@ -3254,10 +3282,10 @@ begin
   end loop;
 
   -- save and share are no longer 20261109160000's.
-  if (select md5(p.prosrc) from pg_proc p
+  if (select md5(replace(p.prosrc, chr(13), '')) from pg_proc p
        where p.oid = 'public.save_pilot_report_artifact(uuid,uuid,text,jsonb,jsonb,text,jsonb,timestamptz)'::regprocedure)
      = 'e66f4dd316ff2f2cb250442b5fc119f2'
-     or (select md5(p.prosrc) from pg_proc p
+     or (select md5(replace(p.prosrc, chr(13), '')) from pg_proc p
           where p.oid = 'public.share_pilot_report_artifact(uuid,uuid,uuid,boolean)'::regprocedure)
      = 'dc8b5f430f0d4ebd630e6793e64e669e' then
     raise exception using errcode = 'P0001', message = '20261109190000 postcondition: save or share was not redefined';

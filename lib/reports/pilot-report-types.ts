@@ -396,6 +396,14 @@ export interface PilotReportRetest {
   observationDays: number;
   implementBy: string;
   sourceActions: { versionId: string; title: string | null; withdrawn: boolean }[];
+  /**
+   * D-062 (engineer) — values above kept exactly as stored, because the save
+   * compares them, but left out of the page and the Markdown: the build's
+   * lint found wording this report may not use in the evidence link or in a
+   * source action's title (each also a needs-review reason). The save does
+   * not read this key. Absent means nothing is left out.
+   */
+  notShown?: { evidenceUrl: boolean; sourceActionVersionIds: string[] };
   implementation: {
     recordedAt: string;
     wentLiveOn: string;
@@ -449,7 +457,13 @@ export interface PilotOutcomeCard {
     intervalLow: number | null;
     intervalHigh: number | null;
     minimumUsefulChange: number;
-    /** From the two phases' actual readable answers; always computed when both have one (M5). */
+    /**
+     * From the two phases' actual readable answers (M5). Null when the rule
+     * can give this card no status from them (engineer): a phase below the
+     * readable-answer floor, or a comparison that stopped early (another
+     * question or setup, not measured the same way). The card then says it
+     * cannot show any change.
+     */
     smallestDetectableChange: number | null;
     /** Each reason's prefix before ": ", never the text after it (M15). */
     reasonCodes: string[];

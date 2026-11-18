@@ -11,7 +11,8 @@
  *      each, sliced as test-pilot-actions.ts M9 and M14 slice them; each block
  *      sits where D-062 places it; its refusal codes, statuses and literals;
  *   H  the precondition pins: each md5 literal is the md5 of 20261109160000's
- *      body source (prosrc) as it stands in that file;
+ *      body source (prosrc) as it stands in that file, hashed with carriage
+ *      returns removed (PF-30) in the precondition and the postcondition;
  *   D  definitions: exactly the 13 new functions plus save and share; none of
  *      them is defined by any other migration; no 0071-0079, 20261109180000
  *      or other existing function is redefined;
@@ -181,18 +182,25 @@ async function main(): Promise<void> {
     NEW_SHARE.indexOf("  -- D-057 end\n") < hStart && hEnd < NEW_SHARE.indexOf("'ACKNOWLEDGEMENT_REQUIRED'")
       && shareBlock.indexOf("'RETEST_IN_PROGRESS'::text") > 0 && shareBlock.indexOf("'RETEST_IN_PROGRESS'::text") < shareBlock.indexOf("'RETESTS_STALE'::text")
       && /s\.phase = 'retest'/.test(shareBlock) && /v_art\.manifest -> 'retestJobs'/.test(shareBlock));
+  check("P7b the share re-checks M1 (engineer, DB-1): the manifest's cards are exactly the members of groups not abandoned whose retest has an attempt and is final now, else RETESTS_STALE",
+    /v_art\.manifest -> 'retestCards'/.test(shareBlock) && /public\.pilot_retest_job_is_final\(j\.id\) is true/.test(shareBlock)
+      && /r\.abandoned_at is null/.test(shareBlock)
+      && shareBlock.indexOf("public.pilot_retest_job_is_final(j.id)") < shareBlock.lastIndexOf("'RETESTS_STALE'::text"));
 
   /* H: the precondition pins ---------------------------------------------- */
   console.log("\n[H] precondition pins");
   const saveMd5 = md5(prosrc(PA, "save_pilot_report_artifact"));
   const shareMd5 = md5(prosrc(PA, "share_pilot_report_artifact"));
   const pre4 = RAW.slice(RAW.indexOf("-- 4. What this migration overwrites"), RAW.indexOf("-- 5. None of the objects"));
-  check("H1 precondition 4 pins md5(prosrc) of 20261109160000's save and share, each literal the md5 of that body as it stands in its file",
+  check("H1 precondition 4 pins md5(prosrc) with carriage returns removed (PF-30) of 20261109160000's save and share, each literal the md5 of that body as it stands in its file",
     pre4.includes(`is distinct from '${saveMd5}'`) && pre4.includes(`is distinct from '${shareMd5}'`)
+      && (pre4.match(/select md5\(replace\(p\.prosrc, chr\(13\), ''\)\) from pg_proc p/g) ?? []).length === 2 && !/md5\(p\.prosrc\)/.test(pre4)
       && pre4.indexOf("save_pilot_report_artifact(uuid,uuid,text,jsonb,jsonb,text,jsonb,timestamptz)") > 0
       && pre4.indexOf("share_pilot_report_artifact(uuid,uuid,uuid,boolean)") > 0, `${saveMd5} ${shareMd5}`);
-  check("H2 the postconditions assert both are no longer those bodies", RAW.slice(RAW.indexOf("6. Postconditions")).includes(`= '${saveMd5}'`)
-    && RAW.slice(RAW.indexOf("6. Postconditions")).includes(`= '${shareMd5}'`));
+  check("H2 the postconditions assert both are no longer those bodies, hashed the same way", RAW.slice(RAW.indexOf("6. Postconditions")).includes(`= '${saveMd5}'`)
+    && RAW.slice(RAW.indexOf("6. Postconditions")).includes(`= '${shareMd5}'`)
+    && (RAW.slice(RAW.indexOf("6. Postconditions")).match(/select md5\(replace\(p\.prosrc, chr\(13\), ''\)\) from pg_proc p/g) ?? []).length === 2
+    && !/md5\(p\.prosrc\)/.test(RAW));
 
   /* D: definitions --------------------------------------------------------- */
   console.log("\n[D] definitions");

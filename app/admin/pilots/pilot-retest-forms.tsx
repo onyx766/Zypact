@@ -14,6 +14,7 @@ import {
   RETEST_REGISTER_BELOW_LIMIT_CONFIRMATION,
   RETEST_REGISTER_CONFIRMATION,
   RETEST_THRESHOLD_QUESTION,
+  retestRouteErrorText,
   retestRunConfirmationAddition,
 } from "@/lib/pilots/retest-copy";
 import {
@@ -159,7 +160,7 @@ export function RetestRegisterPanel({
       });
       if (!ok) {
         if (payload?.issues) setIssues(payload.issues as Issues);
-        setError(payload?.error ?? "The change could not be registered.");
+        setError(retestRouteErrorText(payload?.error, "The change could not be registered."));
         return;
       }
       window.location.reload();
@@ -367,7 +368,7 @@ function StepButton({
         window.location.reload();
         return;
       }
-      setMessage(payload?.error ?? "No answer from the server.");
+      setMessage(retestRouteErrorText(payload?.error, "No answer from the server."));
     } catch {
       setMessage("The request did not reach the server.");
     } finally {
@@ -423,7 +424,7 @@ function RecordLiveForm({ pilotId, group }: { pilotId: string; group: RetestGrou
       });
       if (!ok) {
         if (payload?.issues) setIssues(payload.issues as Issues);
-        setError(payload?.error ?? "The change could not be recorded as live.");
+        setError(retestRouteErrorText(payload?.error, "The change could not be recorded as live."));
         return;
       }
       window.location.reload();
@@ -516,7 +517,7 @@ function AddNoteForm({ pilotId, group }: { pilotId: string; group: RetestGroupVi
       });
       if (!ok) {
         if (payload?.issues) setIssues(payload.issues as Issues);
-        setError(payload?.error ?? "The note could not be added.");
+        setError(retestRouteErrorText(payload?.error, "The note could not be added."));
         return;
       }
       window.location.reload();

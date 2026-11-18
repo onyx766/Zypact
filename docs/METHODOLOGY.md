@@ -1,12 +1,13 @@
 # Zypact V1 Methodology
 
 - **Status:** Canonical V1 methodology
-- **Version:** 1.3
+- **Version:** 1.4
 - **Method date:** 2026-08-16
 - **Version 1.1 date:** 2026-08-19 (see D-014 in `DECISIONS.md`)
 - **Version 1.2 date:** 2026-10-31 (see D-039 in `DECISIONS.md`)
 - **Version 1.3 date:** 2026-11-18 (see D-061 in `DECISIONS.md`)
-- **Default protocol methodology version:** 1.1. This is the current default value a new protocol records; existing protocols keep whatever value they recorded. Document version 1.2 adds planning guidance only and does not change that default, and neither does document version 1.3.
+- **Version 1.4 date:** 2026-11-18 (see D-062 in `DECISIONS.md`)
+- **Default protocol methodology version:** 1.1. This is the current default value a new protocol records; existing protocols keep whatever value they recorded. Document version 1.2 adds planning guidance only and does not change that default, and neither do document versions 1.3 and 1.4.
 - **Live surfaces:** Perplexity Sonar; and ChatGPT (controlled OpenAI Responses API responses with web search) once its worker switch is turned on under its own authorisation (D-053, D-061). Each is its own directional measurement.
 - **Authority:** Governs evidence, sampling, observations, uncertainty, retest comparisons, and client-facing methodological language
 
@@ -60,6 +61,17 @@
 - an engine whose questions are all retired reads "no live question is measured on it".
 
   Existing protocols and stored evidence are unchanged. A stored report revision keeps its payload and the words it was built with: re-rendered, its page says what its stored Markdown says (`builtBeforeD061`).
+- **1.4** (2026-11-18): Documents how a pilot's registered retest meets
+  §13 to §15, tied to D-062. §13 maps the pilot to items 1 to 10, item 8
+  as "no controls; stated on every card". §14 names the kinds of the
+  pilot's log of other changes. §15 places a pilot's Outcome Cards inside
+  the pilot report, takes a status only from a final retest, and never
+  counts cards. This is a documentation version. The default protocol
+  methodology version stays 1.1. The comparison rule is unchanged: a
+  pilot card uses D-038's rule through `compareProtocols`, named
+  `pilot-outcome-card/1` with its 60-point smallest change that counts.
+  The rules marked *(engineer)* in D-062 are proposed for founder
+  confirmation.
 
 ## 1. Purpose
 
@@ -434,6 +446,23 @@ A retest requires:
 
 Retest execution remains blocked until the recorded observation-window rule is satisfied or an authorized override is documented as a protocol deviation.
 
+### 13.1 In a pilot (D-062)
+
+A pilot registers one customer change across 1 to 5 of its questions, each retested on both engines; each question and engine is its own intervention. It meets the ten items as follows:
+
+1. **Baseline:** every chosen question has a finished baseline on both engines, planned at 5 runs, with all 5 answers readable.
+2. **One hypothesis:** one registered change, its hypothesis and expected mechanism stated once and shown on every card of the change.
+3. **Approval:** the customer's dated written approval of the change, recorded at registration, and the founder's confirmation.
+4. **Implementation evidence:** the go-live date the customer reports, recorded by the team with a link or a SHA-256 fingerprint (or both) and whether the change was made as registered. The go-live date cannot precede the registration.
+5. **Window:** 7 to 60 days from the moment the change is recorded as live, one window for every question and engine, closing at least 7 days before the pilot ends.
+6. **Scheduled retest protocol:** after the window closes, one approved retest protocol per question and engine, planned at 5 runs, with the 60-point smallest change that counts.
+7. **Preserved identity:** the same question version, engine and configuration as its baseline; a retest measured differently (measurement fingerprint `mf-1`) is inconclusive.
+8. **Controls: none.** Every card states that no control questions were measured, so wider changes in the engines cannot be told apart from the change.
+9. **Confounder log:** the change's log of other changes (§14.1).
+10. **Versioned calculation:** rule `pilot-outcome-card/1`, D-038's comparison through `compareProtocols`.
+
+A pilot has no early-retest override, and no protocol deviation is recorded: a departure from the registered change is a logged note.
+
 ## 14. Controls and confounders
 
 Controls may help detect wider model or market drift, but they do not automatically establish causality.
@@ -456,6 +485,10 @@ The confounder log should capture material changes such as:
 - major news or category events;
 - incomplete or delayed intervention implementation.
 
+### 14.1 The pilot's log of other changes (D-062)
+
+A pilot's log records each change with its date and one of these kinds, which follow the list above: a change in an AI engine (model or provider updates); a change in how Zypact measures (prompt or configuration changes); competitor activity; another change by the customer; a change in a source the engines cite (indexing or removal); news or a market event; a difference in how the change was made (incomplete, delayed or different implementation); another change. Notes are append-only, a correction is a new note naming the one it corrects, and every card of the change shows the log, flagging each note written at or after that card's first retest answer.
+
 ## 15. Outcome statuses
 
 The only V1 Outcome Card statuses are:
@@ -472,6 +505,14 @@ Each status must link to baseline and retest evidence, method version, numerator
 Every Outcome Card includes this permanent footer:
 
 > **This Outcome Card documents an observed change under the recorded conditions. It does not establish that the intervention caused the change.**
+
+### 15.1 In a pilot (D-062)
+
+- A pilot's Outcome Cards are part of the pilot report revision; none is a separate artifact, page or email.
+- A card, and so a status, exists only once its retest is final (it can no longer gain or change an answer) and has at least one attempt. An unfinished retest shows its state and counts only.
+- Each card states the meaning of all four statuses under rule `pilot-outcome-card/1`, the smallest change that counts (60 points) and the smallest change its own retest could show. When the rule can give the card no status from its answers (a phase below the readable-answer floor, or a comparison that stops early because the question, the setup or the measurement differs), the card states that it cannot show any change, and why, and shows no smallest change *(engineer)*.
+- The card calls the measured quantity the **difference** (the share after the change minus the share before), never "the change", so that no sentence reads as if the customer's change produced it *(engineer)*.
+- Cards are never counted, totalled or combined across questions or engines.
 
 ## 16. Report integrity gates
 

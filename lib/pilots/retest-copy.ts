@@ -24,6 +24,21 @@ export const PILOT_RETEST_NOT_ENABLED =
 
 export const PILOT_RETEST_UNAVAILABLE = "Pilot retests are temporarily unavailable.";
 
+/**
+ * (engineer, review C2 APP-6) The routes' three request-shape refusals are
+ * codes, not words; the console shows these instead. Any other error is
+ * already in words (this module's maps), and a missing one is `fallback`.
+ */
+export const RETEST_REQUEST_ERROR_WORDS: Record<string, string> = {
+  request_body_too_large: "The form is too large to send. Shorten the longest texts and try again.",
+  invalid_id: "This page refers to a pilot or change that does not exist. Reload the page.",
+  invalid_body: "The form could not be read by the server. Reload the page and try again.",
+};
+export function retestRouteErrorText(error: unknown, fallback: string): string {
+  if (typeof error !== "string" || error === "") return fallback;
+  return Object.hasOwn(RETEST_REQUEST_ERROR_WORDS, error) ? RETEST_REQUEST_ERROR_WORDS[error] : error;
+}
+
 export const PILOT_RETEST_STEP_FAILED_TEXT =
   "The step could not finish and nothing was changed. Try again; if it repeats, tell the engineer.";
 

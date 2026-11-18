@@ -13,7 +13,8 @@
  * Every route checks, in this order: the console's kill switch
  * (SNAPSHOT_APPROVAL_ENABLED exactly "true"), the founder guard, the retest
  * gate (ZYPACT_PILOT_RETEST_ENABLED exactly "true") on the gated routes, the
- * ids, then the body (JSON of at most 16 KB, parsed and linted). Withdrawing
+ * ids, then the body (JSON of at most 16 KB, or 64 KB for the register body,
+ * parsed and linted). Withdrawing
  * and logging spend nothing and are forward recovery once the gate is off
  * again, so they are not gated.
  *
@@ -50,11 +51,15 @@ type Env = Readonly<Record<string, string | undefined>>;
 
 export const MAX_RETEST_BODY_BYTES = 16_384;
 /**
- * (engineer) The register body alone may be larger: its ten registered texts
- * are each allowed up to 2,000 characters (the pilot_retests CHECKs), 20,000
- * in all, which a 16 KB limit would refuse. Every other route keeps 16 KB.
+ * (engineer) The register body alone may be larger. The limit counts UTF-8
+ * bytes while the database and the parser count characters: the ten
+ * registered texts and the approval reference allow 15,120 characters in all
+ * (the pilot_retests CHECKs), and a character outside ASCII takes up to 3
+ * bytes per UTF-16 unit the parser counts, about 45,400 bytes at most, so
+ * 64 KB leaves room for the field names and the rest of the body. Every other
+ * route keeps 16 KB.
  */
-export const MAX_REGISTER_BODY_BYTES = 32_768;
+export const MAX_REGISTER_BODY_BYTES = 65_536;
 
 type RetestDb = Pick<
   DbAdapter,

@@ -20,6 +20,7 @@ import {
   type MappedRpcFailure,
 } from "@/lib/interventions/rpc-errors";
 import { readIntervention } from "@/lib/interventions/intervention-actions";
+import { PILOT_MEMBER_FAILURE, pilotMemberInterventionIds } from "@/lib/interventions/pilot-exclusions";
 
 type OnUnmapped = (detail: { code: string | null; message: string | null }) => void;
 
@@ -87,6 +88,8 @@ export async function createRetest(
 ): Promise<CreateRetestResult> {
   const iv = await readIntervention(client, interventionId);
   if (!iv) return { ok: false, failure: NOT_FOUND };
+  // D-062 — a pilot member's retest is prepared on its pilot page.
+  if ((await pilotMemberInterventionIds(client, [interventionId])).has(interventionId)) return { ok: false, failure: PILOT_MEMBER_FAILURE };
 
   // Eligibility is NOT re-checked here. create_retest_protocol calls 0072's
   // retest_eligibility itself — the single authority — and returns its
@@ -134,6 +137,8 @@ export async function queueRetestRun(
 ): Promise<QueueRetestResult> {
   const iv = await readIntervention(client, interventionId);
   if (!iv) return { ok: false, failure: NOT_FOUND };
+  // D-062 — a pilot member's retest is queued on its pilot page.
+  if ((await pilotMemberInterventionIds(client, [interventionId])).has(interventionId)) return { ok: false, failure: PILOT_MEMBER_FAILURE };
 
   if (iv.status !== "implemented") {
     return {

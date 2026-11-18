@@ -11,6 +11,7 @@ import {
   presentPilotReport,
   type PilotPresentationSection,
 } from "@/lib/reports/pilot-report-presentation";
+import { NON_CAUSALITY_FOOTER } from "@/lib/reports/outcome-card-types";
 import type { PilotReportPayload } from "@/lib/reports/pilot-report-types";
 import { Brand } from "./protocol-report-view";
 
@@ -158,6 +159,84 @@ export function PilotReportView({
             {v.actions.notes.map((n) => (
               <p key={n} className="zpr-section-sub">
                 {n}
+              </p>
+            ))}
+          </section>
+        ) : null}
+
+        {v.retests ? (
+          <section className="zpr-card zpr-section">
+            <h2 className="zpr-section-title">{v.retests.heading}</h2>
+            {v.retests.intro.map((p) => (
+              <p key={p} className="zpr-section-sub">
+                {p}
+              </p>
+            ))}
+            {v.retests.groups.map((g) => (
+              <article key={g.key} className="zpr-section">
+                <h3 className="zpr-note-title">{g.heading}</h3>
+                <ul className="zpr-list">
+                  {g.fields.map((f) => (
+                    <li key={`${g.key}-${f.label}`}>
+                      <strong>{f.label}:</strong> {f.text}
+                    </li>
+                  ))}
+                </ul>
+                <ul className="zpr-list">
+                  {g.lines.map((line, i) => (
+                    <li key={`${g.key}-line-${i}`}>{line}</li>
+                  ))}
+                </ul>
+                <p className="zpr-section-sub">{g.notesHeading}:</p>
+                <ul className="zpr-list">
+                  {g.notes.map((n, i) => (
+                    <li key={`${g.key}-note-${i}`}>{n}</li>
+                  ))}
+                </ul>
+                <div className="zpr-table-wrap">
+                  <table className="zpr-table">
+                    <thead>
+                      <tr>
+                        {g.members.columns.map((c) => (
+                          <th key={c}>{c}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {g.members.rows.map((row, i) => (
+                        <tr key={`${g.key}-member-${i}`}>
+                          {row.map((value, j) => (
+                            <td key={`${g.key}-member-${i}-${j}`}>{value}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {g.cards.map((c) => (
+                  <article key={c.key} className="zpr-section">
+                    <h3 className="zpr-note-title">{c.heading}</h3>
+                    {c.blocks.map((b, i) => (
+                      <div key={`${c.key}-block-${i}`}>
+                        {b.title ? <p className="zpr-section-sub">{b.title}:</p> : null}
+                        <ul className="zpr-list">
+                          {b.lines.map((line, j) => (
+                            <li key={`${c.key}-block-${i}-${j}`}>{line}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                    {/* The footer from the constant, never from the payload. */}
+                    <p className="zpr-footnote">
+                      <em>{NON_CAUSALITY_FOOTER}</em>
+                    </p>
+                  </article>
+                ))}
+              </article>
+            ))}
+            {v.retests.withdrawn.map((w) => (
+              <p key={w} className="zpr-section-sub">
+                {w}
               </p>
             ))}
           </section>

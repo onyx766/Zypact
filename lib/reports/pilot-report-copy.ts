@@ -119,11 +119,13 @@ export function previewStatusWords(r: {
   integrityStatus: string;
   isLatest: boolean;
   stale: boolean;
+  /** D-062 — the words for why it is stale, when it is not the suggested actions (default). */
+  staleWords?: string;
 }): string | null {
   if (r.sharedAt) return r.replaced ? REPLACED_REVISION_PREVIEW_WORDS : SHARED_REVISION_PREVIEW_WORDS;
   if (r.integrityStatus === "blocked") return BLOCKED_REVISION_PREVIEW_WORDS;
   if (!r.isLatest) return NOT_LATEST_REVISION_PREVIEW_WORDS;
-  if (r.stale) return STALE_REVISION_WORDS;
+  if (r.stale) return r.staleWords ?? STALE_REVISION_WORDS;
   return null;
 }
 
@@ -256,7 +258,12 @@ export const BUILD_PILOT_REPORT_REFUSAL: Record<
   | "MEASUREMENT_IN_PROGRESS"
   | "ACTION_NOT_REVIEWED"
   | "ACTIONS_INCOMPLETE"
-  | "ACTIONS_CONTENT_MISMATCH",
+  | "ACTIONS_CONTENT_MISMATCH"
+  | "RETESTS_CHANGED"
+  | "RETEST_CARD_MISMATCH"
+  | "RETEST_CARDS_INCOMPLETE"
+  | "RETEST_CARD_CHANGED_SINCE_SHARED"
+  | "RETEST_CONTENT_MISMATCH",
   string
 > = {
   PILOT_NOT_FOUND: "This pilot no longer exists.",
@@ -274,14 +281,29 @@ export const BUILD_PILOT_REPORT_REFUSAL: Record<
     "A suggested action was reviewed while the report was being built, so nothing was saved. Build the report again.",
   ACTIONS_CONTENT_MISMATCH:
     "What the report showed of a suggested action did not match the stored, reviewed action, so nothing was saved. Build the report again; if it repeats, tell the engineer.",
+  // D-062 — the retest checks of the save.
+  RETESTS_CHANGED:
+    "A retest changed while the report was being built (a step, a note, a run or a review), so nothing was saved. Build the report again.",
+  RETEST_CARD_MISMATCH:
+    "An Outcome Card did not match its stored retest, so nothing was saved. Build the report again; if it repeats, tell the engineer.",
+  RETEST_CARDS_INCOMPLETE:
+    "A retest finished, or stopped for good, while the report was being built, so nothing was saved. Build the report again.",
+  RETEST_CARD_CHANGED_SINCE_SHARED:
+    "An Outcome Card already shared would change. Nothing was saved; tell the engineer.",
+  RETEST_CONTENT_MISMATCH:
+    "What the report showed of a registered change did not match the stored change, so nothing was saved. Build the report again; if it repeats, tell the engineer.",
 };
 
 /** The founder console's words for a share the database refused. */
 export const SHARE_PILOT_REPORT_REFUSAL: Record<
-  "NOT_FOUND" | "BLOCKED" | "ACKNOWLEDGEMENT_REQUIRED" | "NOT_LATEST" | "ACTIONS_STALE",
+  "NOT_FOUND" | "BLOCKED" | "ACKNOWLEDGEMENT_REQUIRED" | "NOT_LATEST" | "ACTIONS_STALE" | "RETEST_IN_PROGRESS" | "RETESTS_STALE",
   string
 > = {
   ACTIONS_STALE: "An action changed after this revision was built. Build the report again.",
+  // D-062.
+  RETEST_IN_PROGRESS:
+    "A retest is running, about to run, or has an answer still being collected. Wait until it finishes, then build the report again.",
+  RETESTS_STALE: "A retest changed after this revision was built. Build the report again.",
   NOT_FOUND: "This report revision no longer exists.",
   BLOCKED: "This revision failed its checks and can never be shared.",
   ACKNOWLEDGEMENT_REQUIRED:

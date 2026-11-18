@@ -686,7 +686,8 @@ async function main(): Promise<void> {
       && runSrc.includes('via: "admin_pilot_run"') && runSrc.includes("requestedBy: guard.user.id"));
   check("S21b run: refuses before the start date and for a retired question, and names retiring for an abandoned measurement",
     runSrc.indexOf("pilotNotStarted(") > runSrc.indexOf("pilotIsOver(") && runSrc.includes("target.retired")
-      && runSrc.includes('start.refusal === "JOB_ATTEMPTS_EXHAUSTED" ? PILOT_JOB_ABANDONED_TEXT')
+      // D-062 — a retest's abandoned job has its own words; a baseline's still names retiring.
+      && runSrc.includes('start.refusal === "JOB_ATTEMPTS_EXHAUSTED"\n        ? phase === "retest" ? RETEST_JOB_ABANDONED_TEXT : PILOT_JOB_ABANDONED_TEXT')
       && !runSrc.includes("Close the request"));
   const retrySrc = read(routeFiles.retry);
   check("S22 retry never starts the worker and never takes the failed run from the body",
@@ -737,14 +738,17 @@ async function main(): Promise<void> {
     runSrc.includes(ENGINE_CHOICE)
       && runSrc.indexOf(ENGINE_CHOICE) > runSrc.indexOf("requireFounderForRoute(")
       && runSrc.indexOf(ENGINE_CHOICE) < runSrc.indexOf("resolvePilotQuestionTarget(")
-      && runSrc.includes("resolvePilotQuestionTarget(getReportServiceClient(), pilotId, pilotQuestionId, engine)")
+      // D-062 — and the phase (absent: the baseline), checked by the gated phase choice before the read.
+      && runSrc.includes("resolvePilotQuestionTarget(getReportServiceClient(), pilotId, pilotQuestionId, engine, phase)")
+      && runSrc.indexOf("pilotPhaseFromBody(body, {") < runSrc.indexOf("resolvePilotQuestionTarget(")
       && runSrc.indexOf("target.protocolId === null") > runSrc.indexOf("target.retired")
       && runSrc.indexOf("target.protocolId === null") < runSrc.indexOf("startWorkerMachine({")
       && !runSrc.includes("_request: Request"));
   check("S34 retry: the engine comes from the body through the gated choice, before the slot read; the read takes that engine; it still never starts the worker",
     retrySrc.includes(ENGINE_CHOICE)
       && retrySrc.indexOf(ENGINE_CHOICE) < retrySrc.indexOf("resolvePilotQuestionTarget(")
-      && retrySrc.includes("resolvePilotQuestionTarget(client, pilotId, pilotQuestionId, engine)")
+      && retrySrc.includes("resolvePilotQuestionTarget(client, pilotId, pilotQuestionId, engine, phase)")
+      && retrySrc.indexOf("pilotPhaseFromBody(body, {") < retrySrc.indexOf("resolvePilotQuestionTarget(")
       && retrySrc.indexOf("target.protocolId === null") < retrySrc.indexOf("getDb().retryFailedProtocolJob(")
       && !retrySrc.includes("startWorkerMachine") && !retrySrc.includes("fly-machine"));
   const engineRouteFile = `${R}/[pilotId]/questions/[pilotQuestionId]/engines/route.ts`;
@@ -815,9 +819,10 @@ async function main(): Promise<void> {
   const forms = read("app/admin/pilots/pilot-forms.tsx");
   const addAllBody = forms.slice(forms.indexOf("export function AddChatGptToAllButton"), forms.indexOf("export function ResolveReviewControls"));
   check("S41 the forms name the engine in every Run, Retry and review body; Add ChatGPT posts the ChatGPT engine, one question after another",
-    forms.includes("/run`, {\n        engine: state.engine,\n      });")
-      && forms.includes("idempotencyKey: retryKey,\n        engine: state.engine,")
-      && forms.includes("/review`, {\n        engine,\n        resolution,\n        note,")
+    // D-062 — a retest's bodies also name `phase: "retest"`; a baseline's are unchanged.
+    forms.includes("/run`, {\n        engine: state.engine,\n        ...(state.phase === \"retest\" ? { phase: \"retest\" } : {}),\n      });")
+      && forms.includes("idempotencyKey: retryKey,\n        engine: state.engine,\n        ...(state.phase === \"retest\" ? { phase: \"retest\" } : {}),")
+      && forms.includes("/review`, {\n        engine,\n        resolution,\n        note,\n        ...(phase === \"retest\" ? { phase: \"retest\" } : {}),")
       && (forms.match(/\{ engine: "openai_chatgpt" \}/g) ?? []).length === 2
       && addAllBody.includes("for (const pilotQuestionId of pilotQuestionIds) {") && !addAllBody.includes("Promise.all")
       && forms.includes("window.prompt(RETIRE_PILOT_QUESTION_PROMPT)") && forms.includes("<p className=\"zpa-muted\">{RETIRE_BOTH_ENGINES_NOTE}</p>")

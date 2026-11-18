@@ -9,6 +9,7 @@
  * never a score, and nothing is combined across engines (D-053 item 3).
  */
 import { buildPilotActions, type PilotReportActionInput } from "@/lib/reports/build-pilot-actions";
+import { buildPilotRetests, type PilotCardBuild, type PilotRetestsInput } from "@/lib/reports/build-pilot-retests";
 import { buildProtocolReport } from "@/lib/reports/build-protocol-report";
 import type { BuildProtocolReportInput, ProtocolReportPayload } from "@/lib/reports/protocol-report-types";
 import { DEPENDENCE_LIMITATION, surfaceLimitation } from "@/lib/reports/surface-limitations";
@@ -114,6 +115,8 @@ export interface PilotReportInput {
   questions: PilotReportQuestionInput[];
   /** D-057 — each action's latest reviewed version, oldest action first. */
   actions?: PilotReportActionInput[];
+  /** D-062 — the pilot's registered changes and their retest slots; absent: none. */
+  retests?: PilotRetestsInput;
   now?: Date;
 }
 
@@ -129,6 +132,8 @@ export interface BuiltPilotReport {
   manifest: PilotReportManifest;
   /** Reasons found in the shape of the evidence itself; per-question integrity signals are added by the caller. */
   structural: PilotStructuralReason[];
+  /** D-062 — each Outcome Card's two built reports, for the caller's integrity signals. */
+  cardBuilds: PilotCardBuild[];
 }
 
 /**
@@ -575,6 +580,36 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
   structural.push(...builtActions.structural);
   manifest.actionVersions = builtActions.versionIds;
 
+  // D-062 — the registered changes and their Outcome Cards. Retest evidence
+  // enters only the manifest, the evidence index and the cards: never the
+  // brand, competitor, source, conditions or engine sections above.
+  const builtRetests = buildPilotRetests({
+    retests: input.retests ?? { groups: [], baselineLatestReservedAt: {} },
+    questions: questions.map((q) => ({
+      pilotQuestionId: q.pilotQuestionId,
+      ordinal: q.ordinal,
+      retired: q.retired,
+      slots: q.measurements.map((m) => ({ engine: m.engine, protocolId: m.protocolId, report: m.report, counts: m.counts, execution: m.execution })),
+    })),
+    pilot: { projectId: pilot.projectId, status: pilot.status, startsOn: pilot.startsOn, endsOn: pilot.endsOn },
+    subject,
+    now,
+    countAttempts,
+    liveAnswerModes: LIVE_ANSWER_MODES,
+  });
+  structural.push(...builtRetests.structural);
+  manifest.protocols.push(...builtRetests.manifest.protocols);
+  manifest.attempts.push(...builtRetests.manifest.attempts);
+  manifest.retests = builtRetests.manifest.retests;
+  manifest.retestNotes = builtRetests.manifest.retestNotes;
+  manifest.retestJobs = builtRetests.manifest.retestJobs;
+  manifest.retestCards = builtRetests.manifest.retestCards;
+  evidenceIndex.push(...builtRetests.evidenceIndex);
+  for (const q of questions) {
+    const after = builtRetests.collectedAfterChange.get(q.pilotQuestionId);
+    if (after && after.length > 0) q.collectedAfterChange = after;
+  }
+
   const methodNotes = [
     `Each question's figures come from its own approved protocol and its own answers. The table rows are the question sections' figures, repeated.`,
     `Labels follow rule ${PILOT_LABEL_RULE}: with at least ${MIN_READABLE_FOR_LABEL} readable answers, "named in every answer", "named in no answer" or "named in some answers"; with fewer, "not enough answers". The counts are always shown beside the label.`,
@@ -587,6 +622,8 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
     // measurement of it may have finished; its figures are not reported either.
     "A question is retired when one of its measurements could not finish, and retiring stops it on every engine. A retired question shows its attempt counts only, with no rate, range or reading, even for a measurement that had finished, and it is left out of every total.",
     "A measurement that a review ended (after an answer that was never confirmed, such as a timed-out call) may have fewer completed answers than planned. It shows its own figures with its counts, is marked as ended after review rather than finished, and is left out of the total.",
+    // D-062 (M16) — only when the report shows a registered change.
+    ...(builtRetests.methodNote ? [builtRetests.methodNote] : []),
   ];
 
   const payload: PilotReportPayload = {
@@ -608,9 +645,11 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
     causalLimit: PILOT_CAUSAL_LIMIT,
     methodNotes,
     actions: builtActions.actions,
+    retests: builtRetests.retests,
+    outcomeCards: builtRetests.outcomeCards,
   };
 
-  return { payload, manifest, structural: dedupe(structural) };
+  return { payload, manifest, structural: dedupe(structural), cardBuilds: builtRetests.cardBuilds };
 }
 
 function dedupe(reasons: PilotStructuralReason[]): PilotStructuralReason[] {

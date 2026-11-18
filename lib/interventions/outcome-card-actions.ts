@@ -23,6 +23,7 @@ import type { MappedRpcFailure } from "@/lib/interventions/rpc-errors";
 import type { RouteFailure } from "@/lib/interventions/route-guard";
 import { readIntervention } from "@/lib/interventions/intervention-actions";
 import { readRetestProgress } from "@/lib/interventions/retest-actions";
+import { PILOT_MEMBER_FAILURE, pilotMemberInterventionIds } from "@/lib/interventions/pilot-exclusions";
 
 export interface StoredOutcomeCard {
   artifactId: string;
@@ -95,6 +96,8 @@ export async function generateOutcomeCard(
 ): Promise<GenerateResult> {
   const iv = await readIntervention(client, interventionId);
   if (!iv) return { ok: false, failure: { status: 404, error: "not_found", message: "That intervention was not found." } };
+  // D-062 — a pilot member's Outcome Card lives in the pilot report.
+  if ((await pilotMemberInterventionIds(client, [interventionId])).has(interventionId)) return { ok: false, failure: PILOT_MEMBER_FAILURE };
 
   // The worker only builds a card once the retest job has SUCCEEDED
   // (findDeliverableInterventions). processOutcomeCard itself does not check
@@ -167,6 +170,8 @@ export async function sendReviewedOutcomeCard(
 ): Promise<SendResult> {
   const iv = await readIntervention(client, interventionId);
   if (!iv) return { ok: false, failure: { status: 404, error: "not_found", message: "That intervention was not found." } };
+  // D-062 — a pilot member's Outcome Card is never sent on its own.
+  if ((await pilotMemberInterventionIds(client, [interventionId])).has(interventionId)) return { ok: false, failure: PILOT_MEMBER_FAILURE };
 
   const card = await readOutcomeCard(client, interventionId);
   if (!card) {

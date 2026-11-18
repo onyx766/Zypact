@@ -11,9 +11,12 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import {
+  PILOT_GUARD_RPC_ERRORS,
+  PILOT_RETEST_STEP_FAILED,
   RPC_ERROR_MAP,
   describeRetestEligibility,
   mapCreateRetestOutcome,
+  mapPilotGuardError,
   mapRpcError,
 } from "@/lib/interventions/rpc-errors";
 import { evaluateFounderAccess } from "@/lib/auth/founder";
@@ -138,6 +141,35 @@ check("the kill switch is off for anything but exactly \"true\"",
   !interventionAdminEnabled({ INTERVENTION_ADMIN_ENABLED: "yes" }));
 check("the kill switch is on for exactly \"true\"",
   interventionAdminEnabled({ INTERVENTION_ADMIN_ENABLED: "true" }));
+
+/* ═══════════ 6. D-062: the pilot retest's guards ═══════════ */
+console.log("\n[6] PILOT_GUARD_RPC_ERRORS (20261109190000)");
+{
+  const sql = readFileSync(path.join(MIGRATIONS, "20261109190000_pilot_retest.sql"), "utf8")
+    .split("\n")
+    .map((line) => line.replace(/--.*$/, ""))
+    .join("\n");
+  const raised = new Set([...sql.matchAll(/message\s*=\s*'([a-z_:]+)'/g)].map((m) => m[1]));
+  const guards = [...raised].filter((m) => m.startsWith("pilot_") && !PILOT_RETEST_STEP_FAILED.test(m));
+  const failedSteps = [...raised].filter((m) => PILOT_RETEST_STEP_FAILED.test(m));
+  const dynamic = [...sql.matchAll(/format\('(pilot_retest_[a-z]+_failed):%s'/g)].map((m) => `${m[1]}:x`);
+  check("found the retest migration's guard messages", guards.length >= 10, guards.join(","));
+  for (const g of guards) check(`mapped: ${g}`, Object.hasOwn(PILOT_GUARD_RPC_ERRORS, g), "raised by 20261109190000, missing from PILOT_GUARD_RPC_ERRORS");
+  for (const key of Object.keys(PILOT_GUARD_RPC_ERRORS)) check(`not stale: ${key}`, raised.has(key), "in PILOT_GUARD_RPC_ERRORS but raised by no line of 20261109190000");
+  check("every step failure, fixed or formatted, matches the step-failure rule", failedSteps.length >= 4 && [...failedSteps, ...dynamic].every((m) => PILOT_RETEST_STEP_FAILED.test(m)), [...failedSteps, ...dynamic].join(","));
+  check("none of these keys joins RPC_ERROR_MAP (its staleness check reads only 0071-0078)",
+    Object.keys(PILOT_GUARD_RPC_ERRORS).every((k) => !(k in RPC_ERROR_MAP)));
+  check("a guard reaching a generic M7 call maps to its 409, never the generic 500",
+    Object.keys(PILOT_GUARD_RPC_ERRORS).every((k) => mapRpcError({ message: k, code: "P0001" }).status === 409));
+  const stepFail = mapPilotGuardError({ message: "pilot_retest_prepare_failed:no_row", code: "P0001" });
+  check("a step failure is a 500 that names no step detail", stepFail.status === 500 && !stepFail.message.includes("no_row") && !stepFail.message.includes("prepare_failed"));
+  check("a malformed step call (22023) is a 400 that echoes nothing",
+    mapPilotGuardError({ message: "invalid_add_pilot_retest_note_args", code: "22023" }).status === 400 &&
+    !mapPilotGuardError({ message: "invalid_add_pilot_retest_note_args", code: "22023" }).message.includes("invalid_"));
+  let unmapped: string | null = null;
+  check("anything else falls through to the generic mapping, which never echoes it",
+    mapPilotGuardError({ message: "relation \"x\" does not exist", code: "42P01" }, (d) => { unmapped = d.message; }).status === 500 && unmapped !== null);
+}
 
 console.log(`\n${passed}/${passed + failed} checks passed.${failed ? ` ${failed} FAILED.` : ""}\n`);
 if (failed > 0) process.exit(1);

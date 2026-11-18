@@ -27,6 +27,7 @@ import {
   type ReportIntegrityStatus,
 } from "@/lib/export/report-integrity";
 import { engineLabel, type PilotStructuralReason } from "@/lib/reports/build-pilot-report";
+import { evaluateOutcomeCardIntegrity } from "@/lib/reports/outcome-card-integrity";
 import type { PilotEngineKey } from "@/lib/reports/pilot-report-types";
 import type { ProtocolIntegritySignals } from "@/lib/reports/protocol-integrity-signals";
 
@@ -50,12 +51,29 @@ export interface PilotQuestionSignals {
   signals: ProtocolIntegritySignals;
 }
 
+/**
+ * D-062 — one Outcome Card's integrity inputs: both phases' signals (the
+ * baseline's reused from the question loop), whether its intervention was
+ * registered and implemented, and whether both phases were measured the
+ * same way. The page text is scanned once, above, for the whole report.
+ */
+export interface PilotCardSignals {
+  ordinal: number;
+  engine: PilotEngineKey;
+  baselineSignals: ProtocolIntegritySignals;
+  retestSignals: ProtocolIntegritySignals;
+  interventionRegisteredAndImplemented: boolean;
+  measurement: { comparable: boolean; detail: string };
+}
+
 export function evaluatePilotReportIntegrity(input: {
   markdown: string;
   /** Every string the client page renders (presentationStrings). */
   pageText: string[];
   structural: PilotStructuralReason[];
   questionSignals: PilotQuestionSignals[];
+  /** D-062 — absent: no Outcome Card. */
+  cardSignals?: PilotCardSignals[];
 }): ReportIntegrityResult {
   let status: ReportIntegrityStatus = "integrity_passed";
   const reasons: string[] = [];
@@ -81,6 +99,22 @@ export function evaluatePilotReportIntegrity(input: {
     if (result.status === "integrity_passed") continue;
     status = worse(status, result.status);
     reasons.push(...result.reasons.map((r) => `Question ${q.ordinal} (${engineLabel(q.engine)}): ${r}`));
+  }
+
+  // D-062 — each card through the M7 card rule, worst first, named by its question and engine.
+  const engineRank = (e: PilotEngineKey) => (e === "perplexity_sonar" ? 0 : 1);
+  for (const c of [...(input.cardSignals ?? [])].sort((a, b) => a.ordinal - b.ordinal || engineRank(a.engine) - engineRank(b.engine))) {
+    const result = evaluateOutcomeCardIntegrity({
+      baselineMarkdown: "",
+      baselineSignals: c.baselineSignals,
+      retestMarkdown: "",
+      retestSignals: c.retestSignals,
+      interventionRegisteredAndImplemented: c.interventionRegisteredAndImplemented,
+      measurement: c.measurement,
+    });
+    if (result.status === "integrity_passed") continue;
+    status = worse(status, result.status);
+    reasons.push(...result.reasons.map((r) => `Question ${c.ordinal} (${engineLabel(c.engine)}) Outcome Card: ${r}`));
   }
 
   for (const s of input.structural) {

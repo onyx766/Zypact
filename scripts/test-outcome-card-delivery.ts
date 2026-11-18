@@ -345,6 +345,30 @@ async function main(): Promise<void> {
   check("delivered: neither rebuild nor send is offered",
     !deliveredHtml.includes("Rebuild card") && !deliveredHtml.includes("Send to customer"));
 
+  /* ═══════════ D-062: a pilot member (§3.6) ═══════════ */
+  console.log("\n[D-062] a pilot member's card lives in the pilot report");
+  {
+    const memberTables = {
+      interventions: [{ id: IV, project_id: PROJECT, protocol_id: BASELINE, status: "implemented", hypothesis: "h", expected_mechanism: "m", action_type: "page_created", action_target: "t", owner: "o", supporting_evidence: ["a"], created_at: "x", updated_at: "x" }],
+      pilot_retest_members: [{ intervention_id: IV, pilot_id: "p" }],
+    };
+    const { client, names } = fakeClient(memberTables, () => ({ data: null, error: null }));
+    const gen = await generateOutcomeCard(client, IV);
+    const sent = await sendReviewedOutcomeCard(client, IV, { expectedArtifactId: ARTIFACT, expectedRevision: REVISION, acknowledgeReview: true }, CONFIG);
+    check("generating a member's card answers 409 pilot_member", !gen.ok && gen.failure.error === "pilot_member");
+    check("sending a member's card answers 409 pilot_member, with no claim and no email", !sent.ok && sent.failure.error === "pilot_member" && names().length === 0);
+    const { findDeliverableInterventions, processOutcomeCard } = await import("@/lib/reports/deliver-outcome-card");
+    const processed = await processOutcomeCard(IV, { client, autoSendEnabled: true, deliveryConfig: CONFIG });
+    check("the worker's build returns intervention_not_ready for a member, saving and sending nothing",
+      processed.outcome === "intervention_not_ready" && names().length === 0);
+    const { client: c2 } = fakeClient({
+      ...memberTables,
+      protocols: [{ id: "r", baseline_protocol_id: BASELINE, status: "completed", project_id: PROJECT }],
+      protocol_execution_jobs: [{ protocol_id: "r", status: "succeeded" }],
+    }, () => ({ data: null, error: null }));
+    check("delivery never finds a member", (await findDeliverableInterventions(c2)).length === 0);
+  }
+
   console.log(`\n${passed}/${passed + failed} checks passed.${failed ? ` ${failed} FAILED.` : ""}\n`);
   if (failed > 0) process.exit(1);
 }

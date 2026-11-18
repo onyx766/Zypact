@@ -24,6 +24,12 @@ import {
   type EligibilityPresentation,
   type MappedRpcFailure,
 } from "@/lib/interventions/rpc-errors";
+import {
+  PILOT_BASELINE_FAILURE,
+  PILOT_MEMBER_FAILURE,
+  pilotMemberInterventionIds,
+  pilotSlotProtocolIds,
+} from "@/lib/interventions/pilot-exclusions";
 import { mapInterventionRow, type Intervention } from "@/lib/interventions/types";
 import type { ConfirmInput, RegisterInput } from "@/lib/interventions/validate";
 
@@ -87,6 +93,12 @@ export async function registerIntervention(
   // would then compare against the first retest as though it were the
   // baseline. Nothing in the canonical V1 scope describes chained retests,
   // so this refuses them. The database does not (yet) enforce it.
+  // D-062 — a pilot question's baseline is registered only as part of a
+  // change on its pilot page (20261109190000 refuses it here anyway).
+  if ((await pilotSlotProtocolIds(client, [input.protocolId])).has(input.protocolId)) {
+    return { ok: false, failure: PILOT_BASELINE_FAILURE };
+  }
+
   if (p.baseline_protocol_id !== null && p.baseline_protocol_id !== undefined) {
     return {
       ok: false,
@@ -206,6 +218,17 @@ async function transition(
   const current = await readIntervention(client, id);
   if (!current) return { ok: false, failure: NOT_FOUND };
 
+  // D-062 — a member of a pilot's registered change is managed on its pilot
+  // page. A non-member on a pilot baseline (a recovery row, 20261109190000
+  // §2.8) may only be rejected or abandoned.
+  if ((await pilotMemberInterventionIds(client, [id])).has(id)) return { ok: false, failure: PILOT_MEMBER_FAILURE };
+  if (
+    t.rpc !== "reject_intervention" && t.rpc !== "abandon_intervention" &&
+    (await pilotSlotProtocolIds(client, [current.protocolId])).has(current.protocolId)
+  ) {
+    return { ok: false, failure: PILOT_MEMBER_FAILURE };
+  }
+
   const { data, error } = await client.rpc(t.rpc, argsFor(t, id, current.projectId, actor));
   if (error) return { ok: false, failure: mapRpcError(error, onUnmapped) };
 
@@ -294,7 +317,10 @@ export async function listInterventions(
 
   const { data, error } = await query;
   if (error) throw error;
-  const interventions = (data ?? []).map((r) => mapInterventionRow(r as Record<string, unknown>));
+  const all = (data ?? []).map((r) => mapInterventionRow(r as Record<string, unknown>));
+  // D-062 — a pilot question's interventions are listed on its pilot page only.
+  const members = await pilotMemberInterventionIds(client, all.map((i) => i.id));
+  const interventions = all.filter((i) => !members.has(i.id));
 
   const projectIds = [...new Set(interventions.map((i) => i.projectId))];
   const projects = new Map<string, { companyName: string | null; domain: string | null }>();

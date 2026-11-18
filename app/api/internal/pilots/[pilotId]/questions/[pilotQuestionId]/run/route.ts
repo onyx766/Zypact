@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 
 import { requireFounderForRoute } from "@/lib/auth/founder";
 import { PILOT_JOB_ABANDONED_TEXT, pilotEngineNotOnQuestionText, pilotRunStartedText } from "@/lib/pilots/copy";
-import { pilotChatGptEnabled, pilotEngineFromBody } from "@/lib/pilots/engines";
+import { pilotChatGptEnabled, pilotEngineFromBody, pilotPhaseFromBody, pilotRetestEnabled } from "@/lib/pilots/engines";
+import { PILOT_RETEST_NOT_ENABLED, RETEST_JOB_ABANDONED_TEXT, RETEST_RUN_FAILED_TEXT, RETEST_SLOT_MISSING_TEXT } from "@/lib/pilots/retest-copy";
 import { pilotIsOver, pilotNotStarted, resolvePilotQuestionTarget } from "@/lib/pilots/reads";
 import { todayUtc, UUID_PATTERN } from "@/lib/pilots/validate";
 import { getReportServiceClient } from "@/lib/reports/service-client";
@@ -28,6 +29,13 @@ const MAX_BODY_BYTES = 1_024;
  * closed set is refused, and a ChatGPT Run is refused unless the web host's
  * gate (ZYPACT_PILOT_CHATGPT_ENABLED) is exactly "true", before anything is
  * read or started.
+ *
+ * D-062 — the body may name the phase (`{ "phase": "retest" }`, absent: the
+ * baseline). A retest Run is refused unless the web host's retest gate
+ * (ZYPACT_PILOT_RETEST_ENABLED) is exactly "true", before anything is read
+ * or started; it then names that question's retest job on that engine, and
+ * goes through the same paid-execution gate, run request, claim, admission
+ * and reservation as any Run.
  */
 export async function POST(
   request: Request,
@@ -59,8 +67,17 @@ export async function POST(
     return NextResponse.json({ ok: false, error: choice.error }, { status: choice.status });
   }
   const engine = choice.engine;
+  const phaseChoice = pilotPhaseFromBody(body, {
+    retestEnabled: pilotRetestEnabled(),
+    gated: true,
+    notEnabledText: PILOT_RETEST_NOT_ENABLED,
+  });
+  if (!phaseChoice.ok) {
+    return NextResponse.json({ ok: false, error: phaseChoice.error }, { status: phaseChoice.status });
+  }
+  const phase = phaseChoice.phase;
 
-  const target = await resolvePilotQuestionTarget(getReportServiceClient(), pilotId, pilotQuestionId, engine);
+  const target = await resolvePilotQuestionTarget(getReportServiceClient(), pilotId, pilotQuestionId, engine, phase);
   if (!target) {
     return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
   }
@@ -86,9 +103,12 @@ export async function POST(
     );
   }
 
-  // D-061 — the question has no measurement on the engine asked for.
+  // D-061 — the question has no measurement on the engine asked for (D-062: or no retest).
   if (target.protocolId === null) {
-    return NextResponse.json({ ok: false, error: pilotEngineNotOnQuestionText(engine) }, { status: 409 });
+    return NextResponse.json(
+      { ok: false, error: phase === "retest" ? RETEST_SLOT_MISSING_TEXT : pilotEngineNotOnQuestionText(engine) },
+      { status: 409 }
+    );
   }
 
   const job = target.job;
@@ -119,14 +139,19 @@ export async function POST(
   // retried from the pilot page, where the cause is shown; one that cannot
   // be retried, or was abandoned, is retired there (D-054).
   if (job.status === "abandoned_exhausted") {
-    return NextResponse.json({ ok: false, error: PILOT_JOB_ABANDONED_TEXT }, { status: 409 });
+    return NextResponse.json(
+      { ok: false, error: phase === "retest" ? RETEST_JOB_ABANDONED_TEXT : PILOT_JOB_ABANDONED_TEXT },
+      { status: 409 }
+    );
   }
   if (job.status === "failed") {
     return NextResponse.json(
       {
         ok: false,
         error:
-          "This measurement stopped before it finished. Retry it from the pilot page, or retire the question there if it cannot be retried.",
+          phase === "retest"
+            ? RETEST_RUN_FAILED_TEXT
+            : "This measurement stopped before it finished. Retry it from the pilot page, or retire the question there if it cannot be retried.",
       },
       { status: 409 }
     );
@@ -155,6 +180,7 @@ export async function POST(
       pilotId,
       pilotQuestionId,
       engine,
+      phase,
       jobId: job.id,
       ok: start.ok,
       code: start.ok ? null : start.code,
@@ -165,7 +191,10 @@ export async function POST(
   if (!start.ok) {
     // The shared start path's words for an abandoned job name a request;
     // a pilot question has none, so it is told to retire the question.
-    const error = start.refusal === "JOB_ATTEMPTS_EXHAUSTED" ? PILOT_JOB_ABANDONED_TEXT : start.detail;
+    const error =
+      start.refusal === "JOB_ATTEMPTS_EXHAUSTED"
+        ? phase === "retest" ? RETEST_JOB_ABANDONED_TEXT : PILOT_JOB_ABANDONED_TEXT
+        : start.detail;
     return NextResponse.json(
       { ok: false, error },
       { status: startFailureHttpStatus(start.code) }

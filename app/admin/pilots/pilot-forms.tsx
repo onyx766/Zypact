@@ -326,6 +326,12 @@ export interface QuestionControlState {
   runCap: number | null;
   spendCapUsd: number | null;
   pilotOpen: boolean;
+  /** D-062 — the slot's phase: a retest names `phase: "retest"` in its Run and Retry bodies. Absent: the baseline. */
+  phase?: "baseline" | "retest";
+  /** D-062 — added to the Run confirmation (a retest's own words). */
+  confirmAddition?: string;
+  /** D-062 — a retest that stopped before any answer is queued again, not retried: no Retry. */
+  noRetry?: boolean;
 }
 
 /** Run for a queued (or lapsed) measurement; Retry for one that stopped at the provider. One engine's. */
@@ -335,15 +341,17 @@ export function QuestionControls(state: QuestionControlState) {
   const retryKey = useMemo(newKey, []);
 
   const runnable = state.pilotOpen && (state.jobStatus === "queued" || state.stale);
-  const retryable = state.pilotOpen && state.jobStatus === "failed";
+  const retryable = state.pilotOpen && state.jobStatus === "failed" && !state.noRetry;
 
   async function run() {
-    if (!window.confirm(pilotRunConfirmationText(state))) return;
+    const confirmText = pilotRunConfirmationText(state) + (state.confirmAddition ? `\n\n${state.confirmAddition}` : "");
+    if (!window.confirm(confirmText)) return;
     setBusy(true);
     setMessage(null);
     try {
       const { payload } = await post(`/api/internal/pilots/${state.pilotId}/questions/${state.pilotQuestionId}/run`, {
         engine: state.engine,
+        ...(state.phase === "retest" ? { phase: "retest" } : {}),
       });
       setMessage(payload?.detail ?? payload?.error ?? "No answer from the server.");
     } catch {
@@ -363,6 +371,7 @@ export function QuestionControls(state: QuestionControlState) {
         note,
         idempotencyKey: retryKey,
         engine: state.engine,
+        ...(state.phase === "retest" ? { phase: "retest" } : {}),
       });
       setMessage(payload?.detail ?? payload?.error ?? "No answer from the server.");
     } catch {
@@ -390,12 +399,12 @@ export function QuestionControls(state: QuestionControlState) {
   );
 }
 
-export function ClosePilotButton({ pilotId }: { pilotId: string }) {
+export function ClosePilotButton({ pilotId, warnings = [] }: { pilotId: string; /** D-062 (M19) — said before closing. */ warnings?: string[] }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   async function close() {
-    const reason = window.prompt(CLOSE_PILOT_PROMPT);
+    const reason = window.prompt([CLOSE_PILOT_PROMPT, ...warnings].join("\n\n"));
     if (!reason) return;
     setBusy(true);
     setMessage(null);
@@ -562,10 +571,13 @@ export function ResolveReviewControls({
   pilotId,
   pilotQuestionId,
   engine,
+  phase = "baseline",
 }: {
   pilotId: string;
   pilotQuestionId: string;
   engine: PilotQuestionEngine;
+  /** D-062 — a retest held for review is resolved the same way, with `phase: "retest"`. */
+  phase?: "baseline" | "retest";
 }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -580,6 +592,7 @@ export function ResolveReviewControls({
         engine,
         resolution,
         note,
+        ...(phase === "retest" ? { phase: "retest" } : {}),
       });
       if (ok) {
         window.location.reload();

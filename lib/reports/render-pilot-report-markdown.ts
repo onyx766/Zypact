@@ -3,6 +3,7 @@
  * presentation model (pilot-report-presentation.ts), the same one the client
  * page renders, so the two say the same thing and add no words of their own.
  */
+import { NON_CAUSALITY_FOOTER } from "@/lib/reports/outcome-card-types";
 import {
   presentPilotReport,
   type PilotPresentationSection,
@@ -87,6 +88,51 @@ export function renderPilotReportMarkdown(payload: PilotReportPayload): string {
     }
     for (const n of v.actions.notes) {
       out.push(n);
+      out.push("");
+    }
+  }
+
+  // D-062 — the retest section: each change, its log, its members, its cards.
+  if (v.retests) {
+    out.push(`## ${v.retests.heading}`);
+    out.push("");
+    for (const p of v.retests.intro) {
+      out.push(p);
+      out.push("");
+    }
+    for (const g of v.retests.groups) {
+      out.push(`### ${cell(g.heading)}`);
+      out.push("");
+      for (const f of g.fields) out.push(`- **${f.label}:** ${f.text.replace(/\s+/g, " ").trim()}`);
+      out.push("");
+      for (const line of g.lines) out.push(`- ${line}`);
+      out.push("");
+      out.push(`${g.notesHeading}:`);
+      out.push("");
+      for (const n of g.notes) out.push(`- ${n}`);
+      out.push("");
+      out.push(`| ${g.members.columns.map(cell).join(" | ")} |`);
+      out.push(`|${g.members.columns.map(() => "---").join("|")}|`);
+      for (const row of g.members.rows) out.push(`| ${row.map(cell).join(" | ")} |`);
+      out.push("");
+      for (const c of g.cards) {
+        out.push(`#### ${cell(c.heading)}`);
+        out.push("");
+        for (const b of c.blocks) {
+          if (b.title) {
+            out.push(`${b.title}:`);
+            out.push("");
+          }
+          for (const line of b.lines) out.push(`- ${line}`);
+          out.push("");
+        }
+        // The footer from the constant, never from the payload.
+        out.push(`_${NON_CAUSALITY_FOOTER}_`);
+        out.push("");
+      }
+    }
+    for (const w of v.retests.withdrawn) {
+      out.push(w);
       out.push("");
     }
   }

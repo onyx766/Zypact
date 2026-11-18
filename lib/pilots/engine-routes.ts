@@ -38,7 +38,8 @@ import {
   retireQuestionRefusalText,
   type RetireEngineState,
 } from "@/lib/pilots/copy";
-import { pilotChatGptEnabled, pilotEngineFromBody } from "@/lib/pilots/engines";
+import { pilotChatGptEnabled, pilotEngineFromBody, pilotPhaseFromBody, pilotRetestEnabled } from "@/lib/pilots/engines";
+import { PILOT_RETEST_NOT_ENABLED, RETEST_SLOT_MISSING_TEXT } from "@/lib/pilots/retest-copy";
 import { resolvePilotQuestionTarget } from "@/lib/pilots/reads";
 import { UUID_PATTERN } from "@/lib/pilots/validate";
 import { resolveJobReview, type JobReviewResolution } from "@/lib/reports/job-review";
@@ -237,6 +238,9 @@ export interface ResolvePilotReviewDeps {
  * Not behind the ChatGPT gate: a resolution spends nothing and starts
  * nothing, and a ChatGPT measurement held for review must stay resolvable
  * after the gate is turned off (forward recovery, 20261109180000).
+ *
+ * D-062 — `phase: "retest"` resolves the question's retest on that engine.
+ * Not behind the retest gate either, for the same reason.
  */
 export async function handleResolvePilotQuestionReview(
   request: Request,
@@ -267,6 +271,13 @@ export async function handleResolvePilotQuestionReview(
   });
   if (!choice.ok) return NextResponse.json({ ok: false, error: choice.error }, { status: choice.status });
   const engine = choice.engine;
+  const phaseChoice = pilotPhaseFromBody(parsed.body, {
+    retestEnabled: pilotRetestEnabled(deps.env),
+    gated: false,
+    notEnabledText: PILOT_RETEST_NOT_ENABLED,
+  });
+  if (!phaseChoice.ok) return NextResponse.json({ ok: false, error: phaseChoice.error }, { status: phaseChoice.status });
+  const phase = phaseChoice.phase;
 
   const { resolution, note } = (parsed.body ?? {}) as Record<string, unknown>;
   if (typeof resolution !== "string" || !PILOT_REVIEW_RESOLUTIONS.includes(resolution as JobReviewResolution)) {
@@ -280,10 +291,13 @@ export async function handleResolvePilotQuestionReview(
   }
 
   const client = deps.client();
-  const target = await resolvePilotQuestionTarget(client, pilotId, pilotQuestionId, engine);
+  const target = await resolvePilotQuestionTarget(client, pilotId, pilotQuestionId, engine, phase);
   if (!target) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
   if (target.protocolId === null || target.job === null) {
-    return NextResponse.json({ ok: false, error: pilotEngineNotOnQuestionText(engine) }, { status: 409 });
+    return NextResponse.json(
+      { ok: false, error: phase === "retest" ? RETEST_SLOT_MISSING_TEXT : pilotEngineNotOnQuestionText(engine) },
+      { status: 409 }
+    );
   }
   if (target.job.status !== "needs_review") {
     return NextResponse.json({ ok: false, error: PILOT_REVIEW_NOT_HELD_TEXT }, { status: 409 });
@@ -302,6 +316,7 @@ export async function handleResolvePilotQuestionReview(
     pilotId,
     pilotQuestionId,
     engine,
+    phase,
     jobId: target.job.id,
     resolution,
     ok: result.ok,

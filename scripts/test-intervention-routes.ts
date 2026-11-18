@@ -316,6 +316,30 @@ async function main(): Promise<void> {
   check("with the kill switch unset the route answers 503", res.status === 503);
   check("and never reads the request body", !bodyRead);
 
+  /* ═══════════ D-062: pilot baselines and members (§3.6) ═══════════ */
+  console.log("\n[D-062] pilot baselines and members");
+  {
+    const { client, rpcCalls } = fakeClient({
+      tables: {
+        protocols: [{ id: BASELINE, project_id: PROJECT, status: "completed", baseline_protocol_id: null }],
+        pilot_question_protocols: [{ protocol_id: BASELINE }],
+        interventions: [ivRow("approved")],
+        pilot_retest_members: [{ intervention_id: IV, pilot_id: "p" }],
+      },
+    });
+    const parsed = parseRegisterBody(validRegister);
+    const reg = parsed.ok ? await registerIntervention(client, parsed.value) : null;
+    check("registering on a pilot question's baseline answers 409 pilot_baseline before any call",
+      reg !== null && !reg.ok && reg.failure.error === "pilot_baseline" && rpcCalls.length === 0);
+    const approve = await approveIntervention(client, IV, ACTOR);
+    const abandon = await abandonIntervention(client, IV, ACTOR, "no longer needed here");
+    check("every transition of a member answers 409 pilot_member, 'Managed on its pilot page', and calls nothing",
+      !approve.ok && approve.failure.error === "pilot_member" && !abandon.ok && abandon.failure.error === "pilot_member" &&
+      /Managed on its pilot page/.test(approve.failure.message) && rpcCalls.length === 0);
+    const listed = await listInterventions(client);
+    check("the list leaves a member out", listed.length === 0);
+  }
+
   console.log(`\n${passed}/${passed + failed} checks passed.${failed ? ` ${failed} FAILED.` : ""}\n`);
   if (failed > 0) process.exit(1);
 }

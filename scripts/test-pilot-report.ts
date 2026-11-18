@@ -53,6 +53,10 @@ import { readFileSync } from "node:fs";
 (require("node:module") as { _extensions: Record<string, unknown> })._extensions[".css"] = () => undefined;
 
 import { FORBIDDEN_W1_PHRASES } from "@/lib/site-diagnostic/copy";
+import { ACTION_TYPES } from "@/lib/interventions/types";
+import { RETEST_MEMBER_STATES, RETEST_NOTE_KINDS } from "@/lib/pilots/retest-rules";
+import { NON_CAUSALITY_FOOTER } from "@/lib/reports/outcome-card-types";
+import { OUTCOME_REASON_WORDS } from "@/lib/reports/pilot-retest-copy";
 import { buildProtocolReport } from "@/lib/reports/build-protocol-report";
 import {
   buildPilotReport,
@@ -291,6 +295,11 @@ const PURE = [
   "lib/reports/pilot-report-types.ts",
   "lib/reports/pilot-report-copy.ts",
   "lib/reports/pilot-report-presentation.ts",
+  // D-062 — the retest's pure modules.
+  "lib/pilots/retest-rules.ts",
+  "lib/pilots/retest-copy.ts",
+  "lib/reports/pilot-retest-copy.ts",
+  "lib/reports/build-pilot-retests.ts",
 ];
 const importsOf = (file: string) => [...readFileSync(file, "utf8").matchAll(/^import[\s\S]*?from\s+"([^"]+)";/gm)].map((m) => m[1]);
 const banned = /supabase|openai|perplexity|probes|protocol-worker|node:http|node:https|undici|resend|read-protocol-evidence|read-pilot-evidence|protocol-integrity-signals"$/;
@@ -1091,7 +1100,8 @@ const twoEngineMds = [tMd, qMd, renderPilotReportMarkdown(stoppedGpt.payload), r
   renderPilotReportMarkdown(retiredMixed.payload), renderPilotReportMarkdown(timeoutAt3.payload), renderPilotReportMarkdown(allRetired.payload)];
 const pages = [renderPage(p), renderPage(withRetired.payload), renderPage(unfinished.payload), renderPage(p, { preview: true }), renderReplacedNotice(), ...twoEnginePages];
 // The two sentences METHODOLOGY §4 and §7 require verbatim are left out of the phrase scan ("not guaranteed" is a required negation).
-const MANDATED = [PERPLEXITY_SURFACE_LIMITATION, DEPENDENCE_LIMITATION].map((t) => t.toLowerCase());
+// D-062 — and the Outcome Card's footer (D-006), which says "caused" only to deny it.
+const MANDATED = [PERPLEXITY_SURFACE_LIMITATION, DEPENDENCE_LIMITATION, NON_CAUSALITY_FOOTER].map((t) => t.toLowerCase());
 const allText = MANDATED.reduce(
   (t, m) => t.split(m).join(" "),
   [md, renderPilotReportMarkdown(withRetired.payload), renderPilotReportMarkdown(unfinished.payload), ...twoEngineMds, ...pages, ...copyTexts, ...PILOT_LIMITATIONS, ...p.methodNotes, PILOT_CAUSAL_LIMIT, readFileSync("components/report/pilot-report-view.tsx", "utf8")]
@@ -1103,7 +1113,13 @@ check("W1 no forbidden claim phrase in the Markdown, the copy, the method notes 
   [...FORBIDDEN_W1_PHRASES, ...SECTION_19].filter((ph) => allText.includes(ph)).join(","));
 check("W2 no score, overall figure or combined-engine wording", !/\bscore\b|\boverall\b|combined across engines|all engines combined/.test(allText.replace(/never a score|it is not a score/g, "")));
 const STORED_CODES = ["customer_supplied", "founder_supplied", "observed_consistently_in_sample", "not_observed_consistently_in_sample", "mixed_in_sample", "insufficient_evidence", "perplexity_sonar", "openai_chatgpt", "integrity_passed", "needs_review", "abandoned_exhausted", "not_finished", "review_platform", "ended_after_review", "excluded_and_completed"];
-const STORED_CODES_ALL = [...STORED_CODES, "live_perplexity", "simulated", "in_progress", "excluded_no_result", "timed_out", "perplexity-sonar"];
+const STORED_CODES_ALL = [
+  ...STORED_CODES, "live_perplexity", "simulated", "in_progress", "excluded_no_result", "timed_out", "perplexity-sonar",
+  // D-062 — the four statuses, the ten member states, the eight note kinds, the six underscored action types and the
+  // comparison's reason prefixes. Plain-word codes (other, the group states) are covered in test:pilot-retest (W4).
+  "increase_observed", "decrease_observed", "no_clear_change", ...RETEST_MEMBER_STATES, ...RETEST_NOTE_KINDS,
+  ...ACTION_TYPES.filter((t) => t.includes("_")), ...Object.keys(OUTCOME_REASON_WORDS),
+];
 const renderedAll = [md, renderPilotReportMarkdown(withRetired.payload), ...twoEngineMds, ...pages].join("\n");
 check("W3 no stored code reaches the Markdown or the rendered page (customer view and preview)",
   STORED_CODES_ALL.every((c) => !renderedAll.includes(c)), STORED_CODES_ALL.filter((c) => renderedAll.includes(c)).join(","));

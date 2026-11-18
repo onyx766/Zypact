@@ -2478,3 +2478,38 @@ The last three rows ran before the review fixes. The fixes changed only the migr
 - **Founder decision, 2026-11-18** (relayed: "I agree."): this plan.
 - **Next:** run the adjusted check again at the new R; then step 2 needs its own approval.
 - **Note for PR C:** its status section becomes §39.
+
+## 40. Production record, 2026-11-18, and the ChatGPT switch (Part C, step C2)
+
+Recorded from the operator's checks on 2026-11-18. Each step had the founder's written approval, relayed by the engineer. Production identifiers are not recorded here.
+
+- **Step 1** (read-only preflight): PASS at `main` `e2acca3`, with P6.4 informational (one attempt open since 2026-09-23).
+- **Steps 2–5a:** applied through the named-file procedure (`--single-transaction`, `target_sysid`, `expected_prev`). The ledger tail was `20261109170000` with 90 rows, the unscoped claims were revoked, every pilot table had RLS on, and no job was claimed or running.
+- **Close-out before step 5b:** the one open attempt was closed with one call of 0047's `reconcile_attempt`, status `excluded`. It was a retest attempt reserved on 2026-09-23 under a job left `abandoned_exhausted`. Its 0.04 USD cost was kept and nothing was deleted. The statement had first been tested on a disposable copy, where it refused when no attempt or more than one was open, and refused a second run.
+- **Step 5b:** `20261109180000` applied. The tail is `20261109180000`, with 91 rows, no open attempt and no running job.
+- **Step 6:** the worker was redeployed from `e2acca3` (Fly release v7) on the same machine, which stayed `stopped`. Check (c) observed 7 slots, a 2,400 s runtime, a 330 s lease, a 240,000 ms readiness window and a 290,000 ms ChatGPT timeout. Check (d) observed `WORKER_CHATGPT_ENABLED` `false`, with no same-named secret.
+  - The `--digest` provenance comparison waits for the first authorised start.
+  - A first deploy attempt from an account Fly had flagged was refused by Fly's builder, and changed nothing.
+- **Step 7:** the web app is deployed from `e2acca3`.
+  - `ZYPACT_ACCOUNTS_ENABLED` had been set to `true` on the web host, with `ZYPACT_SIGNUP_MODE` `pilot`, contrary to the recorded state. It was removed with the founder's agreement before this deploy, and `/account` now answers 404.
+  - `account_sessions` held 2 rows.
+  - `/admin/pilots` loads, and ChatGPT shows "Not connected".
+- **Step 8:** set on the web host's Production environment:
+  - paid execution `true`, with a daily ceiling of `10`;
+  - `SNAPSHOT_APPROVAL_ENABLED` and `INTERVENTION_ADMIN_ENABLED` both `true`;
+  - the three Fly worker-control names. The token is a deploy token scoped to the worker application, expiring 2027-11-18.
+
+  The legacy pipeline, auto-delivery and ChatGPT gate names are absent.
+- **Step 9:** the worker secrets for paid execution `true` and a daily ceiling of `10` were set (Fly release v8). The machine stayed `stopped` with check (c) and (d) values unchanged.
+- **Step 10 is skipped by the founder's decision.** Production shows that the self-test retest already ran. Its 2026-10-09 retest succeeded, and its Outcome Card passed integrity, read `no_clear_change` and was delivered. A second intervention, implemented 2026-10-10, was retested on 2026-10-25 and also read `no_clear_change`, with its card undelivered. `SELF_TEST_PERPLEXITY_CONTENT_CHANGE.md` still reads "window OPEN" and is out of date. All three retests ran on the worker deployed before step 6.
+- **Not yet run in production:** any job on the step 6 worker; the pilot console end to end; ChatGPT. There is no pilot customer yet. The founder asked for an end-to-end practice pilot on Zypact's own site first, covering both engines, a retest and the Outcome Card.
+- **Part C, step C2 (this pull request):**
+  - `fly.worker.production.toml` sets `WORKER_CHATGPT_ENABLED = "true"`. Staging and the template stay `"false"`.
+  - The hosting contract now states the switch per deployable file, as it states the execution mode, so a flip either way breaks the contract instead of passing as a toml edit.
+  - The founder approved turning ChatGPT on (relayed, 2026-11-18).
+  - Order:
+    1. C1, the measurement key as a worker secret;
+    2. merge this pull request (R′) and redeploy the worker from it under WORKER_DEPLOY_RUNBOOK §6 and §6a, with check (d) expecting `true`;
+    3. C3, the web gate;
+    4. C4 keeps the 10 USD ceiling for the first supervised ChatGPT day.
+  - R′ carries no unapplied migration below `20261110120000`. PR #133's `20261109190000` must not merge before this deploy, or the R rule would require step 5c first.

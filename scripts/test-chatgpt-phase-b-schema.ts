@@ -334,9 +334,10 @@ async function main(): Promise<void> {
   check("S45 the preflight lists the version in both P2.4 lists and the three new functions as absent",
     (preflight.match(/'20261109180000'/g) ?? []).length === 2
       && ["add_pilot_question_engine", "protocol_worker_capabilities", "pilot_question_protocols_consistency"].every((f) => preflight.includes(`('${f}')`)));
-  check("S46 the preflight pins persist_probe_result_for_job's production state by md5 (it is redefined here)",
+  check("S46 the preflight pins persist_probe_result_for_job's production state by md5, carriage returns removed, at d812b7f4c606e03ea171113f9fbc9762 (it is redefined here)",
     /to_regprocedure\('public\.persist_probe_result_for_job\(uuid,uuid,uuid,jsonb\)'\)/.test(preflight)
-      && /'persist_probe_result_for_job is exactly as 0054 left it \(md5 of its definition\)',\s*\(select coalesce\(md5\(pg_get_functiondef\(oid\)\), 'missing'\) from persist\) = '[0-9a-f]{32}'/.test(preflight));
+      // Since #132 (PF-30) the preflight hashes the definition with carriage returns removed; the pin is unchanged.
+      && /'persist_probe_result_for_job is exactly as 0054 left it \(md5 of its definition\)',\s*\(select coalesce\(md5\(replace\(pg_get_functiondef\(oid\), chr\(13\), ''\)\), 'missing'\) from persist\) = 'd812b7f4c606e03ea171113f9fbc9762'/.test(preflight));
   check("S47 the DB runner runs the phase B database test, and the command is registered",
     read("scripts/run-p2-workspace-db-local.sh").includes("npx tsx scripts/test-chatgpt-phase-b-db.ts")
       && (JSON.parse(read("package.json")) as { scripts: Record<string, string> }).scripts["test:chatgpt-phase-b-schema"] === "tsx scripts/test-chatgpt-phase-b-schema.ts");

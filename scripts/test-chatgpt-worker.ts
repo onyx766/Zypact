@@ -625,9 +625,13 @@ async function main(): Promise<void> {
   check("the entry point builds the engine only with the switch on, under the ChatGPT probe mode",
     /if \(cfg\.chatgpt\.enabled\) \{/.test(entry) && /probeMode: "live_openai_chatgpt"/.test(entry) &&
     /\.\.\.\(chatgpt \? \{ chatgpt \} : \{\}\)/.test(entry));
-  for (const f of ["fly.worker.toml.template", "fly.worker.staging.toml", "fly.worker.production.toml"]) {
+  for (const f of ["fly.worker.toml.template", "fly.worker.staging.toml"]) {
     check(`${f} states the switch off`, read(f).includes('WORKER_CHATGPT_ENABLED = "false"'));
   }
+  // PILOT_PRODUCTION_PLAN Part C, step C2: production alone turns it on.
+  check("fly.worker.production.toml states the switch on (Part C, C2), exactly once",
+    read("fly.worker.production.toml").includes('WORKER_CHATGPT_ENABLED = "true"') &&
+    (read("fly.worker.production.toml").match(/^\s*WORKER_CHATGPT_ENABLED\s*=/gm) ?? []).length === 1);
   check("the benchmark imports the flex rule from lib", /from "@\/lib\/probes\/openai-flex"/.test(read("scripts/lib/chatgpt-benchmark.ts")) &&
     !/export function isFlexResourceUnavailable/.test(read("scripts/lib/chatgpt-benchmark.ts")));
 

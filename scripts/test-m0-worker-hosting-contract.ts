@@ -486,23 +486,29 @@ const GATE_FIXTURE: Readonly<Record<string, string>> = {
   const DEPLOYABLE = [
     {
       env: "staging", file: "fly.worker.staging.toml",
-      app: "zypact-protocol-worker-staging", mode: "disabled",
+      app: "zypact-protocol-worker-staging", mode: "disabled", chatgpt: "false",
     },
     {
       env: "production", file: "fly.worker.production.toml",
       app: "zypact-protocol-worker", mode: "live", // D-034
+      // PILOT_PRODUCTION_PLAN Part C, step C2: the ChatGPT switch is the
+      // second value a deployable config may differ from the template by.
+      // Like `mode`, it is stated here, so a flip either way breaks this
+      // contract instead of passing as a quiet toml edit.
+      chatgpt: "true",
     },
   ] as const;
 
   const identities = new Set<string>();
 
   const MODE_LINE = /^WORKER_EXECUTION_MODE\s*=/;
-  const templateBounds = templateLines.filter((l) => !MODE_LINE.test(l));
+  const CHATGPT_LINE = /^WORKER_CHATGPT_ENABLED\s*=/;
+  const templateBounds = templateLines.filter((l) => !MODE_LINE.test(l) && !CHATGPT_LINE.test(l));
   assert("the template itself remains execution-disabled",
     templateLines.filter((l) => l === 'WORKER_EXECUTION_MODE = "disabled"').length === 1,
     templateLines.filter((l) => MODE_LINE.test(l)).join(" | ") || "absent");
 
-  for (const { env, file, app, mode } of DEPLOYABLE) {
+  for (const { env, file, app, mode, chatgpt } of DEPLOYABLE) {
     const src = read(file);
     const lines = code(src, "#");
 
@@ -529,11 +535,16 @@ const GATE_FIXTURE: Readonly<Record<string, string>> = {
     // that quietly widened a runtime, a slot count or a retry ceiling would
     // be a worker no rehearsal describes.
     const bounds = lines.filter(
-      (l) => !/^app\s*=/.test(l) && !/^primary_region\s*=/.test(l) && !MODE_LINE.test(l),
+      (l) => !/^app\s*=/.test(l) && !/^primary_region\s*=/.test(l) && !MODE_LINE.test(l) && !CHATGPT_LINE.test(l),
     );
-    assert(`${env} differs from the inert template only by app, region and execution mode`,
+    assert(`${env} differs from the inert template only by app, region, execution mode and the ChatGPT switch`,
       bounds.join("\n") === templateBounds.join("\n"),
       `${bounds.length} ${env} bound lines vs ${templateBounds.length} template bound lines`);
+
+    assert(`${env} declares the ChatGPT switch exactly once, and it is "${chatgpt}"`,
+      lines.filter((l) => CHATGPT_LINE.test(l)).length === 1
+        && lines.includes(`WORKER_CHATGPT_ENABLED = "${chatgpt}"`),
+      lines.filter((l) => CHATGPT_LINE.test(l)).join(" | ") || "absent");
 
     assert(`${env} declares exactly one execution mode, and it is "${mode}"`,
       lines.filter((l) => MODE_LINE.test(l)).length === 1

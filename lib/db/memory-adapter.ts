@@ -9,8 +9,11 @@ import type {
   AddPilotQuestionInput,
   AddPilotQuestionOutcome,
   AddPilotQuestionResult,
+  AddPilotQuestionEngineInput,
+  AddPilotQuestionEngineResult,
   ClosePilotInput,
   ClosePilotOutcome,
+  PilotQuestionEngine,
   RetirePilotQuestionInput,
   RetirePilotQuestionOutcome,
   CreatePilotInput,
@@ -287,15 +290,74 @@ interface MemoryPilotQuestion {
   retireReason: string | null;
 }
 
-/** D-054 — mirrors pilot_question_protocols (20261109140000). */
+/** D-054 — mirrors pilot_question_protocols (20261109140000; engines widened by 20261109180000, D-061). */
 interface MemoryPilotQuestionProtocol {
   id: string;
   pilotQuestionId: string;
   projectId: string;
-  engine: "perplexity_sonar";
+  engine: PilotQuestionEngine;
   phase: "baseline";
   protocolId: string;
 }
+
+/** D-061 — pilot_question_protocols_engine_check (20261109180000). */
+const PILOT_SLOT_ENGINES: ReadonlySet<string> = new Set<PilotQuestionEngine>(["perplexity_sonar", "openai_chatgpt"]);
+
+/** What PostgREST throws for a unique violation: the code and the constraint's name. */
+function uniqueViolation(constraint: string): Error {
+  return Object.assign(new Error(`duplicate key value violates unique constraint "${constraint}"`), { code: "23505" });
+}
+
+/**
+ * D-061 — inserts a pilot slot as Postgres would: the engine and phase
+ * CHECKs, the slot and protocol keys, and the BEFORE INSERT trigger
+ * pilot_question_protocols_consistency (the engine is the protocol's
+ * provider, the protocol is in the pilot's project and measures the pilot
+ * question's version, and a baseline slot's protocol is not a retest).
+ * Throws with the same names the database uses.
+ */
+function insertPilotSlot(store: MemoryStore, slot: MemoryPilotQuestionProtocol): void {
+  const question = store.pilotQuestions.get(slot.pilotQuestionId);
+  if (!question) throw new Error("pilot_slot_question_not_found");
+  const pilotProjectId = store.pilots.get(question.pilotId)?.projectId ?? null;
+  const protocol = store.protocols.get(slot.protocolId);
+  if (!protocol) throw new Error("pilot_slot_protocol_not_found");
+  if (protocol.provider !== slot.engine) throw new Error("pilot_slot_engine_is_not_the_protocol_provider");
+  if (protocol.projectId !== pilotProjectId || slot.projectId !== pilotProjectId) {
+    throw new Error("pilot_slot_protocol_outside_the_pilot_project");
+  }
+  if (protocol.buyerQuestionVersionId !== question.buyerQuestionVersionId) {
+    throw new Error("pilot_slot_protocol_measures_another_question_version");
+  }
+  if (slot.phase === "baseline" && protocol.baselineProtocolId !== null) {
+    throw new Error("pilot_slot_baseline_protocol_is_a_retest");
+  }
+  if (!PILOT_SLOT_ENGINES.has(slot.engine)) {
+    throw new Error("pilot_question_protocols_engine_check violated");
+  }
+  if (slot.phase !== "baseline") throw new Error("pilot_question_protocols_phase_check violated");
+  const slots = [...store.pilotQuestionProtocols.values()];
+  if (slots.some((s) => s.pilotQuestionId === slot.pilotQuestionId && s.engine === slot.engine && s.phase === slot.phase)) {
+    throw uniqueViolation("pilot_question_protocols_slot_key");
+  }
+  if (slots.some((s) => s.protocolId === slot.protocolId)) throw uniqueViolation("pilot_question_protocols_protocol_key");
+  store.pilotQuestionProtocols.set(slot.id, slot);
+}
+
+/**
+ * D-061 — the engine of a protocol's provider, as the expression of
+ * protocols_one_live_baseline_per_engine: every Perplexity provider string
+ * is one engine, any other provider is its own.
+ */
+function protocolEngine(provider: string): string {
+  return provider === "perplexity" || provider === "perplexity_sonar" || provider === "perplexity_agent"
+    ? "perplexity"
+    : provider;
+}
+
+/** probe_runs / probe_results CHECKs: 0003's platforms, and the probe modes 0013 and 20261109180000 (D-061) allow. */
+const PROBE_RUN_PLATFORMS: ReadonlySet<string> = new Set(["perplexity", "chatgpt", "gemini"]);
+const PROBE_MODES: ReadonlySet<string> = new Set<ProbeMode>(["simulated", "live_perplexity", "live_openai_chatgpt"]);
 
 /** D-054 — the SQL's md5(concat_ws(chr(31), ...)) request fingerprint. */
 function pilotFingerprint(parts: string[]): string {
@@ -1374,8 +1436,96 @@ export const memoryAdapter: DbAdapter = {
       phase: "baseline",
       protocolId: protocol.id,
     };
-    store.pilotQuestionProtocols.set(slot.id, slot);
+    insertPilotSlot(store, slot);
     return { outcome: "ADDED", pilotQuestionId: pilotQuestion.id, protocolId: protocol.id, jobId: job.id };
+  },
+
+  /** D-061 — mirrors add_pilot_question_engine, branch for branch. */
+  async addPilotQuestionEngine(input: AddPilotQuestionEngineInput): Promise<AddPilotQuestionEngineResult> {
+    const store = getStore();
+    if (!input.pilotId || !input.pilotQuestionId || !input.engine || !input.addedBy) {
+      throw new Error("invalid_add_pilot_question_engine_args");
+    }
+    if ((input.engine as string) !== "openai_chatgpt") throw new Error("pilot_question_engine_not_supported");
+    const none = { protocolId: null, jobId: null };
+    const pilot = store.pilots.get(input.pilotId);
+    if (!pilot) return { outcome: "PILOT_NOT_FOUND", ...none };
+    const question = store.pilotQuestions.get(input.pilotQuestionId);
+    if (!question || question.pilotId !== pilot.id) return { outcome: "QUESTION_NOT_FOUND", ...none };
+    // A repeated press answers the slot it created, whatever the pilot's state is now.
+    const existing = [...store.pilotQuestionProtocols.values()].find(
+      (s) => s.pilotQuestionId === question.id && s.engine === input.engine && s.phase === "baseline"
+    );
+    const existingJob = existing
+      ? [...store.protocolExecutionJobs.values()].find((j) => j.protocolId === existing.protocolId)
+      : undefined;
+    if (existing && existingJob) return { outcome: "ALREADY_ADDED", protocolId: existing.protocolId, jobId: existingJob.id };
+    if (pilot.status !== "active") return { outcome: "PILOT_CLOSED", ...none };
+    if (currentDateUtc() > pilot.endsOn) return { outcome: "PILOT_ENDED", ...none };
+    if (question.retiredAt !== null) return { outcome: "QUESTION_RETIRED", ...none };
+    const version = store.buyerQuestionVersions.get(question.buyerQuestionVersionId);
+    if (!version || version.projectId !== pilot.projectId || version.approvedAt === null) {
+      return { outcome: "VERSION_NOT_APPROVED", ...none };
+    }
+    if (version.promptHash !== question.promptHash
+      || createHash("sha256").update(version.promptText, "utf8").digest("hex") !== question.promptHash) {
+      return { outcome: "HASH_MISMATCH", ...none };
+    }
+    // As the SQL, one transaction: a refusal raised after the protocol is
+    // written (the liveness rule at approval, the slot trigger) leaves
+    // nothing behind.
+    let createdProtocolId: string | null = null;
+    try {
+      const protocol = await memoryAdapter.createProtocol({
+        projectId: pilot.projectId,
+        buyerQuestionVersionId: version.id,
+        provider: "openai_chatgpt",
+        surface: "answer",
+        modelConfig: {
+          model: "gpt-5.4-2026-03-05",
+          setting_version: "openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05",
+        },
+        plannedBaselineRuns: 5,
+        plannedRetestRuns: 0,
+        paraphrasePlan: [{ text: version.promptText, hash: version.promptHash }],
+        unitOfAnalysis: "buyer_question_version",
+        primaryMetric: "presence_rate",
+        samplePlanningMethod: "fixed_operator_default_pending_pilot_calibration",
+        runCap: 7,
+        spendCapUsd: 4,
+        timeWindowSeconds: 86400,
+        rateLimitPerHour: 10,
+        concurrencyLimit: 1,
+        retryCap: 2,
+      });
+      createdProtocolId = protocol.id;
+      const approval = await memoryAdapter.approveProtocol({
+        protocolId: protocol.id, projectId: pilot.projectId, approvedBy: input.addedBy,
+      });
+      if (approval.outcome !== "APPROVED") throw new Error(`unexpected_protocol_approval_status:${approval.outcome}`);
+      const queued = await memoryAdapter.enqueueProtocolExecutionJob({ protocolId: protocol.id, projectId: pilot.projectId });
+      if (queued.outcome !== "QUEUED" || !queued.job) {
+        throw new Error(`unexpected_protocol_execution_job_enqueue_status:${queued.outcome}`);
+      }
+      insertPilotSlot(store, {
+        id: randomUUID(),
+        pilotQuestionId: question.id,
+        projectId: pilot.projectId,
+        engine: input.engine,
+        phase: "baseline",
+        protocolId: protocol.id,
+      });
+      return { outcome: "ADDED", protocolId: protocol.id, jobId: queued.job.id };
+    } catch (error) {
+      if (createdProtocolId !== null) {
+        for (const job of [...store.protocolExecutionJobs.values()].filter((j) => j.protocolId === createdProtocolId)) {
+          store.protocolExecutionJobs.delete(job.id);
+          store.datasetBatches.delete(job.datasetBatchId);
+        }
+        store.protocols.delete(createdProtocolId);
+      }
+      throw error;
+    }
   },
 
   async closePilot(input: ClosePilotInput): Promise<ClosePilotOutcome> {
@@ -1399,7 +1549,15 @@ export const memoryAdapter: DbAdapter = {
     return "CLOSED";
   },
 
-  /** D-054 — mirrors retire_pilot_question, branch for branch. */
+  /**
+   * D-054 — mirrors retire_pilot_question, branch for branch; D-061 — over
+   * every slot of the question (each engine's baseline) and every retest of
+   * each: refused while any is active; retired once at least one slot's job
+   * stopped for good (abandoned, or failed and not retryable per slot), and
+   * only while no other slot, and no retest of any slot, holds a run that
+   * has not finished (a reserved or in-progress attempt, or a claimed or
+   * running job, lease lapsed or not).
+   */
   async retirePilotQuestion(input: RetirePilotQuestionInput): Promise<RetirePilotQuestionOutcome> {
     const store = getStore();
     const reason = input.reason?.trim() ?? "";
@@ -1412,32 +1570,62 @@ export const memoryAdapter: DbAdapter = {
     if (!question || question.pilotId !== pilot.id) return "QUESTION_NOT_FOUND";
     if (question.retiredAt !== null) return "ALREADY_RETIRED";
     if (pilot.status !== "active") return "PILOT_CLOSED";
-    const slot = [...store.pilotQuestionProtocols.values()].find(
-      (s) => s.pilotQuestionId === question.id && s.engine === "perplexity_sonar" && s.phase === "baseline"
-    );
-    const job = slot ? [...store.protocolExecutionJobs.values()].find((j) => j.protocolId === slot.protocolId) : undefined;
-    if (!slot || !job) return "QUESTION_NOT_STOPPED";
+    const slots = [...store.pilotQuestionProtocols.values()]
+      .filter((s) => s.pilotQuestionId === question.id)
+      .sort((a, b) => a.engine.localeCompare(b.engine));
     const nowMs = Date.now();
-    if (jobsOfSlotProtocol(store, slot.protocolId).some((j) => jobIsActive(store, j, nowMs))) return "QUESTION_JOB_ACTIVE";
-    if (job.status !== "failed" && job.status !== "abandoned_exhausted") return "QUESTION_NOT_STOPPED";
-    if (job.status === "failed" && job.currentAttemptId === null && job.failureReason === "provider_error") {
-      const protocol = store.protocols.get(job.protocolId);
-      const attempts = [...store.protocolAttempts.values()];
-      const consumed = attempts.filter((a) => a.protocolId === job.protocolId && a.status !== "cancelled").length;
-      const sourceOk = attempts.some(
-        (a) => a.jobId === job.id && a.status === "failed" && a.terminalizedAt !== null
-          && a.baselineOrdinal === job.nextBaselineOrdinal
-          && !attempts.some((r) => r.retryOfAttemptId === a.id)
-          && !attempts.some((c) => c.jobId === job.id && c.baselineOrdinal === a.baselineOrdinal && c.status === "completed")
-      );
-      const capOk = protocol !== undefined
-        && consumed + 1 + Math.max((protocol.plannedBaselineRuns ?? 0) - job.nextBaselineOrdinal, 0) <= protocol.runCap;
-      if (sourceOk && capOk) return "QUESTION_RETRYABLE";
+    if (slots.some((s) => jobsOfSlotProtocol(store, s.protocolId).some((j) => jobIsActive(store, j, nowMs)))) {
+      return "QUESTION_JOB_ACTIVE";
     }
+    let stopped = false;
+    let retryable = false;
+    const stoppedProtocolIds = new Set<string>();
+    for (const slot of slots.filter((s) => s.phase === "baseline")) {
+      const job = [...store.protocolExecutionJobs.values()].find((j) => j.protocolId === slot.protocolId);
+      if (!job || (job.status !== "failed" && job.status !== "abandoned_exhausted")) continue;
+      let slotRetryable = false;
+      if (job.status === "failed" && job.currentAttemptId === null && job.failureReason === "provider_error") {
+        const protocol = store.protocols.get(job.protocolId);
+        const attempts = [...store.protocolAttempts.values()];
+        const consumed = attempts.filter((a) => a.protocolId === job.protocolId && a.status !== "cancelled").length;
+        const sourceOk = attempts.some(
+          (a) => a.jobId === job.id && a.status === "failed" && a.terminalizedAt !== null
+            && a.baselineOrdinal === job.nextBaselineOrdinal
+            && !attempts.some((r) => r.retryOfAttemptId === a.id)
+            && !attempts.some((c) => c.jobId === job.id && c.baselineOrdinal === a.baselineOrdinal && c.status === "completed")
+        );
+        const capOk = protocol !== undefined
+          && consumed + 1 + Math.max((protocol.plannedBaselineRuns ?? 0) - job.nextBaselineOrdinal, 0) <= protocol.runCap;
+        slotRetryable = sourceOk && capOk;
+      }
+      if (slotRetryable) retryable = true;
+      else {
+        stopped = true;
+        stoppedProtocolIds.add(slot.protocolId);
+      }
+    }
+    if (!stopped) return retryable ? "QUESTION_RETRYABLE" : "QUESTION_NOT_STOPPED";
+    // As the SQL: the stopped slots aside, every slot and every retest of
+    // any slot, with the report save's attempt test and any claimed or
+    // running job, whatever its lease.
+    const unfinished = slots.some((s) =>
+      [...store.protocols.values()]
+        .filter((p) => (p.id === s.protocolId || p.baselineProtocolId === s.protocolId) && !stoppedProtocolIds.has(p.id))
+        .some((p) =>
+          [...store.protocolExecutionJobs.values()].some((j) => j.protocolId === p.id && (j.status === "claimed" || j.status === "running"))
+          || [...store.protocolAttempts.values()].some((a) => a.protocolId === p.id && (a.status === "reserved" || a.status === "in_progress"))
+        )
+    );
+    if (unfinished) return "QUESTION_JOB_ACTIVE";
     const retired = [...store.pilotQuestions.values()].filter((q) => q.pilotId === pilot.id && q.retiredAt !== null).length;
     if (retired >= 5) return "RETIRE_LIMIT_REACHED";
     store.pilotQuestions.set(question.id, { ...question, retiredBy: input.retiredBy, retiredAt: nowIso(), retireReason: reason });
     return "RETIRED";
+  },
+
+  /** D-061 — mirrors protocol_worker_capabilities (20261109180000). */
+  async protocolWorkerCapabilities(): Promise<string[]> {
+    return ["live_openai_chatgpt"];
   },
 
   async rejectSnapshotRequest(
@@ -3964,6 +4152,19 @@ export const memoryAdapter: DbAdapter = {
     if (!version || version.approvedAt === null) {
       return { outcome: "VERSION_NOT_APPROVED", protocol: { ...protocol } };
     }
+    // D-061 — mirrors protocols_one_live_baseline_per_engine (20261109180000):
+    // one approved or active baseline per question version per engine. In
+    // Postgres the draft-to-approved UPDATE raises 23505 and nothing changes.
+    if (protocol.baselineProtocolId === null) {
+      const engine = protocolEngine(protocol.provider);
+      const live = [...store.protocols.values()].some(
+        (p) => p.id !== protocol.id && p.baselineProtocolId === null
+          && (p.status === "approved" || p.status === "active")
+          && p.buyerQuestionVersionId === protocol.buyerQuestionVersionId
+          && protocolEngine(p.provider) === engine
+      );
+      if (live) throw uniqueViolation("protocols_one_live_baseline_per_engine");
+    }
     const now = new Date().toISOString();
     const approved: Protocol = {
       ...protocol,
@@ -4967,6 +5168,17 @@ export const memoryAdapter: DbAdapter = {
       throw new Error(
         `dataset_batch_not_found_for_job: job ${job.id} references dataset_batch_id ${job.datasetBatchId}, which does not exist or is not project-scoped`
       );
+    }
+
+    // D-061 — the probe_runs CHECKs refuse the INSERT below in Postgres
+    // (23514), so a platform or probe mode the database would refuse is
+    // refused here too, before anything is written: 0003's platforms, and
+    // the modes 0013 and 20261109180000 allow.
+    if (!PROBE_RUN_PLATFORMS.has(input.platform)) {
+      throw new Error(`probe_runs_platform_check violated: platform="${input.platform}"`);
+    }
+    if (!PROBE_MODES.has(input.probeMode)) {
+      throw new Error(`probe_runs_probe_mode_check violated: probe_mode="${input.probeMode}"`);
     }
 
     const now = nowIso();
@@ -6799,7 +7011,8 @@ export const memoryAdapter: DbAdapter = {
       fullRequestBodySha256: null,
       negativeClaimDetected: content.negativeClaimDetected,
       observationSchemaVersion: 1,
-      platform: "perplexity",
+      // D-061 — the probe run's own platform, as 20261109180000's persist.
+      platform: probeRun.platform,
       platformsReferenced: content.platformsReferenced,
       probeMode: probeRun?.probeMode ?? null,
       probeRunId: attempt.probeRunId,
@@ -6846,7 +7059,7 @@ export const memoryAdapter: DbAdapter = {
       projectId: input.projectId,
       generatedPromptId: null,
       prompt: buyerQuestion,
-      platform: "perplexity",
+      platform: probeRun.platform,
       probeMode: (probeRun?.probeMode ?? "simulated") as ProbeMode,
       rawResponse: providerReceipt.rawResponseBody ?? "",
       rawProbeRequest: buyerQuestion,

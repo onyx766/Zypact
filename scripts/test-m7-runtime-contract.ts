@@ -247,6 +247,9 @@ async function main(): Promise<void> {
     console.log("[1] 0073 — the liveness rule was swapped, not lost");
     check("0047's index is gone",
       q(`select count(*) from pg_class where relname='protocols_one_active_per_version';`) === "0");
+    // 0073's own state: this harness applies 0001-0074 only. ChatGPT phase B
+    // (20261109180000, D-061) later replaces this index with
+    // protocols_one_live_baseline_per_engine (test-chatgpt-phase-b-db.ts).
     check("the baseline-scoped index exists and is unique",
       q(`select indisunique from pg_index i join pg_class c on c.oid=i.indexrelid where c.relname='protocols_one_live_baseline_per_version';`) === "t");
     check("the retest-scoped index exists and is unique",

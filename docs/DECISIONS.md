@@ -294,6 +294,7 @@ Each entry records:
 - **Reason:** Phase 3D permits paid provider execution. Claim concurrency, provider attempts, runtime, retry behavior, process exit and restart behavior must therefore be bounded, reviewable and reproducible from the repository. Keeping those limits only in out-of-band Machine configuration would leave source and deployment configuration inconsistent.
 - **Effect:** Recording this decision authorizes the bounded staging runtime contract and its subsequent source-configuration implementation. It does not itself authorize a Fly mutation, deployment, provider call, Phase 3D execution, production enablement, continuous worker operation or more than one claimed job.
 - **Revisit trigger:** production rollout; continuous worker operation; more than one claim slot; any additional provider attempt or retry; a changed runtime or provider timeout; automatic restart; or a staging/production bound divergence.
+- **2026-11-18 (D-061), reopened by "a changed runtime or provider timeout":** the three Fly files now set a 2,400 s runtime ceiling, a 330 s lease, a 240 s readiness window and a 290 s ChatGPT call deadline (D-059 items 1 and 2), beside D-036's 7 slots. The 45,000 ms provider timeout, the exit after one job and the zero throttled retries stay. The slot count and runtime here (1 and 120 s) left the Fly files with D-036.
 
 ## D-030 — Define the supervised M5 Phase 3D single-job staging canary contract
 
@@ -308,6 +309,7 @@ Each entry records:
 - **Effect:** This decision defines Phase 3D and the conditions under which a later authorization may permit its execution. It does not itself authorize a Fly or Supabase mutation, provider call, job creation, Machine start, deployment, smoke, Phase 3D run, production enablement or disclosure of private evidence.
 - **M5 boundary:** A successful Phase 3D can establish only the observed claim, provider and receipt behavior of one supervised staging job. It does not by itself establish browser-disconnect survival, two-worker anti-double-payment behavior, abandoned-job recovery or structured error/alert handling, and it does not close M5.
 - **Revisit trigger:** Any production use; more than one Machine, worker, job or claim slot; more than two provider attempts; any retry; a changed runtime, provider timeout, image, schema, candidate-selection rule, evidence format or restoration procedure; or a staging/production contract divergence.
+- **2026-11-18 (D-061), reopened by "a changed runtime, provider timeout":** D-061 changes the Fly files' runtime, lease and readiness values and adds the ChatGPT call deadline. The canary contract itself is unchanged and is not rerun. As since D-036, a future canary would need its own bounded configuration, because the five D-029 bounds are no longer the Fly files' values.
 
 ## D-031 — Target the Phase 3D canary job through a dedicated additive claim surface
 
@@ -337,6 +339,7 @@ Each entry records:
 - **Reason:** Client direction to increase the default sample for new baselines. Five is still an operating default, not a claim of statistical sufficiency. D-001 and D-002 remain in force: the report must keep stating that the result is directional, carry a Wilson interval, and state planned, completed, excluded and readable counts explicitly.
 - **Effect:** `supabase/migrations/0069_new_baseline_default_five_runs.sql` redefines the launch function with the same signature, the same ACL and no row mutation. The `lib/db/memory-adapter.ts` mirror is updated. The protocol report states planned and readable runs in its reconciliation (view, markdown and integrity note). The admin run-pipeline route reads the run count from the protocol instead of stating three. Tests: `test:snapshot-approval-launches-baseline` and `test:protocol-report`. Frozen-plan enforcement is unchanged: `protocols` has no table privilege for any application role (0047), and no RPC updates a sampling field.
 - **Revisit trigger:** Pilot calibration data supporting a per-category or per-use-case template (D-002); any need to change the plan of an already-approved protocol, which must be a new protocol version rather than an update; or a worker runtime bound too short to complete five runs in one claim.
+- **2026-11-18 (D-061):** a ChatGPT pilot protocol (`add_pilot_question_engine`, migration `20261109180000`) keeps this 5-run plan, `run_cap` 7 and `retry_cap` 2, with `spend_cap_usd` 4 (D-059 item 3). Each ChatGPT attempt reserves 0.56 USD (0.54 USD for the ChatGPT call and 0.02 USD for the analysis), so seven attempts need 3.92 USD. Perplexity protocols keep 2 USD.
 
 ## D-033 — The production protocol worker is a separate Fly application, created inert
 
@@ -361,6 +364,7 @@ Each entry records:
 - **Reason:** M7 is complete in the repository but no retest has ever run outside a test harness, so the retest and Outcome Card path is unproven against a live provider. The client has asked to run a fresh audit through the full flow. That cannot be demonstrated by a worker that never claims.
 - **Effect:** `fly.worker.production.toml` and `scripts/test-m0-worker-hosting-contract.ts`. No application, machine, secret or deployment is created by this decision, and merging it starts nothing: the machine must still be created and started by an operator.
 - **Revisit trigger:** continuous or scheduled operation rather than one job per start; more than one machine, worker or claim slot; any automatic restart; a changed runtime bound, provider timeout, retry ceiling or spend cap; live execution in staging; a second live environment; or a spend above the authorised ceiling, which requires a new client authorisation rather than an edit here.
+- **2026-11-18 (D-061), reopened by "a changed runtime bound, provider timeout … or spend cap":** the runtime ceiling becomes 2,400 s, with a 330 s lease and a 240 s readiness window, a 290 s deadline for the ChatGPT call only, and a 4 USD cap for ChatGPT protocols (D-059 items 1 to 3). One start is still one job (`WORKER_EXIT_AFTER_CLAIMED_JOB`, `[[restart]] policy = "never"`), and the database caps still bound spend.
 
 ## D-035 — A founder may start the worker from the admin console
 
@@ -387,6 +391,7 @@ Each entry records:
 - **Contract:** the hosting contract no longer requires one slot. For a `live` config it now requires that the runtime ceiling exceeds `slots × 2 × provider timeout + grace` — so a deadline can never cut a permitted job off mid-run — and that the slot count is at least 5, so this defect cannot return as a number. Both were confirmed to fail when the production value is set back to 1 slot, and when the runtime is lowered to 600 s.
 - **Effect:** the three Fly configs and `scripts/test-m0-worker-hosting-contract.ts`. Takes effect only when the production config is redeployed; until then the running machine keeps the one-slot bound.
 - **Revisit trigger:** a protocol plan or `run_cap` above 7; a provider timeout or grace change that moves the worst case past the ceiling; more than one machine or concurrent claim; continuous operation; or any proposal to use the slot count as a spend control.
+- **2026-11-18 (D-061), reopened by "a provider timeout … that moves the worst case past the ceiling":** a ChatGPT call may take up to 290 s, so `WORKER_MAX_RUNTIME_SECONDS` becomes `"2400"` in the three Fly files (D-059 item 2). With the switch on, the worst case is 7 × (290 s + 45 s) + 10 s = 2,355 s. The 7 slots and the 45 s provider timeout stay. The hosting contract adds the ChatGPT call, the lease and the readiness window to its arithmetic, and the worker refuses to start with the switch on unless the whole claim fits (D-061 item 9). With the switch off, the worst case stays 640 s. The values stay identical in the three files (D-033).
 
 ## D-037 — The protocol-job spending ceiling is enforced by a database gate on the external-call ledger
 
@@ -402,6 +407,7 @@ Each entry records:
 - **Reason:** a ceiling checked outside the transaction that spends cannot hold under concurrency, and a claim-time bound derived from the per-protocol cap is unsound once that cap can be refilled. Enforcing at the one table every paid protocol call must write makes the bound independent of leases, claims, caps and worker count, and covers any future path that writes the ledger.
 - **Effect:** this entry and `docs/SPEND_LEDGER_GATE.md` only. No code, migration, workflow, deployment, secret or database is changed by this decision. Production and paid execution remain on HOLD.
 - **Revisit trigger:** a PostgreSQL run of the acceptance tests that contradicts the design; any paid path that does not write the ledger; a provider whose cost per call cannot be bounded by its reservation, including the Agent API's tool calls; more than four live claims or in-flight calls; a ceiling above 50 USD; or a proposal to re-grant a revoked legacy path while paid execution is enabled.
+- **2026-11-18 (D-061), reopened by "a provider whose cost per call cannot be bounded by its reservation":** ChatGPT is such a provider. Its call's cost is bounded only by its reservation, an assumed worst case of 0.54 USD (`worstCaseRunUsd`: 128,000 input tokens and the 8,000-token output cap at the standard rates, plus 10 searches). The cost is estimated from usage, never reported by the provider. The worker's daily ceiling counts each such call at the larger of its estimate and its reservation (`countedCostUsd` in `lib/worker-control/paid-execution-gate.ts`), and a call that costs more than its reservation is listed as an overrun by the cost report. The ledger gate this entry designs is still not built; the ceiling remains D-051 item 1's soft limit.
 
 ## D-038 — `no_clear_change` requires the interval to exclude the minimum useful change
 
@@ -1056,6 +1062,7 @@ Each item below departed from a document that governed before this approval: V1_
      - one worker machine and one job per operator start (D-034).
 
      The founder accepts that the daily ceiling is checked in application code, outside the claim transaction (D-037, gaps G1, G3 and G4), so it is a soft limit. A single machine that takes one job per start is what keeps claims from running concurrently. Everything else stays on HOLD: paid execution a customer can start (X1 and its prerequisites), the ChatGPT engine and its confirmation test (see *Still open*), and live Stripe charges.
+     - **2026-11-18 (D-061):** a ChatGPT protocol's `spend_cap_usd` is 4 (D-059 item 3). The rest of this item is unchanged, and the ceiling is still the soft limit above.
   2. **Engine.** Perplexity Sonar only for the first pilots, described as a directional measurement of one AI engine. No pilot offer promises visibility in ChatGPT, and none states an overall visibility score.
   3. **Pilot Mode.**
      - Pilot customers see team-run results in their login before they can authorise spending themselves. This moves a results-only view of team-run measurements ahead of X1 (`SELF_SERVICE_PRODUCT.md` §10); the rest of R1, customer-registered interventions and scheduled retests, stays after X1. Nothing a pilot customer can do in the login spends money.
@@ -1164,6 +1171,7 @@ Each item below departed from a document that governed before this approval: V1_
   - the release order of step 1's migration (D-052);
   - each production step (D-051 item 4).
 - **Canon:** `V1_SCOPE.md`, `METHODOLOGY.md` §4 and the repository's `CLAUDE.md` still name Perplexity as the only live surface. That stays true until ChatGPT is wired, so they are updated in the pull request that wires it.
+  - **2026-11-18 (D-061):** updated in that pull request, ChatGPT phase B. ChatGPT is named a live surface from the moment its worker switch is turned on under its own authorisation, each engine its own directional proxy with nothing combined across them.
 - **Effect:** this entry, `PILOT_RUNBOOK.md` §2.1 and `CURRENT_STATUS.md` §30. No code, migration, deployment or secret is changed by this decision.
 - **Revisit trigger:**
   - a pilot with more than 20 questions, or another number of answers per question;
@@ -1477,7 +1485,9 @@ Each item below departed from a document that governed before this approval: V1_
   5. **Flex refusals:** a failed attempt plus a manual Retry, as built. Automatic retries only once refusal rates are known.
   6. **Approve the source rule `openai-responses-sources/1`**, as D-044 was approved for Perplexity.
   - **2026-11-17: approved by D-059 items 1 to 6** (the founder, 2026-11-17, "I agree.", relayed). They will be implemented by ChatGPT phase B (planned as D-061, PR B; not built, and D-061 is not yet recorded). The daily ceiling (item 4) is a production value, set at its own step on both hosts ([`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md) Part C).
+  - **2026-11-18: built by D-061** on branch `feat/chatgpt-phase-b`. Nothing is applied or deployed, and the switch stays `"false"`.
 - **Phase B (not built):**
+  - **2026-11-18: built as D-061**, with two changes to this plan. The provider leg keeps `call_kind 'perplexity'` for every engine (D-061 item 1 *(engineer)*): the cost report splits it by engine through the protocol's provider, so no M5 spend, reservation, receipt or retry function and no monitoring view is redefined. `searchResultsPresence` reads the Responses shape for a ChatGPT protocol (D-061 item 12).
   - a migration:
     - the probe-mode value;
     - a provider-aware `persist_probe_result_for_job`;
@@ -1494,10 +1504,13 @@ Each item below departed from a document that governed before this approval: V1_
 
   It flips `CHATGPT_WORKER_SCHEMA_READY`.
 - **Phase C:** each production step authorised on its own. They are the migration; the worker redeploy with the new bounds and the switch still off; the key; the switch; then the first supervised run.
+  - **2026-11-18 (D-061):** the migration and the worker redeploy move into the Perplexity go-live, as steps 5b and 6 of [`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md), because phase B's code is on the release commit and every migration on it is applied before the worker built from it. The key, the switch, the web host's ChatGPT gate, the daily ceiling and the first supervised run stay in Part C.
 - **Canon to update when the switch is turned on:** `V1_SCOPE.md`, `METHODOLOGY.md` §4, `PILOT_RUNBOOK.md`, and the repository `CLAUDE.md` line "Initial live surface", which needs the user's OK. None is edited in phase A.
+  - **2026-11-18 (D-061):** updated in phase B's pull request instead, as D-053 asked ("in the pull request that wires it"). The user approved the `CLAUDE.md` change on 2026-11-17 by asking for everything on the engineering side. The new wording makes ChatGPT a live surface only once its worker switch is turned on under its own authorisation, so the two entries agree.
 - **Known and not decided:**
   - a retest on both engines conflicts with 0079's one retest per intervention;
   - `provider_model` stays empty until phase B.
+    - **2026-11-18 (D-061 item 3 *(engineer)*):** it stays NULL after phase B too, so every existing replay hash is unchanged.
 - **Tests:**
   - **New:** `npm run test:chatgpt-worker` (102). It covers routing and refusals, the switch and its bounds, the full slot on the memory ledger, a crash after the receipt replayed without a second send, the flex 429, a timeout, the wrong tier or model, the Perplexity path with the engine on, the source rule and its parity with the adapter's readers, the labels and the import boundaries.
   - **Updated:**
@@ -1584,6 +1597,7 @@ Each item below departed from a document that governed before this approval: V1_
 - **Not built:**
   - starting a registered intervention (M7) from an action. Registration exists in the admin console (`/admin/interventions`), and the customer's note says the team registers a test with them; prefilling it from an action does not exist;
   - ChatGPT answers as evidence: they are linkable once ChatGPT is wired (D-056), and the build will use the question's own source rule.
+    - **2026-11-18: built by D-061.** The picker, the save, the console check and the build each read the slot's provider and compare a named source under that engine's rule. A slot whose protocol cannot be read, or names another engine, offers no answer and refuses a named source.
 - **Revisit trigger:**
   - an action shown without a review;
   - a revision shared after one of its actions changed;
@@ -1651,15 +1665,16 @@ Each item below departed from a document that governed before this approval: V1_
 - **Status:** **Approved by the founder on 2026-11-17** (written reply, relayed: "I agree."). The reply is read as answering the consolidated 14-point decision message the engineer relayed together with the production-plan message, as recommended there; item 13 was not answered. On the same day the user asked the engineer to implement everything on the engineering side.
 - **No production step is authorised by D-059** beyond what D-058 already authorised (the release order, and step 1, the read-only preflight). Every other production step still needs its own authorisation (D-051 item 4).
 - **The rulings, and where each is or will be implemented.** Items 1 to 6 will be implemented by ChatGPT phase B, planned as D-061 (PR B). Phase B is not built and D-061 is not yet recorded; "phase B" below means that planned work.
+  - **2026-11-18: phase B is built and D-061 is recorded,** on branch `feat/chatgpt-phase-b`, which merges D-060's branch. Nothing is applied to any database or deployed, and `WORKER_CHATGPT_ENABLED` stays `"false"` in every Fly file. The dated notes in the table say where each item now is.
 
 | # | Ruling | Where |
 |---|---|---|
-| 1 | ChatGPT call timeout 290 s. | Phase B (planned D-061, PR B; not built). |
-| 2 | Worker lease 330 s, readiness window 240 s, runtime ceiling 2,400 s (40 minutes). | Phase B (planned D-061). These reopen D-029, D-030, D-034 and D-036. |
-| 3 | ChatGPT per-question protocol caps: `run_cap` 7, `retry_cap` 2, `spend_cap_usd` 4. | Phase B (planned D-061). |
-| 4 | Daily ceiling 10 USD on the first supervised ChatGPT day, then 20 USD. | Phase B (planned D-061) will record it. It is a production value (`ZYPACT_DAILY_SPEND_CEILING_USD`), set at its own step on both hosts ([`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md) Part C, item 3). |
-| 5 | A flex-tier capacity refusal is a failed answer; the team presses Retry. Nothing is resent automatically. | As built in D-056 item 5; phase B (planned D-061). |
-| 6 | ChatGPT's cited sources are read from the links in its answers (rule `openai-responses-sources/1`), as approved for Perplexity (D-044). | As built in D-056 item 7; phase B (planned D-061). |
+| 1 | ChatGPT call timeout 290 s. | Phase B (planned D-061, PR B; not built). **2026-11-18: built** (D-061): `WORKER_CHATGPT_TIMEOUT_MS = "290000"` in the three Fly files, read only with the switch on. |
+| 2 | Worker lease 330 s, readiness window 240 s, runtime ceiling 2,400 s (40 minutes). | Phase B (planned D-061). These reopen D-029, D-030, D-034 and D-036. **2026-11-18: built** (D-061): `WORKER_LEASE_SECONDS = "330"`, `WORKER_READY_STALE_MS = "240000"` and `WORKER_MAX_RUNTIME_SECONDS = "2400"` in the three Fly files, checked by the hosting contract. They apply to Perplexity jobs from the first deploy (D-061, *Reopened decisions*). |
+| 3 | ChatGPT per-question protocol caps: `run_cap` 7, `retry_cap` 2, `spend_cap_usd` 4. | Phase B (planned D-061). **2026-11-18: built** (D-061): `add_pilot_question_engine` in migration `20261109180000`. |
+| 4 | Daily ceiling 10 USD on the first supervised ChatGPT day, then 20 USD. | Phase B (planned D-061) will record it. It is a production value (`ZYPACT_DAILY_SPEND_CEILING_USD`), set at its own step on both hosts ([`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md) Part C, item 3). **2026-11-18: recorded** by D-061. No code changes, and the gate's 50 USD maximum stays. |
+| 5 | A flex-tier capacity refusal is a failed answer; the team presses Retry. Nothing is resent automatically. | As built in D-056 item 5; phase B (planned D-061). **2026-11-18:** unchanged by D-061. The pilot console's Retry is pressed per engine. |
+| 6 | ChatGPT's cited sources are read from the links in its answers (rule `openai-responses-sources/1`), as approved for Perplexity (D-044). | As built in D-056 item 7; phase B (planned D-061). **2026-11-18:** unchanged by D-061. The pilot report now names the rule each engine's sources were read under. |
 | 7 | Keep the per-engine total line: a count across questions, beside each question's own result, with no percentage. | **Already built:** D-055 item 3 (`lib/reports/build-pilot-report.ts`, rendered by `lib/reports/pilot-report-presentation.ts`). |
 | 8 | The first report may be shared before suggested actions exist; actions are added in an update. | **Already built:** D-055 item 7 and D-057 items 6 and 7. `save_pilot_report_artifact` (20261109160000, lines 786–848) treats a missing action list as empty, refuses `integrity_passed` only when actions are listed, and refuses `ACTIONS_INCOMPLETE` only for a reviewed, current action left out; `share_pilot_report_artifact`'s D-057 block (lines 957–993) does the same. With no reviewed action the report has no actions section (D-057 item 5). |
 | 9 | When an updated report revision is shared, the older link stops working. | **D-060** (migration `20261109170000`). |
@@ -1733,3 +1748,191 @@ Each item below departed from a document that governed before this approval: V1_
   - a code path that calls either unscoped claim with the service-role client;
   - either unscoped claim granted back to `service_role`;
   - 0085 prepared for production (its revoke list).
+
+## D-061 — ChatGPT in the worker, phase B: the schema, the bounds and the two-engine pilot console
+
+- **Date:** 2026-11-18
+- **Status:** Built on branch `feat/chatgpt-phase-b`, from `main` at `d03363f`, with D-060's branch merged in. Migration `20261109180000_chatgpt_measurement.sql` is **not applied to any Supabase project**, nothing is deployed, and `WORKER_CHATGPT_ENABLED` stays `"false"` in every Fly file. The founder values are D-059's, approved on 2026-11-17. Rules marked *(engineer)* are **proposed for founder confirmation**. The pull request adds a migration, so the founder is told in advance (D-041).
+- **Builds on:** D-050 (the adapter, and its setting approved for measurement), D-053 (both engines in the pilot, each its own measurement), D-056 (phase A: the engine behind the switch), D-059 (the founder's approval of the values, 2026-11-17), D-058 item 4 (the numbering window), D-060 (its migration is applied just before this one, at step 5a) and D-052 (a Run names its job).
+- **Reopens:** D-029, D-030, D-034 and D-036 (the worker bounds), D-032 and D-051 item 1 (the caps, for ChatGPT), and D-037 (a cost bounded only by its reservation). Each has a dated note; see *Reopened decisions* below.
+- **The founder's values (D-059 items 1 to 6), as built:**
+  1. **ChatGPT call timeout 290 s:** `WORKER_CHATGPT_TIMEOUT_MS = "290000"` in `fly.worker.production.toml`, `fly.worker.staging.toml` and `fly.worker.toml.template`. It is read only with the switch on.
+  2. **Lease 330 s, readiness window 240 s, runtime ceiling 2,400 s:** `WORKER_LEASE_SECONDS = "330"`, `WORKER_READY_STALE_MS = "240000"` and `WORKER_MAX_RUNTIME_SECONDS = "2400"` in the same files.
+     - The Perplexity and analysis legs keep 45 s (`WORKER_PROVIDER_TIMEOUT_MS = "45000"`), and the 7 slots and the 10 s grace stay.
+     - The files now hold 14 `[env]` values. `scripts/test-m0-worker-hosting-contract.ts` checks that count and four rules: 7 × (290 s + 45 s) + 10 s = 2,355 s < 2,400 s; 290 s + 10 s < 330 s; 240 s > 110 s, the heartbeat (lease / 3); and at least 5 slots.
+  3. **ChatGPT caps 7 runs, 2 retries, 4 USD:** `add_pilot_question_engine` (migration §5). Perplexity stays at 7, 2 and 2 USD.
+  4. **Daily ceiling 10 USD on the first supervised ChatGPT day, then 20 USD:** a production value set on both hosts at its own step ([`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md) Part C). No code changes, and the gate's 50 USD maximum stays.
+  5. **A flex capacity refusal is a failed attempt plus the founder's manual Retry:** as built in D-056 item 5, unchanged.
+  6. **Source rule `openai-responses-sources/1`:** as built in D-056 item 7, unchanged. The pilot report now names each engine's rule (*Further choices*, item 4).
+- **Engineering rules, as built** *(engineer)*:
+  1. **The call kind stays.** The provider leg of every engine keeps `call_kind = 'perplexity'`. No call kind is added, and no 0050–0056 spend, reservation, receipt or retry function is redefined.
+     - A new kind would mean redefining about ten production M5 functions and the monitoring view, an md5 pin for each, and a deployed worker broken between the migration and its redeploy.
+     - The engine is the protocol's provider. The comment on `ExternalCallKind` in `lib/db/types.ts` says so. The cost report groups the provider leg by engine through that join (`byLeg`, below), and the fingerprint still finds the provider leg by `call_kind` and the endpoint by the provider.
+     - This replaces D-056's plan to give the leg a provider-neutral or ChatGPT kind (dated note there).
+  2. **Probe mode.** `live_openai_chatgpt` is added to the `probe_runs` and `probe_results` probe-mode CHECKs (migration §1).
+  3. **Persist takes the platform from the probe run.** `persist_probe_result_for_job` takes it instead of the literal `'perplexity'`. Otherwise it is 0054's definition byte for byte, apart from two marked lines (migration §4).
+     - `provider_model` stays NULL.
+     - Perplexity rows keep `'perplexity'`, so their replay hashes do not change. A precondition requires every existing attempt's probe run to be `perplexity`.
+     - The preflight pins its production pre-state (P3.5).
+  4. **One live baseline per question version per engine.** `protocols_one_live_baseline_per_engine` replaces 0073's `protocols_one_live_baseline_per_version` (migration §2). It is created first, then 0073's index is dropped.
+     - The engine is `perplexity` for `perplexity`, `perplexity_sonar` and `perplexity_agent`, the full set the code writes; any other provider is itself.
+     - Two Perplexity baselines on one version stay refused.
+  5. **The pilot engine slot.** `pilot_question_protocols.engine` accepts `perplexity_sonar` and `openai_chatgpt`, and the phase stays `baseline`.
+     - A BEFORE INSERT trigger refuses a slot whose engine is not its protocol's provider, whose protocol is in another project or measures another version, or whose baseline slot is a retest protocol.
+     - The trigger function `pilot_question_protocols_consistency` is SECURITY DEFINER and granted to nobody.
+  6. **`add_pilot_question_engine`** adds the ChatGPT baseline to a live pilot question through `add_pilot_question`'s approval sequence. It uses the question's own version and one-question paraphrase plan, plans 5 runs with caps of 7, 2 and 4 USD, and keeps Perplexity's limits (86,400 s window, 10 an hour, concurrency 1).
+     - Provider `openai_chatgpt`, surface `answer`, and `model_config` `{"model":"gpt-5.4-2026-03-05","setting_version":"openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05"}`. `test:chatgpt-phase-b-schema` S25 proves these literals equal `CHATGPT_APPROVED_SETTING_VERSION` and its model in `lib/probes/chatgpt.ts`.
+     - It approves the protocol, queues the job and inserts the slot. Nothing is run.
+     - It takes the pilot row `FOR UPDATE`.
+     - It replays first: a question that already has its ChatGPT slot answers `ALREADY_ADDED` with that slot's protocol and job.
+     - It refuses a closed or ended pilot, a retired question, an unapproved version, or a question whose hash is not its version's hash or its version's text.
+  7. **No per-engine retirement.** `retire_pilot_question` looks at every slot of the question, on both engines, and at each slot's retests (migration §6). It is 20261109140000's body byte for byte outside one marked block and marked declarations.
+     - It refuses while any of them is running or has a pending Run.
+     - It is allowed once one baseline slot has stopped for good: abandoned, or failed and not retryable under the existing per-slot gates. So a ChatGPT measurement that cannot go on retires its question, and the approved text can be added again (D-054 item 9).
+     - Once one slot has stopped for good, it is refused (`QUESTION_JOB_ACTIVE`) while any other slot, or any retest of any slot, holds a reserved or in-progress attempt or a claimed or running job, lease lapsed or not (review, DB-1) *(engineer)*. A retired question refuses every Run, so such a run could never close, and `save_pilot_report_artifact` would refuse every report save of the pilot (`MEASUREMENT_IN_PROGRESS`).
+     - The console's prompt and a note beside **Retire** say that retiring stops the question on both engines.
+  8. **The schema capability probe.** `public.protocol_worker_capabilities()` returns `{live_openai_chatgpt}`, to `service_role` only (migration §7).
+     - With the switch on, the worker calls it at startup, before the engine, the health server, the paid gate and any claim (`scripts/run-protocol-worker.ts`, `checkChatGptSchema` in `lib/protocol-worker/chatgpt-engine.ts`).
+     - A missing function, a failed read or a reply without the value logs one closed line, `worker_chatgpt_schema_refused` with `reason` `capabilities_unreadable` or `capability_missing`, and exits 78.
+     - `CHATGPT_WORKER_SCHEMA_READY` is `true` (`lib/protocol-worker/execution-mode.ts`).
+  9. **The startup bound with the switch on.** The worker refuses to start unless slots × (max(provider timeout, ChatGPT timeout) + provider timeout) + grace < runtime (`allSlotsBudgetWithChatGptMs`). That is 2,355 s < 2,400 s at the approved values.
+     - The rule comes after D-056's lease and readiness rules, so their order is unchanged.
+     - With the switch off nothing changes, and no code default changes (the lease default stays 60 s).
+  10. **The web host's gate.** The web app cannot see the worker switch, so it has its own: `ZYPACT_PILOT_CHATGPT_ENABLED`, on only when exactly `"true"`, read at request time (`lib/pilots/engines.ts`).
+      - It gates adding ChatGPT to a question and Run and Retry of a ChatGPT measurement.
+      - Off, ChatGPT shows as "Not connected" and those routes refuse with 409, in words, before anything is read, reserved or started.
+      - It is set on the web host only after the worker switch is on (a production step).
+  11. **A pilot measurement held for review** (for example a ChatGPT timeout, D-056 item 6) is resolved per engine from the pilot console. It uses the existing `resolve_protocol_job_review` RPC with the request page's two resolutions (`excluded_and_completed`, `failed`) and its 10–2000-character note. The job comes from the pilot's own tables, never from the request body.
+  12. **`searchResultsPresence`** takes the provider (`lib/reports/measurement-fingerprint.ts`). For a ChatGPT protocol, a body is "present" when at least one `web_search_call` item has a non-empty `action.sources`, and "absent" otherwise. Sonar and Agent bodies read as before, and the fingerprint version `mf-1` stays.
+  13. **The legacy readers.**
+      - `coerceProbeMode` keeps `live_openai_chatgpt` as itself.
+      - `lib/probe-results/report-selection.ts` and `lib/export/build-mvp-report.ts` never count a ChatGPT row as live Perplexity or as simulated. They leave it out of every Perplexity figure, and the export's limitations say how many ChatGPT answers were left out.
+- **Further choices made while building** *(engineer)*:
+  1. **The database:**
+     - the trigger function is named without a leading underscore, after the existing pilot triggers, so the preflight needs no new prefix check;
+     - the new function's refusals are returned outcomes, not exceptions: `PILOT_NOT_FOUND`, `QUESTION_NOT_FOUND`, `PILOT_CLOSED`, `PILOT_ENDED`, `QUESTION_RETIRED`, `VERSION_NOT_APPROVED`, `HASH_MISMATCH`. A missing argument or another engine raises 22023;
+     - retirement answers `QUESTION_RETRYABLE` when no slot has stopped for good but one can still be retried, else `QUESTION_NOT_STOPPED`. With one slot this is exactly the earlier rule;
+     - the migration refuses if any object it creates already exists, or if an existing slot does not already satisfy the trigger's rules;
+     - the index postcondition ignores whitespace, so it passes on PostgreSQL 16 and 17.
+  2. **The worker bounds:** the hosting contract also feeds production's `[env]` values through the real `resolveExecutionPlan` with the switch on. It requires acceptance, and refusal at a 2,355 s runtime.
+  3. **The console:**
+     - the add-question panel's **Also measure it on ChatGPT** box is unticked by default, because a queued 4 USD job raises the headroom every start needs: the daily gate adds the largest queued cap to the last 24 hours;
+     - resolving a held measurement is not behind the ChatGPT gate or the pilot's state, because it spends nothing and must stay possible after the gate is turned off;
+     - with the gate off, an existing ChatGPT measurement shows "Not connected: Run and Retry on ChatGPT are off.", and the refusal reads "ChatGPT is not connected for pilots yet, so nothing was started, reserved or added.";
+     - the startup refusal exits 78, as the other startup refusals do;
+     - a held measurement's reason is shown in words for its own engine, never the stored code;
+     - with the gate on, **Add ChatGPT** is offered on every live question while the pilot is not over, before its start date included. **Add ChatGPT to every question without it** makes one call after another.
+  4. **The report:**
+     - **Wording.** The "How it was measured" section lists the setting version, the service tier (flex) and web search when a protocol records a setting, and a source-rule line for each engine. The words are literals in `lib/reports/pilot-report-copy.ts`, pinned to the adapter's setting families by `test:pilot-report` X14.
+     - **The integrity rule.** A live measurement with no attempt yet skips the reservation and hash checks, as a retired question that collected nothing already does. They are false by construction there, and the builder's "has not finished" reason still holds the report. A measurement marked finished with no attempt needs review.
+     - **The limitation sentence** follows the engine the section is headed with, never `provider[0]`.
+  5. **Suggested actions** read each slot's provider. A link to a ChatGPT answer's source is compared under `openai-responses-sources/1` (`normalizeProviderSourceUrl` drops OpenAI's `utm_source=openai`). A slot whose protocol cannot be read, or names another engine, fails closed: its answers are not offered, and a named source is refused.
+  6. **The cost report** (`GET /api/internal/costs/projects/:projectId`) adds `byLeg`, with buckets `perplexity`, `chatgpt`, `analysis`, `provider_engine_unknown` and `unknown_kind`, read through the protocol's provider. It also adds `openAiPriceTableVersion`, the OpenAI table ChatGPT's estimates use, or null when there is no ChatGPT row. `byCallKind` stays as the ledger states it.
+  7. **Two new founder routes** behind the console's kill switch (`SNAPSHOT_APPROVAL_ENABLED`) and the founder guard (`lib/pilots/engine-routes.ts`). Neither starts the worker or reserves anything.
+     - `POST /api/internal/pilots/:pilotId/questions/:pilotQuestionId/engines` adds ChatGPT, behind the web gate.
+     - `POST /api/internal/pilots/:pilotId/questions/:pilotQuestionId/review` resolves a held measurement.
+  8. **After the review (2026-11-18)** *(engineer)*:
+     1. DB-1 (engineering rule 7) reads the retests of every slot, including a stopped slot's retests, but not the stopped slots' own attempts.
+     2. `QUESTION_JOB_ACTIVE` is reused for DB-1's refusal, with broader words.
+     3. The switch-off query's "unfinished" count excludes runs in flight and `needs_review` jobs.
+     4. The precondition tests set aside leftover open attempts with 0047's `reconcile_attempt` inside the rolled-back transaction.
+     5. The preflight's section P7 prints counts only.
+     6. "Ended after review" is detected by `review_resolution = excluded_and_completed`, or by fewer distinct completed planned ordinals than planned.
+     7. A measurement ended after review is left out of its engine's total and named there.
+     8. A question retired with one measurement keeps the old words.
+     9. An engine whose questions are all retired reads "no live question is measured on it".
+     10. With the gate off, the retire refusal names ChatGPT. The engines are read only for a gate-off `QUESTION_RETRYABLE` or `QUESTION_JOB_ACTIVE`.
+     11. `builtBeforeD061` detects a payload built before D-061 by the absence of `questionsNotMeasured`.
+     12. The ChatGPT timeout words ("stopped after about 5 minutes") are tied to the Fly value by test, with bounds 240000 < value ≤ 300000.
+     13. The console now counts timed-out and cancelled attempts as failed, and shows excluded attempts separately.
+     14. The per-engine cell is a component, `app/admin/pilots/pilot-engine-cell.tsx`.
+- **For the founder to review** *(engineer)*:
+  - A ChatGPT measurement still queued when its question is retired stays queued: `retire_pilot_question` updates only the question, so every later start still needs its 4 USD cap of room, and the queue is never empty again (relevant to D-060 item 5). Accept, or add a step that closes it?
+  - **The new customer wording.**
+    - The setting, flex and web-search lines. For example: "Service tier: OpenAI's flex tier, which serves the same model at a lower price and more slowly; a request it refuses for lack of capacity is counted as a failed attempt." and "Web search: available on every answer, and the model decides when to search."
+    - The source-rule line. It is now shown for Perplexity too. With the words that replace "0 of 0" and "Ended after review", it changes Perplexity-only reports as well (`test:pilot-report` X16b, X20).
+    - The words that replace "0 of 0", such as "No readable answer yet" and "Not measured on ChatGPT, so not in this table or its total: question 3."
+  - **The integrity rule change** above.
+  - **The two new `blocked` reasons:**
+    - "Question N: its ChatGPT measurement's protocol is for another engine." (a slot's engine differs from its protocol's provider);
+    - "Question N: its measurements on different engines are not of the same approved question." (the slots differ in question hash or text).
+  - **The new needs-review reasons:**
+    - a setting or source rule that differs between questions of one engine;
+    - ChatGPT answers with no recorded setting;
+    - a measurement marked finished with no attempt.
+  - **The new optional payload fields:**
+    - `settingVersion` on each question's measurement and on the engine's conditions;
+    - `sourceRule` on the conditions;
+    - `questionsNotMeasured` on the engine summary.
+
+    They are optional, so revisions stored before D-061 still pass the type guard and render. Re-rendered, an older revision keeps the words it was built with (`builtBeforeD061`), so its page and its stored Markdown say the same.
+  - **The console choices** in item 3 of *Further choices*: the ChatGPT box unticked by default, review not gated, the "Not connected" words, exit 78.
+  - **A retired question's finished engine.** Should a finished engine's results still be reported for a retired question? Not built; attempt counts only.
+  - **A measurement ended after review.** Confirm that it stays out of its engine's total, and confirm its words.
+  - **The new customer words** from the review: the retired per-engine words, "Ended after review…", and "no live question is measured on it".
+  - **Emergency switch-off.** A ChatGPT run left unfinished, for example by stopping the machine at once, holds every pilot report build until ChatGPT is on again. Accept this, or add a founder "close unfinished run" action?
+  - **An earlier limitation, not D-061.** An abandoned or failed job that still holds an open attempt blocks every report save of its pilot; today only an operator reactivation (D-024) clears it.
+  - **PR C.** Keep DB-1's retest rule when pilot retests arrive.
+- **Reopened decisions, and how** (dated notes in each):
+  - **D-029, D-030, D-034 and D-036 (the bounds).**
+    - The runtime ceiling goes from 900 s to 2,400 s. The lease is 330 s and the readiness window 240 s, where the code defaults are 60 s and 60 s. The ChatGPT call deadline is 290 s.
+    - The lease and readiness values apply to Perplexity jobs as soon as the worker is redeployed. A crashed job holds its lease, and its Run stays blocked, for up to 330 s, and `/readyz` reports a wedged worker after 4 minutes.
+    - D-033's identical-bounds rule still holds: the three Fly files carry the same values, and the hosting contract checks it.
+  - **D-032 and D-051 item 1 (the caps).** ChatGPT protocols are capped at 7 runs, 2 retries and 4 USD: seven attempts reserved at 0.56 USD each (0.54 USD for the ChatGPT call, 0.02 USD for the analysis) need 3.92 USD. Perplexity keeps 2 USD.
+  - **D-037 (the cost bound).** A ChatGPT call's cost is bounded only by its reservation, an assumed worst case of 0.54 USD (`worstCaseRunUsd`), and is estimated from usage, never reported by the provider.
+    - The worker's daily ceiling counts each such call at the larger of its estimate and its reservation.
+    - A call above its reservation is listed as an overrun by the cost report.
+    - The ledger gate is still not built (D-051 item 1's soft limit).
+- **Migration** `20261109180000_chatgpt_measurement.sql`:
+  - **Preconditions:**
+    - both probe-mode CHECKs, 0073's index and the two slot CHECKs are exactly as their migrations left them;
+    - none of its objects exists yet;
+    - every protocol's provider is in the closed set above;
+    - every protocol attempt's probe run is `perplexity`;
+    - **no protocol attempt is `reserved` or `in_progress`**;
+    - every existing pilot slot satisfies the trigger's rules.
+  - **Changes:** items 2 to 8 above.
+  - **Postconditions:** the CHECKs, the index swap, the trigger, SECURITY DEFINER on every function, and every privilege.
+  - **What it leaves alone:** no row is written, and no call kind, M5 function, approval, queue, claim, report or action function is touched.
+  - **Release:** directly after `20261109170000`, with `expected_prev=20261109170000` (plan step 5b), and before the worker and web app built from the same release commit. The worker must be stopped: its ALTERs take ACCESS EXCLUSIVE locks.
+  - **Preflight:** its version is in both P2.4 lists; its three new functions are in the absence list (P4.2 now 41); and P3.5 pins the function it redefines that production already has, `persist_probe_result_for_job`, at md5 `d812b7f4c606e03ea171113f9fbc9762`. `retire_pilot_question` is a pilot function, checked by absence. After the review, P6.4, P7.1 and P7.2 check the data its preconditions read: no attempt reserved or in progress, every protocol's provider in the closed set, and every protocol attempt's probe run `perplexity`.
+- **Recovery** (the migration's header):
+  - **Before any ChatGPT protocol, slot, probe run or probe result exists,** and while no question version has a live baseline on two engines: one transaction that undoes it in reverse order. It drops the capability function, restores 20261109140000's retire, drops `add_pilot_question_engine`, restores 0054's persist, drops the trigger and its function, restores the table comment and the slot CHECK, recreates 0073's index before dropping the per-engine one, and restores 0013's probe-mode CHECKs. Each restored function gets its four privilege statements.
+  - **Once any ChatGPT row exists, recovery is forward only.** The evidence rows are insert-only, and the narrower CHECKs would no longer validate. ChatGPT is switched off in this order, and no more ChatGPT slots are added (WORKER_DEPLOY_RUNBOOK §6a):
+    1. Run the read-only query in the migration's header; each count should be 0. A run in flight finishes on its own. Finish an unfinished ChatGPT run first, with Run: a Retry approved but not yet run, or a run whose worker stopped part-way. With ChatGPT off it can be neither run nor retired, and it holds the pilot's report build. A run held for review can be resolved at any time.
+    2. Unset `ZYPACT_PILOT_CHATGPT_ENABLED` on the web host and redeploy the web app.
+    3. Run the query again until `chatgpt_runs_pending` and `chatgpt_runs_in_flight` are both 0: a Run pressed just before step 2 is claimed and finishes under the worker that is still on.
+    4. Only then set `WORKER_CHATGPT_ENABLED` back to `"false"` and redeploy the worker. The worker then refuses a ChatGPT protocol before admission, and nothing is reserved. To stop at once, stop the machine; a ChatGPT run it was making is then left unfinished until ChatGPT is on again.
+
+    The web gate goes off first: a Run that reaches a worker with the switch off closes a ChatGPT job that has no attempt yet as failed (`PROVIDER_ADAPTER_NOT_ENABLED`, `closeJobBeforeAdmission` in `lib/protocol-worker/worker.ts`), which Retry does not take *(engineer)*.
+
+    With ChatGPT off, a ChatGPT measurement that stopped for good (abandoned, or failed in a way Retry does not take) is retired with its question, and one held for review can still be resolved. One that is only waiting for Run, or that failed at the provider and could still be retried, can be neither run nor retried until ChatGPT is on again, and does not by itself let its question be retired: Retire then refuses it (for one that could be retried or has an unfinished run, it says ChatGPT must be turned back on first). Once another measurement of the question has stopped for good, the question can be retired, and a ChatGPT measurement still queued then stays queued.
+- **Canon** (D-053 said the pull request that wires ChatGPT; D-056 said when the switch is turned on). It is updated here, with the user's approval of 2026-11-17, and worded so that ChatGPT is a live surface only once its worker switch is turned on under its own authorisation.
+  - `CLAUDE.md`, `V1_SCOPE.md`, `PILOT_RUNBOOK.md`, `ROADMAP.md` and `ENGINEER_START_HERE.md` are updated.
+  - `METHODOLOGY.md` becomes document version 1.3: the ChatGPT limitation sentence verbatim, beside the unchanged Perplexity sentence, and the source rule by provider in §12.1. The default protocol methodology version stays 1.1.
+  - Every wording keeps the methodology's limits: each engine is its own directional proxy, no score is combined across engines, and nothing claims the engines represent every AI tool or buyer.
+- **Tests:**
+  - **New:** `npm run test:chatgpt-phase-b-schema` (static, and the memory adapter) and `scripts/test-chatgpt-phase-b-db.ts` (run by `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db`).
+  - **Updated:** `test:chatgpt-worker`, `test:m0-worker-hosting-contract`, `test:pilot-questions`, `test:pilot-report`, `test:pilot-actions`, `test:cost-recording`, `test:measurement-compatibility`, `test:export`, `test:chatgpt-adapter`, `test:prod-preflight`, `scripts/test-pilot-questions-db.ts` (K1, K1b, K3), `test:m7-0073-schema` (a named exception for the index replacement) and `scripts/test-m7-runtime-contract.ts` (a comment).
+  - **Added after the review** (check ids): phase B DB O1–O10, G1–G12, A13b and A13c; memory M17b–M17f; preflight PF-29 to PF-29c; report X16b, X16c, X18–X20e, I1, I1b and I5c; questions C1e, C1f, C6f and C6h–C6l, H41–H49, R2, R2b and V1–V6.
+  - Results are in `CURRENT_STATUS.md` §37.
+- **Not established:**
+  - no live ChatGPT call through the worker; every test uses a fake fetch or a fixture;
+  - no browser walk-through of the console or the report;
+  - Level 2 applies the migration but exercises no ChatGPT path;
+  - nothing is applied to any hosted database;
+  - the P3.5 pin has never been observed on production;
+  - (Established after the review, 2026-11-18, listed here because the gap was listed here: each of the ten preconditions refuses on a database, G1–G12, and G1 proves the first recovery.)
+  - the Docker half of the hosting contract needs a clean committed tree, and runs in CI.
+- **Revisit trigger:**
+  - the ChatGPT switch on against a database without `20261109180000`;
+  - a ChatGPT answer recorded as `live_perplexity` or platform `perplexity`;
+  - a ChatGPT figure added to a Perplexity figure, or any score combined across engines;
+  - a new call kind, or an M5 spend, reservation, receipt or retry function redefined for ChatGPT;
+  - a ChatGPT call that costs more than its reservation;
+  - the web gate on while the worker switch is off;
+  - a provider string outside the closed set (it would count as its own engine; nothing in the database limits `protocols.provider`);
+  - per-engine retirement;
+  - a bound that differs between the Fly files, or a value other than D-059's;
+  - the founder's review changing the wording, the integrity rule or the blocked reasons;
+  - a pilot retest on both engines (0079's one retest per intervention, D-056).

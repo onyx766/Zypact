@@ -2,10 +2,17 @@
  * D-054 — reads that feed the founder's pilot pages and the pilot Run and
  * Retry routes.
  *
+ * D-061 — a question is measured on up to two engines, one baseline slot
+ * each. Every read is keyed by question AND engine, so one engine's
+ * measurement never stands in for, or overwrites, the other's.
+ *
  * Service-role client, so callers must have passed the founder guard. These
  * reads return question text to founder pages only; nothing here is logged.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
+
+import type { PilotQuestionEngine } from "@/lib/db/types";
+import { isPilotQuestionEngine } from "@/lib/pilots/engines";
 
 export interface PilotSummary {
   id: string;
@@ -39,22 +46,41 @@ export interface PilotQuestionRow {
   /** D-054 — set when the question was retired; it is then never measured again. */
   retiredAt: string | null;
   retireReason: string | null;
-  /** The Perplexity baseline measurement. */
-  perplexity: PilotMeasurement | null;
+  /**
+   * D-061 — the baseline measurement on each engine, null when the question
+   * has no slot on it. Keyed by engine: one never overwrites the other.
+   */
+  engines: Record<PilotQuestionEngine, PilotMeasurement | null>;
 }
 
 export interface PilotMeasurement {
+  engine: PilotQuestionEngine;
   protocolId: string;
   jobId: string | null;
   jobStatus: string | null;
+  /**
+   * D-061 — the stored reason a job is held for review. A code: the console
+   * shows it only through pilotHeldReasonText (lib/pilots/copy.ts).
+   */
+  needsReviewReason: string | null;
   /** Leased, but the lease has lapsed: nothing is executing. */
   stale: boolean;
   plannedRuns: number | null;
   runCap: number | null;
   spendCapUsd: number | null;
   completedRuns: number;
+  /**
+   * Runs that ended without an answer: failed, timed out or cancelled, as the
+   * customer report counts them as failed (lib/reports/build-pilot-report.ts
+   * countAttempts).
+   */
   failedRuns: number;
+  /** D-061 (review of phase B) — runs left out by a review (`excluded`), as the report's "excluded after review". */
+  excludedRuns: number;
 }
+
+/** The attempt statuses the customer report counts as failed (countAttempts). */
+const FAILED_ATTEMPT_STATUSES: ReadonlySet<string> = new Set(["failed", "timed_out", "cancelled"]);
 
 function summary(row: Record<string, unknown>, questionCount: number): PilotSummary {
   return {
@@ -132,11 +158,11 @@ export async function loadPilot(
   const versionIds = qs.map((q) => String(q.buyer_question_version_id));
   const [versions, slots] = await Promise.all([
     client.from("buyer_question_versions").select("id,prompt_text").in("id", versionIds),
+    // D-061 — every engine's baseline slot, each kept under its own engine.
     client
       .from("pilot_question_protocols")
       .select("pilot_question_id,protocol_id,engine,phase")
       .in("pilot_question_id", questionIds)
-      .eq("engine", "perplexity_sonar")
       .eq("phase", "baseline"),
   ]);
   if (versions.error) throw versions.error;
@@ -145,16 +171,31 @@ export async function loadPilot(
   const textByVersion = new Map(
     ((versions.data ?? []) as Array<Record<string, unknown>>).map((v) => [String(v.id), String(v.prompt_text)])
   );
-  const protocolByQuestion = new Map(
-    ((slots.data ?? []) as Array<Record<string, unknown>>).map((s) => [String(s.pilot_question_id), String(s.protocol_id)])
+  // Keyed by question and engine. An engine outside the closed set is not
+  // shown (the CHECK refuses one); a second slot for the same question and
+  // engine (the slot key refuses one) would be an error, never a silent pick.
+  const slotKey = (questionId: string, engine: PilotQuestionEngine) => `${questionId}|${engine}`;
+  const protocolBySlot = new Map<string, string>();
+  for (const s of (slots.data ?? []) as Array<Record<string, unknown>>) {
+    const engine = s.engine;
+    if (!isPilotQuestionEngine(engine)) continue;
+    const key = slotKey(String(s.pilot_question_id), engine);
+    if (protocolBySlot.has(key)) throw new Error("A pilot question has two baseline slots on one engine.");
+    protocolBySlot.set(key, String(s.protocol_id));
+  }
+  const engineOfProtocol = new Map(
+    [...protocolBySlot.entries()].map(([key, protocolId]) => [protocolId, key.slice(key.indexOf("|") + 1) as PilotQuestionEngine])
   );
-  const protocolIds = [...protocolByQuestion.values()];
+  const protocolIds = [...protocolBySlot.values()];
 
   const measurements = new Map<string, PilotMeasurement>();
   if (protocolIds.length > 0) {
     const [protocols, jobs, attempts] = await Promise.all([
       client.from("protocols").select("id,planned_baseline_runs,run_cap,spend_cap_usd").in("id", protocolIds),
-      client.from("protocol_execution_jobs").select("id,protocol_id,status,lease_expires_at").in("protocol_id", protocolIds),
+      client
+        .from("protocol_execution_jobs")
+        .select("id,protocol_id,status,lease_expires_at,needs_review_reason")
+        .in("protocol_id", protocolIds),
       client.from("protocol_attempts").select("protocol_id,status").in("protocol_id", protocolIds),
     ]);
     if (protocols.error) throw protocols.error;
@@ -163,11 +204,14 @@ export async function loadPilot(
     const jobByProtocol = new Map(
       ((jobs.data ?? []) as Array<Record<string, unknown>>).map((j) => [String(j.protocol_id), j])
     );
-    const tally = new Map<string, { completed: number; failed: number }>();
+    // The customer report's buckets: a timed-out or cancelled run is failed,
+    // an excluded one is left out by review; neither is ever hidden.
+    const tally = new Map<string, { completed: number; failed: number; excluded: number }>();
     for (const a of (attempts.data ?? []) as Array<Record<string, unknown>>) {
-      const t = tally.get(String(a.protocol_id)) ?? { completed: 0, failed: 0 };
+      const t = tally.get(String(a.protocol_id)) ?? { completed: 0, failed: 0, excluded: 0 };
       if (a.status === "completed") t.completed += 1;
-      else if (a.status === "failed") t.failed += 1;
+      else if (FAILED_ATTEMPT_STATUSES.has(String(a.status))) t.failed += 1;
+      else if (a.status === "excluded") t.excluded += 1;
       tally.set(String(a.protocol_id), t);
     }
     for (const pr of (protocols.data ?? []) as Array<Record<string, unknown>>) {
@@ -175,22 +219,30 @@ export async function loadPilot(
       const job = jobByProtocol.get(id);
       const status = job ? String(job.status) : null;
       const lease = job?.lease_expires_at ? Date.parse(String(job.lease_expires_at)) : NaN;
+      const engine = engineOfProtocol.get(id);
+      if (!engine) continue;
       measurements.set(id, {
+        engine,
         protocolId: id,
         jobId: job ? String(job.id) : null,
         jobStatus: status,
+        needsReviewReason: job?.needs_review_reason ? String(job.needs_review_reason) : null,
         stale: (status === "claimed" || status === "running") && !Number.isNaN(lease) && lease <= Date.now(),
         plannedRuns: typeof pr.planned_baseline_runs === "number" ? pr.planned_baseline_runs : null,
         runCap: typeof pr.run_cap === "number" ? pr.run_cap : null,
         spendCapUsd: pr.spend_cap_usd === null || pr.spend_cap_usd === undefined ? null : Number(pr.spend_cap_usd),
         completedRuns: tally.get(id)?.completed ?? 0,
         failedRuns: tally.get(id)?.failed ?? 0,
+        excludedRuns: tally.get(id)?.excluded ?? 0,
       });
     }
   }
 
   const questions: PilotQuestionRow[] = qs.map((q) => {
-    const protocolId = protocolByQuestion.get(String(q.id));
+    const measurementOn = (engine: PilotQuestionEngine): PilotMeasurement | null => {
+      const protocolId = protocolBySlot.get(slotKey(String(q.id), engine));
+      return protocolId ? measurements.get(protocolId) ?? null : null;
+    };
     return {
       id: String(q.id),
       ordinal: Number(q.ordinal),
@@ -201,20 +253,29 @@ export async function loadPilot(
       addedAt: String(q.added_at),
       retiredAt: q.retired_at ? String(q.retired_at) : null,
       retireReason: q.retire_reason ? String(q.retire_reason) : null,
-      perplexity: protocolId ? measurements.get(protocolId) ?? null : null,
+      engines: {
+        perplexity_sonar: measurementOn("perplexity_sonar"),
+        openai_chatgpt: measurementOn("openai_chatgpt"),
+      },
     };
   });
   return { pilot, questions };
 }
 
-/** The pilot state a Run or Retry needs, or null when the question is not this pilot's. */
+/**
+ * The pilot state a Run, Retry or review needs for one engine's measurement
+ * of one question, or null when the question is not this pilot's.
+ */
 export interface PilotQuestionTarget {
   pilotStatus: "active" | "closed";
   startsOn: string;
   endsOn: string;
   /** D-054 — a retired question is never run or retried again. */
   retired: boolean;
-  protocolId: string;
+  /** D-061 — the engine asked for. */
+  engine: PilotQuestionEngine;
+  /** D-061 — null when the question has no baseline slot on this engine (then `job` is null too). */
+  protocolId: string | null;
   job: {
     id: string;
     projectId: string;
@@ -225,11 +286,18 @@ export interface PilotQuestionTarget {
   plannedRuns: number | null;
 }
 
+/**
+ * D-061 — exactly one slot: the question's baseline on `engine`, which must
+ * be one of the closed set (a caller validates the request's engine first;
+ * an unknown one here is a programming error and throws).
+ */
 export async function resolvePilotQuestionTarget(
   client: SupabaseClient,
   pilotId: string,
-  pilotQuestionId: string
+  pilotQuestionId: string,
+  engine: PilotQuestionEngine
 ): Promise<PilotQuestionTarget | null> {
+  if (!isPilotQuestionEngine(engine)) throw new Error("resolvePilotQuestionTarget: unknown pilot engine.");
   const { data: pilotRow, error } = await client
     .from("pilots")
     .select("id,status,starts_on,ends_on")
@@ -247,15 +315,27 @@ export async function resolvePilotQuestionTarget(
   if (qError) throw qError;
   if (!questionRow) return null;
 
+  const p = pilotRow as Record<string, unknown>;
   const { data: slot, error: sError } = await client
     .from("pilot_question_protocols")
     .select("protocol_id")
     .eq("pilot_question_id", pilotQuestionId)
-    .eq("engine", "perplexity_sonar")
+    .eq("engine", engine)
     .eq("phase", "baseline")
     .maybeSingle();
   if (sError) throw sError;
-  if (!slot) return null;
+  if (!slot) {
+    return {
+      pilotStatus: p.status === "closed" ? "closed" : "active",
+      startsOn: String(p.starts_on),
+      endsOn: String(p.ends_on),
+      retired: Boolean((questionRow as Record<string, unknown>).retired_at),
+      engine,
+      protocolId: null,
+      job: null,
+      plannedRuns: null,
+    };
+  }
   const protocolId = String((slot as Record<string, unknown>).protocol_id);
 
   const [{ data: jobRow, error: jError }, { data: protocolRow, error: pError }] = await Promise.all([
@@ -269,13 +349,13 @@ export async function resolvePilotQuestionTarget(
   if (jError) throw jError;
   if (pError) throw pError;
   const j = jobRow as Record<string, unknown> | null;
-  const p = pilotRow as Record<string, unknown>;
   const planned = (protocolRow as Record<string, unknown> | null)?.planned_baseline_runs;
   return {
     pilotStatus: p.status === "closed" ? "closed" : "active",
     startsOn: String(p.starts_on),
     endsOn: String(p.ends_on),
     retired: Boolean((questionRow as Record<string, unknown>).retired_at),
+    engine,
     protocolId,
     job: j
       ? {

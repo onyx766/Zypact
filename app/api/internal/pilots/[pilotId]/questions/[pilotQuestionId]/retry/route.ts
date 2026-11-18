@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { requireFounderForRoute } from "@/lib/auth/founder";
 import { getDb } from "@/lib/db";
 import type { RetryFailedProtocolJobOutcome } from "@/lib/db/types";
+import { pilotEngineLabel, pilotEngineNotOnQuestionText } from "@/lib/pilots/copy";
+import { pilotChatGptEnabled, pilotEngineFromBody } from "@/lib/pilots/engines";
 import { pilotIsOver, pilotNotStarted, resolvePilotQuestionTarget } from "@/lib/pilots/reads";
 import { todayUtc, UUID_PATTERN } from "@/lib/pilots/validate";
 import { getReportServiceClient } from "@/lib/reports/service-client";
@@ -44,6 +46,11 @@ const REFUSAL_TEXT: Record<Exclude<RetryFailedProtocolJobOutcome, "APPROVED">, s
  * once the pilot is closed or outside its dates or the question is retired
  * (D-054). The failed run is chosen here, from the database, never from
  * the body.
+ *
+ * D-061 — the body names the engine (`engine`, absent: Perplexity, as
+ * before). An engine outside the closed set is refused, and a ChatGPT retry
+ * is refused unless the web host's gate (ZYPACT_PILOT_CHATGPT_ENABLED) is
+ * exactly "true", before anything is read or reserved.
  */
 export async function POST(
   request: Request,
@@ -80,9 +87,14 @@ export async function POST(
   if (typeof idempotencyKey !== "string" || !UUID_PATTERN.test(idempotencyKey)) {
     return NextResponse.json({ ok: false, error: "invalid_idempotency_key" }, { status: 400 });
   }
+  const choice = pilotEngineFromBody(body, { chatgptEnabled: pilotChatGptEnabled(), gated: true });
+  if (!choice.ok) {
+    return NextResponse.json({ ok: false, error: choice.error }, { status: choice.status });
+  }
+  const engine = choice.engine;
 
   const client = getReportServiceClient();
-  const target = await resolvePilotQuestionTarget(client, pilotId, pilotQuestionId);
+  const target = await resolvePilotQuestionTarget(client, pilotId, pilotQuestionId, engine);
   if (!target) {
     return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
   }
@@ -97,6 +109,10 @@ export async function POST(
       { ok: false, error: REFUSAL_TEXT.PILOT_CLOSED },
       { status: 409 }
     );
+  }
+  // D-061 — the question has no measurement on the engine asked for.
+  if (target.protocolId === null) {
+    return NextResponse.json({ ok: false, error: pilotEngineNotOnQuestionText(engine) }, { status: 409 });
   }
   const job = target.job;
   if (!job) {
@@ -132,6 +148,7 @@ export async function POST(
       actorUserId: guard.user.id,
       pilotId,
       pilotQuestionId,
+      engine,
       jobId: job.id,
       outcome: result.outcome,
       denialCode: result.denialCode,
@@ -143,7 +160,7 @@ export async function POST(
       {
         ok: true,
         outcome: result.outcome,
-        detail: `Retry of run ${job.nextBaselineOrdinal} reserved. Press Run for this question to continue its measurement.`,
+        detail: `Retry of run ${job.nextBaselineOrdinal} reserved. Press Run for this question on ${pilotEngineLabel(engine)} to continue its measurement.`,
       },
       { status: 200 }
     );

@@ -55,7 +55,14 @@ import type {
   GeneratedAssetRow,
   QaReportRow,
 } from "@/lib/db/types";
-import { buildProbeSetSummary, isBrandedPrompt, probeSetLabel, type PromptProbeAggregate } from "@/lib/probe-results/report-selection";
+import {
+  buildProbeSetSummary,
+  isBrandedPrompt,
+  isChatGptProbeRow,
+  probeSetLabel,
+  withoutChatGptRows,
+  type PromptProbeAggregate,
+} from "@/lib/probe-results/report-selection";
 import { isAiPlatformName } from "@/lib/ai-platforms/platform-registry";
 import {
   getResolvedCompetitorMentions,
@@ -329,27 +336,37 @@ export function resolveCompanyName(
  * Passing `null` is treated as "no row available" and returns
  * `"simulated"` — the safest default when a row is missing from an
  * aggregate roll-up.
+ *
+ * D-061 — a ChatGPT row keeps its own mode (`live_openai_chatgpt`): it is
+ * never called live Perplexity, and never simulated. This report leaves such
+ * rows out before any section reads them (`buildMvpReport`).
  */
 export function deriveProbeMode(row: ProbeResult | null): ProbeMode {
   if (!row) return "simulated";
-  return row.probeMode === "live_perplexity" ? "live_perplexity" : "simulated";
+  if (row.probeMode === "live_perplexity") return "live_perplexity";
+  if (row.probeMode === "live_openai_chatgpt") return "live_openai_chatgpt";
+  return "simulated";
 }
 
 /**
  * Roll a full `ProbeResult[]` into a single sentinel value for
  * report metadata. If any row is `live_perplexity`, the report advertises
  * live Perplexity; otherwise simulated. Mixed sets show `mixed`.
+ *
+ * D-061 — a ChatGPT row counts as neither; a set of ChatGPT rows only is
+ * `none` (nothing this report reads).
  */
 export type AggregateProbeMode = "simulated" | "live_perplexity" | "mixed" | "none";
 
 export function aggregateProbeMode(rows: ProbeResult[]): AggregateProbeMode {
-  if (rows.length === 0) return "none";
   let sawLivePerplexity = false;
   let sawSim = false;
   for (const r of rows) {
+    if (isChatGptProbeRow(r)) continue;
     if (r.probeMode === "live_perplexity") sawLivePerplexity = true;
     else sawSim = true;
   }
+  if (!sawLivePerplexity && !sawSim) return "none";
   if (sawLivePerplexity && sawSim) return "mixed";
   return sawLivePerplexity ? "live_perplexity" : "simulated";
 }
@@ -486,7 +503,11 @@ export function liveProbeLabel(platform: string): string {
  * ChatGPT.
  */
 export function probeHeadingLabel(row: ProbeResult): string {
-  return deriveProbeMode(row) === "live_perplexity"
+  const mode = deriveProbeMode(row);
+  // D-061 — never reached from buildMvpReport, which leaves ChatGPT rows
+  // out; a direct caller still never sees one called simulated.
+  if (mode === "live_openai_chatgpt") return "Live ChatGPT answer (OpenAI's API)";
+  return mode === "live_perplexity"
     ? liveProbeLabel(row.platform)
     : simulatedProbeLabel(row.platform);
 }
@@ -1889,11 +1910,17 @@ function sectionWarnings(input: BuildMvpReportInput): string {
   return parts.join("\n");
 }
 
-function sectionLimitations(input: BuildMvpReportInput): string {
+function sectionLimitations(input: BuildMvpReportInput, chatGptAnswersLeftOut = 0): string {
   const limits: string[] = [];
   if (!input.mirrorProfile) limits.push("No Mirror Profile has been generated for this project.");
   if (input.prompts.length === 0) limits.push("No buyer prompts have been generated yet.");
   if (input.probeResults.length === 0) limits.push("No probe results have been recorded.");
+  // D-061 — said whenever ChatGPT answers were left out (buildMvpReport).
+  if (chatGptAnswersLeftOut > 0) {
+    limits.push(
+      `${chatGptAnswersLeftOut} ChatGPT answer${chatGptAnswersLeftOut === 1 ? " stored for this project is" : "s stored for this project are"} not part of this report, which reads live Perplexity and simulated answers only.`
+    );
+  }
   if (input.competitors.length === 0) limits.push("No competitors have been discovered.");
   if (!input.gapMap) limits.push("No Gap Map has been generated.");
   if (input.gaps.length === 0) limits.push("No prioritized gaps yet.");
@@ -1977,7 +2004,8 @@ function sectionBlockedFixes(input: BuildMvpReportInput): string {
 function sectionAppendixMetadata(
   input: BuildMvpReportInput,
   qaDist: Record<string, number>,
-  now: Date
+  now: Date,
+  chatGptAnswersLeftOut = 0
 ): string {
   const brandName = resolveCompanyName(input.project, input.mirrorProfile).name;
   const activeAssets = currentAssetsForReport(input, brandName);
@@ -2018,7 +2046,11 @@ function sectionAppendixMetadata(
       String(probeSet.scorecardPromptGroups.length),
     ],
     ["scorecard probe runs", String(probeSet.scorecardProbeResults.length)],
-    ["all stored probe rows", String(input.probeResults.length)],
+    // D-061 — every stored row, the ChatGPT rows this report leaves out included.
+    ["all stored probe rows", String(input.probeResults.length + chatGptAnswersLeftOut)],
+    ...(chatGptAnswersLeftOut > 0
+      ? [["ChatGPT rows left out of this report", String(chatGptAnswersLeftOut)] as [string, string]]
+      : []),
     ["competitors", String(input.competitors.length)],
     ["prioritized gaps", String(input.gaps.length)],
     ["fix briefs", String(input.fixBriefs.length)],
@@ -2048,7 +2080,15 @@ function sectionAppendixMetadata(
 /*  Top-level builder                                                         */
 /* -------------------------------------------------------------------------- */
 
-export function buildMvpReport(input: BuildMvpReportInput): BuildMvpReportOutput {
+export function buildMvpReport(rawInput: BuildMvpReportInput): BuildMvpReportOutput {
+  // D-061 — this legacy request report reads live Perplexity and simulated
+  // answers only. A ChatGPT answer is neither, and counting it in a
+  // Perplexity figure would combine two engines (D-053 item 3), so every
+  // ChatGPT row is left out here, before any section reads the rows, and
+  // the limitations say how many.
+  const chatGptAnswersLeftOut = rawInput.probeResults.filter(isChatGptProbeRow).length;
+  const input: BuildMvpReportInput =
+    chatGptAnswersLeftOut === 0 ? rawInput : { ...rawInput, probeResults: withoutChatGptRows(rawInput.probeResults) };
   const now = input.now ?? new Date();
 
   const brand = resolveCompanyName(input.project, input.mirrorProfile);
@@ -2075,9 +2115,9 @@ export function buildMvpReport(input: BuildMvpReportInput): BuildMvpReportOutput
     assetsSection.markdown,
     sectionQaReview(input, qaDistribution),
     sectionWarnings(input),
-    sectionLimitations(input),
+    sectionLimitations(input, chatGptAnswersLeftOut),
     sectionBlockedFixes(input),
-    sectionAppendixMetadata(input, qaDistribution, now),
+    sectionAppendixMetadata(input, qaDistribution, now, chatGptAnswersLeftOut),
   ];
 
   const header = [

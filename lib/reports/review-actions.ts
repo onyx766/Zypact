@@ -20,7 +20,9 @@ import {
   type ProcessResult,
 } from "@/lib/reports/deliver-protocol-report";
 
-export type JobReviewResolution = "excluded_and_completed" | "failed";
+// D-061 — the job resolution lives in job-review.ts, so the pilot console
+// reuses the same call without loading the delivery code below.
+export { resolveJobReview, type JobReviewResolution } from "@/lib/reports/job-review";
 
 export interface ReviewState {
   requestStatus: string | null;
@@ -171,54 +173,6 @@ export async function loadReviewState(
         }
       : null,
   };
-}
-
-export async function resolveJobReview(
-  client: SupabaseClient,
-  input: {
-    requestId: string;
-    jobId: string;
-    reviewedBy: string;
-    resolution: JobReviewResolution;
-    note: string;
-  }
-): Promise<{ ok: true; jobStatus: string } | { ok: false; error: string }> {
-  const { data: job } = await client
-    .from("protocol_execution_jobs")
-    .select("id,project_id,status")
-    .eq("id", input.jobId)
-    .maybeSingle();
-
-  const row = (job ?? null) as Record<string, any> | null;
-
-  if (!row) return { ok: false, error: "Job not found." };
-
-  if (row.status !== "needs_review") {
-    return {
-      ok: false,
-      error: `Job is '${row.status}', not 'needs_review'. Only a job awaiting review can be resolved.`,
-    };
-  }
-
-  const { data, error } = await client.rpc("resolve_protocol_job_review", {
-    p_job_id: input.jobId,
-    p_project_id: row.project_id,
-    p_reviewed_by: input.reviewedBy,
-    p_resolution: input.resolution,
-    p_note: input.note,
-  });
-
-  if (error) return { ok: false, error: error.message };
-
-  const resolved = (Array.isArray(data) ? data[0] : data) as
-    | Record<string, any>
-    | null;
-
-  if (!resolved) {
-    return { ok: false, error: "Resolution was refused." };
-  }
-
-  return { ok: true, jobStatus: resolved.status };
 }
 
 export async function regenerateReport(

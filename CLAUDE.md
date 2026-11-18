@@ -25,10 +25,10 @@ If an archived file, code comment, UI label, prompt, test fixture, or old estima
 
 The V1 offer is **Evidence-Backed Shortlist Diagnostic + Registered Retest**.
 
-- Initial live surface: Perplexity Sonar, presented as a directional proxy.
+- Live surfaces: Perplexity Sonar, and ChatGPT (the OpenAI Responses API with web search) once its worker switch is turned on under its own authorisation (D-053, D-061). Each is presented as its own directional proxy; nothing is combined across them.
 - No fixed three-run external client score.
 - No `won`, `partial`, or `lost` client verdicts.
-- No claim that an AI answer caused a lost sale, an intervention caused a change, or one surface represents all AI buyers.
+- No claim that an AI answer caused a lost sale, an intervention caused a change, or that one surface, or the surfaces measured together, represent all AI buyers.
 - Paid execution requires approved question/protocol identity, bounded sampling, admission control, and reservation before each attempt.
 - Exact provider request/response evidence must be immutable and auditable.
 - One canonical snapshot must drive all client views and artifacts.
@@ -36,7 +36,7 @@ The V1 offer is **Evidence-Backed Shortlist Diagnostic + Registered Retest**.
 - Outcome statuses are limited to `increase_observed`, `decrease_observed`, `no_clear_change`, and `inconclusive`.
 - `integrity_passed` may deliver automatically; `needs_review` requires founder/admin review; `blocked` never delivers.
 
-Full multi-provider coverage, continuous monitoring, full Buyer Journey Intelligence, predictive scoring, CRM integrations, enterprise scope, and causal/revenue attribution are deferred.
+Coverage beyond the two pilot engines, continuous monitoring, full Buyer Journey Intelligence, predictive scoring, CRM integrations, enterprise scope, and causal/revenue attribution are deferred.
 
 ## Audited repository baseline
 
@@ -52,12 +52,14 @@ At that audited commit:
 
 **That snapshot is 2026-08-16 and is now far behind `main`.** It is kept because
 it is what the documentation reset was reconciled against, not because it
-describes the repository. Measured on `main` at `d2f4cdf` on 2026-09-30: **81**
-migrations through `0081`, **176** files matching `scripts/test-*.ts`, and
-**88** `test:*` plus **3** `verify:*` commands. The M7 retest and Outcome Card
-application layer is merged. See [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md)
-section 18, which supersedes every inventory figure above and in sections 3, 7,
-12, 13 and 15 of that file.
+describes the repository. Measured on branch `feat/chatgpt-phase-b` at `f580273`
+on 2026-11-18, and recounted unchanged after the review fixes on top: **95** migrations (82 four-digit, `0001`–`0081` and `0083`, and 13
+timestamped, the last `20261113120000`), **229** files matching
+`scripts/test-*.ts`, and **135** `test:*` plus **4** `verify:*` commands. The M7
+retest and Outcome Card application layer is merged. See
+[`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) section 37, which supersedes
+every inventory figure above and in sections 3, 7, 12, 13, 15 and 18 of that
+file.
 
 Do not infer deployed migration state, worker health, or production parity from repository files. M0 verifies those separately.
 

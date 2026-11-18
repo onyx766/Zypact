@@ -8,6 +8,13 @@
  * of this pilot's measurements. A source is offered, or accepted, only when
  * it is among that answer's own extracted sources, so a URL is never typed
  * freehand; the report re-checks both at every build.
+ *
+ * D-061 — sources are read under the rule of the answer's own engine: the
+ * provider of its slot's protocol (read from `protocols`, the protocol being
+ * the engine's identity). A slot whose protocol cannot be read, or names
+ * another engine than the slot, has no known rule: its answers are not
+ * offered and no source of theirs is accepted, rather than being read under
+ * the Perplexity rule, which finds no source in a ChatGPT answer.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -22,7 +29,7 @@ import {
 import type { PilotReportActionInput } from "@/lib/reports/build-pilot-actions";
 import { runOrdinalsByAttemptId } from "@/lib/reports/build-protocol-report";
 import type { EvidenceAttemptInput } from "@/lib/reports/protocol-report-types";
-import { extractProviderSources, normalizeSourceUrl } from "@/lib/source-insights/extract-provider-sources";
+import { extractProviderSources, normalizeProviderSourceUrl } from "@/lib/source-insights/extract-provider-sources";
 
 const ENGINE_LABEL: Record<string, string> = { perplexity_sonar: "Perplexity", openai_chatgpt: "ChatGPT" };
 
@@ -111,6 +118,12 @@ interface PilotSlot {
   retired: boolean;
   engine: string;
   protocolId: string;
+  /**
+   * D-061 — the slot's protocol's provider, which names the source rule;
+   * null when the protocol could not be read or names another engine than
+   * the slot (the slot trigger, 20261109180000, refuses that at insert).
+   */
+  provider: string | null;
 }
 
 async function pilotSlots(client: SupabaseClient, pilotId: string): Promise<PilotSlot[]> {
@@ -127,14 +140,29 @@ async function pilotSlots(client: SupabaseClient, pilotId: string): Promise<Pilo
     .in("pilot_question_id", [...questions.keys()])
     .eq("phase", "baseline");
   if (sError) throw sError;
-  return ((sRows ?? []) as Row[]).map((s) => {
+  const slotRows = (sRows ?? []) as Row[];
+  const providers = new Map<string, string>();
+  if (slotRows.length > 0) {
+    const { data: pRows, error: pError } = await client
+      .from("protocols")
+      .select("id,provider")
+      .in("id", slotRows.map((s) => String(s.protocol_id)));
+    if (pError) throw pError;
+    for (const p of (pRows ?? []) as Row[]) {
+      if (typeof p.provider === "string") providers.set(String(p.id), p.provider);
+    }
+  }
+  return slotRows.map((s) => {
     const q = questions.get(String(s.pilot_question_id))!;
+    const engine = String(s.engine);
+    const provider = providers.get(String(s.protocol_id));
     return {
       pilotQuestionId: String(s.pilot_question_id),
       ordinal: Number(q.ordinal),
       retired: q.retired_at !== null && q.retired_at !== undefined,
-      engine: String(s.engine),
+      engine,
       protocolId: String(s.protocol_id),
+      provider: provider === engine ? provider : null,
     };
   });
 }
@@ -214,12 +242,16 @@ export async function loadEvidenceChoices(
   for (const a of answers.sort((x, y) => x.answerNumber - y.answerNumber)) {
     const r = stored.get(a.probeRunId!);
     if (!r) continue;
+    const slot = slots.find((s) => s.protocolId === a.protocolId)!;
+    // D-061 — no known rule, nothing offered (never the Perplexity rule by default).
+    if (slot.provider === null) continue;
     const sources = extractProviderSources(
       typeof r.raw_response === "string" ? r.raw_response : null,
-      typeof r.raw_response_sha256 === "string" ? r.raw_response_sha256 : null
+      typeof r.raw_response_sha256 === "string" ? r.raw_response_sha256 : null,
+      slot.provider
     );
     if (sources.status === "no_raw_response" || sources.status === "hash_missing" || sources.status === "hash_mismatch") continue;
-    const engine = slots.find((s) => s.protocolId === a.protocolId)!.engine;
+    const engine = slot.engine;
     choices.push({
       attemptId: a.attemptId,
       engine,
@@ -257,6 +289,7 @@ export async function verifyActionEvidence(
   const slots = await pilotSlots(client, pilotId);
   const answers = await answersOf(client, slots.map((s) => s.protocolId));
   const byId = new Map(answers.map((a) => [a.attemptId, a]));
+  const slotByProtocol = new Map(slots.map((s) => [s.protocolId, s]));
   for (const link of links) {
     if (!byId.has(link.attemptId)) return refuse("EVIDENCE_OUTSIDE_PILOT");
   }
@@ -273,11 +306,15 @@ export async function verifyActionEvidence(
       const a = byId.get(link.attemptId)!;
       const r = a.probeRunId ? stored.get(a.probeRunId) : undefined;
       if (a.status !== "completed" || !r) return refuse("EVIDENCE_NOT_AN_ANSWER");
+      // D-061 — the answer's own engine's rule; with none known, no source can be confirmed.
+      const provider = slotByProtocol.get(a.protocolId)?.provider ?? null;
+      if (provider === null) return refuse("SOURCE_NOT_IN_ANSWER");
       const sources = extractProviderSources(
         typeof r.raw_response === "string" ? r.raw_response : null,
-        typeof r.raw_response_sha256 === "string" ? r.raw_response_sha256 : null
+        typeof r.raw_response_sha256 === "string" ? r.raw_response_sha256 : null,
+        provider
       );
-      const wanted = normalizeSourceUrl(link.sourceUrl)?.url ?? link.sourceUrl;
+      const wanted = normalizeProviderSourceUrl(link.sourceUrl, provider)?.url ?? link.sourceUrl;
       const hit = sources.status === "ok" ? [...sources.cited, ...sources.retrievedOnly].find((x) => x.url === wanted) : undefined;
       if (!hit) return refuse("SOURCE_NOT_IN_ANSWER");
       sourceUrl = hit.url;
@@ -476,7 +513,10 @@ export async function listPilotActionsForAdmin(client: SupabaseClient, pilotId: 
     const r = a?.probeRunId ? stored.get(a.probeRunId) : undefined;
     if (!r) return { answerText: null, answerNote: "No stored answer." };
     const raw = typeof r.raw_response === "string" ? r.raw_response : null;
-    const check = extractProviderSources(raw, typeof r.raw_response_sha256 === "string" ? r.raw_response_sha256 : null);
+    // D-061 — read under the answer's own engine's rule. Only the fingerprint
+    // statuses are used here, and those never depend on the rule.
+    const provider = a ? slotByProtocol.get(a.protocolId)?.provider ?? null : null;
+    const check = extractProviderSources(raw, typeof r.raw_response_sha256 === "string" ? r.raw_response_sha256 : null, provider);
     if (check.status === "no_raw_response" || check.status === "hash_missing" || check.status === "hash_mismatch") {
       return { answerText: null, answerNote: "The stored answer could not be checked against its recorded fingerprint." };
     }

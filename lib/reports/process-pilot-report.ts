@@ -73,6 +73,7 @@ export async function buildAndSavePilotReport(
         engine: m.engine,
         retired: q.retired,
         completedAttempts: m.counts.completed,
+        attempts: m.counts.attempted,
         signals: await readIntegritySignals(client, m.report),
       });
     }

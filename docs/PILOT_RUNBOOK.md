@@ -3,7 +3,7 @@
 - **Status:** Canonical founder-operated V1 runbook
 - **Runbook date:** 2026-08-16
 - **Offer:** Evidence-Backed Shortlist Diagnostic + Registered Retest
-- **Initial surface:** Perplexity Sonar
+- **Engines:** Perplexity Sonar; and ChatGPT (the OpenAI Responses API with web search) once its worker switch is turned on under its own authorisation (D-053, D-061). Each is its own directional measurement; nothing is combined across them.
 
 ## 1. Purpose
 
@@ -16,7 +16,7 @@ It is designed to let sales and customer learning continue without sending legac
 The pilot provides:
 
 - approved buyer-question intake;
-- a bounded Perplexity Sonar baseline under a recorded protocol;
+- a bounded baseline on each engine, each under its own recorded protocol;
 - immutable raw evidence and traceability;
 - prompt-scoped observed competitors, claims, citations, and sources;
 - one evidence-backed intervention hypothesis;
@@ -27,7 +27,7 @@ The pilot provides:
 The pilot does not provide:
 
 - a guarantee of recommendation, citation, lead, sale, or revenue;
-- total ChatGPT/Gemini/Copilot/Claude visibility;
+- what every buyer sees in ChatGPT, Perplexity, Gemini, Copilot, Claude or any other AI tool, or a score combined across engines;
 - a global company visibility score;
 - proof that an intervention caused a change;
 - unlimited runs or open-ended monitoring;
@@ -40,8 +40,9 @@ The pilot does not provide:
 
 Pilot Mode is the managed pilot the founder approved on 2026-11-14. The team runs every measurement and retest from the admin console, and the customer views the results. Until the customer login shows results, they reach the customer by private link.
 
-- **Paid runs:** only team-run jobs, one job per operator start, within the database caps and the worker's daily ceiling, set at the figure the founder confirms when authorising that production step (10 USD proposed). Nothing a customer can do starts paid work. The first paid pilot run waits for step 1 (D-052) to be deployed: until then a Run is not limited to its own request (`CURRENT_STATUS.md` §18.5 item 2).
+- **Paid runs:** only team-run jobs, one job per operator start, within the database caps and the worker's daily ceiling, set at the figure the founder confirms when authorising that production step (10 USD proposed). With ChatGPT, the ceiling is 10 USD on its first supervised day, then 20 USD, each set at its own step on both hosts (D-059 item 4). Nothing a customer can do starts paid work. The first paid pilot run waits for step 1 (D-052) to be deployed: until then a Run is not limited to its own request (`CURRENT_STATUS.md` §18.5 item 2).
 - **Engines (D-053, replacing D-051's Perplexity only):** the 1,500 USD pilot includes Perplexity Sonar and ChatGPT. Each is reported as its own directional measurement of one AI engine, with no score combined across engines and no claim about other assistants. ChatGPT measures nothing for a pilot until its confirmation run passes, its setting is approved, it is wired into the worker and its deploy is authorised. Until then a pilot starts on Perplexity, and the customer's change waits until both baselines are taken. Never state an overall visibility score.
+  - **2026-11-18 (D-061):** the first three conditions are met. The confirmation run passed, the setting was approved (D-050), and phase B wires ChatGPT into the worker under the same approval, admission and reservation as Perplexity, with its own caps (not yet applied or deployed). The fourth is [`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md) Part C: the worker switch first, then the console's ChatGPT gate.
 - **Shape (D-053):** 15 approved buyer questions (20 at most), 5 answers per question on each engine, a retest of up to 5 questions on both engines, 90 days.
 - **Recommended actions (D-053):** written by the team, each linked to the answers and sources it rests on, reviewed before sending. Never generated automatically, and never said to be likely to change results.
 - **Offer wording:** use D-053 item 8.
@@ -113,7 +114,7 @@ The written pilot agreement should define:
 
 - exact company/category scope;
 - included buyer questions;
-- initial surface;
+- the engines measured, each reported separately;
 - diagnostic and retest deliverables;
 - sampling-planning process and hard caps;
 - estimated provider/hosting costs and who bears them;
@@ -180,19 +181,40 @@ A managed pilot holds all of one customer's questions in one project, on **Pilot
    - the date of that approval.
 
    Adding a question queues its Perplexity measurement with the same plan and caps as an audit: 5 runs, a run cap of 7, a retry cap of 2 and $2.
-3. Press **Run** for one question at a time, after the paid-execution switch and the daily ceiling are set. A run that failed at the provider is retried from the pilot page, then run again.
+
+   **ChatGPT (D-061), once it is connected** ([`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md) Part C):
+   - Measure a question on ChatGPT in one of three ways:
+     - tick **Also measure it on ChatGPT** when adding the question; it is unticked by default;
+     - press **Add ChatGPT** on the question later;
+     - press **Add ChatGPT to every question without it**.
+   - Each queues a ChatGPT measurement of the same approved question: 5 runs, a run cap of 7, a retry cap of 2 and $4 (D-059 item 3). Nothing runs until you press Run for it on ChatGPT.
+   - While any ChatGPT measurement is queued, every start, on either engine, needs $4 of room under the daily ceiling: the ceiling check adds the largest queued cap to the last 24 hours' spend.
+3. Press **Run** for one question on one engine at a time, after the paid-execution switch and the daily ceiling are set. A run that failed at the provider is retried from the pilot page, on its engine, then run again. A ChatGPT request that the flex tier refused for lack of capacity is such a failure: press Retry. Nothing is resent automatically (D-059 item 5).
+
+   A ChatGPT Run: most answers take 30-60 seconds; a call is stopped after about 5 minutes and the measurement is then held for review (item 5). If today's spending limit has no room, Run is refused; press it again later.
 4. If a question's measurement stopped and cannot go on, **Retire** it from the pilot page with a reason. That covers a measurement that was abandoned, or that failed in a way Retry does not take.
    - The question and its evidence are kept.
    - It no longer counts toward the limit, and it can never be run again.
    - You can add the same approved question again.
    - A measurement that can still be retried is not retired; retry it.
    - A pilot may have at most 5 retired questions.
-5. Close the pilot when it ends, or the customer stops.
+   - **With two engines (D-061), retiring stops the question on both.** It is allowed once one of its measurements has stopped for good, even if the other could still go on or has finished; the other engine's figures, finished ones included, are then no longer reported or counted in any total. It is refused while either is running or has a Run pending, and while the other has a run that has not finished: a Retry you approved but have not run yet, a run whose worker stopped part-way, or a run held for review. Press Run for it on that engine and let it finish (or resolve its review), then retire. A ChatGPT measurement still queued when its question is retired stays queued: every later start still needs 4 USD of room, and the queue is never empty again.
+   - **With ChatGPT off** (web gate unset), a ChatGPT measurement that is only waiting for Run, or that could still be retried, can be neither run nor retried, and does not by itself let its question be retired: Retire then refuses it (for one that could be retried or has an unfinished run, it says ChatGPT must be turned back on first).
+5. If a measurement is **held for review** (for example a ChatGPT call that timed out with no answer on record), the pilot page says why, for that engine. Resolve it there (D-061) with one of the request page's two resolutions, and a note of 10 to 2000 characters:
+   - **Finish without the unconfirmed run;**
+   - **Close as stopped.** A measurement closed as stopped cannot be retried; retire the question if it cannot go on.
+
+   Neither runs or spends anything, and the unconfirmed run is never counted as completed.
+
+The pilot page counts each engine's runs as the report does: failed (a timeout or a cancelled run included) and excluded after review.
+
+6. Close the pilot when it ends, or the customer stops.
    - A close is refused while one of its measurements is running or about to start: wait for it to finish, then close.
    - Closing keeps all evidence.
    - The database then refuses any further Run, retry or claim for the pilot, including a retest of one of its questions. It also refuses a Run for a pilot past its end date.
 
 ChatGPT shows as "Not measured" until it is wired (D-053 item 3). A pilot's results are not yet reported or sent: the combined pilot report is the next step.
+- **2026-11-18 (D-061):** until ChatGPT is connected on the web host (`ZYPACT_PILOT_CHATGPT_ENABLED`, set only after the worker's switch is on), ChatGPT shows as "Not connected", and Add, Run and Retry on ChatGPT refuse. A question with no ChatGPT measurement reads "Not measured" on ChatGPT.
 
 ### 8.2 The combined pilot report (D-055)
 
@@ -208,12 +230,21 @@ The pilot page's **Pilot report** section builds one report for all of the pilot
 
 What the report says and does not say:
 - Each question's result is its own: how often the company was named in that question's readable answers, the likely range, and every failed or excluded attempt.
-- One total line adds up readable answers over the finished questions. It is a count of answers, not a rate or a score for the company.
-- Each engine has a "how it was measured" section: the required directional sentence, the model, how the answers were obtained, the dates, and the method versions.
-- A retired question shows its attempt counts only, with no rate.
+- One total line per engine adds up readable answers over the finished questions (D-059 item 7). It is a count of answers, not a rate or a score for the company.
+- **Two engines (D-061):**
+  - each engine has its own tables, total and directional sentence, and nothing is added up across engines;
+  - a live question not measured on an engine is named under that engine, never counted;
+  - a measurement without a readable answer says so in words, never "0 of 0".
+- Each engine has a "how it was measured" section: the required directional sentence, the model, how the answers were obtained, the dates, the method versions, and the rule its sources were read under. For ChatGPT it also gives the setting version, the service tier (flex) and the web-search mode (D-061).
+- A retired question shows its attempt counts only, with no rate, even for a measurement that had finished on its other engine; a question retired with two measurements says one of them could not finish and how far each got.
+- **A measurement a review ended** (for example after a ChatGPT timeout, resolved with **Finish without the unconfirmed run**) reads "Ended after review", never "Finished". It shows its own figures and how many planned answers it completed, is left out of its engine's total and named there, and holds the report for review.
+- An engine whose questions are all retired reads "no live question is measured on it", never "0 of 0".
+- A revision built before D-061 keeps the words it was built with when opened again, so its page and its stored Markdown say the same.
 - Answers still being collected are counted as such, never as failed.
 - Other brands and source types are shown per question, with totals across questions labelled as such.
 - ChatGPT reads "not measured in this pilot yet" until it is connected (D-053 item 3).
+- **Blocked (D-061):** a report is blocked when a measurement's protocol is for another engine than its own, or when one question's measurements on the two engines are not of the same approved question.
+- **Needs review (D-061):** a report needs review when the setting or the source rule differs between questions of one engine, or when a ChatGPT answer has no recorded setting.
 - Suggested actions appear only once reviewed (§8.3, D-057).
 
 ### 8.3 Suggested actions (D-057)
@@ -221,7 +252,7 @@ What the report says and does not say:
 Suggested actions are written by the team, never generated, and each rests on stored answers of this pilot (D-053 item 4).
 
 1. In the pilot page's **Suggested actions** section, press **Write a suggested action**. Fill in every field: what we observed, the suggested action, why it might matter (as a hypothesis), what else could explain it, and what we don't know yet. A pilot may have at most 30 suggested actions (D-059 item 10). Withdrawn ones do not count toward the 30; that part is D-057's *(engineer)* rule, still proposed for founder confirmation. At the limit the button is disabled and the page says why.
-2. Link the answers it rests on: choose a question, then one of its completed answers, then, if the action rests on a particular source, one of that answer's own sources. Link at least one and at most ten (D-059 item 10). You cannot type a URL.
+2. Link the answers it rests on: choose a question, then one of its completed answers, then, if the action rests on a particular source, one of that answer's own sources. Link at least one and at most ten (D-059 item 10). You cannot type a URL. Answers of either engine can be linked; a source is checked under its own engine's rule (D-061).
 3. Save. The action is a draft. Wording that predicts an effect or claims a cause is refused: "will improve", "should increase", "is expected to", "guarantee", "ensure", "caused", "led to", "due to", "because of" and the like, in any spelling. Reword it as a hypothesis ("one possibility is", "may reflect", "could come from"). This applies to "What else could explain it" too.
 4. Read the action and, under each link, the stored answer it rests on (**Read the stored answer**) and the source it names. Then press **I have read it: mark reviewed** and confirm. One review, by the founder, is enough (D-059 item 12). Only reviewed actions appear in a report built after that. An edit is a new draft that needs a new review; an action can have at most 50 versions.
 5. Withdraw an action that no longer holds, with a reason. **A withdrawal is final: it cannot be undone** (D-059 item 11). The action stays on record, appears in no later report, and cannot be edited; write a new one if it is needed again.

@@ -3,12 +3,12 @@
 - **Status:** Canonical V1 product scope
 - **Scope date:** 2026-08-16
 - **Offer:** Evidence-Backed Shortlist Diagnostic + Registered Retest
-- **Initial live surface:** Perplexity Sonar
+- **Live surfaces:** Perplexity Sonar; and ChatGPT (the OpenAI Responses API with web search) once its worker switch is turned on under its own authorisation (D-053, D-061). Each is measured and reported separately, as its own directional proxy; nothing is combined across them.
 - **Direction update (D-040, 2026-11-01):** the product target is now self-service. This amends §2 (founder-operated first pilots) and §4.1 (Request Demo as the primary CTA, hybrid disclosure, no self-serve checkout). It does so **only under D-040's transition rule**: every control in this document stays in force until its replacement is implemented, tested and separately authorised. The reconciliation is in [`SELF_SERVICE_PRODUCT.md`](SELF_SERVICE_PRODUCT.md) §9.
 
 ## 1. V1 promise
 
-> Approve a commercially meaningful buyer question, execute a bounded and recorded baseline on one defined AI surface, inspect the exact evidence and observed competitors, register one evidence-backed intervention hypothesis, and retest the same question after an explicit observation window.
+> Approve a commercially meaningful buyer question, execute a bounded and recorded baseline on each defined AI surface, reported separately, inspect the exact evidence and observed competitors, register one evidence-backed intervention hypothesis, and retest the same question after an explicit observation window.
 
 V1 reports observed change, no clear change, or an inconclusive result. It does not promise causal proof, total AI-market coverage, or revenue attribution.
 
@@ -47,7 +47,7 @@ The first pilots are founder-operated. V1 does not require a mature self-serve o
 
 - a clear landing page for the Evidence-Backed Shortlist Diagnostic + Registered Retest;
 - **Request Demo** as the primary call to action;
-- honest disclosure that the initial live surface is Perplexity Sonar and the first pilots are hybrid/founder-operated;
+- honest disclosure of the live surfaces, that each is a separate directional measurement, and that together they do not represent every AI tool or buyer; first pilots are hybrid/founder-operated;
 - no fixed three-run free company score or unsupported “lost sale” claim;
 - pricing may describe a paid/custom pilot path without requiring public fixed packages;
 - self-serve checkout is not required for the core V1 trust workflow.
@@ -254,7 +254,7 @@ V1 is paid-pilot ready only when:
 
 ## 8. Explicitly deferred
 
-- broad multi-model/public-surface coverage;
+- coverage beyond the two pilot engines;
 - full AI Buyer Journey Intelligence;
 - continuous weekly/monthly monitoring;
 - predictive buyer intelligence or expected lift;

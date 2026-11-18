@@ -8,6 +8,10 @@
  * adapter is never loaded. worker.ts and execute-job.ts reach ChatGPT only
  * through the injected engine (types.ts ChatGptEngine).
  *
+ * D-061 — it also holds the startup check that the connected database can
+ * record a ChatGPT attempt (`checkChatGptSchema`). Living here, it is loaded
+ * only with the switch on, so with the switch off it is never called.
+ *
  * Pure apart from the adapter it wraps: no environment read here, no fetch.
  */
 
@@ -74,4 +78,43 @@ export function buildChatGptEngine(args: {
     probeMode: args.probeMode,
     answerFromBody: (raw) => chatGptAnswerFromBody(setting, raw),
   };
+}
+
+/**
+ * D-061 — the capability a ChatGPT attempt needs from the connected schema:
+ * the probe mode 20261109180000 adds to the probe_runs and probe_results
+ * CHECKs (and, with it, persist taking the platform from the probe run).
+ */
+export const CHATGPT_SCHEMA_CAPABILITY = "live_openai_chatgpt";
+
+export type ChatGptSchemaCheck =
+  | { ready: true }
+  /**
+   * `capabilities_unreadable`: the read failed, which is what a database
+   * without 20261109180000 gives (PostgREST has no such function).
+   * `capability_missing`: the reply is not a list naming the capability.
+   */
+  | { ready: false; reason: "capabilities_unreadable" | "capability_missing" };
+
+/**
+ * D-061 — whether the connected database can record a ChatGPT attempt.
+ * With the switch on, the worker entry point calls this at startup with the
+ * adapter's `protocolWorkerCapabilities()` and refuses to start, before any
+ * claim, unless it is ready. A read that throws (a missing function, an
+ * unreachable database) is a refusal, never a pass: a worker switched on
+ * ahead of the migration would otherwise fail its first ChatGPT attempt
+ * after admission and reservation, at the probe-mode CHECK. The thrown value
+ * is never inspected or logged; only the closed reason leaves this function.
+ */
+export async function checkChatGptSchema(readCapabilities: () => Promise<unknown>): Promise<ChatGptSchemaCheck> {
+  let capabilities: unknown;
+  try {
+    capabilities = await readCapabilities();
+  } catch {
+    return { ready: false, reason: "capabilities_unreadable" };
+  }
+  if (!Array.isArray(capabilities) || !capabilities.includes(CHATGPT_SCHEMA_CAPABILITY)) {
+    return { ready: false, reason: "capability_missing" };
+  }
+  return { ready: true };
 }

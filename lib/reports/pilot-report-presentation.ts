@@ -10,7 +10,7 @@
  * Pure: no database, network, provider or model.
  */
 import { pilotProvenanceLabel } from "@/lib/pilots/copy";
-import { engineLabel } from "@/lib/reports/build-pilot-report";
+import { engineLabel, questionOrdinalsWords } from "@/lib/reports/build-pilot-report";
 import {
   ACTION_FIELD_WORDS,
   ACTIONS_HEADING,
@@ -19,11 +19,20 @@ import {
   actionEvidenceWords,
   actionReviewedWords,
   ANSWER_MODE_WORDS,
+  endedAfterReviewWords,
+  engineNothingReadableWords,
   LABEL_WORDS,
+  NO_READABLE_ANSWER_CELL,
+  NO_READABLE_ANSWER_LINE,
   PILOT_REPORT_TITLE,
   PORTFOLIO_WEIGHTING_WORDS,
   PROVIDER_WORDS,
+  RETIRED_ONE_OF_SEVERAL_WORDS,
   RETIRED_WORDS,
+  retiredMeasurementWords,
+  settingSearchWords,
+  settingTierWords,
+  sourceRuleWords,
   STATE_WORDS,
   SURFACE_WORDS,
   UNKNOWN_ANSWER_MODE_WORDS,
@@ -35,6 +44,7 @@ import type {
   PilotAttemptCounts,
   PilotConditionValue,
   PilotEngineConditions,
+  PilotEngineKey,
   PilotReportPayload,
 } from "@/lib/reports/pilot-report-types";
 import { SOURCE_CATEGORY_LABEL } from "@/lib/source-insights/source-types";
@@ -131,6 +141,10 @@ function conditionsSection(c: PilotEngineConditions): PilotPresentationSection {
         ? `Answers collected on ${c.executedFrom}.`
         : `Answers collected from ${c.executedFrom} to ${c.executedTo}.`
       : "No answer has been collected yet.";
+  // D-061 — present only on revisions built since D-061, and the setting
+  // only for an engine whose protocols record one (ChatGPT).
+  const settings = c.settingVersion ?? [];
+  const rules = c.sourceRule ?? [];
   return {
     key: `conditions-${c.engine}`,
     heading: `${label}: how it was measured`,
@@ -140,25 +154,63 @@ function conditionsSection(c: PilotEngineConditions): PilotPresentationSection {
       `Engine: ${valueWords(c.provider, (v) => PROVIDER_WORDS[v] ?? UNKNOWN_PROVIDER_WORDS)}.`,
       `Answer format: ${valueWords(c.surface, (v) => SURFACE_WORDS[v] ?? UNKNOWN_SURFACE_WORDS)}.`,
       `Model: ${valueWords(c.model, (v) => v)}.`,
+      ...(settings.length > 0
+        ? [
+            `Setting version: ${valueWords(settings, (v) => (v === "" ? "not recorded" : v))}.`,
+            `Service tier: ${valueWords(settings, settingTierWords)}.`,
+            `Web search: ${valueWords(settings, settingSearchWords)}.`,
+          ]
+        : []),
       `Answers: ${valueWords(c.answerMode, (v) => ANSWER_MODE_WORDS[v] ?? UNKNOWN_ANSWER_MODE_WORDS)}.`,
       dates,
       `Methodology version ${valueWords(c.methodologyVersion, (v) => v)}; analysis version ${valueWords(c.analyzerVersion, (v) => (v === "" ? "not recorded" : v))}.`,
+      ...(rules.length > 0 ? [`Sources: ${valueWords(rules, sourceRuleWords)}.`] : []),
     ],
   };
 }
 
+/**
+ * D-061 (review of phase B, engineer) — whether a stored payload was built
+ * before D-061. Every revision built since carries `questionsNotMeasured` on
+ * each engine (an empty list included); none built before does. The page
+ * re-renders a stored payload with this code, while the stored Markdown
+ * keeps the words it was saved with, so a revision built before D-061 keeps
+ * the words of that time wherever D-061 changed them: "0 of 0 readable
+ * answers" in a row and a question line, the hero's engines, the total line
+ * and the empty other-brand and source notes. The page then still says what
+ * its stored Markdown says (METHODOLOGY §16 gate 14).
+ */
+export function builtBeforeD061(payload: PilotReportPayload): boolean {
+  return !payload.engines.some((e) => Array.isArray(e.questionsNotMeasured));
+}
+
 export function presentPilotReport(payload: PilotReportPayload): PilotPresentation {
   const { subject, window } = payload;
+  const beforeD061 = builtBeforeD061(payload);
   const live = payload.questions.filter((q) => !q.retired);
   const retiredCount = payload.questions.length - live.length;
   const measured = payload.engines.filter((e) => e.measured);
   const notMeasured = payload.engines.filter((e) => !e.measured);
+  // D-061 — the hero names only the engines that produced a readable answer
+  // (a revision built before D-061 named every measured engine).
+  const answered = beforeD061 ? measured : measured.filter((e) => e.questionsWithReadableAnswer > 0);
+  const summaryOf = (engine: PilotEngineKey) => payload.engines.find((e) => e.engine === engine);
+  // D-061 — an engine with no readable answer at all says why, in words:
+  // still being measured on some live question, or nothing it returned was readable.
+  const nothingReadable = (engine: PilotEngineKey): string | null => {
+    if (beforeD061) return null;
+    if ((summaryOf(engine)?.questionsWithReadableAnswer ?? 0) > 0) return null;
+    const stillMeasuring = live.some((q) =>
+      q.measurements.some((m) => m.engine === engine && (m.state === "not_started" || m.state === "not_finished"))
+    );
+    return engineNothingReadableWords(engineLabel(engine), stillMeasuring);
+  };
 
   const heroCopy = [
     ...measured.map((e) => `${e.label}: ${e.note}`),
     ...notMeasured.map((e) => `${e.label} has not been measured in this pilot yet.`),
     `Every figure belongs to one question on one engine. Results show what ${
-      measured.length > 0 ? measured.map((e) => e.label).join(" and ") : "the engines"
+      answered.length > 0 ? answered.map((e) => e.label).join(" and ") : "the engines"
     } answered during the pilot; they don't represent every AI tool or every buyer.`,
   ];
 
@@ -168,13 +220,22 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
     const label = engineLabel(section.engine);
     const p = section.portfolio;
     const notes: string[] = [];
-    if (p) {
+    if (p && p.includedOrdinals.length === 0 && !beforeD061) {
+      // D-061 — no question has finished with a readable answer: no total,
+      // and never "named in 0 of 0".
+      notes.push(p.heterogeneity);
+    } else if (p) {
       notes.push(
         `Total across ${plural(p.includedOrdinals.length, "finished question")}: named in ${p.numerator} of ${p.denominator} readable answers. ${PORTFOLIO_WEIGHTING_WORDS} ${p.heterogeneity}`
       );
       if (p.leftOutOrdinals.length > 0) {
         notes.push(`Left out of the total: question${p.leftOutOrdinals.length === 1 ? "" : "s"} ${p.leftOutOrdinals.join(", ")}.`);
       }
+    }
+    // D-061 — live questions with no measurement on this engine are named, never counted.
+    const unmeasured = summaryOf(section.engine)?.questionsNotMeasured ?? [];
+    if (unmeasured.length > 0) {
+      notes.push(`Not measured on ${label}, so not in this table or its total: ${questionOrdinalsWords(unmeasured)}.`);
     }
     notes.push(payload.dependenceNote);
     sections.push({
@@ -189,7 +250,7 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
             : [
                 String(r.ordinal),
                 STATE_WORDS[r.state],
-                `${r.numerator} of ${r.denominator} readable answers`,
+                r.denominator === 0 && !beforeD061 ? NO_READABLE_ANSWER_CELL[r.state] : `${r.numerator} of ${r.denominator} readable answers`,
                 rangeWords(r.intervalLow, r.intervalHigh),
                 attemptWords(r.counts),
                 LABEL_WORDS[r.label],
@@ -201,6 +262,7 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
   }
 
   for (const section of payload.competitors) {
+    const empty = nothingReadable(section.engine);
     sections.push({
       key: `competitors-${section.engine}`,
       heading: `${engineLabel(section.engine)}: other brands named, across questions`,
@@ -217,13 +279,14 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
               ]),
             },
       notes: [
-        ...(section.rows.length === 0 ? ["No other brand was named in a readable answer."] : []),
+        ...(section.rows.length === 0 ? [empty ?? "No other brand was named in a readable answer."] : []),
         ...(section.rowsNotShown > 0 ? [`${section.rowsNotShown} further name(s) are in the question sections below.`] : []),
       ],
     });
   }
 
   for (const section of payload.sources) {
+    const empty = nothingReadable(section.engine);
     const withList = new Map(section.coverage.map((c) => [c.ordinal, c.runsWithSourceEvidence]));
     const cellWords = (ordinal: number, k: number) => `Q${ordinal}: ${k} of ${withList.get(ordinal) ?? 0}`;
     const thin = section.coverage.filter((c) => c.runsWithSourceEvidence < c.readableRuns);
@@ -245,7 +308,7 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
               ]),
             },
       notes: [
-        ...(section.rows.length === 0 ? ["No readable answer had a usable source list."] : []),
+        ...(section.rows.length === 0 ? [empty ?? "No readable answer had a usable source list."] : []),
         ...(thin.length > 0
           ? [
               `Some readable answers had no usable source list and are not counted here: ${thin
@@ -259,16 +322,25 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
 
   const questions: PilotPresentationQuestion[] = payload.questions.map((q) => {
     const lines: string[] = [];
+    // D-061 (review of phase B) — a question retired with more than one
+    // measurement: retiring needed one of them to stop for good, and the
+    // other may have finished, so each engine's line says how far it got.
+    const severalRetired = q.retired && q.measurements.length > 1 && !beforeD061;
     for (const m of q.measurements) {
       const label = engineLabel(m.engine);
       if (q.retired) {
-        lines.push(`${label} (retired): ${attemptWords(m.counts)}.`);
+        lines.push(`${label} (${severalRetired ? retiredMeasurementWords(m.state) : "retired"}): ${attemptWords(m.counts)}.`);
         continue;
       }
       const o = m.report.observation;
       lines.push(
-        `${label} (${STATE_WORDS[m.state]}): named in ${o.numerator} of ${o.denominator} readable answers; likely range ${rangeWords(o.interval?.low ?? null, o.interval?.high ?? null)}.`
+        o.denominator === 0 && !beforeD061
+          ? // D-061 — no readable answer yet, or none at all: said in words, beside the counts below.
+            `${label} (${STATE_WORDS[m.state]}): ${NO_READABLE_ANSWER_LINE[m.state]}`
+          : `${label} (${STATE_WORDS[m.state]}): named in ${o.numerator} of ${o.denominator} readable answers; likely range ${rangeWords(o.interval?.low ?? null, o.interval?.high ?? null)}.`
       );
+      // D-061 (review of phase B) — a review ended it: how many planned answers it completed, and that it is not in the total.
+      if (m.state === "ended_after_review") lines.push(endedAfterReviewWords(m.counts.completed, m.counts.planned));
       lines.push(`Attempts: ${attemptWords(m.counts)}.`);
       if (m.report.competitorsObserved.length > 0) {
         lines.push(`Other brands named: ${m.report.competitorsObserved.map((c) => `${c.name} (${c.runsMentionedIn})`).join(", ")}.`);
@@ -281,7 +353,7 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
       key: q.pilotQuestionId,
       heading: `${q.ordinal}. ${q.text}`,
       meta: `${pilotProvenanceLabel(q.provenance)}. Approved by the customer on ${q.customerApprovedOn}.${
-        q.retired ? ` ${RETIRED_WORDS}${q.retiredOn ? ` (${q.retiredOn})` : ""}` : ""
+        q.retired ? ` ${severalRetired ? RETIRED_ONE_OF_SEVERAL_WORDS : RETIRED_WORDS}${q.retiredOn ? ` (${q.retiredOn})` : ""}` : ""
       }`,
       lines,
     };

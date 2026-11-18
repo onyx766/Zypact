@@ -37,6 +37,7 @@ import {
   type PilotReportQuestionEngine,
   type PilotSourceRow,
 } from "@/lib/reports/pilot-report-types";
+import { sourcesRuleVersionForProvider } from "@/lib/source-insights/extract-provider-sources";
 import { categorizeDomain, SOURCE_CATEGORY_LABEL, SOURCE_TYPE_LIST_VERSION, type SourceCategory } from "@/lib/source-insights/source-types";
 
 export const PILOT_ENGINE_ORDER: readonly { key: PilotEngineKey; label: string }[] = [
@@ -80,6 +81,14 @@ export interface PilotReportSlotInput {
   execution: PilotExecutionWindow;
   /** probe_runs.probe_mode of the slot's attempts, deduplicated. */
   answerModes: string[];
+  /** D-061 — the protocol's `model_config.setting_version`; null or absent when it records none. */
+  settingVersion?: string | null;
+  /**
+   * D-061 (review of phase B) — the job's `review_resolution`: how a review
+   * ended it, or null. `excluded_and_completed` marks a measurement a review
+   * ended (resolve_protocol_job_review), whatever its answers. Absent: not read.
+   */
+  reviewResolution?: string | null;
 }
 
 export interface PilotReportQuestionInput {
@@ -163,10 +172,39 @@ export function countAttempts(evidence: BuildProtocolReportInput, report: Protoc
   };
 }
 
-function measurementState(jobStatus: string | null, attempted: number): PilotQuestionMeasurementState {
+/**
+ * D-061 (review of phase B) — the planned baseline answers a measurement
+ * completed: its distinct baseline ordinals, 1 to planned, with a completed
+ * attempt (a retried ordinal counts once).
+ */
+export function completedPlannedAnswers(evidence: BuildProtocolReportInput, planned: number): number {
+  const ordinals = new Set<number>();
+  for (const a of evidence.attempts) {
+    if (a.status === "completed" && a.attemptKind === "baseline" && typeof a.baselineOrdinal === "number"
+      && a.baselineOrdinal >= 1 && a.baselineOrdinal <= planned) {
+      ordinals.add(a.baselineOrdinal);
+    }
+  }
+  return ordinals.size;
+}
+
+/**
+ * D-061 (review of phase B) — a succeeded job that a review ended. 0050's
+ * completion gate marks a job succeeded only once every planned ordinal has
+ * a completed answer, so fewer completed planned answers than planned means
+ * resolve_protocol_job_review(excluded_and_completed) ended it; its recorded
+ * resolution says so directly. Either one is enough (engineer): the count is
+ * defence in depth for a reader that did not pass the resolution.
+ */
+function endedByReview(slot: PilotReportSlotInput, planned: number): boolean {
+  return slot.jobStatus === "succeeded"
+    && (slot.reviewResolution === "excluded_and_completed" || completedPlannedAnswers(slot.evidence, planned) < planned);
+}
+
+function measurementState(jobStatus: string | null, attempted: number, endedAfterReview = false): PilotQuestionMeasurementState {
   switch (jobStatus) {
     case "succeeded":
-      return "measured";
+      return endedAfterReview ? "ended_after_review" : "measured";
     case "claimed":
     case "running":
       return "not_finished";
@@ -338,6 +376,19 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
     if (q.slots.length === 0) {
       structural.push({ status: "needs_review", reason: `Question ${q.ordinal} has no measurement on any engine.` });
     }
+    // D-061 — one question, one approved text, on every engine. The slot
+    // trigger (20261109180000) ties each slot's protocol to the question's own
+    // version; this check is defence in depth, so the report never puts one
+    // question's answers under another question's heading.
+    if (
+      new Set(q.slots.map((s) => s.evidence.question.hash)).size > 1 ||
+      new Set(q.slots.map((s) => s.evidence.question.text)).size > 1
+    ) {
+      structural.push({
+        status: "blocked",
+        reason: `Question ${q.ordinal}: its measurements on different engines are not of the same approved question.`,
+      });
+    }
 
     for (const slot of q.slots) {
       const ev = slot.evidence;
@@ -346,6 +397,14 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
         structural.push({
           status: "blocked",
           reason: `Question ${q.ordinal}: its evidence does not belong to this pilot's project and protocol.`,
+        });
+      }
+      // D-061 — the protocol is the engine's identity: a slot must measure on
+      // its own engine (the slot trigger refuses anything else at insert).
+      if (ev.protocol.provider !== slot.engine) {
+        structural.push({
+          status: "blocked",
+          reason: `Question ${q.ordinal}: its ${engineLabel(slot.engine)} measurement's protocol is for another engine.`,
         });
       }
       if (ev.subject.companyName.trim() !== pilot.companyName.trim()) {
@@ -361,7 +420,7 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
       });
       text = text || report.question.text;
       const counts = countAttempts(ev, report);
-      const state = measurementState(slot.jobStatus, counts.attempted);
+      const state = measurementState(slot.jobStatus, counts.attempted, endedByReview(slot, counts.planned));
       measurements.push({
         engine: slot.engine,
         protocolId: slot.protocolId,
@@ -369,16 +428,29 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
         counts,
         execution: slot.execution,
         answerModes: [...new Set(slot.answerModes)].sort(),
+        settingVersion: slot.settingVersion ?? null,
         report,
       });
 
+      // D-061 — defence in depth: a finished job always has attempts. The
+      // integrity rule skips the per-answer checks of a live measurement with
+      // no attempt, so this one must never pass as finished.
+      if (!retired && slot.jobStatus === "succeeded" && counts.attempted === 0) {
+        structural.push({
+          status: "needs_review",
+          reason: `Question ${q.ordinal}: the ${engineLabel(slot.engine)} measurement is marked finished but has no recorded attempt.`,
+        });
+      }
       if (!retired && state !== "measured") {
         structural.push({
           status: "needs_review",
           reason:
             state === "stopped"
               ? `Question ${q.ordinal}: the ${engineLabel(slot.engine)} measurement stopped before it finished.`
-              : `Question ${q.ordinal}: the ${engineLabel(slot.engine)} measurement has not finished.`,
+              : state === "ended_after_review"
+                ? // D-061 (review of phase B) — never read as finished (METHODOLOGY §7: no silent stop at a convenient sample).
+                  `Question ${q.ordinal}: the ${engineLabel(slot.engine)} measurement ended after review with ${counts.completed} of ${counts.planned} planned answers completed.`
+                : `Question ${q.ordinal}: the ${engineLabel(slot.engine)} measurement has not finished.`,
         });
       }
       if (counts.inProgress > 0) {
@@ -453,6 +525,12 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
     const withReadable = live.filter((q) => slotOf(q).report.observation.denominator > 0).length;
     const notStarted = live.filter((q) => slotOf(q).counts.attempted === 0).length;
     const retiredCount = withSlot.length - live.length;
+    // D-061 — every count above is over the questions with a slot on this
+    // engine only; the live questions without one are named, never counted.
+    const notMeasured =
+      withSlot.length > 0
+        ? questions.filter((q) => !q.retired && !q.measurements.some((m) => m.engine === key)).map((q) => q.ordinal)
+        : [];
     return {
       engine: key,
       label,
@@ -461,7 +539,11 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
       questionsWithReadableAnswer: withReadable,
       questionsNotStarted: notStarted,
       questionsRetired: retiredCount,
-      note: withSlot.length > 0 ? engineNote(live.length, withReadable, notStarted, retiredCount) : ENGINE_NOT_MEASURED_NOTE,
+      questionsNotMeasured: notMeasured,
+      note:
+        withSlot.length > 0
+          ? engineNote(label, live.length, withReadable, notStarted, retiredCount, notMeasured)
+          : ENGINE_NOT_MEASURED_NOTE,
     };
   });
 
@@ -496,11 +578,15 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
   const methodNotes = [
     `Each question's figures come from its own approved protocol and its own answers. The table rows are the question sections' figures, repeated.`,
     `Labels follow rule ${PILOT_LABEL_RULE}: with at least ${MIN_READABLE_FOR_LABEL} readable answers, "named in every answer", "named in no answer" or "named in some answers"; with fewer, "not enough answers". The counts are always shown beside the label.`,
-    "The total line adds up readable answers over the questions that finished, each answer counting once. Questions that are retired or not finished are left out of it and named. It is not a score.",
+    "The total line adds up readable answers over the questions that finished, each answer counting once. Questions that are retired, not finished, or ended after review are left out of it and named. It is not a score.",
     `Competitor names are grouped across questions by rule ${PILOT_COMPETITOR_RULE}: the same name apart from spacing and capital letters. Names were read from each answer by an analysis model, so different spellings of one company can appear separately. These are totals across questions, not results for any one question.`,
     `Source types come from the fixed list ${SOURCE_TYPE_LIST_VERSION}. A run counts once per type, whatever the number of pages of that type it cited.`,
     "Failed and excluded answers stay in each question's own count of attempts. They are never counted as an answer that did not name the brand.",
-    "A retired question's measurement could not finish. It shows its attempt counts only, with no rate, range or reading, and it is left out of every total.",
+    // D-061 (review of phase B) — retiring needs one measurement that could
+    // not finish and stops the question on every engine, so another
+    // measurement of it may have finished; its figures are not reported either.
+    "A question is retired when one of its measurements could not finish, and retiring stops it on every engine. A retired question shows its attempt counts only, with no rate, range or reading, even for a measurement that had finished, and it is left out of every total.",
+    "A measurement that a review ended (after an answer that was never confirmed, such as a timed-out call) may have fewer completed answers than planned. It shows its own figures with its counts, is marked as ended after review rather than finished, and is left out of the total.",
   ];
 
   const payload: PilotReportPayload = {
@@ -537,10 +623,29 @@ function dedupe(reasons: PilotStructuralReason[]): PilotStructuralReason[] {
   });
 }
 
-function engineNote(live: number, withReadable: number, notStarted: number, retired: number): string {
-  const parts = [`${withReadable} of ${live} question${live === 1 ? "" : "s"} with at least one readable answer`];
+/** "question 3" or "questions 2, 3": the report's way of naming questions. */
+export function questionOrdinalsWords(ordinals: number[]): string {
+  return `question${ordinals.length === 1 ? "" : "s"} ${ordinals.join(", ")}`;
+}
+
+function engineNote(
+  label: string,
+  live: number,
+  withReadable: number,
+  notStarted: number,
+  retired: number,
+  notMeasured: number[]
+): string {
+  // D-061 (review of phase B) — no live question on this engine (every one
+  // measured on it is retired): said in words, never "0 of 0".
+  const parts = [
+    live === 0
+      ? "no live question is measured on it"
+      : `${withReadable} of ${live} question${live === 1 ? "" : "s"} with at least one readable answer`,
+  ];
   if (notStarted > 0) parts.push(`${notStarted} not started`);
   if (retired > 0) parts.push(`${retired} retired`);
+  if (notMeasured.length > 0) parts.push(`not measured on ${label} for ${questionOrdinalsWords(notMeasured)}`);
   return `${parts.join("; ")}.`;
 }
 
@@ -572,6 +677,16 @@ function buildConditions(
   const methodologyVersion = pick((m) => m.report.protocol.methodologyVersion);
   const analyzerVersion = pick((m) => (m.report.protocol.analyzerVersion === null ? "" : String(m.report.protocol.analyzerVersion)));
   const answerMode = collect(slots.flatMap(({ ordinal, m }) => m.answerModes.map((value) => ({ value, ordinal }))));
+  // D-061 — the recorded setting, listed only when some question of the
+  // engine records one ("" marks a question that records none, so a mix is
+  // listed and held for review). A Perplexity protocol records none.
+  const settingVersion = slots.some(({ m }) => m.settingVersion)
+    ? pick((m) => m.settingVersion ?? "")
+    : [];
+  // D-061 — the source rule each question's own report read its answers under.
+  const sourceRule = pick(
+    (m) => m.report.sourceInsights?.extractionVersion ?? sourcesRuleVersionForProvider(m.report.protocol.provider)
+  );
   const label = engineLabel(engine);
 
   for (const [name, values] of [
@@ -581,6 +696,8 @@ function buildConditions(
     ["methodology version", methodologyVersion],
     ["analysis version", analyzerVersion],
     ["answer mode", answerMode],
+    ["setting", settingVersion],
+    ["source rule", sourceRule],
   ] as const) {
     if (values.length > 1) {
       structural.push({
@@ -602,6 +719,12 @@ function buildConditions(
   if (analyzerVersion.some((v) => v.value === "") && answered.length > 0) {
     structural.push({ status: "needs_review", reason: `Some ${label} answers have no recorded analysis version.` });
   }
+  // D-061 — a ChatGPT protocol always records its setting (the worker refuses
+  // one that does not name the approved setting), so answers without one
+  // cannot be described and hold the report.
+  if (engine === "openai_chatgpt" && answered.some(({ m }) => !m.settingVersion)) {
+    structural.push({ status: "needs_review", reason: `Some ${label} answers have no recorded setting.` });
+  }
 
   const firsts = slots.map(({ m }) => m.execution.firstOn).filter((d): d is string => !!d).sort();
   const lasts = slots.map(({ m }) => m.execution.lastOn).filter((d): d is string => !!d).sort();
@@ -611,13 +734,18 @@ function buildConditions(
 
   return {
     engine,
-    surfaceLimitation: surfaceLimitation(provider[0]?.value ?? engine),
+    // D-061 — the sentence of the engine the section is headed with, so a
+    // heading and its sentence never disagree. A protocol on another engine
+    // blocks the report (above), so the two agree whenever it can be shared.
+    surfaceLimitation: surfaceLimitation(engine),
     provider,
     surface,
     model,
     answerMode,
     methodologyVersion,
     analyzerVersion,
+    settingVersion,
+    sourceRule,
     executedFrom: firsts[0] ?? null,
     executedTo: lasts[lasts.length - 1] ?? null,
   };

@@ -1,6 +1,8 @@
 import Link from "next/link";
 
 import { requireFounderForPage } from "@/lib/auth/founder";
+import { pilotEnginesSubtitle } from "@/lib/pilots/copy";
+import { pilotChatGptEnabled } from "@/lib/pilots/engines";
 import { listPilots, type PilotSummary } from "@/lib/pilots/reads";
 import { todayUtc } from "@/lib/pilots/validate";
 import { getReportServiceClient } from "@/lib/reports/service-client";
@@ -40,10 +42,8 @@ export default async function PilotsAdminPage() {
         <div>
           <p className="zpa-eyebrow">Managed pilots</p>
           <h1 className="zpa-title">Pilots</h1>
-          <p className="zpa-subtitle">
-            One project per customer, up to 20 approved buyer questions, 90 days. Measured on Perplexity;
-            ChatGPT is not connected yet.
-          </p>
+          {/* D-061 — the web host's ChatGPT gate, read at request time. */}
+          <p className="zpa-subtitle">{pilotEnginesSubtitle(pilotChatGptEnabled())}</p>
         </div>
         <NewPilotPanel />
       </div>

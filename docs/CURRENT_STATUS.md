@@ -14,6 +14,8 @@
 > - **Shared tree:** `042e87006aec88462377c660ce1b2994187603d0` — identical for both commits above, so the merge into `main` added no content of its own
 >
 > Sections 1-12 are preserved historical snapshots, taken on 2026-08-16 and 2026-08-21. They are deliberately not rewritten, and several of their figures are now superseded. For any statement about the *current* repository, section 15 prevails, then section 13.
+>
+> **2026-11-18:** sections 16 to 37 were added after this notice. Each is dated and records one branch or step. For the repository inventory (migrations, `scripts/test-*.ts` files and registered commands), the latest measured figures are section 37's, and [`CLAUDE.md`](../CLAUDE.md) points there.
 
 ## 1. Reading rule
 
@@ -2256,6 +2258,7 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 
 - **Base:** `main` at `d03363f`.
 - **Founder decisions (D-059):** the founder's "I agree." of 2026-11-17 is recorded against the 14-point list. Items 1 to 6 will be implemented by ChatGPT phase B (planned as D-061, PR B; not built, and D-061 is not yet recorded); items 7, 8, 10, 11 and 12 were already built; item 9 is built here; item 13 (the login's security reviewer) is still open; item 14 (the production plan) is done. D-059 authorises no production step beyond D-058's.
+  - **2026-11-18:** D-061 is recorded and phase B is built, on branch `feat/chatgpt-phase-b`, which merges this branch (§37). It is not applied anywhere and not deployed, and the ChatGPT switch stays off.
 - **What it adds (D-060):**
   - **Migration** `20261109170000_pilot_links_and_claim_scope.sql`, numbered inside D-058's window:
     - `read_shared_pilot_report` redefined, same signature, columns and grants. Once a later revision of a pilot is shared, an earlier revision's link answers no payload and the "newer revision shared" flag. Its body is 20261109150000's byte for byte apart from one marked block;
@@ -2306,3 +2309,162 @@ or the founder's approval of the catalogue and fetch bounds have happened. They 
 | The four pilot migrations, then `20261109170000`, in order with `target_sysid` | exit 0 each; 90 rows, tail `20261109170000`; `service_role` can execute neither unscoped claim, and can execute the requested claim and the read; md5 of the read `36dd5bc1…` before, `7b90ce86…` after. The preflight then fails by design: P2.3, P2.4 (which now lists `20261109170000`), P2.5, P3.3, P3.4, P4.1, P4.2; `PREFLIGHT: FAIL (7)`, exit 3 |
 
 The last three rows ran before the review fixes. The fixes changed only the migration's header comments and none of its statements, and the read's definition (its md5) is unchanged, so they were not re-run.
+
+## 37. ChatGPT in the worker, phase B (D-061) — branch `feat/chatgpt-phase-b`, merges §36's branch, not applied anywhere, not deployed, switch off
+
+- **Base:** `main` at `d03363f`. Phase B's code is commit `c3f6088`; D-060's branch (`da2151e`, §36) is merged into it at `f580273`; this section's documents are on top.
+- **Founder values (D-059 items 1 to 6, approved 2026-11-17), as built:**
+  - a ChatGPT call timeout of 290 s;
+  - a lease of 330 s, a readiness window of 240 s and a runtime ceiling of 2,400 s, in the three Fly files;
+  - ChatGPT caps of 7 runs, 2 retries and 4 USD, in `add_pilot_question_engine`;
+  - the 10-then-20 USD daily ceiling, recorded as a production step (PILOT_PRODUCTION_PLAN Part C);
+  - the flex refusal and the source rule, unchanged from phase A.
+
+  `WORKER_CHATGPT_ENABLED` stays `"false"` in every Fly file.
+- **What it adds (D-061):**
+  - **Migration** `20261109180000_chatgpt_measurement.sql`, numbered inside D-058's window, applied after `20261109170000` (`expected_prev=20261109170000`). It:
+    - adds `live_openai_chatgpt` to both probe-mode CHECKs;
+    - adds one live baseline per question version per engine, an index that replaces 0073's;
+    - accepts `openai_chatgpt` as a pilot slot engine, with a BEFORE INSERT consistency trigger;
+    - has `persist_probe_result_for_job` take the platform from the probe run (0054's body otherwise; Perplexity hashes unchanged);
+    - adds `add_pilot_question_engine`, with caps of 7, 2 and 4 USD and the approved setting;
+    - has `retire_pilot_question` cover every slot of the question and their retests;
+    - adds `protocol_worker_capabilities()`.
+
+    It writes no row and redefines no M5 spend, reservation, receipt or retry function: the provider leg of every engine keeps `call_kind 'perplexity'` (D-061 item 1). Its preconditions refuse while any protocol attempt is `reserved` or `in_progress`.
+  - **The worker:**
+    - the four bound values in the three Fly files (14 `[env]` values, hosting contract updated);
+    - `CHATGPT_WORKER_SCHEMA_READY = true`;
+    - with the switch on, a whole-claim startup rule, and a startup capability check that logs `worker_chatgpt_schema_refused` and exits 78 against a database without the migration.
+  - **The readers:**
+    - the cost report's `byLeg` (the provider leg per engine through the protocol's provider) and `openAiPriceTableVersion`;
+    - `searchResultsPresence` for the Responses shape;
+    - `coerceProbeMode`, and the legacy request-report readers leaving ChatGPT rows out of every Perplexity figure.
+  - **The pilot console:**
+    - the web host's gate `ZYPACT_PILOT_CHATGPT_ENABLED`; off, ChatGPT shows as "Not connected";
+    - Run and Retry per engine;
+    - **Add ChatGPT**, per question or for every question without it, and an unticked "also on ChatGPT" box when adding a question (new route `POST /api/internal/pilots/:pilotId/questions/:pilotQuestionId/engines`);
+    - **Resolve review** per engine (new route `…/questions/:pilotQuestionId/review`);
+    - **Retire** stops a question on both engines.
+  - **The pilot report:**
+    - two engines, each with its own table, total and limitation sentence, and nothing combined;
+    - a question not measured on an engine is named, never counted;
+    - no "0 of 0" for a measurement without a readable answer;
+    - setting, flex, web-search and source-rule lines;
+    - two new `blocked` reasons and three new needs-review reasons;
+    - the integrity rule for a measurement with no attempt yet;
+    - new optional payload fields.
+  - **Suggested actions** use each engine's own source rule.
+  - **Preflight:** `20261109180000` in both P2.4 lists; three pending functions (P4.2 now 41); P3.5 pins `persist_probe_result_for_job` at md5 `d812b7f4c606e03ea171113f9fbc9762`, computed on a disposable `supabase/postgres:17.6.1.167` at the recorded production state.
+  - **Documents:**
+    - D-061, with dated notes in D-029, D-030, D-032, D-034, D-036, D-037, D-051, D-053, D-056, D-057 and D-059;
+    - `CLAUDE.md`'s live-surface lines and inventory;
+    - V1_SCOPE, METHODOLOGY (document version 1.3; the default protocol methodology version stays 1.1), PILOT_RUNBOOK, ROADMAP and ENGINEER_START_HERE;
+    - WORKER_DEPLOY_RUNBOOK §2, §5, §6, a new §6a (the switch-on deploy, the startup refusal, the web gate) and §10;
+    - PILOT_PRODUCTION_PLAN: step 5b for the migration, step 6's new values, Part C in order;
+    - PROD_PREFLIGHT_SPEC;
+    - comment lines in `.env.example` for the web gate;
+    - a dated pointer to this section in this file's precedence notice.
+- **For the founder** *(engineer, proposed)*:
+  - the new customer wording: the setting, flex and web-search lines, the source-rule line (now shown for Perplexity too; with the words that replace "0 of 0" and "Ended after review", it changes Perplexity-only reports as well) and the words that replace "0 of 0";
+  - the integrity rule change;
+  - the two new `blocked` reasons;
+  - the new optional payload fields;
+  - the console choices: the ChatGPT box unticked by default, review not gated, the "Not connected" words, exit 78.
+
+  The full list is in D-061.
+- **Inventory on this branch** (`f580273`; this section's documents add no file). Recounted on 2026-11-18 after the review fixes, which add one non-test file (`app/admin/pilots/pilot-engine-cell.tsx`): unchanged.
+  - 95 migrations: 82 four-digit (`0001`–`0081` and `0083`) and 13 timestamped, the last `20261113120000`;
+  - 229 files matching `scripts/test-*.ts`;
+  - 135 `test:*` and 4 `verify:*` commands.
+- **Commands and local results** (2026-11-17 to 18). The full pass ran on the merged tree, `f580273`'s content. The final results after the review fixes are in the second table, under *The review*; where the two differ, the second supersedes the first:
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | exit 0 |
+| `npm run build:verify` | exit 0; `next-env.d.ts` unchanged |
+| `npm run test:pilot-actions`, `test:pilot-report`, `test:pilot-links-claims` | 109/109, 122/122, 38/38 |
+| `npm run test:pilot-questions`, `test:pilot-step1` | 218/218, 75/75 |
+| `npm run test:prod-preflight`, `test:chatgpt-phase-b-schema`, `test:paid-execution-guards` | 72/72, 68/68, 145/145 |
+| `npm run test:m0-worker-hosting-contract` | 170/170, the static half only. The Docker half needs a clean committed tree and runs in CI |
+| `npm run test:chatgpt-worker`, `test:cost-recording`, `test:measurement-compatibility`, `test:chatgpt-adapter` | 141/141, 74/74, 106/106, 195/195 |
+| `npm run test:worker-start`, `test:m0-worker-execution-gate`, `test:m5-b3-max-runtime` | 41/41, 498/498, 189/189 |
+| Schema contracts: m5-0056, m0-0057, m5-0059, m5-0060, m5-0083 | 71/71, 82/82, 169/169, 278/278, 30/30 |
+| Schema contracts: m7-0070, 0072, 0074, 0075 and 0076; q2p, q2p2 and s1 | pass |
+| `test:m7-0071-schema`, `test:m7-0073-schema` | 2 and 1 failures, the failing lines identical to `main` `d03363f`'s (§30, already failing) |
+| `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | exit 0, 95 migrations applied, 0 failures: P1 45/45, P2 71/71, E1 74/74, Q4 52/52, pilot step 1 60/60, pilot questions 70/70, pilot report 39/39, pilot actions 53/53, pilot links and claims 28/28, ChatGPT phase B 58/58 (new) |
+| `ZYPACT_LEVEL2_LOCAL=1 npm run test:snapshot-worker-postgres-level2` | `LEVEL2_RESULT=PASS`, 886 passed and 0 failed, all 95 migrations applied on `postgres:16-alpine`. The local runner then exits 1 from its known cleanup trap (§30) |
+| Before the merge, on phase B's own tree: `test:export`, `test:export-route`, `test:pipeline-integrity`, `test:public-site-url`, `test:source-insights`, `test:outcome-card`, `test:protocol-report`, `test:founder-baseline-control` | 135/135, 17/17, 96/96, 22/22, 84/84, 40/40, pass, pass |
+| Before the merge: §33's offline worker suites (the eight m5-a suites, tk-r, phase3d, m5-2-adapter, agent adapter, precheck closure, paid gate, image provenance, report pass) | all pass with their baseline counts |
+| Before the merge: known failing suites (§30) on a fresh `git archive` of `d03363f` and on the branch | m7-0071, m7-0073, 0080-report-ready and pg9-harness-offline fail with identical lines in both; bqi-wording 109/110 in both, its P-04 change-scope check. None is worse |
+| Preflight rehearsal before the merge (`supabase/postgres:17.6.1.167` at the recorded state: 85 rows, tail S1, `-v expected_sysid` set to the disposable cluster's own identifier) | every must-pass check PASS, P3.5 included; `PREFLIGHT: PASS`, exit 0 |
+| `20261109180000` through the named-file procedure on that database, out of order (tail S1) | refused, exit 3; ledger unchanged |
+| The four pilot migrations, then `20261109180000`, in order with `target_sysid` (`expected_prev=20261109160000` there, because `20261109170000` was not yet in that tree) | exit 0 each; 90 rows. md5 after the apply: persist `4d80da43d46d0ee2cfb2c4898f54e652`, retire `a52b4f27c4170844e192575ed1108abd`. The preflight then fails by design: P2.3, P2.4, P2.5, P3.3, P3.4, P3.5, P4.1 and P4.2, `PREFLIGHT: FAIL (8)`, exit 3 |
+| After this section's documents (2026-11-18): `npm run typecheck` | exit 0 |
+| After the documents: `test:prod-preflight` (reads PROD_PREFLIGHT_SPEC), `test:chatgpt-phase-b-schema`, `test:pilot-actions` (reads DECISIONS, this file and PILOT_RUNBOOK), `test:pilot-links-claims` (reads DECISIONS, this file, WORKER_DEPLOY_RUNBOOK and PILOT_PRODUCTION_PLAN) | 72/72, 68/68, 109/109, 38/38 |
+| After the documents: `test:m5-b3-max-runtime`, `test:s1-accounts` and `test:w1-preview` (each reads `.env.example`); `test:m0-worker-hosting-contract` | 189/189, 74/74, 26/26; 170/170, the static half only |
+| After the documents: the 0051 to 0054 schema contracts (`npx tsx scripts/test-m5-005N-schema-contract.ts`, which read DECISIONS) | 117/117, 67/67, 74/74, 150/150 |
+| After the documents: `test:q2p1-scope`, `test:q2p2-scope` | 3 and 4 failures, the same lines as on `main` at `d03363f` (no scope base is set; §30) |
+| After the documents: `test:bqi-wording` | 109/110: P-04, the change-scope check, which fails on any branch that is not BQI's and passes on `main` (110/110 at `d03363f`) |
+
+- **The review (2026-11-18).** Two independent reviewers read the branch: 3 major and 11 minor findings, all fixed in the working tree on top of `f580273`. Among the fixes:
+  - **DB-1, the retire rule** (D-061 engineering rule 7): once one slot has stopped for good, `retire_pilot_question` refuses (`QUESTION_JOB_ACTIVE`) while any other slot, or any retest of any slot, holds a reserved or in-progress attempt or a claimed or running job, lease lapsed or not. A retired question refuses every Run, so such a run could never close, and it would hold every report save of the pilot;
+  - **"Ended after review":** a measurement a review ended (for example a ChatGPT timeout resolved with **Finish without the unconfirmed run**) never reads "Finished". It shows its own figures and its completed planned answers, is left out of its engine's total and named there, and holds the report for review;
+  - **the per-engine retired words:** a question retired with two measurements says one of them could not finish and how far each got, with attempt counts only; an engine whose questions are all retired reads "no live question is measured on it", never "0 of 0"; a revision built before D-061 keeps its own words (`builtBeforeD061`);
+  - **three new preflight checks,** P6.4, P7.1 and P7.2, mirroring the migration's data preconditions (PROD_PREFLIGHT_SPEC, PF-29 to PF-29c);
+  - **the switch-off order** (WORKER_DEPLOY_RUNBOOK §6a, the migration's header): a read-only query first, unfinished ChatGPT runs finished, the web gate off, the query again until no ChatGPT run is pending or in flight, then the worker switch;
+  - with the gate off, while no measurement of the question has stopped for good, Retire refuses it; for a ChatGPT measurement that could be retried or has an unfinished run, it says ChatGPT must be turned back on first;
+  - the pilot page counts timed-out and cancelled attempts as failed and shows excluded attempts separately, as the report does.
+
+  The *(engineer)* choices and the founder's questions they raise are in D-061 (*Further choices*, item 8, and *For the founder to review*).
+
+| Command (after the review fixes, 2026-11-18) | Result |
+|---|---|
+| `npm run typecheck` | exit 0 |
+| `npm run build:verify` | exit 0 |
+| `npm run test:pilot-questions`, `test:pilot-step1`, `test:pilot-report`, `test:pilot-actions`, `test:pilot-links-claims` | 243/243, 75/75, 133/133, 109/109, 38/38 |
+| `npm run test:chatgpt-phase-b-schema`, `test:prod-preflight`, `test:chatgpt-worker` | 74/74, 76/76, 141/141 |
+| `npm run test:cost-recording`, `test:measurement-compatibility`, `test:paid-execution-guards`, `test:worker-start` | 74/74, 106/106, 145/145, 41/41 |
+| `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | exit 0, 95 migrations applied: P1 45, P2 71, E1 74, Q4 52, pilot step 1 60, pilot questions 70, pilot report 39, pilot actions 53, pilot links and claims 28, ChatGPT phase B 81/81 |
+| `ZYPACT_LEVEL2_LOCAL=1 npm run test:snapshot-worker-postgres-level2` | `LEVEL2_RESULT=PASS`, 886 passed and 0 failed. The runner exits 1 from its known cleanup trap (§30) |
+| `test:m7-0071-schema`, `test:m7-0073-schema` | 2 and 1 failures, the same lines as `main` |
+| Rehearsal on a fresh disposable `supabase/postgres:17.6.1.167` at the recorded state: `20261109130000` to `20261109180000` in order through the named-file procedure, `expected_prev=20261109170000` for the last | 91 rows, tail `20261109180000`. md5 after the apply: persist `4d80da43d46d0ee2cfb2c4898f54e652` (unchanged), retire `f1d660a5097e672a38ffaec28b048a0b` (after the DB-1 fix; it replaces `a52b4f27…` above) |
+| The preflight on a fresh disposable copy at the recorded state, then one negative control at a time (PROD_PREFLIGHT_SPEC, *History*) | `PREFLIGHT: PASS`, exit 0; each control fails only its own check (P6.4, P7.1, P7.2), `FAIL (1)`, exit 3 |
+
+- **Mutation trials, as each part reported them** (every file restored and its sha256 checked):
+  - **The database:** none reported. The `test:m7-0073-schema` exception has fixtures showing that any other migration touching the index is still caught.
+  - **The worker bounds:**
+    - five mutations of the three Fly files, each caught: a runtime of 2,355 s (3 failures), a lease of 300 s (5), a readiness window of 110,000 ms (4), the ChatGPT timeout line removed (11) and 8 slots (3);
+    - with the new startup rule disabled in a scratch copy of `execution-mode.ts`, `test:chatgpt-worker` gave 114/120: the six new checks fail.
+  - **The console and readers:** 10 breaks, each caught:
+    - the gate made truthy;
+    - Run ungated;
+    - the pilot read on Perplexity only;
+    - the review's job taken from the body;
+    - a failed capability read passing;
+    - the refusal not exiting;
+    - ChatGPT cost filed as Perplexity;
+    - the fingerprint's provider dropped;
+    - ChatGPT rows read by the summary;
+    - `coerceProbeMode` turning ChatGPT into simulated.
+  - **The report and actions:** 19 breaks, M1 to M19 (for example the engine check off, "0 of 0" printed, the source rule always Perplexity's, flex described as the standard tier, a slot's provider ignored), each caught by its expected checks in the final run. One, M6 (questions not measured left unnamed), was missed on its first trial and caught on its second.
+- **Not established:**
+  - no live ChatGPT call through the worker. Every test uses a fake fetch or a fixture; the only real ChatGPT calls are the adapter's benchmark and confirmation runs (§29), outside the worker;
+  - no browser walk-through of the console or the report;
+  - Level 2 applies the migration but exercises no ChatGPT path;
+  - nothing is applied to any hosted database, and the edited preflight has not run against production. The P3.5 pin has never been observed on production. If R includes this branch, the preflight is run again from R before step 2 (PILOT_PRODUCTION_PLAN, the R rule);
+  - the merged preflight file, with both versions in P2.4, has not itself been run on a disposable database. Each branch's edit was, and the merge only added `20261109170000` to the two lists. **2026-11-18:** the reviewed file, with P6.4, P7.1 and P7.2, was run on a fresh disposable copy (the review table above);
+  - the migration's preconditions are pinned by the static suite but not exercised refusing on a database, apart from the out-of-order apply above. **2026-11-18:** each of the ten preconditions now refuses on a database (G1–G12), and G1 proves the first recovery;
+  - the md5 values after the apply come from the pre-merge rehearsal (`20261109170000` touches neither function). **2026-11-18:** superseded by the post-review rehearsal on the merged tree (the review table above).
+- **Open:**
+  - the founder's review of the *(engineer)* items above;
+  - D-060 item 5, still proposed. Part C's worker-secret change and switch-on redeploy happen with pilot jobs queued, so they need it, or an empty queue;
+  - the pilot retest on both engines against 0079's one retest per intervention;
+  - nothing in the database limits `protocols.provider`, so a new provider string would count as its own engine; a CHECK is a possible follow-up;
+  - a probe run's platform is not tied to its protocol's provider in `create_probe_run_and_start_attempt_for_job`;
+  - the slot loop still never re-checks the deadline; with the switch off, the whole-claim rule is enforced only by the hosting contract;
+  - the founder-only request review panel and interventions page still show the stored code `perplexity_outcome_unknown`. No customer page does;
+  - `lib/agents/competitor-discovery.ts` and `gap-map.ts` (legacy) pass a row's probe mode through unchanged;
+  - an engine whose questions are all retired still reads "0 of 0 questions with at least one readable answer; 1 retired." It is a question count, pinned by I5c. **2026-11-18:** fixed by the review; it now reads "no live question is measured on it" (I5c);
+  - `README.md` line 37, and `ADAPTER_VALIDITY_CHATGPT.md`'s status lines and open items 7 and 8, still describe ChatGPT as not wired and its time limits as undecided. Neither file is edited here, and `test:chatgpt-adapter` pins the note's "not wired into any worker". **2026-11-18:** both are now updated, and the pin follows the note's new text;
+  - the deployed worker's lease and readiness values are unrecorded (WORKER_DEPLOY_RUNBOOK §5, §10).

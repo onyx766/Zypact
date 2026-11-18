@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { requireFounderForRoute } from "@/lib/auth/founder";
 import { getDb } from "@/lib/db";
 import { ADD_QUESTION_REFUSAL } from "@/lib/pilots/copy";
+import { addChatGptAfterQuestion } from "@/lib/pilots/engine-routes";
+import { pilotChatGptEnabled } from "@/lib/pilots/engines";
 import { parseAddPilotQuestion, UUID_PATTERN } from "@/lib/pilots/validate";
 
 export const runtime = "nodejs";
@@ -18,6 +20,12 @@ const MAX_BODY_BYTES = 8_192;
  * protocol with the same Perplexity plan a request's approval uses, and
  * queues its job. It does not start the worker: the founder presses Run per
  * question, which goes through the paid-execution gate and a run request.
+ *
+ * D-061 — with `"addChatGpt": true` in the body and the web host's ChatGPT
+ * gate on, the ChatGPT baseline is added right after, as a second call
+ * (add_pilot_question_engine). When that one does not add it, the question
+ * stays with its Perplexity measurement and the reply says ChatGPT was not
+ * added, and why.
  */
 export async function POST(
   request: Request,
@@ -58,6 +66,20 @@ export async function POST(
   }
 
   const result = await getDb().addPilotQuestion({ pilotId, addedBy: guard.user.id, ...parsed.value });
+  const added = result.outcome === "ADDED" || result.outcome === "ALREADY_ADDED";
+
+  // D-061 — the second call: only when asked for, and only once the
+  // question exists (a replay included, which then replays ChatGPT's too).
+  const wantsChatGpt = (body as Record<string, unknown> | null)?.addChatGpt === true;
+  const chatgpt =
+    wantsChatGpt && added && result.pilotQuestionId
+      ? await addChatGptAfterQuestion(getDb(), {
+          pilotId,
+          pilotQuestionId: result.pilotQuestionId,
+          addedBy: guard.user.id,
+          chatgptEnabled: pilotChatGptEnabled(),
+        })
+      : null;
 
   // Closed fields only. The question text and the approval reference never
   // reach the log.
@@ -74,6 +96,7 @@ export async function POST(
       protocolId: result.protocolId,
       jobId: result.jobId,
       questionProvenance: parsed.value.questionProvenance,
+      chatgptOutcome: chatgpt ? chatgpt.outcome : null,
     })
   );
 
@@ -83,7 +106,13 @@ export async function POST(
         ok: true,
         outcome: result.outcome,
         pilotQuestionId: result.pilotQuestionId,
-        detail: "Question added and its measurement queued. Nothing runs until you press Run for it.",
+        chatgptAdded: chatgpt ? chatgpt.added : null,
+        detail:
+          chatgpt === null
+            ? "Question added and its measurement queued. Nothing runs until you press Run for it."
+            : chatgpt.added
+              ? "Question added, with its Perplexity and ChatGPT measurements queued. Nothing runs until you press Run for each."
+              : `Question added and its Perplexity measurement queued; ChatGPT was not added. ${chatgpt.words} Nothing runs until you press Run for it.`,
       },
       { status: result.outcome === "ADDED" ? 201 : 200 }
     );

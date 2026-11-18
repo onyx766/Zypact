@@ -5,13 +5,13 @@ import { requireFounderForPage } from "@/lib/auth/founder";
 import { revisionActionsCurrent, STALE_REVISION_WORDS } from "@/lib/pilots/action-rules";
 import { currentReportableVersionIds, listPilotActionsForAdmin } from "@/lib/pilots/action-store";
 import {
-  ENGINE_NOT_MEASURED,
-  PILOT_ENGINES,
+  ENGINE_NOT_CONNECTED,
   PILOT_QUESTION_RETIRED_LABEL,
-  pilotJobStatusLabel,
+  pilotEngines,
   pilotProvenanceLabel,
 } from "@/lib/pilots/copy";
-import { loadPilot, pilotIsOver, pilotNotStarted } from "@/lib/pilots/reads";
+import { pilotChatGptEnabled } from "@/lib/pilots/engines";
+import { loadPilot, pilotIsOver, pilotNotStarted, type PilotMeasurement, type PilotQuestionRow } from "@/lib/pilots/reads";
 import { todayUtc, UUID_PATTERN } from "@/lib/pilots/validate";
 import {
   INTEGRITY_WORDS,
@@ -24,21 +24,39 @@ import { getReportServiceClient } from "@/lib/reports/service-client";
 import { publicSiteUrl } from "@/lib/seo/site";
 import { AdminShell } from "../../admin-shell";
 import {
+  AddChatGptToAllButton,
   AddQuestionPanel,
   BuildPilotReportButton,
   ClosePilotButton,
-  QuestionControls,
   RetireQuestionButton,
 } from "../pilot-forms";
 import { PilotActionsPanel } from "../pilot-action-forms";
+import { PilotEngineCell } from "../pilot-engine-cell";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+/** D-061 — a measurement that stopped: failed, or abandoned after too many worker stops. */
+function stopped(m: PilotMeasurement | null): boolean {
+  return m !== null && (m.jobStatus === "failed" || m.jobStatus === "abandoned_exhausted");
+}
+
+/** D-061 — whether a question is measured on at least one engine. */
+function measuredOnAnyEngine(q: PilotQuestionRow): boolean {
+  return Object.values(q.engines).some((m) => m !== null);
+}
+
 /**
  * D-054 — one pilot: its questions, who supplied each and the customer's
- * written approval, and each question's Perplexity measurement with its
- * own Run. ChatGPT is shown as not measured, never as zero (D-053).
+ * written approval, and each question's measurement with its own Run.
+ *
+ * D-061 — one cell per engine, Perplexity and ChatGPT, each with its own
+ * status, runs, Run and Retry, and the review resolution when it is held.
+ * Whether ChatGPT is connected is the web host's gate, read here at request
+ * time (never a constant): off, ChatGPT reads "Not connected" and offers no
+ * Run, Retry or add. A question without a measurement on an engine reads
+ * "Not measured" there, never zero (D-053). Retire stays per question: it
+ * looks at every engine's measurement and stops the question on both.
  */
 export default async function PilotAdminPage({ params }: { params: Promise<{ pilotId: string }> }) {
   const { pilotId } = await params;
@@ -57,8 +75,9 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
   const currentActionVersions = await currentReportableVersionIds(client, pilot.id);
   const isStale = (r: { actionVersionIds: string[]; sharedAt: string | null }) =>
     r.sharedAt === null && !revisionActionsCurrent(r.actionVersionIds, currentActionVersions);
+  // D-061 — a live question measured on any engine can carry an action's evidence.
   const actionQuestions = questions
-    .filter((q) => q.retiredAt === null && q.perplexity !== null)
+    .filter((q) => q.retiredAt === null && measuredOnAnyEngine(q))
     .map((q) => ({ pilotQuestionId: q.id, ordinal: q.ordinal, text: q.questionText }));
   const siteUrl = publicSiteUrl();
   const today = todayUtc();
@@ -68,7 +87,13 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
   const liveCount = questions.filter((q) => q.retiredAt === null).length;
   const retiredCount = questions.length - liveCount;
   const full = liveCount >= pilot.questionLimit;
-  const chatgpt = PILOT_ENGINES.find((e) => e.key === "openai_chatgpt")!;
+  // D-061 — the web host's ChatGPT gate, read at request time.
+  const chatgptConnected = pilotChatGptEnabled();
+  const engines = pilotEngines(chatgptConnected);
+  const canAddChatGpt = chatgptConnected && !over;
+  const withoutChatGpt = questions
+    .filter((q) => q.retiredAt === null && q.engines.openai_chatgpt === null)
+    .map((q) => q.id);
 
   return (
     <AdminShell
@@ -109,7 +134,10 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
       </div>
 
       <div className="zpa-toolbar">
-        <AddQuestionPanel pilotId={pilot.id} disabled={over || full} />
+        <AddQuestionPanel pilotId={pilot.id} disabled={over || full} chatgptConnected={chatgptConnected} />
+        {canAddChatGpt && withoutChatGpt.length > 0 ? (
+          <AddChatGptToAllButton pilotId={pilot.id} pilotQuestionIds={withoutChatGpt} />
+        ) : null}
         {full && !over ? <p className="zpa-muted">This pilot has reached its question limit.</p> : null}
       </div>
 
@@ -126,62 +154,51 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
                 <th>#</th>
                 <th>Buyer question</th>
                 <th>Customer approval</th>
-                <th>Perplexity</th>
-                <th>{chatgpt.label}</th>
+                {engines.map((e) => (
+                  <th key={e.key}>
+                    {e.label}
+                    {e.connected ? null : <span className="zpa-muted"> ({ENGINE_NOT_CONNECTED})</span>}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {questions.map((q) => {
-                const m = q.perplexity;
-                return (
-                  <tr key={q.id}>
-                    <td>{q.ordinal}</td>
-                    <td>
-                      <p className="zpa-question">{q.questionText}</p>
-                      <p className="zpa-muted">{pilotProvenanceLabel(q.questionProvenance)}.</p>
-                      {q.retiredAt ? (
-                        <p className="zpa-muted">
-                          <strong>{PILOT_QUESTION_RETIRED_LABEL}:</strong> {q.retireReason}
-                        </p>
-                      ) : null}
+              {questions.map((q) => (
+                <tr key={q.id}>
+                  <td>{q.ordinal}</td>
+                  <td>
+                    <p className="zpa-question">{q.questionText}</p>
+                    <p className="zpa-muted">{pilotProvenanceLabel(q.questionProvenance)}.</p>
+                    {q.retiredAt ? (
+                      <p className="zpa-muted">
+                        <strong>{PILOT_QUESTION_RETIRED_LABEL}:</strong> {q.retireReason}
+                      </p>
+                    ) : null}
+                    {/* D-061 — per question: offered once any engine's measurement stopped; the database decides. */}
+                    {!over && q.retiredAt === null && Object.values(q.engines).some(stopped) ? (
+                      <RetireQuestionButton pilotId={pilot.id} pilotQuestionId={q.id} />
+                    ) : null}
+                  </td>
+                  <td>
+                    <p>{q.customerApprovalRef}</p>
+                    <p className="zpa-muted">{q.customerApprovedOn}</p>
+                  </td>
+                  {engines.map((e) => (
+                    <td key={e.key}>
+                      <PilotEngineCell
+                        pilotId={pilot.id}
+                        pilotQuestionId={q.id}
+                        engine={e.key}
+                        measurement={q.engines[e.key]}
+                        connected={e.connected}
+                        canAddChatGpt={canAddChatGpt}
+                        retired={q.retiredAt !== null}
+                        pilotOpen={!over && !notStarted && q.retiredAt === null}
+                      />
                     </td>
-                    <td>
-                      <p>{q.customerApprovalRef}</p>
-                      <p className="zpa-muted">{q.customerApprovedOn}</p>
-                    </td>
-                    <td>
-                      {m ? (
-                        <>
-                          <p>{pilotJobStatusLabel(m.jobStatus, m.stale)}</p>
-                          <p className="zpa-muted">
-                            {m.completedRuns} of {m.plannedRuns ?? "?"} runs completed
-                            {m.failedRuns > 0 ? `, ${m.failedRuns} failed` : ""}
-                          </p>
-                          <QuestionControls
-                            pilotId={pilot.id}
-                            pilotQuestionId={q.id}
-                            jobStatus={m.jobStatus}
-                            stale={m.stale}
-                            plannedRuns={m.plannedRuns}
-                            runCap={m.runCap}
-                            spendCapUsd={m.spendCapUsd}
-                            pilotOpen={!over && !notStarted && q.retiredAt === null}
-                          />
-                          {!over && q.retiredAt === null
-                            && (m.jobStatus === "failed" || m.jobStatus === "abandoned_exhausted") ? (
-                            <RetireQuestionButton pilotId={pilot.id} pilotQuestionId={q.id} />
-                          ) : null}
-                        </>
-                      ) : (
-                        <p>No measurement</p>
-                      )}
-                    </td>
-                    <td>
-                      <p className="zpa-muted">{ENGINE_NOT_MEASURED}</p>
-                    </td>
-                  </tr>
-                );
-              })}
+                  ))}
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>

@@ -14,7 +14,9 @@
  *      presentation model, the fixed note, every link re-checked (a source
  *      not in the answer, an answer outside the pilot, not completed,
  *      tampered or retired blocks it), any action holds it for review, no
- *      section without a reviewed action;
+ *      section without a reviewed action; D-061: a ChatGPT link is re-found
+ *      under the ChatGPT rule, its OpenAI tag normalised, a Perplexity link
+ *      unchanged;
  *   T  the routes: founder guard first, parse and lint before the checked
  *      save, closed log fields; the console's client code loads no server
  *      module;
@@ -22,6 +24,8 @@
  *      returns the answer's own source URL and refuses what is not in the
  *      answer, the checked save calls the database only after it, the
  *      picker, the reportable versions, the console's stored answer text;
+ *      D-061: the same for a ChatGPT answer under its protocol's provider,
+ *      and a slot whose provider cannot be read or disagrees fails closed;
  *   C  the console and share copy: rebuild after a change, stale
  *      revisions, the review prompt, the customer note; the limits the
  *      founder approved (30 suggested actions per pilot and 10 links per
@@ -92,6 +96,7 @@ import { presentationStrings, presentPilotReport } from "@/lib/reports/pilot-rep
 import type { PilotReportPayload } from "@/lib/reports/pilot-report-types";
 import { renderPilotReportMarkdown } from "@/lib/reports/render-pilot-report-markdown";
 import type { BuildProtocolReportInput, EvidenceAttemptInput, EvidenceResultInput } from "@/lib/reports/protocol-report-types";
+import { extractProviderSources } from "@/lib/source-insights/extract-provider-sources";
 
 (globalThis as unknown as { fetch: unknown }).fetch = () => {
   throw new Error("network disabled");
@@ -470,6 +475,96 @@ check("R19 two actions keep their order and their numbers",
 const copyTexts = [ACTIONS_NOTE, ACTIONS_NOT_REGISTERED_NOTE, ACTIONS_HEADING].join("\n").toLowerCase();
 check("R20 the section's own words use no forbidden phrase", [...FORBIDDEN_W1_PHRASES, ...METHODOLOGY_19_PHRASES].every((ph) => !copyTexts.includes(ph)));
 
+/* D-061 — a ChatGPT answer's links, read under the ChatGPT rule (openai-responses-sources/1). */
+const VENDOR = "https://vendor-a.example/pricing";
+const REVIEWS = "https://reviews.example/compare";
+const GPT_MODEL = "gpt-5.4-2026-03-05";
+
+/** A stored Responses body as the confirmation run returned them: search sources, and url_citation links with OpenAI's tag. */
+function chatgptBody(text: string, cited: string[], returned: string[] = []): string {
+  return JSON.stringify({
+    id: "resp_a",
+    object: "response",
+    status: "completed",
+    error: null,
+    model: GPT_MODEL,
+    service_tier: "flex",
+    output: [
+      {
+        type: "web_search_call",
+        id: "ws_1",
+        status: "completed",
+        action: { type: "search", query: "q", sources: [...cited.map((u) => `${u}?utm_source=openai`), ...returned].map((url) => ({ type: "url", url })) },
+      },
+      {
+        type: "message",
+        id: "msg_1",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text, annotations: cited.map((u, i) => ({ type: "url_citation", start_index: 0, end_index: 5, url: `${u}?utm_source=openai`, title: `Source ${i + 1}` })) }],
+      },
+    ],
+  });
+}
+
+function chatgptQuestion(ordinal: number, runs: RunSpec[], retiredAt: string | null = null): PilotReportQuestionInput {
+  const protocolId = uid(9500 + ordinal);
+  const ev = evidence(protocolId, runs.map((r) => ({ ...r, body: r.body ?? chatgptBody("Vendor A fits small teams.", [VENDOR], [REVIEWS]) })));
+  ev.protocol = { ...ev.protocol, provider: "openai_chatgpt", model: GPT_MODEL };
+  ev.results = ev.results.map((r) => ({ ...r, providerModel: GPT_MODEL }));
+  return {
+    pilotQuestionId: uid(8000 + ordinal),
+    ordinal,
+    provenance: "customer_supplied",
+    customerApprovedOn: "2026-11-18",
+    retiredAt,
+    slots: [
+      {
+        engine: "openai_chatgpt",
+        protocolId,
+        jobStatus: "succeeded",
+        evidence: ev,
+        execution: { firstOn: "2026-11-20", lastOn: "2026-11-20" },
+        answerModes: ["live_openai_chatgpt"],
+        settingVersion: "openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05",
+      },
+    ],
+  };
+}
+
+const gq = chatgptQuestion(5, FIVE);
+const gAtt = gq.slots[0].evidence.attempts;
+const gBuilt = buildPilotReport(input([q1, gq], [action(31, [
+  { attemptId: gAtt[0].id, sourceUrl: `${VENDOR}?utm_source=openai` },
+  { attemptId: gAtt[1].id, sourceUrl: VENDOR },
+  { attemptId: gAtt[3].id, sourceUrl: REVIEWS },
+])]));
+const gEv = gBuilt.payload.actions?.[0].evidence ?? [];
+check("R21 a ChatGPT action link that names a source passes the build: re-found under the ChatGPT rule, and a link copied with OpenAI's tag matches its normalised form",
+  !gBuilt.structural.some((s) => s.status === "blocked") && gEv.length === 3 &&
+  gEv.every((e) => e.engine === "openai_chatgpt" && e.ordinal === 5) &&
+  gEv[0].sourceUrl === VENDOR && gEv[0].sourceCited === true && gEv[1].sourceUrl === VENDOR && gEv[1].sourceCited === true &&
+  gEv[2].sourceUrl === REVIEWS && gEv[2].sourceCited === false && gEv[2].sourceDomain === "reviews.example" &&
+  [renderPage(gBuilt.payload), renderPilotReportMarkdown(gBuilt.payload)].every((t) =>
+    t.includes("Question 5, ChatGPT answer 1") && t.includes(`source ${VENDOR}, cited in that answer`) &&
+    t.includes(`source ${REVIEWS}, returned by the engine but not cited in that answer`)),
+  JSON.stringify({ structural: gBuilt.structural, gEv }));
+check("R22 a source that is not among a ChatGPT answer's sources blocks the report",
+  blocks([action(32, [{ attemptId: gAtt[0].id, sourceUrl: "https://www.example.com/not-in-the-answer" }])], [q1, gq]));
+const gBody = gq.slots[0].evidence.results[0].rawResponse!;
+const asBefore = extractProviderSources(gBody, sha(gBody));
+const asChatGpt = extractProviderSources(gBody, sha(gBody), "openai_chatgpt");
+check("R23 the ChatGPT rule is what finds the source: read without the provider (as before D-061), the same answer has none, so R21's links would have blocked",
+  asBefore.status === "ok" && asBefore.cited.length === 0 && asBefore.retrievedOnly.length === 0 &&
+  asChatGpt.cited.map((s) => s.url).join() === VENDOR && asChatGpt.retrievedOnly.map((s) => s.url).join() === REVIEWS);
+check("R24 a Perplexity link is unchanged: OpenAI's tag is removed only under the ChatGPT rule, so a Perplexity source named with it is not that answer's source",
+  blocks([action(33, [{ attemptId: a1[0].id, sourceUrl: `${G2}?utm_source=openai` }])]) &&
+  !buildPilotReport(input([q1, q2], [action(34, [{ attemptId: a1[0].id, sourceUrl: G2 }])])).structural.some((s) => s.status === "blocked"));
+const sourceCalls = (file: string) => read(file).split("extractProviderSources(").slice(1).map((s) => s.slice(0, s.indexOf(");")).trim());
+const allSourceCalls = [...sourceCalls("lib/pilots/action-store.ts"), ...sourceCalls("lib/reports/build-pilot-actions.ts")];
+check("R25 every source reading of a pilot answer names the answer's provider: the picker, the save re-check, the console text check and the build re-check",
+  allSourceCalls.length === 4 && allSourceCalls.every((c) => /\bprovider$/.test(c)), allSourceCalls.join(" | "));
+
 /* ---------------------------------------------------------------- T */
 
 const ROUTES = {
@@ -547,25 +642,33 @@ const attemptRows = (q: PilotReportQuestionInput) => q.slots[0].evidence.attempt
 const resultRows = (q: PilotReportQuestionInput) => q.slots[0].evidence.results.map((r) => ({
   probe_run_id: r.probeRunId, raw_response: r.rawResponse, raw_response_sha256: r.rawResponseSha256, answer_summary: r.answerSummary,
 }));
-const KQS = [kq1, kq2, kTampered];
-const K_ACT = { a: uid(6101), b: uid(6102), c: uid(6103) };
-const K_VER = { a1: uid(6111), a2: uid(6112), b1: uid(6121), c1: uid(6131) };
+// D-061 — a question measured on ChatGPT, beside the Perplexity ones.
+const kg = chatgptQuestion(14, FIVE);
+const KQS = [kq1, kq2, kTampered, kg];
+const K_ACT = { a: uid(6101), b: uid(6102), c: uid(6103), d: uid(6104) };
+const K_VER = { a1: uid(6111), a2: uid(6112), b1: uid(6121), c1: uid(6131), d1: uid(6141) };
 const kAtt = kq1.slots[0].evidence.attempts;
+const kgAtt = kg.slots[0].evidence.attempts;
 const kTables: Record<string, FakeRow[]> = {
   pilot_questions: KQS.map((q) => ({ id: q.pilotQuestionId, pilot_id: PILOT, ordinal: q.ordinal, retired_at: q.retiredAt })),
-  pilot_question_protocols: KQS.map((q) => ({ pilot_question_id: q.pilotQuestionId, engine: "perplexity_sonar", phase: "baseline", protocol_id: q.slots[0].protocolId })),
+  pilot_question_protocols: KQS.map((q) => ({ pilot_question_id: q.pilotQuestionId, engine: q.slots[0].engine, phase: "baseline", protocol_id: q.slots[0].protocolId })),
+  // D-061 — the slot's provider is read from its protocol; without this table every source would be refused (K16).
+  protocols: KQS.map((q) => ({ id: q.slots[0].protocolId, provider: q.slots[0].evidence.protocol.provider })),
   protocol_attempts: KQS.flatMap(attemptRows),
   probe_results: KQS.flatMap(resultRows),
   pilot_actions: [
     { id: K_ACT.a, pilot_id: PILOT, created_at: "2026-11-19T01:00:00Z" },
     { id: K_ACT.b, pilot_id: PILOT, created_at: "2026-11-19T02:00:00Z" },
     { id: K_ACT.c, pilot_id: PILOT, created_at: "2026-11-19T03:00:00Z" },
+    { id: K_ACT.d, pilot_id: PILOT, created_at: "2026-11-19T06:00:00Z" },
   ],
   pilot_action_versions: [
     { id: K_VER.a1, action_id: K_ACT.a, pilot_id: PILOT, version_number: 1, title: "A v1", observation: TEXT.observation, suggested_action: TEXT.suggestedAction, why_it_might_matter: TEXT.whyItMightMatter, alternative_explanations: TEXT.alternativeExplanations, open_questions: TEXT.openQuestions, written_at: "2026-11-19T01:00:00Z" },
     { id: K_VER.a2, action_id: K_ACT.a, pilot_id: PILOT, version_number: 2, title: "A v2", observation: TEXT.observation, suggested_action: TEXT.suggestedAction, why_it_might_matter: TEXT.whyItMightMatter, alternative_explanations: TEXT.alternativeExplanations, open_questions: TEXT.openQuestions, written_at: "2026-11-19T04:00:00Z" },
     { id: K_VER.b1, action_id: K_ACT.b, pilot_id: PILOT, version_number: 1, title: "B v1", observation: TEXT.observation, suggested_action: TEXT.suggestedAction, why_it_might_matter: TEXT.whyItMightMatter, alternative_explanations: TEXT.alternativeExplanations, open_questions: TEXT.openQuestions, written_at: "2026-11-19T02:00:00Z" },
     { id: K_VER.c1, action_id: K_ACT.c, pilot_id: PILOT, version_number: 1, title: "C v1", observation: TEXT.observation, suggested_action: TEXT.suggestedAction, why_it_might_matter: TEXT.whyItMightMatter, alternative_explanations: TEXT.alternativeExplanations, open_questions: TEXT.openQuestions, written_at: "2026-11-19T03:00:00Z" },
+    // D-061 — a draft (never reviewed, so never reportable) linking a ChatGPT answer and one of its sources.
+    { id: K_VER.d1, action_id: K_ACT.d, pilot_id: PILOT, version_number: 1, title: "D v1", observation: TEXT.observation, suggested_action: TEXT.suggestedAction, why_it_might_matter: TEXT.whyItMightMatter, alternative_explanations: TEXT.alternativeExplanations, open_questions: TEXT.openQuestions, written_at: "2026-11-19T06:00:00Z" },
   ],
   pilot_action_events: [
     { action_id: K_ACT.a, action_version_id: K_VER.a1, pilot_id: PILOT, event: "reviewed", created_at: "2026-11-19T01:30:00Z", reason: null },
@@ -578,6 +681,7 @@ const kTables: Record<string, FakeRow[]> = {
     { action_version_id: K_VER.b1, position: 1, attempt_id: kAtt[0].id, source_url: G2 },
     { action_version_id: K_VER.a2, position: 1, attempt_id: kAtt[0].id, source_url: null },
     { action_version_id: K_VER.c1, position: 1, attempt_id: kTampered.slots[0].evidence.attempts[0].id, source_url: null },
+    { action_version_id: K_VER.d1, position: 1, attempt_id: kgAtt[0].id, source_url: VENDOR },
   ],
 };
 
@@ -644,6 +748,49 @@ const kDone = (async () => {
   check("K11 a revision is current only when its listed versions are exactly the reviewed, current ones",
     revisionActionsCurrent([K_VER.b1], [K_VER.b1]) && revisionActionsCurrent([], []) &&
     !revisionActionsCurrent([K_VER.b1, K_VER.c1], [K_VER.b1]) && !revisionActionsCurrent([], [K_VER.b1]) && !revisionActionsCurrent([K_VER.a1], [K_VER.a2]));
+
+  /* D-061 — ChatGPT answers, read under their protocol's provider. */
+  const tagged = `${VENDOR}?utm_source=openai`;
+  const g1 = await verifyActionEvidence(kc, PILOT, [{ attemptId: kgAtt[0].id, sourceUrl: tagged }, { attemptId: kgAtt[1].id, sourceUrl: REVIEWS }]);
+  check("K12 the evidence check reads a ChatGPT answer under the ChatGPT rule: a source posted with OpenAI's tag is accepted and returned as the answer's own extracted URL",
+    g1.outcome === "OK" && g1.links.length === 2 && g1.links[0].sourceUrl === VENDOR && g1.links[1].sourceUrl === REVIEWS, JSON.stringify(g1));
+  const g2 = await verifyActionEvidence(kc, PILOT, [{ attemptId: kgAtt[0].id, sourceUrl: "https://www.example.com/not-in-the-answer" }]);
+  const pplxTagged = await verifyActionEvidence(kc, PILOT, [{ attemptId: kAtt[0].id, sourceUrl: `${G2}?utm_source=openai` }]);
+  check("K13 a source not in that ChatGPT answer is refused, and OpenAI's tag is never removed from a Perplexity link",
+    g2.outcome === "SOURCE_NOT_IN_ANSWER" && g2.links.length === 0 && pplxTagged.outcome === "SOURCE_NOT_IN_ANSWER");
+  const gChoices = await loadEvidenceChoices(kc, PILOT, kg.pilotQuestionId);
+  check("K14 the picker offers a ChatGPT question's completed answers with their sources under the ChatGPT rule, labelled ChatGPT",
+    gChoices !== null && gChoices.length === 4 && gChoices.every((c) => c.engine === "openai_chatgpt" && c.engineLabel === "ChatGPT") &&
+    gChoices.every((c) => c.sources.some((s) => s.url === VENDOR && s.cited) && c.sources.some((s) => s.url === REVIEWS && !s.cited)),
+    JSON.stringify(gChoices?.[0]));
+  const gCalls: FakeRpcCall[] = [];
+  const gSaved = await savePilotActionChecked(fakeClient(kTables, gCalls), { pilotId: PILOT, writtenBy: uid(1), fields: fields([{ attemptId: kgAtt[0].id, sourceUrl: tagged }]) });
+  const gSent = gCalls[0]?.args.p_evidence as { attemptId: string; sourceUrl: string | null }[] | undefined;
+  check("K15 the checked save of a ChatGPT link sends the answer's own extracted URL, never the tagged one as posted",
+    gSaved.outcome === "SAVED" && gCalls.length === 1 && gSent?.length === 1 && gSent[0].sourceUrl === VENDOR, JSON.stringify(gCalls));
+
+  // Fail closed: with no readable provider the rule is unknown, and the Perplexity rule is never assumed.
+  const blind = fakeClient(Object.fromEntries(Object.entries(kTables).filter(([table]) => table !== "protocols")));
+  const mislabelled = fakeClient({
+    ...kTables,
+    protocols: kTables.protocols.map((r) => (r.id === kg.slots[0].protocolId ? { ...r, provider: "perplexity_sonar" } : r)),
+  });
+  const outcomes = [
+    (await loadEvidenceChoices(blind, PILOT, kg.pilotQuestionId))?.length,
+    (await loadEvidenceChoices(blind, PILOT, kq1.pilotQuestionId))?.length,
+    (await verifyActionEvidence(blind, PILOT, [{ attemptId: kgAtt[0].id, sourceUrl: VENDOR }])).outcome,
+    (await verifyActionEvidence(blind, PILOT, [{ attemptId: kAtt[0].id, sourceUrl: G2 }])).outcome,
+    (await verifyActionEvidence(blind, PILOT, [{ attemptId: kgAtt[0].id, sourceUrl: null }])).outcome,
+    (await loadEvidenceChoices(mislabelled, PILOT, kg.pilotQuestionId))?.length,
+    (await verifyActionEvidence(mislabelled, PILOT, [{ attemptId: kgAtt[0].id, sourceUrl: VENDOR }])).outcome,
+  ];
+  check("K16 a slot whose protocol cannot be read, or names another engine than the slot, fails closed on either engine: nothing offered and no source accepted, while a link with no source is still checked as the pilot's answer",
+    JSON.stringify(outcomes) === JSON.stringify([0, 0, "SOURCE_NOT_IN_ANSWER", "SOURCE_NOT_IN_ANSWER", "OK", 0, "SOURCE_NOT_IN_ANSWER"]),
+    JSON.stringify(outcomes));
+  const dRow = admin.find((x) => x.actionId === K_ACT.d);
+  check("K17 the console shows a linked ChatGPT answer's stored text after its fingerprint check, with its engine and source",
+    dRow?.status === "draft" && dRow.evidence[0].answerText === "Vendor A fits small teams." && dRow.evidence[0].answerNote === null &&
+    dRow.evidence[0].words === `Question 14, ChatGPT answer 1; source ${VENDOR}`, JSON.stringify(dRow?.evidence[0]));
 })().catch((error) => {
   check("K the store checks ran", false, String(error));
 });
@@ -821,7 +968,7 @@ check("D3 test:pilot-actions is registered", /"test:pilot-actions": "tsx scripts
 // fewer checks than this suite holds fails rather than passing quietly.
 void kDone.then(() => {
   console.log(`\n${total - failures}/${total} checks passed.`);
-  if (total < 98) {
+  if (total < 109) {
     console.error(`Pilot actions FAILED: only ${total} checks ran.`);
     process.exit(1);
   }

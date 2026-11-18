@@ -364,6 +364,11 @@ const ANALYSIS_MODEL_REFUSAL_MESSAGE: Record<AnalysisModelRefusal, (name: string
  * and generalising that is deliberately NOT part of this changeset — the
  * canary constraint is documented in `.env.example` instead.
  *
+ * D-036 / D-061 — production now drives 7 slots per claim. With the ChatGPT
+ * switch off the N-slot rule is still not enforced here: the hosting
+ * contract checks it on the committed Fly values. With the switch on,
+ * `allSlotsBudgetWithChatGptMs` enforces it at startup.
+ *
  * Exported so the rule is exercised value-by-value, and used by both the
  * configuration gate and the runtime bound. There is one implementation.
  */
@@ -386,16 +391,46 @@ export function claimBudgetWithChatGptMs(
 }
 
 /**
- * D-056 — whether the database can record a ChatGPT attempt honestly.
+ * D-061 — what a WHOLE claim can need with the ChatGPT engine on, in ms.
  *
- * Not yet: probe_runs and probe_results accept no `live_openai_chatgpt`
- * probe mode, and persist_probe_result_for_job writes platform 'perplexity'
- * for every result (0054). Phase B's migration fixes both and flips this in
- * the same pull request. Until then a live worker refuses to start with the
- * switch on, so turning it on early can neither fail after a reservation
- * nor record a ChatGPT answer under Perplexity's name.
+ * `claimBudgetWithChatGptMs` is one slot, and the runtime bound asks for it
+ * once, before each claim. The claim may then drive up to
+ * `WORKER_MAX_SLOTS_PER_CLAIM` slots without asking again, and with
+ * ChatGPT calls of up to 290 s a claim taken at startup could still be
+ * mid-slot when the absolute deadline cuts the process off — after the
+ * slot was admitted, reserved and sent. So, at startup: every permitted
+ * slot at its worst case, the longer provider call and then the analysis
+ * call, plus the grace once for the wind-down. At the D-059 values,
+ * 7 x (290000 + 45000) + 10000 = 2355000 ms, under a 2400 s ceiling.
+ *
+ * Applied only with the switch on; with it off nothing here changes.
  */
-export const CHATGPT_WORKER_SCHEMA_READY = false;
+export function allSlotsBudgetWithChatGptMs(
+  slots: number,
+  providerTimeoutMs: number,
+  chatgptCallTimeoutMs: number,
+  graceMs: number,
+): number {
+  return slots * (Math.max(providerTimeoutMs, chatgptCallTimeoutMs) + providerTimeoutMs) + graceMs;
+}
+
+/**
+ * D-056 / D-061 — whether this build's ChatGPT path matches the database
+ * schema it writes to.
+ *
+ * True since phase B. Its migration, 20261109180000, adds
+ * `live_openai_chatgpt` to the probe_runs and probe_results probe-mode
+ * CHECKs, and makes persist_probe_result_for_job record the probe run's
+ * own platform instead of 'perplexity' for every result (0054). This
+ * constant cannot see the connected database, so it proves only that the
+ * code is ready. What proves the migration is APPLIED there is the runtime
+ * capability probe, `protocol_worker_capabilities()`: with the switch on,
+ * the entry point calls it at startup and refuses to start, before any
+ * claim, unless it lists `live_openai_chatgpt`. A worker switched on ahead
+ * of the migration therefore still cannot fail after a reservation, nor
+ * record a ChatGPT answer under Perplexity's name.
+ */
+export const CHATGPT_WORKER_SCHEMA_READY = true;
 
 /**
  * TK-R-5 — the versioned-model rule, as a pure predicate.
@@ -434,8 +469,9 @@ function requireDatedAnalysisModel(env: Env, name: string): string {
  */
 export function resolveExecutionPlan(
   env: Env,
-  // D-056 — injectable only so tests can exercise the switch's "on" path
-  // before phase B; the live entry point never passes it.
+  // D-056 / D-061 — injectable only so tests can still exercise the refusal
+  // a build without the phase B schema gives (`chatgptSchemaReady: false`);
+  // the live entry point never passes it.
   overrides: { readonly chatgptSchemaReady?: boolean } = {},
 ): ExecutionPlan {
   const modeRaw = raw(env, "WORKER_EXECUTION_MODE");
@@ -721,6 +757,28 @@ export function resolveExecutionPlan(
       "WORKER_READY_STALE_MS must exceed the heartbeat interval (WORKER_LEASE_SECONDS / 3) "
         + "when WORKER_CHATGPT_ENABLED=true.",
       ["WORKER_READY_STALE_MS", "WORKER_LEASE_SECONDS"],
+    );
+  }
+  // D-061 — and the runtime must absorb the WHOLE claim, not one slot of it:
+  // every slot the claim may drive, each a ChatGPT call and then the
+  // analysis call, plus the grace (`allSlotsBudgetWithChatGptMs`). Checked
+  // only with the switch on, after every other rule, so a Perplexity-only
+  // configuration and the order of the existing refusals are unchanged.
+  if (
+    chatgpt.enabled
+    && allSlotsBudgetWithChatGptMs(
+      config.maxSlotsPerClaim, providerTimeoutMs, chatgpt.callTimeoutMs, graceMs,
+    ) >= maxRuntimeSeconds * 1000
+  ) {
+    throw new WorkerConfigError(
+      "WORKER_MAX_SLOTS_PER_CLAIM x (max(WORKER_PROVIDER_TIMEOUT_MS, WORKER_CHATGPT_TIMEOUT_MS) + "
+        + "WORKER_PROVIDER_TIMEOUT_MS) + WORKER_GRACE_MS must be strictly less than "
+        + "WORKER_MAX_RUNTIME_SECONDS in milliseconds when WORKER_CHATGPT_ENABLED=true: "
+        + "every slot one claim may drive can make a ChatGPT call and then the analysis call.",
+      [
+        "WORKER_MAX_RUNTIME_SECONDS", "WORKER_MAX_SLOTS_PER_CLAIM", "WORKER_CHATGPT_TIMEOUT_MS",
+        "WORKER_PROVIDER_TIMEOUT_MS", "WORKER_GRACE_MS",
+      ],
     );
   }
   return { mode: "live", config };

@@ -9,7 +9,11 @@
  *   - it is a completed answer whose stored response re-hashes to its
  *     recorded SHA-256;
  *   - a named source is re-found among that answer's own extracted sources,
- *     under the same rule the question's source section uses.
+ *     under the rule the question's source section uses: the one its
+ *     protocol's provider names (D-056; passed since D-061, before which a
+ *     ChatGPT answer was read as a Perplexity Agent body and had no sources).
+ *     The named URL is put in that rule's form before it is compared, so a
+ *     ChatGPT link copied with OpenAI's `utm_source=openai` tag matches.
  * A link that fails, or wording a suggested action may not use, blocks the
  * report. Any action at all holds it for the founder's review.
  *
@@ -19,7 +23,7 @@ import { lintPilotActionText, PILOT_ACTION_TEXT_FIELDS, type PilotActionText } f
 import { runOrdinalsByAttemptId } from "@/lib/reports/build-protocol-report";
 import type { PilotReportAction, PilotReportActionEvidence, PilotEngineKey } from "@/lib/reports/pilot-report-types";
 import type { EvidenceAttemptInput, EvidenceResultInput, BuildProtocolReportInput } from "@/lib/reports/protocol-report-types";
-import { extractProviderSources, normalizeSourceUrl } from "@/lib/source-insights/extract-provider-sources";
+import { extractProviderSources, normalizeProviderSourceUrl } from "@/lib/source-insights/extract-provider-sources";
 
 export interface PilotReportActionInput extends PilotActionText {
   actionId: string;
@@ -106,7 +110,11 @@ export function buildPilotActions(
         block(`it rests on ${where}, which is no longer a completed answer.`);
         continue;
       }
-      const sources = extractProviderSources(result.rawResponse, result.rawResponseSha256);
+      // D-061 — the protocol's provider decides the rule, as in the question's
+      // own report (buildProtocolReport); a slot on another engine blocks the
+      // report in buildPilotReport.
+      const provider = slot.evidence.protocol.provider;
+      const sources = extractProviderSources(result.rawResponse, result.rawResponseSha256, provider);
       if (UNVERIFIED.has(sources.status) || typeof result.rawResponseSha256 !== "string") {
         block(`the stored response of ${where} could not be checked against its recorded fingerprint.`);
         continue;
@@ -115,7 +123,7 @@ export function buildPilotActions(
       let sourceDomain: string | null = null;
       let sourceCited: boolean | null = null;
       if (link.sourceUrl !== null) {
-        const wanted = normalizeSourceUrl(link.sourceUrl)?.url ?? link.sourceUrl;
+        const wanted = normalizeProviderSourceUrl(link.sourceUrl, provider)?.url ?? link.sourceUrl;
         const cited = sources.cited.find((s) => s.url === wanted);
         const retrieved = cited ? undefined : sources.retrievedOnly.find((s) => s.url === wanted);
         const hit = cited ?? retrieved;

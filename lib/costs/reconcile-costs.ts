@@ -4,7 +4,8 @@
  * Pure. Every row is counted exactly once, in exactly one cost bucket:
  *
  *   measured    actual cost the provider itself reported (Perplexity)
- *   estimated   actual cost computed from token counts (analysis, PR #2)
+ *   estimated   actual cost computed from token counts (analysis, PR #2;
+ *               ChatGPT's provider leg, D-056, from OpenAI's price table)
  *   unknown     no actual cost — in flight, failed, or unpriced
  *   malformed   anything else; reported, never silently totalled
  *
@@ -14,6 +15,15 @@
  * actual cost exceeds its reservation is an overrun and is listed by count
  * and amount: reservations are the admission control, so an overrun means
  * the per-call reservation is too low.
+ *
+ * Two splits of the same rows (D-061):
+ *   byCallKind  the ledger's own label. The provider leg of EVERY engine is
+ *               `perplexity` there (D-061 item 1), so this split does not
+ *               separate engines; it is kept as the ledger states it.
+ *   byLeg       the provider leg by engine, through the protocol's provider
+ *               (`perplexity`, `chatgpt`), and `analysis` apart. A provider
+ *               leg whose protocol's provider is not known is
+ *               `provider_engine_unknown`, never filed under an engine.
  */
 
 export interface LedgerCostRow {
@@ -21,6 +31,12 @@ export interface LedgerCostRow {
   reserved_cost_usd: unknown;
   actual_cost_usd: unknown;
   cost_basis: unknown;
+  /**
+   * D-061 — the provider of the protocol the row's attempt belongs to
+   * (`protocols.provider`), when the caller joined it. It decides only the
+   * `byLeg` split.
+   */
+  provider?: unknown;
 }
 
 export interface CostBucketTotals {
@@ -36,6 +52,25 @@ export interface CostBucketTotals {
   actualKnownUsd: number;
   overrunCalls: number;
   overrunUsd: number;
+}
+
+/** D-061 — the `byLeg` buckets. */
+export type CostLeg = "perplexity" | "chatgpt" | "analysis" | "provider_engine_unknown" | "unknown_kind";
+
+/** Every provider string a Perplexity protocol has been written with. */
+const PERPLEXITY_PROVIDERS: ReadonlySet<string> = new Set(["perplexity", "perplexity_sonar", "perplexity_agent"]);
+
+/**
+ * D-061 — the leg a ledger row belongs to: the analysis leg as such, and the
+ * provider leg (`call_kind = 'perplexity'` for every engine) by the
+ * protocol's provider.
+ */
+export function costLegOf(row: Pick<LedgerCostRow, "call_kind" | "provider">): CostLeg {
+  if (row.call_kind === "analysis") return "analysis";
+  if (row.call_kind !== "perplexity") return "unknown_kind";
+  if (typeof row.provider === "string" && PERPLEXITY_PROVIDERS.has(row.provider)) return "perplexity";
+  if (row.provider === "openai_chatgpt") return "chatgpt";
+  return "provider_engine_unknown";
 }
 
 function emptyTotals(): CostBucketTotals {
@@ -58,14 +93,18 @@ function round(n: number): number {
 export function reconcileCosts(rows: LedgerCostRow[]): {
   total: CostBucketTotals;
   byCallKind: Record<string, CostBucketTotals>;
+  byLeg: Partial<Record<CostLeg, CostBucketTotals>>;
 } {
   const total = emptyTotals();
   const byCallKind: Record<string, CostBucketTotals> = {};
+  const byLeg: Partial<Record<CostLeg, CostBucketTotals>> = {};
 
   for (const row of rows) {
     const kind = typeof row.call_kind === "string" ? row.call_kind : "unknown_kind";
     const bucket = (byCallKind[kind] ??= emptyTotals());
-    for (const t of [total, bucket]) t.calls += 1;
+    const leg = (byLeg[costLegOf(row)] ??= emptyTotals());
+    const buckets = [total, bucket, leg];
+    for (const t of buckets) t.calls += 1;
 
     const reserved = money(row.reserved_cost_usd);
     const actualRaw = row.actual_cost_usd;
@@ -79,18 +118,18 @@ export function reconcileCosts(rows: LedgerCostRow[]): {
       (basis !== null && (actual === null || (basis !== "measured" && basis !== "estimated")));
 
     if (malformed) {
-      for (const t of [total, bucket]) t.malformedCalls += 1;
+      for (const t of buckets) t.malformedCalls += 1;
       continue;
     }
 
-    for (const t of [total, bucket]) t.reservedUsd += reserved!;
+    for (const t of buckets) t.reservedUsd += reserved!;
 
     if (basis === null) {
-      for (const t of [total, bucket]) t.unknownCalls += 1;
+      for (const t of buckets) t.unknownCalls += 1;
       continue;
     }
 
-    for (const t of [total, bucket]) {
+    for (const t of buckets) {
       if (basis === "measured") { t.measuredUsd += actual!; t.measuredCalls += 1; }
       else { t.estimatedUsd += actual!; t.estimatedCalls += 1; }
       t.actualKnownUsd += actual!;
@@ -98,12 +137,13 @@ export function reconcileCosts(rows: LedgerCostRow[]): {
     }
   }
 
-  for (const t of [total, ...Object.values(byCallKind)]) {
+  for (const t of [total, ...Object.values(byCallKind), ...Object.values(byLeg)]) {
+    if (!t) continue;
     t.reservedUsd = round(t.reservedUsd);
     t.measuredUsd = round(t.measuredUsd);
     t.estimatedUsd = round(t.estimatedUsd);
     t.actualKnownUsd = round(t.actualKnownUsd);
     t.overrunUsd = round(t.overrunUsd);
   }
-  return { total, byCallKind };
+  return { total, byCallKind, byLeg };
 }

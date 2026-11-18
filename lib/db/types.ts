@@ -59,10 +59,11 @@ export type ProbeRunStatus = "pending" | "succeeded" | "failed";
  * hardcoded helper; read it from the row.
  */
 /**
- * D-056 — `live_openai_chatgpt` is the ChatGPT engine's live mode. It is
- * typed here so the worker can name it; the database CHECK on probe_runs and
- * probe_results does not accept it until phase B's migration, and the worker
- * refuses WORKER_CHATGPT_ENABLED=true until then (execution-mode.ts).
+ * D-056 — `live_openai_chatgpt` is the ChatGPT engine's live mode. The
+ * probe-mode CHECKs on probe_runs and probe_results accept it from phase B's
+ * migration (20261109180000, D-061); before it, Postgres refuses it. With the
+ * ChatGPT switch on, the worker confirms at startup that the connected schema
+ * lists it (protocol_worker_capabilities).
  */
 export type ProbeMode = "simulated" | "live_perplexity" | "live_openai_chatgpt";
 
@@ -1476,6 +1477,21 @@ export interface ProtocolExecutionJob {
   datasetBatchId: string;
 }
 
+/**
+ * The two legs of an attempt in the external-call ledger (0050's CHECK on
+ * protocol_external_calls and 0056's on external_call_requests).
+ *
+ * D-061 item 1 — `perplexity` is the label of the PROVIDER leg of every
+ * engine, ChatGPT's included; it does not mean the call went to Perplexity.
+ * No call kind was added for ChatGPT: a new kind would mean redefining about
+ * ten production M5 spend, reservation, receipt and retry functions and the
+ * monitoring view, and would break the deployed worker between the
+ * migration and its redeploy. The engine is the protocol's provider
+ * (`protocols.provider`, through the attempt): every reader that needs it
+ * joins it there (the cost report's `byLeg`, lib/costs/reconcile-costs.ts;
+ * the fingerprint finds the provider leg by this kind and the endpoint by
+ * the provider).
+ */
 export type ExternalCallKind = "perplexity" | "analysis";
 
 export type ExternalCallStatus =
@@ -1887,6 +1903,10 @@ export type ClosePilotOutcome =
  * D-054 — retires a pilot question whose measurement can no longer finish.
  * Its rows and evidence are kept; it stops counting toward the limit, its
  * text may be added again, and it can no longer be run or retried.
+ *
+ * D-061 — the question is retired with every slot (no per-engine
+ * retirement): its checks cover each engine's measurement and the retests
+ * of each, and one slot that stopped for good is enough.
  */
 export interface RetirePilotQuestionInput {
   pilotId: string;
@@ -1902,14 +1922,56 @@ export type RetirePilotQuestionOutcome =
   | "PILOT_NOT_FOUND"
   | "QUESTION_NOT_FOUND"
   | "PILOT_CLOSED"
-  /** Its measurement holds a live lease or a pending run request. */
+  /** One of its measurements (any engine, or a retest) holds a live lease or a pending run request. */
   | "QUESTION_JOB_ACTIVE"
-  /** Its measurement is not stopped (failed or abandoned). */
+  /** None of its measurements is stopped (failed or abandoned). */
   | "QUESTION_NOT_STOPPED"
-  /** It stopped at the provider and can still be retried. */
+  /** None is stopped for good: each stopped one failed at the provider and can still be retried. */
   | "QUESTION_RETRYABLE"
   /** The pilot already has 5 retired questions. */
   | "RETIRE_LIMIT_REACHED";
+
+/**
+ * D-061 — the engines a pilot question is measured on: a slot's `engine` in
+ * pilot_question_protocols (20261109180000), always equal to the provider of
+ * the slot's protocol.
+ */
+export type PilotQuestionEngine = "perplexity_sonar" | "openai_chatgpt";
+
+/**
+ * D-061 — adds the ChatGPT baseline to an existing pilot question
+ * (add_pilot_question_engine): the question's own approved version and
+ * paraphrase plan, 5 planned runs, caps of 7 runs, 2 retries and 4 USD
+ * (D-059), the approved ChatGPT setting, approved and queued, never run.
+ */
+export interface AddPilotQuestionEngineInput {
+  pilotId: string;
+  pilotQuestionId: string;
+  /** The only engine added this way; Perplexity's baseline comes with the question. */
+  engine: "openai_chatgpt";
+  /** The signed-in founder's user id. */
+  addedBy: string;
+}
+
+export type AddPilotQuestionEngineOutcome =
+  | "ADDED"
+  /** The question already has its ChatGPT slot: that slot's protocol and job are returned. */
+  | "ALREADY_ADDED"
+  | "PILOT_NOT_FOUND"
+  | "QUESTION_NOT_FOUND"
+  | "PILOT_CLOSED"
+  | "PILOT_ENDED"
+  | "QUESTION_RETIRED"
+  /** The question's version is not approved. */
+  | "VERSION_NOT_APPROVED"
+  /** The question's hash is not its version's, or not its version's text. */
+  | "HASH_MISMATCH";
+
+export interface AddPilotQuestionEngineResult {
+  outcome: AddPilotQuestionEngineOutcome;
+  protocolId: string | null;
+  jobId: string | null;
+}
 
 /** D-052 — closes an approved request whose job ended in failure. */
 export interface CloseFailedSnapshotRequestInput {
@@ -2974,10 +3036,20 @@ export interface DbAdapter {
   createPilot(input: CreatePilotInput): Promise<CreatePilotResult>;
   /** D-054 — adds an approved question to a pilot and queues its measurement. */
   addPilotQuestion(input: AddPilotQuestionInput): Promise<AddPilotQuestionResult>;
+  /** D-061 — adds the ChatGPT baseline to an existing pilot question and queues it (never runs it). */
+  addPilotQuestionEngine(input: AddPilotQuestionEngineInput): Promise<AddPilotQuestionEngineResult>;
   /** D-054 — closes a pilot. */
   closePilot(input: ClosePilotInput): Promise<ClosePilotOutcome>;
-  /** D-054 — retires a pilot question whose measurement can no longer finish. */
+  /** D-054, D-061 — retires a pilot question whose measurement can no longer finish, with every slot. */
   retirePilotQuestion(input: RetirePilotQuestionInput): Promise<RetirePilotQuestionOutcome>;
+  /**
+   * D-061 — what the connected schema lets the protocol worker record
+   * (protocol_worker_capabilities, 20261109180000): `live_openai_chatgpt`
+   * once phase B's migration is applied. Throws when the function is
+   * missing (a database without that migration), so a caller that needs a
+   * capability fails closed.
+   */
+  protocolWorkerCapabilities(): Promise<string[]>;
   reserveSnapshotRequestProject(
     requestId: string
   ): Promise<SnapshotRequest | null>;

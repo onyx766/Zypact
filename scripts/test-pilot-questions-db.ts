@@ -16,7 +16,9 @@
  *      request recorded before the pilot ended; a retest of a pilot
  *      baseline is gated like the baseline; retiring a question whose
  *      measurement cannot go on; a retry refused for a closed pilot;
- *   K  the keys refuse a protocol or version of another project;
+ *   K  the keys refuse a protocol or version of another project, and the
+ *      slot trigger (20261109180000, D-061) refuses a slot whose engine is
+ *      not its protocol's provider;
  *   X  privileges.
  *
  * Failures are produced through the worker's own RPCs, never by writing
@@ -358,20 +360,36 @@ async function main(): Promise<void> {
   // A question with no slot yet, so only the protocol key can refuse the
   // slot (the slot's own unique key would refuse a second slot first). The
   // whole statement fails, so nothing it inserts stays.
-  const k1 = fails(`with q as (insert into public.buyer_questions (project_id) values (${lit(projectA)}::uuid) returning id, project_id),
+  const k1Sql = `with q as (insert into public.buyer_questions (project_id) values (${lit(projectA)}::uuid) returning id, project_id),
     v as (insert into public.buyer_question_versions (buyer_question_id, project_id, version_number, prompt_text, prompt_hash, intent_type, commercial_value, winnability, priority, rationale, provenance)
           select q.id, q.project_id, 1, ${lit(question(98))}, ${lit(sha(question(98)))}, 'shortlist', 3, 3, 13, 'Test setup for the protocol key.', 'customer_supplied' from q returning id, project_id),
     pq as (insert into public.pilot_questions (pilot_id, project_id, ordinal, buyer_question_version_id, prompt_hash, question_provenance, customer_approval_ref, customer_approved_on, added_by, idempotency_key, request_fingerprint)
           select ${lit(pilotA)}::uuid, v.project_id, 19, v.id, ${lit(sha(question(98)))}, 'customer_supplied', 'ref', current_date, ${lit(FOUNDER)}::uuid, gen_random_uuid(), md5('k1') from v returning id, project_id)
     insert into public.pilot_question_protocols (pilot_question_id, project_id, engine, phase, protocol_id)
-    select pq.id, pq.project_id, 'perplexity_sonar', 'baseline', ${lit(refProtocol)}::uuid from pq;`, "supabase_admin");
+    select pq.id, pq.project_id, 'perplexity_sonar', 'baseline', ${lit(refProtocol)}::uuid from pq;`;
+  // D-061: the slot trigger (20261109180000) now refuses this row before the
+  // key is checked. To prove the key itself still refuses it, the trigger is
+  // disabled inside a transaction that the failure rolls back.
+  const k1 = fails(`begin;\nalter table public.pilot_question_protocols disable trigger pilot_question_protocols_consistency;\n${k1Sql}`, "supabase_admin");
   check("K1 a pilot question cannot point at another project's protocol: the protocol key itself refuses it",
     k1 !== null && k1.includes("pilot_question_protocols_protocol_fk")
-      && admin(`select count(*) from public.pilot_questions where pilot_id = ${lit(pilotA)}::uuid and ordinal = 19;`) === "0", k1 ?? "");
+      && admin(`select count(*) from public.pilot_questions where pilot_id = ${lit(pilotA)}::uuid and ordinal = 19;`) === "0"
+      && admin(`select tgenabled from pg_trigger where tgrelid = 'public.pilot_question_protocols'::regclass and tgname = 'pilot_question_protocols_consistency';`) === "O", k1 ?? "");
+  const k1b = fails(k1Sql, "supabase_admin");
+  check("K1b with the slot trigger on (D-061), the trigger refuses it first, and nothing stays",
+    k1b !== null && k1b.includes("pilot_slot_protocol_outside_the_pilot_project")
+      && admin(`select count(*) from public.pilot_questions where pilot_id = ${lit(pilotA)}::uuid and ordinal = 19;`) === "0", k1b ?? "");
   check("K2 a pilot question cannot use another project's question version",
     fails(`insert into public.pilot_questions (pilot_id, project_id, ordinal, buyer_question_version_id, prompt_hash, question_provenance, customer_approval_ref, customer_approved_on, added_by, idempotency_key, request_fingerprint) select ${lit(pilotA)}::uuid, ${lit(projectA)}::uuid, 20, v.id, v.prompt_hash, 'customer_supplied', 'ref', current_date, ${lit(FOUNDER)}::uuid, gen_random_uuid(), md5('x') from public.buyer_question_versions v where v.project_id = ${lit(otherProject)}::uuid limit 1;`, "supabase_admin") !== null);
-  check("K3 a ChatGPT slot cannot be added before ChatGPT is wired",
-    fails(`insert into public.pilot_question_protocols (pilot_question_id, project_id, engine, phase, protocol_id) values (${lit(added[0].pq)}::uuid, ${lit(projectA)}::uuid, 'openai_chatgpt', 'baseline', ${lit(added[1].protocol)}::uuid);`, "supabase_admin") !== null);
+  // D-061 changed this rule: the engine CHECK accepts ChatGPT, and a ChatGPT
+  // slot exists only over a ChatGPT protocol (add_pilot_question_engine).
+  // A ChatGPT slot over a Perplexity protocol is refused by the slot trigger
+  // for that reason, before the protocol key (which would also refuse
+  // reusing another question's protocol) is reached.
+  const k3 = fails(`insert into public.pilot_question_protocols (pilot_question_id, project_id, engine, phase, protocol_id) values (${lit(added[0].pq)}::uuid, ${lit(projectA)}::uuid, 'openai_chatgpt', 'baseline', ${lit(added[1].protocol)}::uuid);`, "supabase_admin");
+  check("K3 a ChatGPT slot over a Perplexity protocol is refused: its engine is not the protocol's provider (D-061)",
+    k3 !== null && k3.includes("pilot_slot_engine_is_not_the_protocol_provider")
+      && admin(`select count(*) from public.pilot_question_protocols where pilot_question_id = ${lit(added[0].pq)}::uuid;`) === "1", k3 ?? "");
 
   /* X: privileges ------------------------------------------------------- */
   const fns = [

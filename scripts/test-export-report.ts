@@ -22,6 +22,11 @@
  *     - `resolveCompanyName` falls back from project → mirrorProfile → domain
  *     - Report brand line reflects the fallback source
  *   Read-only invariant preserved from Sprint 11
+ *   D-061 — ChatGPT rows (probe mode live_openai_chatgpt)
+ *     - the adapter reads them as their own mode, never as simulated
+ *     - this legacy report and its selection never count them as live
+ *       Perplexity or as simulated: they are left out of every figure,
+ *       counted as stored rows, and named in the limitations
  */
 
 delete process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -31,10 +36,13 @@ delete process.env.OPENAI_API_KEY;
 delete process.env.ANTHROPIC_API_KEY;
 delete process.env.OPENAI_MODEL;
 
+import type { SupabaseClient } from "@supabase/supabase-js";
 import {
+  aggregateProbeMode,
   buildMvpReport,
   computeDynamicFence,
   longestBacktickRun,
+  probeHeadingLabel,
   redactSensitive,
   resolveCompanyName,
   simulatedProbeLabel,
@@ -45,6 +53,13 @@ import {
   REDACTED_MARKER,
   REPORT_SECTIONS,
 } from "@/lib/export/build-mvp-report";
+import {
+  buildProbeSetSummary,
+  buildPromptProbeAggregates,
+  isChatGptProbeRow,
+  selectMainReportProbeResults,
+} from "@/lib/probe-results/report-selection";
+import { __setSupabaseAdapterClientForTests, supabaseAdapter } from "@/lib/db/supabase-adapter";
 import type {
   BuildMvpReportInput,
 } from "@/lib/export/build-mvp-report";
@@ -1117,6 +1132,129 @@ function testPromptCountIntegrity(): void {
     "mixed-mode executive summary still agrees with the appendix",
     mixedExec.includes("11 prompts / 33 runs")
   );
+
+  // D-061 — ChatGPT rows are neither live Perplexity nor simulated. Adding
+  // them to a Perplexity figure would combine two engines, so this legacy
+  // report leaves them out of every figure, still counts them as stored
+  // rows, and says how many it left out.
+  const gptRow = (k: number, prompt: string): ProbeResult => ({
+    ...probeRow(k, prompt, "gp-0", "live_openai_chatgpt"),
+    platform: "chatgpt",
+    clientMentioned: true,
+    clientPosition: "primary",
+    verdict: "won",
+    competitorsMentioned: [{ name: "GptOnlyRival", position: 1 }],
+  });
+  const gptRows = [gptRow(200, texts[0]!), gptRow(201, texts[11]!), gptRow(202, texts[11]!)];
+  const withGpt: BuildMvpReportInput = {
+    ...input,
+    probeResults: [...probeResults, ...gptRows],
+    resolvedMentionsByProbeResult: toResolvedMentionsByProbeResult([...probeResults, ...gptRows]),
+  };
+  const gptReport = buildMvpReport(withGpt).markdown;
+  const gptExec = sliceReportSection(gptReport, REPORT_SECTIONS[0]);
+  const gptAppendix = sliceReportSection(gptReport, REPORT_SECTIONS[18]);
+  check(
+    "D-061 ChatGPT rows never enter the live Perplexity figures: still 11 prompts / 33 runs",
+    gptAppendix.includes("**distinct prompts represented in scorecard results**: 11") &&
+      gptAppendix.includes("**scorecard probe runs**: 33") &&
+      gptExec.includes("11 prompts / 33 runs")
+  );
+  check(
+    "D-061 every stored row is still counted, and the ChatGPT rows left out are named",
+    gptAppendix.includes("**all stored probe rows**: 36") &&
+      gptAppendix.includes("**ChatGPT rows left out of this report**: 3")
+  );
+  check(
+    "D-061 the limitations say how many ChatGPT answers this report left out",
+    gptReport.includes(
+      "3 ChatGPT answers stored for this project are not part of this report, which reads live Perplexity and simulated answers only."
+    )
+  );
+  check(
+    "D-061 no ChatGPT answer's content reaches a figure or a list (its competitor never appears)",
+    !gptReport.includes("GptOnlyRival")
+  );
+  check(
+    "D-061 a report without ChatGPT rows says nothing about ChatGPT rows",
+    !markdown.includes("ChatGPT rows left out") && !markdown.includes("ChatGPT answer")
+  );
+  const oneGpt = buildMvpReport({ ...input, probeResults: [...probeResults, gptRows[0]!] }).markdown;
+  check(
+    "D-061 one left-out ChatGPT answer is named in the singular",
+    oneGpt.includes("1 ChatGPT answer stored for this project is not part of this report")
+  );
+  check(
+    "D-061 a ChatGPT row keeps its own mode: never live Perplexity, never simulated",
+    deriveProbeMode(gptRows[0]!) === "live_openai_chatgpt" &&
+      probeHeadingLabel(gptRows[0]!) === "Live ChatGPT answer (OpenAI's API)" &&
+      !/simulated|perplexity/i.test(probeHeadingLabel(gptRows[0]!))
+  );
+  check(
+    "D-061 the roll-up ignores ChatGPT rows: none alone, live Perplexity beside them, simulated beside them",
+    aggregateProbeMode(gptRows) === "none" &&
+      aggregateProbeMode([...probeResults, ...gptRows]) === "live_perplexity" &&
+      aggregateProbeMode([probeRow(300, texts[0]!, "gp-0", "simulated"), ...gptRows]) === "simulated"
+  );
+  const summary = buildProbeSetSummary([...probeResults, ...gptRows]);
+  check(
+    "D-061 the probe-set summary counts ChatGPT rows as left out and nowhere else",
+    summary.chatGptRowsLeftOut === 3 && summary.total === 33 && summary.livePerplexity === 33 &&
+      summary.simulated === 0 && summary.includedMode === "live_perplexity" &&
+      ![...summary.mainProbeResults, ...summary.historicalProbeResults, ...summary.scorecardProbeResults].some(isChatGptProbeRow)
+  );
+  const gptOnly = buildProbeSetSummary(gptRows);
+  check(
+    "D-061 a ChatGPT-only set is never read as simulated: nothing is selected",
+    gptOnly.chatGptRowsLeftOut === 3 && gptOnly.total === 0 && gptOnly.simulated === 0 &&
+      gptOnly.mainProbeResults.length === 0 && gptOnly.promptGroups.length === 0
+  );
+  check(
+    "D-061 the main selection and the prompt aggregates never take a ChatGPT row",
+    !selectMainReportProbeResults(gptRows).some(isChatGptProbeRow) &&
+      selectMainReportProbeResults([...gptRows, probeRow(301, texts[2]!, "gp-2", "simulated")]).length === 1 &&
+      buildPromptProbeAggregates([...probeResults, ...gptRows]).reduce((n, g) => n + g.runs, 0) === 33
+  );
+}
+
+/**
+ * D-061 — the Supabase adapter's read path keeps a ChatGPT row's probe mode
+ * (coerceProbeMode); only an unknown or missing value still reads as
+ * simulated, the pre-migration guard.
+ */
+async function testChatGptProbeModeRead(): Promise<void> {
+  const rowsFor = (table: string): Array<Record<string, unknown>> => {
+    const modes = ["live_openai_chatgpt", "live_perplexity", "simulated", "something_else", null];
+    return modes.map((probeMode, i) => table === "probe_runs"
+      ? { id: `run-${i}`, project_id: "p-1", platform: probeMode === "live_openai_chatgpt" ? "chatgpt" : "perplexity",
+          status: "succeeded", probe_mode: probeMode, created_at: "2026-11-17T00:00:00.000Z" }
+      : { id: `pr-${i}`, probe_run_id: `run-${i}`, project_id: "p-1", generated_prompt_id: null, prompt: "q",
+          platform: probeMode === "live_openai_chatgpt" ? "chatgpt" : "perplexity", probe_mode: probeMode,
+          raw_response: "a", client_mentioned: false, client_position: "absent", competitors_mentioned: [],
+          sources_cited: [], answer_summary: "", verdict: "lost", why_client_lost: "", created_at: "2026-11-17T00:00:00.000Z" });
+  };
+  const client = {
+    from(table: string) {
+      const q = {
+        select: () => q,
+        eq: () => q,
+        order: () => q,
+        then(resolve: (v: unknown) => unknown) { return resolve({ data: rowsFor(table), error: null }); },
+      };
+      return q;
+    },
+  } as unknown as SupabaseClient;
+  __setSupabaseAdapterClientForTests(client);
+  try {
+    const results = await supabaseAdapter.getProbeResultsByProject("p-1");
+    const runs = await supabaseAdapter.getProbeRunsByProject("p-1");
+    const expected = "live_openai_chatgpt,live_perplexity,simulated,simulated,simulated";
+    check("D-061 the adapter reads a ChatGPT result's probe mode as itself, never as simulated",
+      results.map((r) => r.probeMode).join(",") === expected, results.map((r) => r.probeMode).join(","));
+    check("D-061 the same for a probe run", runs.map((r) => r.probeMode).join(",") === expected, runs.map((r) => r.probeMode).join(","));
+  } finally {
+    __setSupabaseAdapterClientForTests(null);
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1353,23 +1491,31 @@ function testM3CanonicalTallySites(): void {
 /*  Entry                                                                     */
 /* -------------------------------------------------------------------------- */
 
-testFence();
-testRedactSensitive();
-testCompanyNameFallback();
-testSimulatedProbeHonesty();
-testGapToRecommendedAction();
-testAggregateEvidenceNeeded();
-testFullReport();
-testCompanyNameInReport();
-testCategoryCaveat();
-testSecretLeakThroughReport();
-testPromptCountIntegrity();
-testM3CanonicalTallySites();
+async function main(): Promise<void> {
+  testFence();
+  testRedactSensitive();
+  testCompanyNameFallback();
+  testSimulatedProbeHonesty();
+  testGapToRecommendedAction();
+  testAggregateEvidenceNeeded();
+  testFullReport();
+  testCompanyNameInReport();
+  testCategoryCaveat();
+  testSecretLeakThroughReport();
+  testPromptCountIntegrity();
+  testM3CanonicalTallySites();
+  await testChatGptProbeModeRead();
 
-console.log(
-  `\n${checks - failures}/${checks} checks passed. ` +
-    (failures === 0
-      ? "Sprint 11.5 export builder scenario PASSED."
-      : "Sprint 11.5 export builder scenario FAILED.")
-);
-process.exit(failures === 0 ? 0 : 1);
+  console.log(
+    `\n${checks - failures}/${checks} checks passed. ` +
+      (failures === 0
+        ? "Sprint 11.5 export builder scenario PASSED."
+        : "Sprint 11.5 export builder scenario FAILED.")
+  );
+  process.exit(failures === 0 ? 0 : 1);
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

@@ -2,11 +2,20 @@
  * GET /api/internal/costs/projects/:projectId — reserved versus actual cost
  * for one project, founder-only.
  *
- * Read-only and aggregate-only: totals by call kind and by protocol, never a
- * request body, response, prompt or address. Every read is scoped to the
- * project in the path — the ledger rows by `project_id`, and the attempts
- * that attribute them to protocols by the same `project_id` — so one
- * project's figures cannot include another's.
+ * Read-only and aggregate-only: totals by call kind, by leg (the provider
+ * leg per engine, and analysis) and by protocol, never a request body,
+ * response, prompt or address. Every read is scoped to the project in the
+ * path — the ledger rows by `project_id`, the attempts that attribute them to
+ * protocols, and the protocols that name their engine, each by the same
+ * `project_id` — so one project's figures cannot include another's.
+ *
+ * D-061 — the provider leg of every engine carries `call_kind = 'perplexity'`
+ * in the ledger (D-061 item 1), so `byCallKind` cannot separate engines.
+ * `byLeg` does, through the protocol's provider: Perplexity's and ChatGPT's
+ * provider legs apart, analysis apart, and a provider leg whose protocol is
+ * not readable here as `provider_engine_unknown`. ChatGPT's costs are
+ * estimates from OpenAI's dated price table, whose version is reported
+ * beside the analysis one whenever ChatGPT rows exist.
  *
  * Refuses rather than undercounts: a ledger larger than one page, or any
  * read error, is a 503, not a partial total.
@@ -17,6 +26,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { FounderRouteGuard } from "@/lib/auth/founder";
 import { LLM_PRICE_TABLE_VERSION } from "@/lib/costs/llm-pricing";
 import { reconcileCosts, type LedgerCostRow } from "@/lib/costs/reconcile-costs";
+// No imports, no environment, no call: safe in the web app (D-050).
+import { OPENAI_PRICE_TABLE } from "@/lib/probes/chatgpt-pricing";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -73,17 +84,41 @@ export async function handleProjectCostReport(
     }
   }
 
+  // D-061 — each protocol's engine, read from the same project's protocols.
+  const protocolIds = Array.from(new Set(protocolOf.values()));
+  const providerOf = new Map<string, unknown>();
+  if (protocolIds.length > 0) {
+    const protocols = await client
+      .from("protocols")
+      .select("id,provider")
+      .eq("project_id", projectId)
+      .in("id", protocolIds);
+    if (protocols.error || !Array.isArray(protocols.data)) return unavailable();
+    for (const p of protocols.data as Record<string, unknown>[]) {
+      providerOf.set(String(p.id), p.provider);
+    }
+  }
+
   const grouped = new Map<string, LedgerCostRow[]>();
+  const attributed: LedgerCostRow[] = [];
   for (const row of rows) {
     // A ledger row whose attempt is not in this project is not attributed to
     // any protocol here; it still counts in the project totals it was read for.
     const protocolId = protocolOf.get(String(row.protocol_attempt_id)) ?? "unattributed";
+    const withEngine: LedgerCostRow = {
+      call_kind: row.call_kind,
+      reserved_cost_usd: row.reserved_cost_usd,
+      actual_cost_usd: row.actual_cost_usd,
+      cost_basis: row.cost_basis,
+      provider: providerOf.get(protocolId),
+    };
+    attributed.push(withEngine);
     const list = grouped.get(protocolId) ?? [];
-    list.push(row);
+    list.push(withEngine);
     grouped.set(protocolId, list);
   }
 
-  const { total, byCallKind } = reconcileCosts(rows);
+  const { total, byCallKind, byLeg } = reconcileCosts(attributed);
   const byProtocol = Array.from(grouped.entries())
     .map(([protocolId, list]) => ({ protocolId, ...reconcileCosts(list).total }))
     .sort((a, b) => a.protocolId.localeCompare(b.protocolId));
@@ -91,8 +126,12 @@ export async function handleProjectCostReport(
   return NextResponse.json({
     ok: true,
     projectId,
+    // The analysis leg's table.
     priceTableVersion: LLM_PRICE_TABLE_VERSION,
+    // D-061 — the table ChatGPT's estimates use, whenever ChatGPT rows exist.
+    openAiPriceTableVersion: byLeg.chatgpt ? OPENAI_PRICE_TABLE.version : null,
     total,
+    byLeg,
     byCallKind,
     byProtocol,
   });

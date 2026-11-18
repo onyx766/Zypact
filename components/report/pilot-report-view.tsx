@@ -1,9 +1,10 @@
 import { Calendar, ExternalLink, Info, Lock } from "lucide-react";
 
 import {
-  NEWER_REVISION_WORDS,
+  PILOT_REPORT_TITLE,
   PREVIEW_BANNER_WORDS,
   PRIVATE_REPORT_WORDS,
+  REPLACED_LINK_WORDS,
   revisionChipWords,
 } from "@/lib/reports/pilot-report-copy";
 import {
@@ -22,18 +23,20 @@ import "./protocol-report.css";
  * Markdown renders, or from the page frame in pilot-report-copy.ts; nothing
  * is re-derived here. An engine with no measurement says so in words and is
  * never shown as zero.
+ *
+ * D-060: the customer's page renders it only for the newest shared revision
+ * of a pilot; an earlier link shows PilotReportReplacedNotice instead, so no
+ * page says that a newer revision exists.
  */
 export function PilotReportView({
   payload,
   revision,
   sharedAt,
-  newerSharedRevision,
   preview = false,
 }: {
   payload: PilotReportPayload;
   revision: number;
   sharedAt: string | null;
-  newerSharedRevision: boolean;
   preview?: boolean;
 }) {
   const v = presentPilotReport(payload);
@@ -84,11 +87,6 @@ export function PilotReportView({
               </span>
             ))}
           </div>
-          {newerSharedRevision ? (
-            <p className="zpr-hero-copy">
-              <strong>{NEWER_REVISION_WORDS}</strong>
-            </p>
-          ) : null}
         </div>
       </section>
 
@@ -184,6 +182,37 @@ export function PilotReportView({
           </p>
         </section>
       </div>
+    </main>
+  );
+}
+
+/**
+ * D-060 — what an earlier link shows once a later revision of the same report
+ * has been shared (D-059 item 9). It takes no props on purpose: no report
+ * content, revision, date or token can reach it, and it gives no pointer to
+ * the newer link. The page around it is noindex.
+ */
+export function PilotReportReplacedNotice() {
+  return (
+    <main className="zpr-root">
+      <header className="zpr-header">
+        <a href="/" aria-label="Zypact home">
+          <Brand />
+        </a>
+        <span className="zpr-private">
+          <Lock size={14} strokeWidth={2} />
+          {PRIVATE_REPORT_WORDS}
+        </span>
+      </header>
+
+      <section className="zpr-hero">
+        <div className="zpr-hero-inner">
+          <h1 className="zpr-title">{PILOT_REPORT_TITLE}</h1>
+          <p className="zpr-hero-copy" role="status">
+            {REPLACED_LINK_WORDS}
+          </p>
+        </div>
+      </section>
     </main>
   );
 }

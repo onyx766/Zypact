@@ -56,8 +56,10 @@ at risk.
 Two consequences:
 
 - **Never deploy between "Queue retest run" and "Run retest now"** (self-test §7
-  steps 4 and 5). In that interval a job sits `queued` and a deploy-time start
-  could claim it, outside the founder's intent and outside the console.
+  steps 4 and 5) until `20261109170000` is applied and the founder has
+  confirmed D-060 item 5 (below). In that interval a job sits `queued` and a
+  deploy-time start of a worker on the global claim could claim it, outside
+  the founder's intent and outside the console.
 - Until D-052 is deployed (migration `20261109130000`, numbered `20261114120000` until 2026-11-17 (D-058), and a worker image
   built from it), the claim is unscoped (`CURRENT_STATUS.md` §18.5 item 2).
   Deploy D-052's worker after its migration and before its web app: the
@@ -69,6 +71,22 @@ Two consequences:
 - Before D-052:
   `claim_protocol_execution_job` takes the oldest eligible job *globally*. An
   empty queue is therefore the check, not "no job for this intervention".
+- **Once migration `20261109170000` is applied (D-060)**, the two unscoped
+  claims (`claim_protocol_execution_job` and
+  `claim_protocol_execution_job_by_id`) are revoked from `service_role`. A
+  D-052 worker claims only the job a pending run request names, and a worker
+  image from before D-052 cannot claim at all (permission denied). A queued
+  job without a pending run request is then inert.
+  **D-060 item 5 *(engineer)*, proposed for founder confirmation:** the
+  empty-queue rule then becomes
+  **no job holds a live lease and no run request is pending**
+  (§6 step 3, second query), because the database itself refuses every claim
+  without a Run. Once the founder confirms it, this
+  replaces "keep the empty queue rule anyway" above. **Until then, keep the
+  empty-queue rule** for every worker redeploy and worker-secret change.
+  Until the migration is applied, the empty-queue rule holds in any case: the
+  deployed worker predates D-052 and uses the global claim, which is also why
+  the preflight keeps its P6.3 check (no queued job).
 
 If a future deploy is observed leaving the machine stopped or starting it, record
 that observation here and promote it from an open question to a stated fact.
@@ -142,6 +160,26 @@ select count(*) from protocol_execution_jobs
 
 Those three are the live statuses in migration `0050`. If the count is not zero,
 stop: resolve the job first. Do not deploy past a non-empty queue.
+
+**Once `20261109170000` is applied and the founder has confirmed D-060 item 5
+*(engineer)* (§3),** a queued job without a run request cannot be claimed, so
+the check may instead be this one: no job holds a live lease and no run
+request is pending. Until the founder confirms it, keep using the empty-queue
+query above.
+
+```sql
+select (select count(*) from protocol_execution_jobs
+         where status in ('claimed', 'running')
+           and lease_expires_at > now()) as live_leases,        -- must be 0
+       (select count(*) from protocol_job_run_requests
+         where status = 'pending'
+           and expires_at > now()) as pending_run_requests;     -- must be 0
+```
+
+A request past its expiry time is never claimed: the claim closes it as
+expired and claims nothing (D-052). Under this check, once it applies, queued
+jobs may stay queued. If either count is not zero, wait for the run to finish
+or the request to expire, and check again.
 
 ```bash
 # 4a. Provenance (PR-2). The build context must be exactly the commit you deploy:

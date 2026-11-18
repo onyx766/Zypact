@@ -137,7 +137,18 @@ export interface PilotReportRevisionRow {
   integrityStatus: ReportIntegrityStatus;
   integrityReasons: string[];
   sharedAt: string | null;
+  /** The link, only for a shared revision whose link still opens: the newest shared one (D-060). */
   publicToken: string | null;
+  /**
+   * D-060 — shared, and a later revision of the pilot has been shared since,
+   * so its link no longer opens (D-059 item 9, read_shared_pilot_report).
+   */
+  replaced: boolean;
+  /**
+   * D-060 — the newest shared revision, read beside the newest revisions
+   * because none of them is shared; it is listed last, after them.
+   */
+  olderThanListed: boolean;
   /** D-057 — the action versions the revision lists (its manifest), to tell a stale revision. */
   actionVersionIds: string[];
 }
@@ -148,54 +159,103 @@ export function manifestActionVersionIds(manifest: unknown): string[] {
   return Array.isArray(list) ? list.filter((v): v is string => typeof v === "string") : [];
 }
 
-/** The founder's list of a pilot's report revisions, newest first. The link is shown only once shared. */
+/**
+ * The founder's list of a pilot's report revisions, newest first. The link
+ * is shown only once shared, and only while it still opens (D-060): a shared
+ * revision with a later shared revision is marked replaced and carries no
+ * link. The list holds the newest revisions, so every revision shared after
+ * a listed one is listed too, and "replaced" is exact for every row.
+ *
+ * D-060 — only the newest shared revision's link opens, so the page must
+ * always show it. When none of the newest `limit` revisions is shared, it is
+ * older than all of them; one more bounded read finds it, and it is listed
+ * last, marked `olderThanListed`.
+ */
 export async function listPilotReportRevisions(
   client: SupabaseClient,
   pilotId: string,
   limit = 10
 ): Promise<PilotReportRevisionRow[]> {
+  const columns = "id,revision,generated_at,integrity_status,integrity_reasons,shared_at,public_token,manifest";
   const { data, error } = await client
     .from("pilot_report_artifacts")
-    .select("id,revision,generated_at,integrity_status,integrity_reasons,shared_at,public_token,manifest")
+    .select(columns)
     .eq("pilot_id", pilotId)
     .order("revision", { ascending: false })
     .limit(limit);
   if (error) throw error;
-  return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
-    id: String(r.id),
-    revision: Number(r.revision),
-    generatedAt: String(r.generated_at),
-    integrityStatus: String(r.integrity_status) as ReportIntegrityStatus,
-    integrityReasons: Array.isArray(r.integrity_reasons) ? r.integrity_reasons.map(String) : [],
-    sharedAt: r.shared_at ? String(r.shared_at) : null,
-    publicToken: r.shared_at && r.public_token ? String(r.public_token) : null,
-    actionVersionIds: manifestActionVersionIds(r.manifest),
-  }));
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  let olderShared: Record<string, unknown> | null = null;
+  if (rows.length >= limit && !rows.some((r) => r.shared_at)) {
+    const { data: shared, error: sharedError } = await client
+      .from("pilot_report_artifacts")
+      .select(columns)
+      .eq("pilot_id", pilotId)
+      .not("shared_at", "is", null)
+      .order("revision", { ascending: false })
+      .limit(1);
+    if (sharedError) throw sharedError;
+    olderShared = ((shared ?? []) as Array<Record<string, unknown>>)[0] ?? null;
+  }
+  const listed = olderShared ? [...rows, olderShared] : rows;
+  const sharedRevisions = listed.filter((r) => r.shared_at).map((r) => Number(r.revision));
+  const newestShared = sharedRevisions.length > 0 ? Math.max(...sharedRevisions) : null;
+  return listed.map((r) => {
+    const replaced = Boolean(r.shared_at) && newestShared !== null && Number(r.revision) < newestShared;
+    return {
+      id: String(r.id),
+      revision: Number(r.revision),
+      generatedAt: String(r.generated_at),
+      integrityStatus: String(r.integrity_status) as ReportIntegrityStatus,
+      integrityReasons: Array.isArray(r.integrity_reasons) ? r.integrity_reasons.map(String) : [],
+      sharedAt: r.shared_at ? String(r.shared_at) : null,
+      publicToken: r.shared_at && r.public_token && !replaced ? String(r.public_token) : null,
+      replaced,
+      olderThanListed: r === olderShared,
+      actionVersionIds: manifestActionVersionIds(r.manifest),
+    };
+  });
 }
 
-export interface SharedPilotReport {
-  payload: unknown;
-  revision: number;
-  generatedAt: string;
-  sharedAt: string;
-  newerSharedRevision: boolean;
-}
+/**
+ * D-060 — what a customer's link reads (read_shared_pilot_report):
+ *   - `current`: the newest shared revision of its pilot, with its payload;
+ *   - `replaced`: a later revision of the same pilot has been shared since,
+ *     so this link no longer opens the report (D-059 item 9). It carries
+ *     nothing of the report: no payload, revision, date or token;
+ *   - `not_found`: no shared, non-blocked revision has this token.
+ */
+export type SharedPilotReportRead =
+  | { state: "current"; payload: unknown; revision: number; generatedAt: string; sharedAt: string }
+  | { state: "replaced" }
+  | { state: "not_found" };
 
-/** The client read: only a shared revision, never a blocked one (read_shared_pilot_report). */
+/**
+ * The client read: only a shared revision, never a blocked one, and only the
+ * newest shared one in full (read_shared_pilot_report, 20261109170000).
+ *
+ * The flag is read before the payload: a revision with a later shared one is
+ * `replaced` even when a payload comes back with it, as it would if the
+ * database function were rolled back to 20261109150000's, which still
+ * returned it. Anything the function does not promise (no flag, or no
+ * payload without the flag) fails closed as `not_found`.
+ */
 export async function readSharedPilotReport(
   client: SupabaseClient,
   publicToken: string
-): Promise<SharedPilotReport | null> {
+): Promise<SharedPilotReportRead> {
   const { data, error } = await client.rpc("read_shared_pilot_report", { p_public_token: publicToken });
   if (error) throw error;
   const row = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | undefined;
-  if (!row || row.payload === null || row.payload === undefined) return null;
+  if (!row) return { state: "not_found" };
+  if (row.newer_shared_revision === true) return { state: "replaced" };
+  if (row.newer_shared_revision !== false || row.payload === null || row.payload === undefined) return { state: "not_found" };
   return {
+    state: "current",
     payload: row.payload,
     revision: Number(row.revision),
     generatedAt: String(row.generated_at),
     sharedAt: String(row.shared_at),
-    newerSharedRevision: row.newer_shared_revision === true,
   };
 }
 
@@ -208,6 +268,8 @@ export interface PilotReportRevision {
   integrityReasons: string[];
   sharedAt: string | null;
   isLatest: boolean;
+  /** D-060 — shared, and a later revision has been shared since: its link no longer opens. */
+  replaced: boolean;
   /** D-057 — the action versions the revision lists, to tell a stale revision. */
   actionVersionIds: string[];
 }
@@ -239,6 +301,20 @@ export async function readPilotReportRevision(
     .gt("revision", Number(r.revision))
     .limit(1);
   if (newerError) throw newerError;
+  const isLatest = (newer ?? []).length === 0;
+  // D-060 — a shared revision is replaced once any later revision is shared.
+  let replaced = false;
+  if (r.shared_at && !isLatest) {
+    const { data: newerShared, error: newerSharedError } = await client
+      .from("pilot_report_artifacts")
+      .select("id")
+      .eq("pilot_id", pilotId)
+      .gt("revision", Number(r.revision))
+      .not("shared_at", "is", null)
+      .limit(1);
+    if (newerSharedError) throw newerSharedError;
+    replaced = (newerShared ?? []).length > 0;
+  }
   return {
     id: String(r.id),
     revision: Number(r.revision),
@@ -247,7 +323,8 @@ export async function readPilotReportRevision(
     integrityStatus: String(r.integrity_status) as ReportIntegrityStatus,
     integrityReasons: Array.isArray(r.integrity_reasons) ? r.integrity_reasons.map(String) : [],
     sharedAt: r.shared_at ? String(r.shared_at) : null,
-    isLatest: (newer ?? []).length === 0,
+    isLatest,
+    replaced,
     actionVersionIds: manifestActionVersionIds(r.manifest),
   };
 }

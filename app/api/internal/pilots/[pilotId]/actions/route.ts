@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { requireFounderForRoute } from "@/lib/auth/founder";
-import { SAVE_PILOT_ACTION_REFUSAL, parseSavePilotAction } from "@/lib/pilots/action-rules";
+import { parseSavePilotAction, savePilotActionRefusalWords } from "@/lib/pilots/action-rules";
 import { savePilotActionChecked } from "@/lib/pilots/action-store";
 import { UUID_PATTERN } from "@/lib/pilots/validate";
 import { getReportServiceClient } from "@/lib/reports/service-client";
@@ -70,8 +70,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ pil
   if (result.outcome === "SAVED") {
     return NextResponse.json({ ok: true, ...result }, { status: 200 });
   }
+  // LIMIT_REACHED is the action limit for a new action and the version limit
+  // for an edit; the words say which (D-059 item 10).
   return NextResponse.json(
-    { ok: false, outcome: result.outcome, error: SAVE_PILOT_ACTION_REFUSAL[result.outcome] ?? "The action could not be saved." },
+    { ok: false, outcome: result.outcome, error: savePilotActionRefusalWords(result.outcome, parsed.value.actionId !== null) },
     { status: result.outcome === "PILOT_NOT_FOUND" || result.outcome === "ACTION_NOT_FOUND" ? 404 : 409 }
   );
 }

@@ -18,7 +18,12 @@ import {
 import { pilotChatGptEnabled } from "@/lib/pilots/engines";
 import { loadPilot, pilotIsOver, pilotNotStarted, type PilotMeasurement, type PilotQuestionRow } from "@/lib/pilots/reads";
 import { todayUtc, UUID_PATTERN } from "@/lib/pilots/validate";
-import { INTEGRITY_WORDS } from "@/lib/reports/pilot-report-copy";
+import {
+  INTEGRITY_WORDS,
+  OLDER_SHARED_REVISION_WORDS,
+  REPLACED_REVISION_WORDS,
+  SHARING_ENDS_EARLIER_LINK_WORDS,
+} from "@/lib/reports/pilot-report-copy";
 import { listPilotReportRevisions } from "@/lib/reports/process-pilot-report";
 import { getReportServiceClient } from "@/lib/reports/service-client";
 import { publicSiteUrl } from "@/lib/seo/site";
@@ -279,7 +284,7 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
               One report for all of this pilot&apos;s questions, built from the stored answers. Building spends nothing and
               shares nothing, and is refused while a measurement is still running. Open a revision to read it exactly as the
               customer will; the newest one can be shared from there. The customer receives only the private link you send
-              them.
+              them. {SHARING_ENDS_EARLIER_LINK_WORDS}
             </p>
           </div>
           {questions.length > 0 ? <BuildPilotReportButton pilotId={pilot.id} /> : null}
@@ -322,7 +327,19 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
                         </a>
                         <br />
                         <span className="zpa-muted">Shared {r.sharedAt?.slice(0, 10)}</span>
+                        {r.olderThanListed ? (
+                          // D-060 — the only link that opens, read beside the newest revisions because none of them is shared.
+                          <>
+                            <br />
+                            <span className="zpa-muted">{OLDER_SHARED_REVISION_WORDS}</span>
+                          </>
+                        ) : null}
                       </p>
+                    ) : r.replaced ? (
+                      // D-060 — a later revision was shared, so this link no longer opens; no link is shown.
+                      <span className="zpa-muted">
+                        Shared {r.sharedAt?.slice(0, 10)}. {REPLACED_REVISION_WORDS}.
+                      </span>
                     ) : (
                       <span className="zpa-muted">
                         {r.integrityStatus === "blocked"

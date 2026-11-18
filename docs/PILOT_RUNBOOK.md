@@ -308,6 +308,7 @@ Once D-052 is deployed, the request page says where and why it stopped. Before t
 - **The AI provider returned an error or no readable reply:** retry the failed run, with a note saying why. The retry reserves one paid run inside the measurement's caps; then press Run on the requests list. The failed run stays in the run table and in the attempt reconciliation; the rate counts readable runs only.
 - **Any other cause** (an answer that arrived empty, a failed analysis, a used-up cap, an abandoned job): close the request, with a note. Its evidence is kept, nothing is sent, and the website can be audited again. Tell the customer, and agree a fresh measurement if the pilot needs one.
 - **A retest** that stops has no console retry or close yet. It needs a founder decision, and the intervention's one retest (0079) may be spent.
+  - **A pilot's retest (D-062):** it is handled from the pilot page's **Retest** card, per question and engine. A provider failure gets **Retry**, as a baseline does; a retest held for review gets the review resolution; a retest that stopped before any answer (nothing was reserved) gets **Queue again**, with a reason, at most 3 times. Nothing is edited by hand (§14).
 - Never edit job or attempt rows by hand.
 
 ### Founder/operator review during hybrid phase
@@ -359,6 +360,20 @@ The founder and customer choose one intervention, then record:
 
 Interventions may be implemented by the customer, Zypact under a separate scope, or an approved execution partner. Zypact's default role is measurement and learning, not guaranteed execution.
 
+### 12.1 In a pilot: registering the change (D-062)
+
+A pilot's change is registered on the pilot page, never through the generic interventions console (which refuses a pilot baseline). Rules marked *(engineer)* in D-062 are proposed for founder confirmation, and the whole step stays off until the web host's retest gate is turned on (PILOT_PRODUCTION_PLAN Part D).
+
+1. **Before registering,** have the customer's written approval of the change, dated, and agree which questions it should move. The customer's change waits until both engines' baselines are taken (D-053 item 3).
+2. On the pilot page's **Retest** card, press **Register a change to measure again**. It is offered while the pilot is open, no change is live and fewer than 2 have been registered.
+3. **Choose 1 to 5 questions.** Each needs a finished baseline on both engines, planned at 5 runs, with all 5 answers readable. A question that does not qualify is listed with its reason in words.
+4. **Fill in the fields:** what the change is (a title and a description); where it is made; who makes it; the kind of change; why we expect it might matter (a hypothesis); the expected mechanism (a hypothesis); what else could explain a change; what we don't know yet; **what would change the customer's next decision, in the customer's own words** (it is not pre-filled); what we are watching for; and the waiting period in days (7 to 60 *(engineer)*). Then the approval reference and date, and, optionally, the reviewed suggested actions it came from. The approval reference is internal: it never reaches the report.
+5. **Write the hypothesis once for the whole change.** It is shown on every card of the change, so do not quote one question's or one engine's figures in it. All this text is checked for forbidden wording when it is saved and again whenever the report is built.
+6. **Read the limits shown on the panel:** "With 5 answers on each engine before and after the change, a retest can show only a change of 60 points or more.", and what each of the four statuses means. Answer "Is the change the customer said would matter smaller than 60 points?" honestly: a yes is stated on every card.
+7. **Confirm** that the customer approved the change in writing on that date, chose these questions, and was told before paying that a retest can show only a change of 60 points or more. Registering creates one approved intervention per question and engine, in one step. Nothing is run or spent.
+8. **The latest go-live date** is shown on registration: the pilot's end date, minus 7 days, minus the waiting period. A change that cannot go live by then is refused.
+9. **One change at a time, two at most per pilot.** A second change can be registered only after the first was withdrawn **before** it went live. **The questions of a change that went live are never retested again**, and a later change's baselines must have been collected after the earlier change went live.
+
 ## 13. Implementation confirmation and observation window
 
 Before the retest clock starts:
@@ -371,6 +386,14 @@ Before the retest clock starts:
 - record unrelated customer/market changes.
 
 Do not retest early merely to meet a demo, sales, or reporting deadline.
+
+### 13.1 In a pilot: recording the change as live (D-062)
+
+1. When the customer says the change is live, press **Record the change as live**. Enter the go-live date the customer reports, a link to the live change and/or the SHA-256 fingerprint of the changed file (at least one), an internal note, and **"Was the change made as registered?"**. On "no", describe the difference: it is written to the log of other changes as "a difference in how the change was made". A departure is never recorded as a protocol deviation.
+2. **The go-live date cannot be before the registration day** (the answers before it would not be a clean before-measurement) and cannot be in the future. Recording is refused if the waiting period would then end less than 7 days before the pilot's end date *(engineer)*.
+3. **One window for every question and engine,** opened at the moment you record the change as live and closed after the registered waiting period. It cannot be moved.
+4. **Keep the log of other changes** from registration to the end of the pilot: **Log another change**, with its kind, the day it happened and the text. The kinds follow METHODOLOGY §14. A mistaken note is corrected by a new note that names it; nothing is edited or deleted. A change may hold at most 20 notes *(engineer)*, and notes are accepted even after the pilot closes *(engineer)*.
+5. **No early retest.** A pilot's window has no override.
 
 ## 14. Retest
 
@@ -385,6 +408,18 @@ The retest uses:
 - visible failures and exclusions.
 
 A disagreement or underpowered result is not forced into a positive or negative claim.
+
+### 14.1 In a pilot: preparing and running the retests (D-062)
+
+1. **Prepare** once the waiting period is over: **Prepare the retests**. Every question and engine gets an approved retest protocol (5 planned answers, the 60-point smallest change that counts), a queued job and a retest slot, in one step, or none does. Preparing spends nothing.
+2. **Run each retest** from the members table, one question and engine at a time, **Perplexity first**. Each Run goes through the paid gate, the run request, admission and reservation like any baseline. A ChatGPT retest also needs ChatGPT connected (D-061).
+3. **The daily ceiling.** The gate adds the largest spend cap of any claimable queued job to the last 24 hours' spend, not the cap of the job being started (`lib/worker-control/paid-execution-gate.ts`). A ChatGPT retest is capped at 4 USD, so once retests are prepared every start needs the last 24 hours' spend to be at most the ceiling minus 4 USD.
+   - Each ChatGPT retest counts its reservations, 0.56 USD per answer: 2.80 USD with no failure, up to 3.92 USD at its run cap of 7.
+   - So about 3 ChatGPT retests fit in 24 hours at a 10 USD ceiling, and all 5 at 20 USD. Make no same-day promise.
+   - A change's caps bound its retests at 5 × 3.92 + 5 × 0.28 = 21.00 USD.
+4. **When a retest stops:** a provider failure gets **Retry**; a retest held for review is resolved in its cell; a retest that stopped before any answer (for example a ChatGPT Run while the worker's ChatGPT switch is off) gets **Queue again**, with a reason, at most 3 times *(engineer)*. Nothing was reserved for it, and the next Run is gated as usual. Retry is not offered for a retest with no attempt.
+5. **Change nothing in the measurement** (the analysis request, the provider request, the ChatGPT setting) while a change is live. A retest measured differently from its baseline is inconclusive and holds the report for review.
+6. **Withdraw the change** is possible until the first retest answer. It withdraws every question and engine together, with a reason, is final, and cancels any queued retest job. It is refused once a retest has an attempt, is running, or has a pending Run.
 
 ## 15. Outcome Card
 
@@ -410,6 +445,16 @@ Required footer:
 
 > **This Outcome Card documents an observed change under the recorded conditions. It does not establish that the intervention caused the change.**
 
+### 15.1 In a pilot: Outcome Cards inside the report (D-062)
+
+- **Cards live inside the pilot report**, in its Retest section, after the suggested actions. There is no card page and no separate card artifact.
+- **A status appears only once a retest is final** (it can no longer change) and has at least one answer. Until then the card shows only its state and counts. A retest that never ran by the pilot's end reads "Could not be measured again".
+- **Each card** is one question on one engine: the status in words, what each status means under rule `pilot-outcome-card/1`, the question and its version, before and after (readable answers, failed and excluded attempts, dates), the difference (after minus before) and its 95% range, the 60-point smallest change that counts, the smallest change this retest could show, the customer's threshold in their words, how it was measured and whether the same way as before, the sources cited before and after, what we were watching for, the log of other changes (each note written after the retest's first answer is flagged), "No control questions were measured…", "No departure from the registered retest was recorded." (or, when the change was recorded as not made exactly as registered, that the customer reported so), the answer references, and the footer above.
+  - **When the rule can give a card no status from its answers** (a phase with too few readable answers, or the two measurements not made the same way), the card says "This retest cannot show any change: …", with the reason in words, instead of a smallest change it could show *(engineer)*.
+- **Nothing is combined.** Each question and engine is compared on its own; cards are never added up, counted or summarised across questions or engines.
+- Text that fails the wording check when the report is built is replaced by "This text is not shown because it uses wording this report may not use." and holds the report for review.
+- The link to the live change and the titles of the suggested actions a change came from are checked the same way *(engineer)*. On a hit they stay stored as they are, but the report leaves them out ("The link to the live change is not shown…", "From a suggested action whose title is not shown…") and needs review, naming them.
+
 ## 16. Delivery states
 
 - `integrity_passed`: generate and deliver automatically.
@@ -417,6 +462,14 @@ Required footer:
 - `blocked`: do not deliver until the unsafe condition is resolved.
 
 Every review or override is recorded. Founder review is not used to conceal or manually rewrite deterministic facts.
+
+### 16.1 In a pilot: reviewing and sharing the cards (D-062)
+
+- **Sharing the revision is the recorded review of its cards.** A revision with any retest always needs review, so it is shared only with the founder's acknowledgement (D-055).
+- **No email and no card page.** The customer sees the cards through the pilot report link only.
+- **Build again after any retest change.** A note, a retest answer or a review resolution after the build makes the revision out of date, and Share refuses it. So does a retest that has become final since the build without a card *(engineer)*, for example one that could still be retried when the report was built and can no longer be because the pilot has ended or closed. Share also waits while a retest is running or a Run is pending.
+- **Share a revision containing every card before the engagement ends.** The pilot page warns while any card is in no shared revision.
+- **A shared card never changes.** A later revision must carry every card of the newest shared revision with the same status and the same answers, or the save is refused *(engineer)*.
 
 ## 17. Existing-report remediation
 

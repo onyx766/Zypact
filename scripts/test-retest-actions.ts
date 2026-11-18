@@ -224,6 +224,20 @@ async function main(): Promise<void> {
     check("no retest means no progress", (await readRetestProgress(client, { projectId: PROJECT, protocolId: BASELINE })) === null);
   }
 
+  /* ═══════════ D-062: a pilot member (§3.6) ═══════════ */
+  console.log("\n[D-062] a pilot retest member is managed on its pilot page");
+  {
+    const { client, rpcCalls } = fakeClient({
+      tables: { interventions: [iv("implemented")], pilot_retest_members: [{ intervention_id: IV, pilot_id: "p" }], protocols: [retestRow(RETEST, "approved")] },
+    });
+    const created = await createRetest(client, IV, ACTOR);
+    const queued = await queueRetestRun(client, IV);
+    check("creating a member's retest answers 409 pilot_member and calls nothing",
+      !created.ok && created.failure.status === 409 && created.failure.error === "pilot_member");
+    check("queueing a member's retest run answers 409 pilot_member and calls nothing",
+      !queued.ok && queued.failure.error === "pilot_member" && rpcCalls.length === 0);
+  }
+
   console.log(`\n${passed}/${passed + failed} checks passed.${failed ? ` ${failed} FAILED.` : ""}\n`);
   if (failed > 0) process.exit(1);
 }

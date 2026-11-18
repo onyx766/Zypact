@@ -16,6 +16,18 @@ import type {
   PilotQuestionEngine,
   RetirePilotQuestionInput,
   RetirePilotQuestionOutcome,
+  RegisterPilotRetestInput,
+  RegisterPilotRetestResult,
+  ConfirmPilotRetestImplementationInput,
+  ConfirmPilotRetestImplementationResult,
+  PreparePilotRetestsInput,
+  PreparePilotRetestsResult,
+  AbandonPilotRetestInput,
+  AbandonPilotRetestOutcome,
+  RequeuePilotRetestJobInput,
+  RequeuePilotRetestJobResult,
+  AddPilotRetestNoteInput,
+  AddPilotRetestNoteResult,
   CreatePilotInput,
   CreatePilotOutcome,
   CreatePilotResult,
@@ -290,15 +302,21 @@ interface MemoryPilotQuestion {
   retireReason: string | null;
 }
 
-/** D-054 — mirrors pilot_question_protocols (20261109140000; engines widened by 20261109180000, D-061). */
+/**
+ * D-054 — mirrors pilot_question_protocols (20261109140000; engines widened
+ * by 20261109180000, D-061; the retest phase by 20261109190000, D-062).
+ */
 interface MemoryPilotQuestionProtocol {
   id: string;
   pilotQuestionId: string;
   projectId: string;
   engine: PilotQuestionEngine;
-  phase: "baseline";
+  phase: "baseline" | "retest";
   protocolId: string;
 }
+
+/** D-062 — what each pilot retest group step throws here: the memory adapter models no group. */
+const PILOT_RETEST_NOT_MODELLED = "pilot_retest_not_modelled_in_memory";
 
 /** D-061 — pilot_question_protocols_engine_check (20261109180000). */
 const PILOT_SLOT_ENGINES: ReadonlySet<string> = new Set<PilotQuestionEngine>(["perplexity_sonar", "openai_chatgpt"]);
@@ -314,6 +332,10 @@ function uniqueViolation(constraint: string): Error {
  * pilot_question_protocols_consistency (the engine is the protocol's
  * provider, the protocol is in the pilot's project and measures the pilot
  * question's version, and a baseline slot's protocol is not a retest).
+ * D-062 — a retest slot then meets 20261109190000's trigger
+ * pilot_question_protocols_retest_slot, which refuses a slot whose member and
+ * group step do not exist. The memory adapter models no pilot retest group,
+ * so every retest slot is refused with that trigger's message.
  * Throws with the same names the database uses.
  */
 function insertPilotSlot(store: MemoryStore, slot: MemoryPilotQuestionProtocol): void {
@@ -332,6 +354,7 @@ function insertPilotSlot(store: MemoryStore, slot: MemoryPilotQuestionProtocol):
   if (slot.phase === "baseline" && protocol.baselineProtocolId !== null) {
     throw new Error("pilot_slot_baseline_protocol_is_a_retest");
   }
+  if (slot.phase === "retest") throw new Error("pilot_retest_slot_inconsistent");
   if (!PILOT_SLOT_ENGINES.has(slot.engine)) {
     throw new Error("pilot_question_protocols_engine_check violated");
   }
@@ -1626,6 +1649,39 @@ export const memoryAdapter: DbAdapter = {
   /** D-061 — mirrors protocol_worker_capabilities (20261109180000). */
   async protocolWorkerCapabilities(): Promise<string[]> {
     return ["live_openai_chatgpt"];
+  },
+
+  /*
+   * D-062 — the pilot retest's group steps (20261109190000). The memory
+   * adapter models no pilot retest group (D-062 §3.7), so each step fails
+   * closed with one error instead of pretending to register, record, queue
+   * or abandon anything. The database's own suite
+   * (scripts/test-pilot-retest-db.ts) proves the steps.
+   */
+  async registerPilotRetest(_input: RegisterPilotRetestInput): Promise<RegisterPilotRetestResult> {
+    throw new Error(PILOT_RETEST_NOT_MODELLED);
+  },
+
+  async confirmPilotRetestImplementation(
+    _input: ConfirmPilotRetestImplementationInput
+  ): Promise<ConfirmPilotRetestImplementationResult> {
+    throw new Error(PILOT_RETEST_NOT_MODELLED);
+  },
+
+  async preparePilotRetests(_input: PreparePilotRetestsInput): Promise<PreparePilotRetestsResult> {
+    throw new Error(PILOT_RETEST_NOT_MODELLED);
+  },
+
+  async abandonPilotRetest(_input: AbandonPilotRetestInput): Promise<AbandonPilotRetestOutcome> {
+    throw new Error(PILOT_RETEST_NOT_MODELLED);
+  },
+
+  async requeuePilotRetestJob(_input: RequeuePilotRetestJobInput): Promise<RequeuePilotRetestJobResult> {
+    throw new Error(PILOT_RETEST_NOT_MODELLED);
+  },
+
+  async addPilotRetestNote(_input: AddPilotRetestNoteInput): Promise<AddPilotRetestNoteResult> {
+    throw new Error(PILOT_RETEST_NOT_MODELLED);
   },
 
   async rejectSnapshotRequest(

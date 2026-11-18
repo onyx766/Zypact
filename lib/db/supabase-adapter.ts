@@ -19,6 +19,23 @@ import type {
   ClosePilotOutcome,
   RetirePilotQuestionInput,
   RetirePilotQuestionOutcome,
+  RegisterPilotRetestInput,
+  RegisterPilotRetestOutcome,
+  RegisterPilotRetestResult,
+  ConfirmPilotRetestImplementationInput,
+  ConfirmPilotRetestImplementationOutcome,
+  ConfirmPilotRetestImplementationResult,
+  PreparePilotRetestsInput,
+  PreparePilotRetestsOutcome,
+  PreparePilotRetestsResult,
+  AbandonPilotRetestInput,
+  AbandonPilotRetestOutcome,
+  RequeuePilotRetestJobInput,
+  RequeuePilotRetestJobOutcome,
+  RequeuePilotRetestJobResult,
+  AddPilotRetestNoteInput,
+  AddPilotRetestNoteOutcome,
+  AddPilotRetestNoteResult,
   CreatePilotInput,
   CreatePilotOutcome,
   CreatePilotResult,
@@ -2252,6 +2269,206 @@ export const supabaseAdapter: DbAdapter = {
       throw new Error("retirePilotQuestion: the RPC reply did not satisfy the closed D-054 contract.");
     }
     return outcome as RetirePilotQuestionOutcome;
+  },
+
+  /*
+   * D-062 — the pilot retest's six group steps (20261109190000). Each reply
+   * is checked against its closed contract: exactly one row, a known
+   * outcome, and the ids or instant that outcome carries. A 22023 or a
+   * P0001 raised by the database (malformed input, a guard, a wrapped M7
+   * call's unexpected answer) is thrown as PostgREST returns it.
+   */
+  async registerPilotRetest(input: RegisterPilotRetestInput): Promise<RegisterPilotRetestResult> {
+    const { data, error } = await getClient().rpc("register_pilot_retest", {
+      p_pilot_id: input.pilotId,
+      p_registered_by: input.registeredBy,
+      p_pilot_question_ids: input.pilotQuestionIds,
+      p_change_title: input.changeTitle,
+      p_change_description: input.changeDescription,
+      p_change_target: input.changeTarget,
+      p_change_owner: input.changeOwner,
+      p_action_type: input.actionType,
+      p_hypothesis: input.hypothesis,
+      p_expected_mechanism: input.expectedMechanism,
+      p_alternative_explanations: input.alternativeExplanations,
+      p_open_questions: input.openQuestions,
+      p_decision_threshold: input.decisionThreshold,
+      p_threshold_below_limit: input.thresholdBelowLimit,
+      p_confounders_to_monitor: input.confoundersToMonitor,
+      p_observation_days: input.observationDays,
+      p_customer_approval_ref: input.customerApprovalRef,
+      p_customer_approved_on: input.customerApprovedOn,
+      p_source_action_version_ids: input.sourceActionVersionIds,
+      p_confirmed: input.confirmed,
+      p_idempotency_key: input.idempotencyKey,
+    });
+    if (error) throw error;
+    const REJECT = "registerPilotRetest: the RPC reply did not satisfy the closed D-062 contract.";
+    const rows = Array.isArray(data) ? data : data === null || data === undefined ? [] : [data];
+    if (rows.length !== 1) throw new Error(REJECT);
+    const reply = rows[0] as Record<string, unknown>;
+    const OUTCOMES: readonly RegisterPilotRetestOutcome[] = [
+      "REGISTERED", "ALREADY_REGISTERED", "IDEMPOTENCY_KEY_CONFLICT", "PILOT_NOT_FOUND", "CONFIRMATION_REQUIRED",
+      "PILOT_CLOSED", "RETEST_ALREADY_REGISTERED", "RETEST_LIMIT_REACHED", "WINDOW_PAST_PILOT_END",
+      "QUESTION_NOT_LIVE", "QUESTION_IN_EARLIER_LIVE_CHANGE", "BASELINE_MISSING", "BASELINE_PLAN_NOT_FIVE_RUNS",
+      "BASELINE_NOT_FINISHED", "BASELINE_NOT_FIVE_READABLE", "BASELINE_BEFORE_EARLIER_CHANGE",
+      "BASELINE_ALREADY_REGISTERED", "SOURCE_ACTION_NOT_CURRENT",
+    ];
+    const outcome = reply.outcome;
+    if (typeof outcome !== "string" || !OUTCOMES.includes(outcome as RegisterPilotRetestOutcome)) throw new Error(REJECT);
+    const registered = outcome === "REGISTERED" || outcome === "ALREADY_REGISTERED";
+    const retestId = reply.pilot_retest_id ?? null;
+    if (registered !== (typeof retestId === "string")) throw new Error(REJECT);
+    const questionId = reply.pilot_question_id ?? null;
+    const engine = reply.engine ?? null;
+    if (questionId !== null && typeof questionId !== "string") throw new Error(REJECT);
+    if (engine !== null && engine !== "perplexity_sonar" && engine !== "openai_chatgpt") throw new Error(REJECT);
+    return {
+      outcome: outcome as RegisterPilotRetestOutcome,
+      pilotRetestId: registered ? (retestId as string) : null,
+      pilotQuestionId: questionId as string | null,
+      engine: engine as RegisterPilotRetestResult["engine"],
+    };
+  },
+
+  async confirmPilotRetestImplementation(
+    input: ConfirmPilotRetestImplementationInput
+  ): Promise<ConfirmPilotRetestImplementationResult> {
+    const { data, error } = await getClient().rpc("confirm_pilot_retest_implementation", {
+      p_pilot_id: input.pilotId,
+      p_pilot_retest_id: input.pilotRetestId,
+      p_confirmed_by: input.confirmedBy,
+      p_went_live_on: input.wentLiveOn,
+      p_evidence_url: input.evidenceUrl,
+      p_artifact_sha256: input.artifactSha256,
+      p_note: input.note,
+      p_implemented_as_registered: input.implementedAsRegistered,
+      p_deviation_note: input.deviationNote,
+      p_confirmed: input.confirmed,
+    });
+    if (error) throw error;
+    const REJECT = "confirmPilotRetestImplementation: the RPC reply did not satisfy the closed D-062 contract.";
+    const rows = Array.isArray(data) ? data : data === null || data === undefined ? [] : [data];
+    if (rows.length !== 1) throw new Error(REJECT);
+    const reply = rows[0] as Record<string, unknown>;
+    const OUTCOMES: readonly ConfirmPilotRetestImplementationOutcome[] = [
+      "IMPLEMENTED", "ALREADY_IMPLEMENTED", "PILOT_NOT_FOUND", "RETEST_NOT_FOUND", "RETEST_ABANDONED",
+      "CONFIRMATION_REQUIRED", "PILOT_CLOSED", "WENT_LIVE_BEFORE_REGISTRATION", "WINDOW_PAST_PILOT_END",
+      "NOTE_LIMIT_REACHED",
+    ];
+    const outcome = reply.outcome;
+    if (typeof outcome !== "string" || !OUTCOMES.includes(outcome as ConfirmPilotRetestImplementationOutcome)) {
+      throw new Error(REJECT);
+    }
+    const live = outcome === "IMPLEMENTED" || outcome === "ALREADY_IMPLEMENTED";
+    const closes = reply.window_closes_at ?? null;
+    if (live !== (typeof closes === "string")) throw new Error(REJECT);
+    return { outcome: outcome as ConfirmPilotRetestImplementationOutcome, windowClosesAt: live ? (closes as string) : null };
+  },
+
+  async preparePilotRetests(input: PreparePilotRetestsInput): Promise<PreparePilotRetestsResult> {
+    const { data, error } = await getClient().rpc("prepare_pilot_retests", {
+      p_pilot_id: input.pilotId,
+      p_pilot_retest_id: input.pilotRetestId,
+      p_prepared_by: input.preparedBy,
+    });
+    if (error) throw error;
+    const REJECT = "preparePilotRetests: the RPC reply did not satisfy the closed D-062 contract.";
+    const rows = Array.isArray(data) ? data : data === null || data === undefined ? [] : [data];
+    if (rows.length !== 1) throw new Error(REJECT);
+    const reply = rows[0] as Record<string, unknown>;
+    const OUTCOMES: readonly PreparePilotRetestsOutcome[] = [
+      "PREPARED", "ALREADY_PREPARED", "PILOT_NOT_FOUND", "RETEST_NOT_FOUND", "RETEST_ABANDONED",
+      "NOT_IMPLEMENTED", "PILOT_CLOSED", "WINDOW_OPEN", "MEMBER_NOT_ELIGIBLE",
+    ];
+    const outcome = reply.outcome;
+    if (typeof outcome !== "string" || !OUTCOMES.includes(outcome as PreparePilotRetestsOutcome)) throw new Error(REJECT);
+    const done = outcome === "PREPARED" || outcome === "ALREADY_PREPARED";
+    const prepared = reply.prepared ?? null;
+    if (done !== (typeof prepared === "number" && Number.isInteger(prepared) && prepared > 0)) throw new Error(REJECT);
+    const windowed = done || outcome === "WINDOW_OPEN" || outcome === "MEMBER_NOT_ELIGIBLE";
+    const closes = reply.window_closes_at ?? null;
+    if (windowed !== (typeof closes === "string")) throw new Error(REJECT);
+    return {
+      outcome: outcome as PreparePilotRetestsOutcome,
+      prepared: done ? (prepared as number) : null,
+      windowClosesAt: windowed ? (closes as string) : null,
+    };
+  },
+
+  async abandonPilotRetest(input: AbandonPilotRetestInput): Promise<AbandonPilotRetestOutcome> {
+    const { data, error } = await getClient().rpc("abandon_pilot_retest", {
+      p_pilot_id: input.pilotId,
+      p_pilot_retest_id: input.pilotRetestId,
+      p_abandoned_by: input.abandonedBy,
+      p_reason: input.reason,
+      p_confirmed: input.confirmed,
+    });
+    if (error) throw error;
+    const rows = Array.isArray(data) ? data : data === null || data === undefined ? [] : [data];
+    const OUTCOMES: readonly AbandonPilotRetestOutcome[] = [
+      "ABANDONED", "ALREADY_ABANDONED", "PILOT_NOT_FOUND", "RETEST_NOT_FOUND", "CONFIRMATION_REQUIRED",
+      "RETEST_JOB_BUSY", "RETEST_STARTED", "RETEST_RUN_PENDING",
+    ];
+    const outcome = rows.length === 1 ? (rows[0] as Record<string, unknown>).outcome : undefined;
+    if (typeof outcome !== "string" || !OUTCOMES.includes(outcome as AbandonPilotRetestOutcome)) {
+      throw new Error("abandonPilotRetest: the RPC reply did not satisfy the closed D-062 contract.");
+    }
+    return outcome as AbandonPilotRetestOutcome;
+  },
+
+  async requeuePilotRetestJob(input: RequeuePilotRetestJobInput): Promise<RequeuePilotRetestJobResult> {
+    const { data, error } = await getClient().rpc("requeue_pilot_retest_job", {
+      p_pilot_id: input.pilotId,
+      p_pilot_retest_id: input.pilotRetestId,
+      p_pilot_question_id: input.pilotQuestionId,
+      p_engine: input.engine,
+      p_requeued_by: input.requeuedBy,
+      p_reason: input.reason,
+    });
+    if (error) throw error;
+    const REJECT = "requeuePilotRetestJob: the RPC reply did not satisfy the closed D-062 contract.";
+    const rows = Array.isArray(data) ? data : data === null || data === undefined ? [] : [data];
+    if (rows.length !== 1) throw new Error(REJECT);
+    const reply = rows[0] as Record<string, unknown>;
+    const OUTCOMES: readonly RequeuePilotRetestJobOutcome[] = [
+      "REQUEUED", "ALREADY_QUEUED", "PILOT_NOT_FOUND", "RETEST_NOT_FOUND", "RETEST_ABANDONED", "NOT_PREPARED",
+      "MEMBER_NOT_FOUND", "PILOT_CLOSED", "RETEST_JOB_BUSY", "JOB_NOT_STOPPED_BEFORE_ANSWERS", "REQUEUE_LIMIT_REACHED",
+    ];
+    const outcome = reply.outcome;
+    if (typeof outcome !== "string" || !OUTCOMES.includes(outcome as RequeuePilotRetestJobOutcome)) throw new Error(REJECT);
+    const queued = outcome === "REQUEUED" || outcome === "ALREADY_QUEUED";
+    const jobId = reply.job_id ?? null;
+    if (queued !== (typeof jobId === "string")) throw new Error(REJECT);
+    return { outcome: outcome as RequeuePilotRetestJobOutcome, jobId: queued ? (jobId as string) : null };
+  },
+
+  async addPilotRetestNote(input: AddPilotRetestNoteInput): Promise<AddPilotRetestNoteResult> {
+    const { data, error } = await getClient().rpc("add_pilot_retest_note", {
+      p_pilot_id: input.pilotId,
+      p_pilot_retest_id: input.pilotRetestId,
+      p_written_by: input.writtenBy,
+      p_noted_on: input.notedOn,
+      p_kind: input.kind,
+      p_text: input.text,
+      p_corrects_note_id: input.correctsNoteId,
+      p_idempotency_key: input.idempotencyKey,
+    });
+    if (error) throw error;
+    const REJECT = "addPilotRetestNote: the RPC reply did not satisfy the closed D-062 contract.";
+    const rows = Array.isArray(data) ? data : data === null || data === undefined ? [] : [data];
+    if (rows.length !== 1) throw new Error(REJECT);
+    const reply = rows[0] as Record<string, unknown>;
+    const OUTCOMES: readonly AddPilotRetestNoteOutcome[] = [
+      "ADDED", "ALREADY_ADDED", "IDEMPOTENCY_KEY_CONFLICT", "PILOT_NOT_FOUND", "RETEST_NOT_FOUND", "RETEST_ABANDONED",
+      "NOTED_BEFORE_PILOT", "CORRECTED_NOTE_NOT_FOUND", "NOTE_LIMIT_REACHED",
+    ];
+    const outcome = reply.outcome;
+    if (typeof outcome !== "string" || !OUTCOMES.includes(outcome as AddPilotRetestNoteOutcome)) throw new Error(REJECT);
+    const added = outcome === "ADDED" || outcome === "ALREADY_ADDED";
+    const noteId = reply.note_id ?? null;
+    if (added !== (typeof noteId === "string")) throw new Error(REJECT);
+    return { outcome: outcome as AddPilotRetestNoteOutcome, noteId: added ? (noteId as string) : null };
   },
 
   async reserveSnapshotRequestProject(

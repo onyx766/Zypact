@@ -12,7 +12,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ReportIntegrityStatus } from "@/lib/export/report-integrity";
 import { readReportableActions } from "@/lib/pilots/action-store";
 import { buildPilotReport } from "@/lib/reports/build-pilot-report";
-import { evaluatePilotReportIntegrity, type PilotQuestionSignals } from "@/lib/reports/pilot-report-integrity";
+import { evaluatePilotReportIntegrity, type PilotCardSignals, type PilotQuestionSignals } from "@/lib/reports/pilot-report-integrity";
 import { presentationStrings, presentPilotReport } from "@/lib/reports/pilot-report-presentation";
 import { readIntegritySignals } from "@/lib/reports/protocol-integrity-signals";
 import { readPilotReportInput } from "@/lib/reports/read-pilot-evidence";
@@ -28,7 +28,13 @@ export type SavePilotReportOutcome =
   | "MEASUREMENT_IN_PROGRESS"
   | "ACTION_NOT_REVIEWED"
   | "ACTIONS_INCOMPLETE"
-  | "ACTIONS_CONTENT_MISMATCH";
+  | "ACTIONS_CONTENT_MISMATCH"
+  // D-062 — the retest checks of save_pilot_report_artifact (20261109190000).
+  | "RETESTS_CHANGED"
+  | "RETEST_CARD_MISMATCH"
+  | "RETEST_CARDS_INCOMPLETE"
+  | "RETEST_CARD_CHANGED_SINCE_SHARED"
+  | "RETEST_CONTENT_MISMATCH";
 
 export interface BuildPilotReportResult {
   outcome: SavePilotReportOutcome;
@@ -66,19 +72,34 @@ export async function buildAndSavePilotReport(
   const pageText = presentationStrings(presentPilotReport(built.payload));
 
   const questionSignals: PilotQuestionSignals[] = [];
+  // D-062 — a card's baseline signals are the question loop's own, keyed by protocol.
+  const baselineSignals = new Map<string, Awaited<ReturnType<typeof readIntegritySignals>>>();
   for (const q of built.payload.questions) {
     for (const m of q.measurements) {
+      const signals = await readIntegritySignals(client, m.report);
+      baselineSignals.set(m.protocolId, signals);
       questionSignals.push({
         ordinal: q.ordinal,
         engine: m.engine,
         retired: q.retired,
         completedAttempts: m.counts.completed,
         attempts: m.counts.attempted,
-        signals: await readIntegritySignals(client, m.report),
+        signals,
       });
     }
   }
-  const integrity = evaluatePilotReportIntegrity({ markdown, pageText, structural: built.structural, questionSignals });
+  const cardSignals: PilotCardSignals[] = [];
+  for (const c of built.cardBuilds) {
+    cardSignals.push({
+      ordinal: c.ordinal,
+      engine: c.engine,
+      baselineSignals: baselineSignals.get(c.baselineReport.protocol.id) ?? (await readIntegritySignals(client, c.baselineReport)),
+      retestSignals: await readIntegritySignals(client, c.retestReport),
+      interventionRegisteredAndImplemented: c.interventionRegisteredAndImplemented,
+      measurement: c.measurement,
+    });
+  }
+  const integrity = evaluatePilotReportIntegrity({ markdown, pageText, structural: built.structural, questionSignals, cardSignals });
 
   const { data, error } = await client.rpc("save_pilot_report_artifact", {
     p_pilot_id: pilotId,
@@ -110,7 +131,10 @@ export type SharePilotReportOutcome =
   | "ACKNOWLEDGEMENT_REQUIRED"
   | "NOT_LATEST"
   // D-057 — an action changed since the revision was built.
-  | "ACTIONS_STALE";
+  | "ACTIONS_STALE"
+  // D-062 — a retest is running or about to, or changed since the build.
+  | "RETEST_IN_PROGRESS"
+  | "RETESTS_STALE";
 
 export async function sharePilotReport(
   client: SupabaseClient,
@@ -151,6 +175,44 @@ export interface PilotReportRevisionRow {
   olderThanListed: boolean;
   /** D-057 — the action versions the revision lists (its manifest), to tell a stale revision. */
   actionVersionIds: string[];
+  /** D-062 — what the revision's manifest says of the retests, to tell a stale revision. */
+  retestManifest: RevisionRetestManifest;
+}
+
+/**
+ * D-062 — what a stored manifest says of the pilot's retests, for the share
+ * block's staleness check in TypeScript (revisionRetestsCurrent): the groups,
+ * the note ids, the retest slots' jobs and every attempt id. A missing key is
+ * an empty list, as the database reads it (revisions before D-062).
+ */
+export interface RevisionRetestManifest {
+  retests: { id: string; state: string; memberIds: string[] }[];
+  retestNotes: string[];
+  retestJobs: { jobId: string; protocolId: string; status: string; reviewResolution: string | null }[];
+  attemptIds: string[];
+}
+
+export function manifestRetests(manifest: unknown): RevisionRetestManifest {
+  const m = (manifest && typeof manifest === "object" ? manifest : {}) as Record<string, unknown>;
+  const list = (k: string) => (Array.isArray(m[k]) ? (m[k] as unknown[]) : []);
+  const obj = (x: unknown) => (x && typeof x === "object" ? (x as Record<string, unknown>) : {});
+  return {
+    retests: list("retests").map((x) => {
+      const o = obj(x);
+      return { id: String(o.id), state: String(o.state), memberIds: Array.isArray(o.memberIds) ? o.memberIds.map(String) : [] };
+    }),
+    retestNotes: list("retestNotes").map(String),
+    retestJobs: list("retestJobs").map((x) => {
+      const o = obj(x);
+      return {
+        jobId: String(o.jobId),
+        protocolId: String(o.protocolId),
+        status: String(o.status),
+        reviewResolution: typeof o.reviewResolution === "string" ? o.reviewResolution : null,
+      };
+    }),
+    attemptIds: list("attempts").map((x) => String(obj(x).id)),
+  };
 }
 
 /** The action versions a stored manifest lists; none when it has no list (revisions before D-057). */
@@ -213,6 +275,7 @@ export async function listPilotReportRevisions(
       replaced,
       olderThanListed: r === olderShared,
       actionVersionIds: manifestActionVersionIds(r.manifest),
+      retestManifest: manifestRetests(r.manifest),
     };
   });
 }
@@ -272,6 +335,8 @@ export interface PilotReportRevision {
   replaced: boolean;
   /** D-057 — the action versions the revision lists, to tell a stale revision. */
   actionVersionIds: string[];
+  /** D-062 — what the revision's manifest says of the retests, to tell a stale revision. */
+  retestManifest: RevisionRetestManifest;
 }
 
 /**
@@ -326,5 +391,6 @@ export async function readPilotReportRevision(
     isLatest,
     replaced,
     actionVersionIds: manifestActionVersionIds(r.manifest),
+    retestManifest: manifestRetests(r.manifest),
   };
 }

@@ -52,13 +52,14 @@ At that audited commit:
 
 **That snapshot is 2026-08-16 and is now far behind `main`.** It is kept because
 it is what the documentation reset was reconciled against, not because it
-describes the repository. Measured on branch `feat/chatgpt-phase-b` at `f580273`
-on 2026-11-18, and recounted unchanged after the review fixes on top: **95** migrations (82 four-digit, `0001`–`0081` and `0083`, and 13
-timestamped, the last `20261113120000`), **229** files matching
-`scripts/test-*.ts`, and **135** `test:*` plus **4** `verify:*` commands. The M7
+describes the repository. Measured on branch `feat/pilot-retest` at `b0964fe`
+(the pilot retest, D-062, with `main` at `e2acca3` merged in) on 2026-11-18:
+**96** migrations (82 four-digit, `0001`–`0081` and `0083`, and 14
+timestamped, the last `20261113120000`), **232** files matching
+`scripts/test-*.ts`, and **137** `test:*` plus **4** `verify:*` commands. The M7
 retest and Outcome Card application layer is merged. See
-[`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) section 37, which supersedes
-every inventory figure above and in sections 3, 7, 12, 13, 15 and 18 of that
+[`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) section 39, which supersedes
+every inventory figure above and in sections 3, 7, 12, 13, 15, 18 and 37 of that
 file.
 
 Do not infer deployed migration state, worker health, or production parity from repository files. M0 verifies those separately.

@@ -27,6 +27,15 @@
  * the draft retest protocol create_retest_protocol would write, which is
  * then approved and queued by the real functions) and says so.
  *
+ * Since the pilot retest (20261109190000, D-062), a retest of a pilot slot's
+ * protocol is created only by its group's preparation: the trigger
+ * protocols_pilot_retest_guard refuses any other insert, the owner's
+ * included. P8's draft retest is therefore inserted in one admin transaction
+ * with `set local session_replication_role = replica`, which skips that
+ * trigger for this one test-setup insert (declared owner bypass, D-062 §4.4).
+ * Its approval and queueing still go through the real functions, and every
+ * P8-P10 assertion is unchanged.
+ *
  * Runs against a DISPOSABLE Supabase Postgres with every migration applied
  * (scripts/run-p2-workspace-db-local.sh). Opt-in: SKIP (exit 2) without
  * ZYPACT_P2_DB_CONTAINER. No network.
@@ -282,8 +291,9 @@ async function main(): Promise<void> {
   quiesce();
   const [, pilotT, projectT] = createPilot("pq-t.example");
   const [, , protoT] = addQuestion(pilotT, question(73));
-  // Test setup: the draft retest protocol create_retest_protocol (0073) writes for this baseline.
-  const retestProto = admin(`insert into public.protocols (project_id, buyer_question_version_id, baseline_protocol_id, provider, surface, model_config, planned_baseline_runs, planned_retest_runs, paraphrase_plan, unit_of_analysis, primary_metric, minimum_useful_change, sample_planning_method, sample_planning_assumptions, run_cap, spend_cap_usd, time_window_seconds, rate_limit_per_hour, concurrency_limit, retry_cap, observation_window_rule, analyzer_version, entity_resolution_version, methodology_version) select project_id, buyer_question_version_id, id, provider, surface, model_config, planned_baseline_runs, planned_retest_runs, paraphrase_plan, unit_of_analysis, primary_metric, minimum_useful_change, sample_planning_method, sample_planning_assumptions, run_cap, spend_cap_usd, time_window_seconds, rate_limit_per_hour, concurrency_limit, retry_cap, observation_window_rule, analyzer_version, entity_resolution_version, methodology_version from public.protocols where id = ${lit(protoT)}::uuid returning id;`);
+  // Test setup: the draft retest protocol create_retest_protocol (0073) writes for this baseline,
+  // inserted past protocols_pilot_retest_guard (20261109190000) by the declared owner bypass.
+  const retestProto = admin(`begin;\nset local session_replication_role = replica;\ninsert into public.protocols (project_id, buyer_question_version_id, baseline_protocol_id, provider, surface, model_config, planned_baseline_runs, planned_retest_runs, paraphrase_plan, unit_of_analysis, primary_metric, minimum_useful_change, sample_planning_method, sample_planning_assumptions, run_cap, spend_cap_usd, time_window_seconds, rate_limit_per_hour, concurrency_limit, retry_cap, observation_window_rule, analyzer_version, entity_resolution_version, methodology_version) select project_id, buyer_question_version_id, id, provider, surface, model_config, planned_baseline_runs, planned_retest_runs, paraphrase_plan, unit_of_analysis, primary_metric, minimum_useful_change, sample_planning_method, sample_planning_assumptions, run_cap, spend_cap_usd, time_window_seconds, rate_limit_per_hour, concurrency_limit, retry_cap, observation_window_rule, analyzer_version, entity_resolution_version, methodology_version from public.protocols where id = ${lit(protoT)}::uuid returning id;\ncommit;`);
   const retestApproved = psql(`select status from public.approve_protocol(${lit(retestProto)}::uuid, ${lit(projectT)}::uuid, ${lit(FOUNDER)}::uuid);`);
   const retestQueued = psql(`select status from public.enqueue_protocol_execution_job(${lit(retestProto)}::uuid, ${lit(projectT)}::uuid);`);
   const retestJob = admin(`select id from public.protocol_execution_jobs where protocol_id = ${lit(retestProto)}::uuid;`);

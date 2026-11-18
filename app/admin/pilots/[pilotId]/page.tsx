@@ -10,7 +10,10 @@ import {
   pilotEngines,
   pilotProvenanceLabel,
 } from "@/lib/pilots/copy";
-import { pilotChatGptEnabled } from "@/lib/pilots/engines";
+import { pilotChatGptEnabled, pilotRetestEnabled } from "@/lib/pilots/engines";
+import { cardsNotSharedWarning, preparedNotRunWarning, RETEST_OUT_OF_DATE_WORDS } from "@/lib/pilots/retest-copy";
+import { MAX_RETEST_QUESTIONS, RETEST_TEXT_LABELS } from "@/lib/pilots/retest-rules";
+import { cardsNotYetShared, currentRetestState, loadPilotRetests, revisionRetestsCurrent } from "@/lib/pilots/retest-store";
 import { loadPilot, pilotIsOver, pilotNotStarted, type PilotMeasurement, type PilotQuestionRow } from "@/lib/pilots/reads";
 import { todayUtc, UUID_PATTERN } from "@/lib/pilots/validate";
 import {
@@ -20,6 +23,7 @@ import {
   SHARING_ENDS_EARLIER_LINK_WORDS,
 } from "@/lib/reports/pilot-report-copy";
 import { listPilotReportRevisions } from "@/lib/reports/process-pilot-report";
+import { abandonedGroupWords, ACTION_TYPE_WORDS, noteWords } from "@/lib/reports/pilot-retest-copy";
 import { getReportServiceClient } from "@/lib/reports/service-client";
 import { publicSiteUrl } from "@/lib/seo/site";
 import { AdminShell } from "../../admin-shell";
@@ -32,6 +36,7 @@ import {
 } from "../pilot-forms";
 import { PilotActionsPanel } from "../pilot-action-forms";
 import { PilotEngineCell } from "../pilot-engine-cell";
+import { RetestGroupPanel, RetestRegisterPanel, type RetestGroupView } from "../pilot-retest-forms";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -73,8 +78,11 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
   const actions = await listPilotActionsForAdmin(client, pilot.id);
   // D-057 — a revision whose listed actions are no longer the reviewed, current ones cannot be shared.
   const currentActionVersions = await currentReportableVersionIds(client, pilot.id);
-  const isStale = (r: { actionVersionIds: string[]; sharedAt: string | null }) =>
-    r.sharedAt === null && !revisionActionsCurrent(r.actionVersionIds, currentActionVersions);
+  // D-062 — nor one whose retests changed since it was built, or while a retest is running.
+  const retestState = await currentRetestState(client, pilot.id, questions.map((q) => q.id));
+  const isStale = (r: (typeof revisions)[number]) =>
+    r.sharedAt === null &&
+    (!revisionActionsCurrent(r.actionVersionIds, currentActionVersions) || !revisionRetestsCurrent(r.retestManifest, retestState));
   // D-061 — a live question measured on any engine can carry an action's evidence.
   const actionQuestions = questions
     .filter((q) => q.retiredAt === null && measuredOnAnyEngine(q))
@@ -94,6 +102,54 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
   const withoutChatGpt = questions
     .filter((q) => q.retiredAt === null && q.engines.openai_chatgpt === null)
     .map((q) => q.id);
+  // D-062 — the registered changes, and the retest gate read at request time.
+  const retestEnabled = pilotRetestEnabled();
+  const retests = await loadPilotRetests(client, pilot, questions, today);
+  const unsharedCards = await cardsNotYetShared(client, pilot, questions, today);
+  const closeWarnings = [
+    ...(unsharedCards.length > 0 ? [cardsNotSharedWarning(unsharedCards.length)] : []),
+    ...(retests.preparedNotRun > 0 ? [preparedNotRunWarning(retests.preparedNotRun)] : []),
+  ];
+  const groupView = (g: (typeof retests.groups)[number]): RetestGroupView => ({
+    id: g.id,
+    sequence: g.sequence,
+    state: g.state,
+    fields: [
+      { label: RETEST_TEXT_LABELS.changeTitle, text: g.text.changeTitle },
+      { label: RETEST_TEXT_LABELS.changeDescription, text: g.text.changeDescription },
+      { label: RETEST_TEXT_LABELS.changeTarget, text: g.text.changeTarget },
+      { label: RETEST_TEXT_LABELS.changeOwner, text: g.text.changeOwner },
+      { label: "Kind of change", text: ACTION_TYPE_WORDS[g.actionType] ?? ACTION_TYPE_WORDS.other },
+      { label: RETEST_TEXT_LABELS.hypothesis, text: g.text.hypothesis },
+      { label: RETEST_TEXT_LABELS.expectedMechanism, text: g.text.expectedMechanism },
+      { label: RETEST_TEXT_LABELS.alternativeExplanations, text: g.text.alternativeExplanations },
+      { label: RETEST_TEXT_LABELS.openQuestions, text: g.text.openQuestions },
+      { label: RETEST_TEXT_LABELS.decisionThreshold, text: g.text.decisionThreshold },
+      {
+        label: "Smaller than 60 points?",
+        text: g.thresholdBelowLimit ? "Yes: this retest cannot settle the change the customer named." : "No.",
+      },
+      { label: RETEST_TEXT_LABELS.confoundersToMonitor, text: g.text.confoundersToMonitor },
+      { label: "Customer approval", text: `${g.customerApprovalRef} (${g.customerApprovedOn})` },
+    ],
+    observationDays: g.observationDays,
+    implementBy: g.implementBy,
+    wentLiveOn: g.wentLiveOn,
+    windowClosesAt: g.windowClosesAt,
+    canAbandon: g.canAbandon,
+    canPrepare: g.canPrepare,
+    questions: g.questions,
+    notes: g.notes.map((n) => ({
+      id: n.id,
+      line: noteWords({
+        kind: n.kind,
+        notedOn: n.notedOn,
+        writtenOn: n.writtenAt.slice(0, 10),
+        text: n.text,
+        correctsNotedOn: n.correctsNoteId ? g.notes.find((x) => x.id === n.correctsNoteId)?.notedOn ?? null : null,
+      }),
+    })),
+  });
 
   return (
     <AdminShell
@@ -119,7 +175,7 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
             {pilot.status === "closed" ? " · Closed" : ""}
           </p>
         </div>
-        {pilot.status === "active" ? <ClosePilotButton pilotId={pilot.id} /> : null}
+        {pilot.status === "active" ? <ClosePilotButton pilotId={pilot.id} warnings={closeWarnings} /> : null}
       </div>
 
       <div className="zpa-card">
@@ -175,7 +231,8 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
                       </p>
                     ) : null}
                     {/* D-061 — per question: offered once any engine's measurement stopped; the database decides. */}
-                    {!over && q.retiredAt === null && Object.values(q.engines).some(stopped) ? (
+                    {/* D-062 — never for a question in a registered change that is not withdrawn (the database refuses it too). */}
+                    {!over && q.retiredAt === null && Object.values(q.engines).some(stopped) && !retests.questionsInLiveGroup.includes(q.id) ? (
                       <RetireQuestionButton pilotId={pilot.id} pilotQuestionId={q.id} />
                     ) : null}
                   </td>
@@ -234,6 +291,49 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
             })),
           }))}
         />
+      </div>
+
+      <div className="zpa-card">
+        <h2 className="zpa-title">Retest</h2>
+        <p className="zpa-muted">
+          One registered customer change, measured again on every chosen question on both engines after its waiting period.
+          Each question and engine gets its own Outcome Card inside the pilot report; nothing is added up across them.
+          {retestEnabled ? "" : " Retests are switched off on this server: withdrawing a change, logging another change and resolving a held retest stay available."}
+        </p>
+        {unsharedCards.length > 0 ? <p className="zpa-new-audit-error">{cardsNotSharedWarning(unsharedCards.length)}</p> : null}
+        {retestEnabled && retests.canRegister ? (
+          <RetestRegisterPanel
+            pilotId={pilot.id}
+            questions={retests.questions}
+            sourceActions={retests.sourceActions}
+            labels={RETEST_TEXT_LABELS}
+            maxQuestions={MAX_RETEST_QUESTIONS}
+          />
+        ) : null}
+        {retests.groups
+          .filter((g) => g.state !== "abandoned")
+          .map((g) => (
+            <RetestGroupPanel
+              key={g.id}
+              pilotId={pilot.id}
+              group={groupView(g)}
+              pilotOpen={!over && !notStarted}
+              retestEnabled={retestEnabled}
+              chatgptConnected={chatgptConnected}
+            />
+          ))}
+        {retests.groups
+          .filter((g) => g.state === "abandoned")
+          .map((g) => (
+            <p key={g.id} className="zpa-muted">
+              {abandonedGroupWords({
+                registeredOn: g.registeredAt.slice(0, 10),
+                abandonedOn: (g.abandonedAt ?? "").slice(0, 10),
+                liveOn: g.implementedAt ? g.implementedAt.slice(0, 10) : null,
+              })}
+            </p>
+          ))}
+        {retests.groups.length === 0 && !retests.canRegister ? <p className="zpa-muted">No change can be registered now.</p> : null}
       </div>
 
       <div className="zpa-card">
@@ -306,7 +406,9 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
                           ? "Cannot be shared"
                           : r.id === revisions[0]?.id
                             ? isStale(r)
-                              ? STALE_REVISION_WORDS
+                              ? revisionActionsCurrent(r.actionVersionIds, currentActionVersions)
+                                ? RETEST_OUT_OF_DATE_WORDS
+                                : STALE_REVISION_WORDS
                               : "Not shared: read it to share it"
                             : "Not shared (a newer revision exists)"}
                       </span>

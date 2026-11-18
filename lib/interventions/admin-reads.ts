@@ -8,6 +8,8 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { pilotSlotProtocolIds } from "@/lib/interventions/pilot-exclusions";
+
 /**
  * One citable run. `attemptId` is what gets stored in
  * `interventions.supporting_evidence`: it is the attempt's durable identity,
@@ -66,7 +68,9 @@ export async function listRegistrableBaselines(
     .limit(limit);
   if (error) throw error;
 
-  const rows = (protocols ?? []) as Array<Record<string, unknown>>;
+  // D-062 — a pilot question's baseline is registered on its pilot page, never here.
+  const pilotSlots = await pilotSlotProtocolIds(client, ((protocols ?? []) as Array<Record<string, unknown>>).map((r) => String(r.id)));
+  const rows = ((protocols ?? []) as Array<Record<string, unknown>>).filter((r) => !pilotSlots.has(String(r.id)));
   if (rows.length === 0) return [];
 
   const protocolIds = rows.map((r) => String(r.id));

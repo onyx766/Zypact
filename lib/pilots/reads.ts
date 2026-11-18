@@ -12,7 +12,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { PilotQuestionEngine } from "@/lib/db/types";
-import { isPilotQuestionEngine } from "@/lib/pilots/engines";
+import { isPilotQuestionEngine, type PilotSlotPhase } from "@/lib/pilots/engines";
 
 export interface PilotSummary {
   id: string;
@@ -290,14 +290,20 @@ export interface PilotQuestionTarget {
  * D-061 — exactly one slot: the question's baseline on `engine`, which must
  * be one of the closed set (a caller validates the request's engine first;
  * an unknown one here is a programming error and throws).
+ *
+ * D-062 — or its retest slot, with `phase = "retest"`: the slot table keeps
+ * at most one slot per question, engine and phase (the slot key), so this
+ * is still exactly one slot, never a guess.
  */
 export async function resolvePilotQuestionTarget(
   client: SupabaseClient,
   pilotId: string,
   pilotQuestionId: string,
-  engine: PilotQuestionEngine
+  engine: PilotQuestionEngine,
+  phase: PilotSlotPhase = "baseline"
 ): Promise<PilotQuestionTarget | null> {
   if (!isPilotQuestionEngine(engine)) throw new Error("resolvePilotQuestionTarget: unknown pilot engine.");
+  if (phase !== "baseline" && phase !== "retest") throw new Error("resolvePilotQuestionTarget: unknown slot phase.");
   const { data: pilotRow, error } = await client
     .from("pilots")
     .select("id,status,starts_on,ends_on")
@@ -321,7 +327,7 @@ export async function resolvePilotQuestionTarget(
     .select("protocol_id")
     .eq("pilot_question_id", pilotQuestionId)
     .eq("engine", engine)
-    .eq("phase", "baseline")
+    .eq("phase", phase)
     .maybeSingle();
   if (sError) throw sError;
   if (!slot) {

@@ -12,6 +12,7 @@ import { readOutcomeCard, type StoredOutcomeCard } from "@/lib/interventions/out
 import { OutcomeCardView } from "@/components/report/outcome-card-view";
 import { OutcomeCardControls } from "./outcome-card-controls";
 import { interventionAdminEnabled } from "@/lib/interventions/route-guard";
+import { pilotOfMember } from "@/lib/interventions/pilot-exclusions";
 import { UUID_PATTERN } from "@/lib/interventions/validate";
 import { cn } from "@/lib/utils";
 import { AdminThemeRoot, ThemeToggle } from "../../theme";
@@ -206,6 +207,9 @@ export default async function InterventionDetailPage({
   const iv = await readIntervention(client, interventionId);
   if (!iv) notFound();
 
+  // D-062 — a pilot member is managed on its pilot page: shown read-only here.
+  const memberOfPilot = await pilotOfMember(client, iv.id);
+
   const [eligibility, baseline, citedRuns, retest, card] = await Promise.all([
     readEligibility(client, iv),
     readBaselineContext(client, iv.protocolId),
@@ -395,6 +399,19 @@ export default async function InterventionDetailPage({
 
           {/* -------------------------------------------- actions */}
           <aside className="flex flex-col gap-6">
+            {memberOfPilot ? (
+              <section className={cn(ui.panel, "flex flex-col gap-3 p-5")}>
+                <h2 className="text-base font-semibold">Managed on its pilot page</h2>
+                <p className="text-sm text-muted-foreground">
+                  This intervention belongs to a pilot question&apos;s registered change. It is approved, recorded as live,
+                  retested and withdrawn only with the rest of that change, and its Outcome Card lives in the pilot report.
+                </p>
+                <a href={`/admin/pilots/${memberOfPilot}`} className="text-sm font-medium text-primary hover:underline">
+                  Open the pilot
+                </a>
+              </section>
+            ) : (
+            <>
             <InterventionActionsPanel
               interventionId={iv.id}
               status={iv.status}
@@ -440,6 +457,8 @@ export default async function InterventionDetailPage({
                 />
               </section>
             ) : null}
+            </>
+            )}
           </aside>
         </div>
       </main>

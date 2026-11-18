@@ -40,13 +40,65 @@ import {
   UNKNOWN_SURFACE_WORDS,
   rangeWords,
 } from "@/lib/reports/pilot-report-copy";
+import { NON_CAUSALITY_FOOTER } from "@/lib/reports/outcome-card-types";
 import type {
   PilotAttemptCounts,
   PilotConditionValue,
   PilotEngineConditions,
   PilotEngineKey,
+  PilotExecutionWindow,
+  PilotOutcomeCard,
   PilotReportPayload,
+  PilotReportRetest,
 } from "@/lib/reports/pilot-report-types";
+import {
+  abandonedGroupWords,
+  ACTION_TYPE_WORDS,
+  approvedOnWords,
+  cannotShowAnyChangeWords,
+  changeWords,
+  collectedAfterChangeWords,
+  DIFFERENCE_HEADING,
+  EVIDENCE_LINK_NOT_SHOWN_WORDS,
+  evidenceWords,
+  MEASURED_SAME_WAY_WORDS,
+  measurementFieldWords,
+  NO_CHANGE_SHOWABLE_REASONS,
+  NO_CONTROLS_WORDS,
+  NO_DEPARTURE_WORDS,
+  NO_OTHER_CHANGES_WORDS,
+  NOT_AS_REGISTERED_WORDS,
+  NOT_FROM_SUGGESTED_ACTION_WORDS,
+  NOTE_AFTER_FIRST_ANSWER_WORDS,
+  notMeasuredSameWayWords,
+  noteWords,
+  OTHER_CHANGES_HEADING,
+  outcomeCardHeading,
+  outcomeReasonWords,
+  outcomeRuleSentences,
+  outcomeStatusWords,
+  phaseWords,
+  PILOT_RETEST_HEADING,
+  PILOT_RETEST_LIMIT_SENTENCE,
+  PILOT_RETEST_NOT_COMBINED,
+  questionLineWords,
+  reasonsWords,
+  recordedLiveWords,
+  registeredForWords,
+  registeredOnWords,
+  RETEST_FIELD_WORDS,
+  RETEST_MEMBER_STATE_WORDS,
+  shortRetestWords,
+  SMALLEST_CHANGE_THAT_COUNTS,
+  smallestDetectableWords,
+  SOURCES_BEFORE_AFTER_HEADING,
+  sourceActionWords,
+  THRESHOLD_BELOW_LIMIT_WORDS,
+  thresholdWords,
+  waitingPeriodPlannedWords,
+  waitingPeriodWords,
+} from "@/lib/reports/pilot-retest-copy";
+import { surfaceLimitation } from "@/lib/reports/surface-limitations";
 import { SOURCE_CATEGORY_LABEL } from "@/lib/source-insights/source-types";
 
 export interface PilotPresentationTable {
@@ -88,6 +140,35 @@ export interface PilotPresentationActions {
   notes: string[];
 }
 
+/** D-062 — one Outcome Card: its blocks in §3.5's order, and the footer from the constant. */
+export interface PilotPresentationCard {
+  key: string;
+  heading: string;
+  blocks: { title: string | null; lines: string[] }[];
+  /** Always NON_CAUSALITY_FOOTER, from the constant, never from the payload. */
+  footer: string;
+}
+
+/** D-062 — one registered change that is not withdrawn: its registered text, its log, its members and cards. */
+export interface PilotPresentationRetestGroup {
+  key: string;
+  heading: string;
+  fields: { label: string; text: string }[];
+  lines: string[];
+  notesHeading: string;
+  notes: string[];
+  members: PilotPresentationTable;
+  cards: PilotPresentationCard[];
+}
+
+export interface PilotPresentationRetests {
+  heading: string;
+  intro: string[];
+  groups: PilotPresentationRetestGroup[];
+  /** One line per withdrawn change (M6). */
+  withdrawn: string[];
+}
+
 export interface PilotPresentation {
   eyebrow: string;
   title: string;
@@ -103,6 +184,8 @@ export interface PilotPresentation {
   questions: PilotPresentationQuestion[];
   /** D-057 — absent when no reviewed action exists: no section at all. */
   actions: PilotPresentationActions | null;
+  /** D-062 — absent when the report shows no registered change (and on every revision built before D-062). */
+  retests: PilotPresentationRetests | null;
   limitsHeading: string;
   limitations: string[];
   methodHeading: string;
@@ -349,6 +432,8 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
     for (const e of payload.engines.filter((e) => !q.measurements.some((m) => m.engine === e.engine))) {
       lines.push(`${e.label}: not measured for this question.`);
     }
+    // D-062 (M17) — answers collected after a registered change went live.
+    for (const c of q.collectedAfterChange ?? []) lines.push(collectedAfterChangeWords(c.registeredOn, c.liveOn));
     return {
       key: q.pilotQuestionId,
       heading: `${q.ordinal}. ${q.text}`,
@@ -392,6 +477,8 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
           notes: [ACTIONS_NOT_REGISTERED_NOTE],
         };
 
+  const retests = presentRetests(payload);
+
   return {
     eyebrow: PILOT_REPORT_TITLE,
     title: `${subject.companyName}: ${plural(live.length, "buyer question")}`,
@@ -409,6 +496,7 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
     questionsIntro: [payload.dependenceNote],
     questions,
     actions,
+    retests,
     limitsHeading: "Limits of this report",
     limitations: [...payload.limitations, payload.dependenceNote],
     methodHeading: "How the figures were produced",
@@ -453,6 +541,23 @@ export function presentationStrings(p: PilotPresentation): string[] {
           ...p.actions.notes,
         ]
       : []),
+    ...(p.retests
+      ? [
+          p.retests.heading,
+          ...p.retests.intro,
+          ...p.retests.groups.flatMap((g) => [
+            g.heading,
+            ...g.fields.flatMap((f) => [f.label, f.text]),
+            ...g.lines,
+            g.notesHeading,
+            ...g.notes,
+            ...g.members.columns,
+            ...g.members.rows.flat(),
+            ...g.cards.flatMap(cardStrings),
+          ]),
+          ...p.retests.withdrawn,
+        ]
+      : []),
     p.limitsHeading,
     ...p.limitations,
     p.methodHeading,
@@ -460,4 +565,227 @@ export function presentationStrings(p: PilotPresentation): string[] {
     p.evidenceLine,
     p.causalLimit,
   ];
+}
+
+/* ---------------------------------------------------------------- D-062: the retest section */
+
+/** Every string one card shows, in order. */
+export function cardStrings(c: PilotPresentationCard): string[] {
+  return [c.heading, ...c.blocks.flatMap((b) => [...(b.title ? [b.title] : []), ...b.lines]), c.footer];
+}
+
+function datesWords(e: PilotExecutionWindow): string {
+  if (!e.firstOn || !e.lastOn) return "No answer dates are recorded.";
+  return e.firstOn === e.lastOn ? `Answers collected on ${e.firstOn}.` : `Answers collected from ${e.firstOn} to ${e.lastOn}.`;
+}
+
+function cardPresentation(
+  card: PilotOutcomeCard,
+  group: PilotReportRetest,
+  company: string,
+  dependenceNote: string
+): PilotPresentationCard {
+  const label = engineLabel(card.engine);
+  const notesById = new Map(group.notes.map((n) => [n.id, n]));
+  const after = new Set(card.noteIdsAfterFirstAnswer);
+  const sc = card.sourceComparison;
+  const c = card.comparison;
+  const reasonWords = c.reasonCodes.map(outcomeReasonWords);
+  const domains = sc ? [...sc.domains].sort((a, b) => b.baselineCitedInRuns + b.retestCitedInRuns - (a.baselineCitedInRuns + a.retestCitedInRuns) || a.domain.localeCompare(b.domain)) : [];
+  const SHOWN = 10;
+  return {
+    key: card.memberId,
+    heading: outcomeCardHeading(card.ordinal, label),
+    blocks: [
+      { title: null, lines: [outcomeStatusWords(card.status, company)] },
+      { title: `What each result means (rule ${group.outcomeRule})`, lines: outcomeRuleSentences(card.status) },
+      { title: "The question", lines: [questionLineWords(card.ordinal, card.question.versionNumber, card.question.hash)] },
+      {
+        title: "Before and after",
+        lines: [
+          phaseWords("Before", {
+            numerator: card.baseline.numerator,
+            denominator: card.baseline.denominator,
+            rangeWords: rangeWords(card.baseline.interval?.low ?? null, card.baseline.interval?.high ?? null),
+            attemptWords: attemptWords(card.baseline.counts),
+            dates: datesWords(card.baseline.execution),
+          }),
+          phaseWords("After", {
+            numerator: card.retest.numerator,
+            denominator: card.retest.denominator,
+            rangeWords: rangeWords(card.retest.interval?.low ?? null, card.retest.interval?.high ?? null),
+            attemptWords: attemptWords(card.retest.counts),
+            dates: datesWords(card.retest.execution),
+          }),
+        ],
+      },
+      { title: DIFFERENCE_HEADING, lines: [changeWords({ delta: c.delta, low: c.intervalLow, high: c.intervalHigh, reasons: reasonWords })] },
+      {
+        title: "The limits",
+        lines: [
+          SMALLEST_CHANGE_THAT_COUNTS,
+          // (engineer, review C2 APP-1) A smallest change it could show only when the rule could give a status.
+          c.smallestDetectableChange === null
+            ? cannotShowAnyChangeWords(c.reasonCodes.filter((code) => NO_CHANGE_SHOWABLE_REASONS.includes(code)).map(outcomeReasonWords))
+            : smallestDetectableWords(c.smallestDetectableChange),
+          PILOT_RETEST_LIMIT_SENTENCE,
+          ...(card.shortRetest ? [shortRetestWords(card.retest.denominator, card.retest.planned, c.smallestDetectableChange)] : []),
+        ],
+      },
+      {
+        title: "Your threshold",
+        lines: [thresholdWords(group.text.decisionThreshold), ...(group.thresholdBelowLimit ? [THRESHOLD_BELOW_LIMIT_WORDS] : [])],
+      },
+      {
+        title: "How it was measured",
+        lines: [
+          surfaceLimitation(card.engine),
+          `Engine: ${PROVIDER_WORDS[card.conditions.provider] ?? UNKNOWN_PROVIDER_WORDS}. Answer format: ${SURFACE_WORDS[card.conditions.surface] ?? UNKNOWN_SURFACE_WORDS}. Model: ${card.conditions.model}.`,
+          `Answers: ${card.conditions.answerModes.length > 0 ? card.conditions.answerModes.map((m) => ANSWER_MODE_WORDS[m] ?? UNKNOWN_ANSWER_MODE_WORDS).join("; ") : "not recorded"}. Methodology version ${card.conditions.methodologyVersion}; analysis version ${card.conditions.analyzerVersion ?? "not recorded"}.`,
+          card.measurement.sameAsBaseline
+            ? MEASURED_SAME_WAY_WORDS
+            : notMeasuredSameWayWords([...new Set(card.measurement.differences.map(measurementFieldWords))]),
+        ],
+      },
+      {
+        title: SOURCES_BEFORE_AFTER_HEADING,
+        lines: sc
+          ? [
+              `Answers with a usable source list: ${sc.baselineRunsWithSourceEvidence} before, ${sc.retestRunsWithSourceEvidence} after.`,
+              `Answers citing your own website: ${sc.ownedCited.baseline} before, ${sc.ownedCited.retest} after.`,
+              ...domains.slice(0, SHOWN).map((d) => `${d.domain} (${SOURCE_CATEGORY_LABEL[d.category]}): cited in ${d.baselineCitedInRuns} answers before, ${d.retestCitedInRuns} after.`),
+              ...(domains.length > SHOWN ? [`${domains.length - SHOWN} further cited website(s) are not listed here.`] : []),
+              ...sc.notes,
+            ]
+          : ["Cited sources are not compared here: one of the two measurements has no usable source list, or the two were read under different rules."],
+      },
+      {
+        title: "Context",
+        lines: [
+          `${RETEST_FIELD_WORDS.confoundersToMonitor}: ${group.text.confoundersToMonitor}`,
+          ...group.notes.map((n) => {
+            const corrected = n.correctsNoteId ? notesById.get(n.correctsNoteId)?.notedOn ?? null : null;
+            const line = noteWords({ kind: n.kind, notedOn: n.notedOn, writtenOn: n.writtenAt.slice(0, 10), text: n.text, correctsNotedOn: corrected });
+            return after.has(n.id) ? `${line} (${NOTE_AFTER_FIRST_ANSWER_WORDS})` : line;
+          }),
+          NO_CONTROLS_WORDS,
+          // (engineer, review C2 APP-4) Never "no departure" when the change was reported as not made as registered.
+          group.implementation?.implementedAsRegistered === false ? NOT_AS_REGISTERED_WORDS : NO_DEPARTURE_WORDS,
+        ],
+      },
+      { title: "The evidence", lines: [evidenceWords(card.baseline.answers, card.retest.answers)] },
+      ...(reasonsWords(c.reasonCodes) ? [{ title: null, lines: [reasonsWords(c.reasonCodes)!] }] : []),
+      { title: null, lines: [dependenceNote] },
+    ],
+    footer: NON_CAUSALITY_FOOTER,
+  };
+}
+
+/**
+ * D-062 — the retest section: each registered change in the customer's
+ * words, its log of other changes, its members and its Outcome Cards. Each
+ * card stands on its own; nothing is added up across cards (M11).
+ */
+/**
+ * D-062 (engineer) — whether a stored payload was built before D-062: it has
+ * no `retests` key (every revision built since carries one, an empty list
+ * included). Such a revision renders exactly as it did: no retest section,
+ * no M17 line (its questions carry no `collectedAfterChange`), and its
+ * stored method notes, which never name the outcome rule.
+ */
+export function builtBeforeD062(payload: PilotReportPayload): boolean {
+  return payload.retests === undefined;
+}
+
+export function presentRetests(payload: PilotReportPayload): PilotPresentationRetests | null {
+  if (builtBeforeD062(payload)) return null;
+  const groups = payload.retests ?? [];
+  if (groups.length === 0) return null;
+  const cards = payload.outcomeCards ?? [];
+  const company = payload.subject.companyName;
+  const live = groups.filter((g) => g.abandoned === null);
+  const withdrawn = groups
+    .filter((g) => g.abandoned !== null)
+    .map((g) =>
+      abandonedGroupWords({
+        registeredOn: g.registeredOn,
+        abandonedOn: g.abandoned!.abandonedOn,
+        liveOn: g.abandoned!.wasLive && g.implementation ? g.implementation.recordedAt.slice(0, 10) : null,
+      })
+    );
+  return {
+    heading: PILOT_RETEST_HEADING,
+    intro: [PILOT_RETEST_NOT_COMBINED],
+    withdrawn,
+    groups: live.map((g) => {
+      const ordinals = [...new Set(g.members.map((m) => m.ordinal))].sort((a, b) => a - b);
+      const lines = [
+        registeredForWords(ordinals),
+        approvedOnWords(g.customerApprovedOn),
+        registeredOnWords(g.registeredOn, g.implementBy),
+        ...(g.implementation
+          ? [
+              recordedLiveWords({
+                recordedOn: g.implementation.recordedAt.slice(0, 10),
+                wentLiveOn: g.implementation.wentLiveOn,
+                // (engineer, review C2 APP-5) Left out when the build's lint found wording this report may not use.
+                evidenceUrl: g.notShown?.evidenceUrl ? null : g.implementation.evidenceUrl,
+                artifactSha256: g.implementation.artifactSha256,
+              }),
+              ...(g.notShown?.evidenceUrl && g.implementation.evidenceUrl ? [EVIDENCE_LINK_NOT_SHOWN_WORDS] : []),
+            ]
+          : []),
+        g.windowOpensAt && g.windowClosesAt
+          ? waitingPeriodWords(g.observationDays, g.windowOpensAt.slice(0, 10), g.windowClosesAt.slice(0, 10))
+          : waitingPeriodPlannedWords(g.observationDays),
+        ...(g.sourceActions.length > 0
+          ? g.sourceActions.map((a) => sourceActionWords({ ...a, notShown: (g.notShown?.sourceActionVersionIds ?? []).includes(a.versionId) }))
+          : [NOT_FROM_SUGGESTED_ACTION_WORDS]),
+      ];
+      const notesById = new Map(g.notes.map((n) => [n.id, n]));
+      return {
+        key: g.retestId,
+        heading: `Change ${g.sequence}: ${g.text.changeTitle}`,
+        fields: [
+          { label: RETEST_FIELD_WORDS.changeDescription, text: g.text.changeDescription },
+          { label: RETEST_FIELD_WORDS.changeTarget, text: g.text.changeTarget },
+          { label: RETEST_FIELD_WORDS.changeOwner, text: g.text.changeOwner },
+          { label: RETEST_FIELD_WORDS.actionType, text: ACTION_TYPE_WORDS[g.actionType] ?? ACTION_TYPE_WORDS.other },
+          { label: RETEST_FIELD_WORDS.hypothesis, text: g.text.hypothesis },
+          { label: RETEST_FIELD_WORDS.expectedMechanism, text: g.text.expectedMechanism },
+          { label: RETEST_FIELD_WORDS.alternativeExplanations, text: g.text.alternativeExplanations },
+          { label: RETEST_FIELD_WORDS.openQuestions, text: g.text.openQuestions },
+          { label: RETEST_FIELD_WORDS.decisionThreshold, text: g.text.decisionThreshold },
+          { label: RETEST_FIELD_WORDS.confoundersToMonitor, text: g.text.confoundersToMonitor },
+        ],
+        lines,
+        notesHeading: OTHER_CHANGES_HEADING,
+        notes:
+          g.notes.length === 0
+            ? [NO_OTHER_CHANGES_WORDS]
+            : g.notes.map((n) =>
+                noteWords({
+                  kind: n.kind,
+                  notedOn: n.notedOn,
+                  writtenOn: n.writtenAt.slice(0, 10),
+                  text: n.text,
+                  correctsNotedOn: n.correctsNoteId ? notesById.get(n.correctsNoteId)?.notedOn ?? null : null,
+                })
+              ),
+        members: {
+          columns: ["Question", "Engine", "Where it stands", "Retest attempts"],
+          rows: g.members.map((m) => [
+            String(m.ordinal),
+            engineLabel(m.engine),
+            RETEST_MEMBER_STATE_WORDS[m.state] ?? "In a state this report does not recognise",
+            m.counts ? attemptWords(m.counts) : "—",
+          ]),
+        },
+        cards: cards
+          .filter((c) => c.retestId === g.retestId)
+          .sort((a, b) => a.ordinal - b.ordinal || (a.engine === b.engine ? 0 : a.engine === "perplexity_sonar" ? -1 : 1))
+          .map((c) => cardPresentation(c, g, company, payload.dependenceNote)),
+      };
+    }),
+  };
 }

@@ -3,6 +3,7 @@ import { getReportServiceClient } from "@/lib/reports/service-client";
 import { guardInterventionRoute } from "@/lib/interventions/route-guard";
 import { readIntervention } from "@/lib/interventions/intervention-actions";
 import { readRetestProgress } from "@/lib/interventions/retest-actions";
+import { PILOT_MEMBER_FAILURE, pilotMemberInterventionIds } from "@/lib/interventions/pilot-exclusions";
 import { invalidId, type RouteContext } from "@/lib/interventions/route-handlers";
 import { UUID_PATTERN } from "@/lib/interventions/validate";
 import { startFailureHttpStatus, startWorkerMachine } from "@/lib/worker-control/fly-machine";
@@ -46,6 +47,11 @@ export async function POST(_request: Request, context: RouteContext) {
       { ok: false, error: "not_found", message: "That intervention was not found." },
       { status: 404 }
     );
+  }
+
+  // D-062 — a pilot member's retest runs only from its pilot page.
+  if ((await pilotMemberInterventionIds(client, [interventionId])).has(interventionId)) {
+    return NextResponse.json({ ok: false, error: PILOT_MEMBER_FAILURE.error, message: PILOT_MEMBER_FAILURE.message }, { status: 409 });
   }
 
   const retest = await readRetestProgress(client, intervention);

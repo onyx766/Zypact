@@ -6,6 +6,8 @@ import { requireFounderForPage } from "@/lib/auth/founder";
 import { revisionActionsCurrent } from "@/lib/pilots/action-rules";
 import { currentReportableVersionIds } from "@/lib/pilots/action-store";
 import { loadPilot } from "@/lib/pilots/reads";
+import { RETEST_OUT_OF_DATE_WORDS } from "@/lib/pilots/retest-copy";
+import { currentRetestState, revisionRetestsCurrent } from "@/lib/pilots/retest-store";
 import { UUID_PATTERN } from "@/lib/pilots/validate";
 import { INTEGRITY_WORDS, PREVIEW_SHARE_NOTE_WORDS, previewStatusWords } from "@/lib/reports/pilot-report-copy";
 import { isPilotReportPayload } from "@/lib/reports/pilot-report-types";
@@ -44,9 +46,14 @@ export default async function PilotReportPreviewPage({
 
   // D-057 — a revision whose listed actions are no longer the pilot's reviewed,
   // current ones is out of date; the database refuses it too (ACTIONS_STALE).
-  const stale =
+  // D-062 — and one whose retests changed since it was built, or while a
+  // retest is running; the database refuses it too (RETESTS_STALE, RETEST_IN_PROGRESS).
+  const actionsStale =
+    revision.sharedAt === null && !revisionActionsCurrent(revision.actionVersionIds, await currentReportableVersionIds(client, pilotId));
+  const retestsStale =
     revision.sharedAt === null &&
-    !revisionActionsCurrent(revision.actionVersionIds, await currentReportableVersionIds(client, pilotId));
+    !revisionRetestsCurrent(revision.retestManifest, await currentRetestState(client, pilotId, loaded.questions.map((q) => q.id)));
+  const stale = actionsStale || retestsStale;
   const canShare = revision.isLatest && revision.sharedAt === null && revision.integrityStatus !== "blocked" && !stale;
 
   return (
@@ -104,6 +111,7 @@ export default async function PilotReportPreviewPage({
               integrityStatus: revision.integrityStatus,
               isLatest: revision.isLatest,
               stale,
+              staleWords: actionsStale ? undefined : RETEST_OUT_OF_DATE_WORDS,
             })}
           </p>
         )}

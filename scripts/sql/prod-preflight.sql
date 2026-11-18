@@ -26,6 +26,12 @@
 -- progress, a protocol provider outside its closed set, a protocol attempt's
 -- probe run on another platform than 'perplexity'.
 --
+-- 2026-11-18 (first production run at 2ae02e1): P3.1, P3.3 and P3.5 compare
+-- each definition with carriage returns removed. Production's 0069 body was
+-- pasted through the SQL editor with Windows line endings: the same code,
+-- different bytes (md5 57322a0b... raw, 710dfb5c... without CRs). P6.4 is
+-- informational here; step 5b's own before-check requires it to be 0.
+--
 -- The check set is built once (the checks CTE). One statement turns it into
 -- the printed lines and the FAIL count. The last line printed is the verdict,
 -- "PREFLIGHT: PASS" or "PREFLIGHT: FAIL (n)". On a FAIL the single raise-only
@@ -95,7 +101,7 @@ pending_functions(name) as (values
 ),
 -- The only informational checks. Every other check must be exactly true: a
 -- must-pass check that comes out false or null is a FAIL (fail closed).
-informational(id) as (values ('P1.4'), ('P6.2')),
+informational(id) as (values ('P1.4'), ('P6.2'), ('P6.4')),
 reconcile as (
   select to_regprocedure('public.reconcile_attempt_for_job(uuid,uuid,uuid,uuid,text,text)') as oid
 ),
@@ -153,8 +159,8 @@ checks(id, label, pass, observed) as (
   -- and ChatGPT phase B (20261109180000, D-061) redefine
   union all
   select 'P3.1', 'reconcile_attempt_for_job is exactly as 0083 left it (md5 of its definition, the reserved procedure''s post_def)',
-         (select coalesce(md5(pg_get_functiondef(oid)), 'missing') from reconcile) = '721e487901b2272708e38565b7070c53',
-         (select coalesce(md5(pg_get_functiondef(oid)), 'missing') from reconcile)
+         (select coalesce(md5(replace(pg_get_functiondef(oid), chr(13), '')), 'missing') from reconcile) = '721e487901b2272708e38565b7070c53',
+         (select coalesce(md5(replace(pg_get_functiondef(oid), chr(13), '')), 'missing') from reconcile)
   union all
   select 'P3.2', 'only service_role may execute reconcile_attempt_for_job',
          (select oid is not null
@@ -164,15 +170,15 @@ checks(id, label, pass, observed) as (
          null
   union all
   select 'P3.3', 'approve_and_launch_snapshot_baseline is exactly as 0069 left it (md5 of its definition)',
-         (select coalesce(md5(pg_get_functiondef(oid)), 'missing') from launch) = '710dfb5cb84ce09a94040ebb84086025',
-         (select coalesce(md5(pg_get_functiondef(oid)), 'missing') from launch)
+         (select coalesce(md5(replace(pg_get_functiondef(oid), chr(13), '')), 'missing') from launch) = '710dfb5cb84ce09a94040ebb84086025',
+         (select coalesce(md5(replace(pg_get_functiondef(oid), chr(13), '')), 'missing') from launch)
   union all
   select 'P3.4', 'the five-argument approve_and_launch_snapshot_baseline does not exist yet',
          (select oid5 is null from launch), null
   union all
   select 'P3.5', 'persist_probe_result_for_job is exactly as 0054 left it (md5 of its definition)',
-         (select coalesce(md5(pg_get_functiondef(oid)), 'missing') from persist) = 'd812b7f4c606e03ea171113f9fbc9762',
-         (select coalesce(md5(pg_get_functiondef(oid)), 'missing') from persist)
+         (select coalesce(md5(replace(pg_get_functiondef(oid), chr(13), '')), 'missing') from persist) = 'd812b7f4c606e03ea171113f9fbc9762',
+         (select coalesce(md5(replace(pg_get_functiondef(oid), chr(13), '')), 'missing') from persist)
 
   -- P4 what is applied exists; nothing pending exists ----------------------
   union all
@@ -233,8 +239,8 @@ checks(id, label, pass, observed) as (
          (select count(*) from public.protocol_execution_jobs where status = 'queued') = 0,
          (select count(*)::text from public.protocol_execution_jobs where status = 'queued')
   union all
-  select 'P6.4', 'no protocol attempt is reserved or in progress (20261109180000 refuses to apply while one is)',
-         (select count(*) from public.protocol_attempts pa where pa.status in ('reserved', 'in_progress')) = 0,
+  select 'P6.4', 'attempts reserved or in progress (informational here; must be 0 before step 5b: 20261109180000 refuses to apply while one is)',
+         null,
          (select count(*)::text from public.protocol_attempts pa where pa.status in ('reserved', 'in_progress'))
 
   -- P7 the data 20261109180000's preconditions read (D-061) ----------------

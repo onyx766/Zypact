@@ -247,7 +247,7 @@ assert("PF-21 the expected tail is the last applied version, and the row count i
 assert("PF-22 the 0069 pre-state of approve_and_launch_snapshot_baseline is pinned (computed on a disposable stack with every migration before 20261109130000)",
   SQL.includes("= '710dfb5cb84ce09a94040ebb84086025'"));
 assert("PF-22b the 0054 pre-state of persist_probe_result_for_job, which 20261109180000 (D-061) redefines, is pinned (computed on a disposable stack at the recorded state)",
-  /'persist_probe_result_for_job is exactly as 0054 left it \(md5 of its definition\)',\s*\(select coalesce\(md5\(pg_get_functiondef\(oid\)\), 'missing'\) from persist\) = 'd812b7f4c606e03ea171113f9fbc9762',/.test(SQL));
+  /'persist_probe_result_for_job is exactly as 0054 left it \(md5 of its definition\)',\s*\(select coalesce\(md5\(replace\(pg_get_functiondef\(oid\), chr\(13\), ''\)\), 'missing'\) from persist\) = 'd812b7f4c606e03ea171113f9fbc9762',/.test(SQL));
 assert("PF-23 the queue is checked empty (P6.3) as well as nothing claimed or running (P6.1)",
   /status = 'queued'\) = 0/.test(SQL) && /status in \('claimed', 'running'\)\) = 0/.test(SQL));
 assert("PF-24 the header says this baseline has never been run against production", /has NEVER been\s*\n?-- run against production/.test(SQL));
@@ -263,9 +263,9 @@ const checkOf = (id: string) => SQL.match(new RegExp(`select '${id.replace(".", 
 const p64 = checkOf("P6.4");
 const p71 = checkOf("P7.1");
 const p72 = checkOf("P7.2");
-assert("PF-29 P6.4 is must-pass and counts attempts reserved or in progress, as 20261109180000's precondition does",
+assert("PF-29 P6.4 is informational at step 1 (step 5b requires 0) and counts attempts reserved or in progress, as 20261109180000's precondition does",
   /where pa\.status in \('reserved', 'in_progress'\)/.test(MIG_B)
-    && /\(select count\(\*\) from public\.protocol_attempts pa where pa\.status in \('reserved', 'in_progress'\)\) = 0,/.test(p64));
+    && /^\s*null,\s*\(select count\(\*\)::text from public\.protocol_attempts pa where pa\.status in \('reserved', 'in_progress'\)\)/.test(p64));
 assert("PF-29a P7.1 is must-pass and accepts exactly the provider set 20261109180000's precondition accepts",
   migProviders.length > 0 && p71.includes(`where p.provider not in (${migProviders})) = 0,`)
     && (p71.match(new RegExp(`not in \\(${migProviders.replace(/[()]/g, "\\$&")}\\)`, "g")) ?? []).length === 2,
@@ -273,8 +273,11 @@ assert("PF-29a P7.1 is must-pass and accepts exactly the provider set 2026110918
 assert("PF-29b P7.2 is must-pass and joins each attempt to its own probe run, as 20261109180000's precondition does",
   /join public\.probe_runs pr on pr\.id = pa\.probe_run_id\s+where pr\.platform <> 'perplexity'/.test(MIG_B)
     && /join public\.probe_runs pr on pr\.id = pa\.probe_run_id\s+where pr\.platform <> 'perplexity'\) = 0,/.test(p72));
-assert("PF-29c none of the three is informational",
-  !/'P6\.4'|'P7\.1'|'P7\.2'/.test(SQL.match(/informational\(id\) as \(values([^\n]*)\)/)?.[1] ?? "") && [p64, p71, p72].every((c) => c.length > 0));
+assert("PF-29c P7.1 and P7.2 are must-pass; P6.4 is informational",
+  !/'P7\.1'|'P7\.2'/.test(SQL.match(/informational\(id\) as \(values([^\n]*)\)/)?.[1] ?? "")
+    && /'P6\.4'/.test(SQL.match(/informational\(id\) as \(values([^\n]*)\)/)?.[1] ?? "") && [p64, p71, p72].every((c) => c.length > 0));
+assert("PF-30 every pinned definition is hashed with carriage returns removed, and none raw",
+  (SQL.match(/md5\(replace\(pg_get_functiondef\(oid\), chr\(13\), ''\)\)/g) ?? []).length === 6 && !/md5\(pg_get_functiondef\(/.test(SQL));
 
 /* Target, verdict and fail-closed rules (2026-11-17, review of PR #129) --- */
 assert("PF-25 P1.1 must pass: the system identifier equals -v expected_sysid, and a missing value cannot pass",

@@ -1659,6 +1659,8 @@ Each item below departed from a document that governed before this approval: V1_
   - a production migration numbered at or after `20261110120000` while P1 to Q4 are unapplied (item 4);
   - any apply without `-v target_sysid`, or any preflight run without `-v expected_sysid`.
 
+- **2026-11-18 (dated note):** first production run of step 1 at `2ae02e1` returned `FAIL (2)`. P3.3 is line endings only, and P6.4 is one attempt left open since 2026-09-23 under an abandoned job (CURRENT_STATUS §38). The founder agreed to adjust the check: definitions are hashed without carriage returns, and P6.4 is informational at step 1 and required at step 5b. The founder also agreed to close that attempt as its own approved step before step 5b, and accepted the dashboard reading of the cluster identifier as the record.
+
 ## D-059 — The founder's rulings on the pilot's open questions (14-point list)
 
 - **Date:** 2026-11-17

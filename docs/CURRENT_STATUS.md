@@ -2468,3 +2468,13 @@ The last three rows ran before the review fixes. The fixes changed only the migr
   - an engine whose questions are all retired still reads "0 of 0 questions with at least one readable answer; 1 retired." It is a question count, pinned by I5c. **2026-11-18:** fixed by the review; it now reads "no live question is measured on it" (I5c);
   - `README.md` line 37, and `ADAPTER_VALIDITY_CHATGPT.md`'s status lines and open items 7 and 8, still describe ChatGPT as not wired and its time limits as undecided. Neither file is edited here, and `test:chatgpt-adapter` pins the note's "not wired into any worker". **2026-11-18:** both are now updated, and the pin follows the note's new text;
   - the deployed worker's lease and readiness values are unrecorded (WORKER_DEPLOY_RUNBOOK §5, §10).
+
+## 38. First production preflight at `2ae02e1` (2026-11-18): two findings, nothing changed
+
+- **Run:** the founder ran the Supabase SQL editor version of `scripts/sql/prod-preflight.sql` (generated from `main` `2ae02e1`, the same checks plus P0.1, which stands in for `row_security = off`; tested against the psql version on a disposable copy at the recorded state). The founder approved running the updated check at the new R, and accepted the identifier read in the dashboard as the record (the 2026-11-09 private record was not available here). The number is not written anywhere in the repository.
+- **Result:** `PREFLIGHT: FAIL (2)`. P1.1 PASS; every other check PASS except:
+  - **P3.3:** production's `approve_and_launch_snapshot_baseline` is 0069's code with Windows line endings (from its 2026-09-16 SQL-editor apply). Shown read-only: whitespace-free body and definition match the disposable copy's; attributes match. Step 2 drops and replaces this function and compares no text. **Fix:** P3.1, P3.3 and P3.5 now hash each definition with carriage returns removed (`test:prod-preflight` PF-30); pins unchanged.
+  - **P6.4:** one `retest` attempt `in_progress` since 2026-09-23 under a job `abandoned_exhausted` that day (Perplexity Sonar, 0.04 USD reserved). It blocks only step 5b (`20261109180000`'s precondition). **Fix:** P6.4 is informational at step 1; step 5b keeps the requirement. Closing the attempt is its own founder-approved step (one `reconcile_attempt` call, prepared and tested first).
+- **Founder decision, 2026-11-18** (relayed: "I agree."): this plan.
+- **Next:** run the adjusted check again at the new R; then step 2 needs its own approval.
+- **Note for PR C:** its status section becomes §39.

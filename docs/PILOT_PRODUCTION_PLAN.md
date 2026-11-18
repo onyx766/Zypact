@@ -69,7 +69,8 @@ Order rule (D-052): migrations, then the worker, then the web app. Rollback runs
   `expected_sysid` is the cluster system identifier recorded privately on 2026-11-09. Read it from your own record. It is never written into the repository, a pull request or a chat.
 - **Pass:** the last line is `PREFLIGHT: PASS` and the exit code is 0. **Anything else means stop:** `PREFLIGHT: FAIL (n)`, a non-zero exit, or an error.
 - **If P3.3 fails:** its pin `710dfb5c…` was computed on disposable databases and has never been observed on production. Stop. Compare the observed hash against a disposable copy built to the recorded state before anything else. A mismatch means production's `approve_and_launch_snapshot_baseline` is not what step 2 expects to replace.
-- **If P6.4, P7.1 or P7.2 fails** (at an R that includes D-061): stop and decide with the engineer; never edit rows (PILOT_RUNBOOK §10).
+- **If P7.1 or P7.2 fails** (at an R that includes D-061): stop and decide with the engineer; never edit rows (PILOT_RUNBOOK §10). P6.4 is informational at step 1 since 2026-11-18; step 5b requires it to be 0.
+- **Run record, 2026-11-18:** first run at `2ae02e1`, by the founder in the SQL editor version: `FAIL (2)`, P3.3 (Windows line endings only, same code) and P6.4 (one attempt left open since 2026-09-23). Both explained in PROD_PREFLIGHT_SPEC's History; the check was adjusted, and step 1 is run again at the new R.
 - **If P3.5 fails** (at an R that includes D-061): stop, as for P3.3. Its pin `d812b7f4…` was computed on a disposable database at the recorded state and has never been observed on production. Compare the observed hash against a disposable copy built to the recorded state before anything else. A mismatch means production's `persist_probe_result_for_job` is not what step 5b expects to replace.
 - **Output:** check ids, PASS/FAIL, versions, hashes and counts, and the system identifier itself. Keep the full output private; the record notes only the result and the date.
 - **Rollback:** none.
@@ -124,6 +125,8 @@ Order rule (D-052): migrations, then the worker, then the web app. Rollback runs
   - the claims: `grant execute on function public.claim_protocol_execution_job(text, integer) to service_role;` and `grant execute on function public.claim_protocol_execution_job_by_id(text, integer, uuid, uuid) to service_role;`. A re-grant reopens the path by which a worker image from before D-052 could take any queued job, a pilot's included, without a Run.
 
 ### Step 5b — the ChatGPT measurement schema, with ChatGPT still off (D-061)
+
+> **2026-11-18:** production holds one attempt `in_progress` since 2026-09-23, under a job `abandoned_exhausted` the same day. This step's precondition refuses to apply while it is open. Before this step, close it with its own founder approval: one call of 0047's `reconcile_attempt` for that attempt (the statement is prepared and tested on a disposable copy first, and recorded with the result). Nothing is deleted.
 
 | Step | Version | `expected_prev` |
 |---|---|---|

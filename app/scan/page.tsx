@@ -101,31 +101,40 @@ const FOOTER = {
       heading: "Product",
       links: [
         { label: "How it works", href: "/#how-it-works" },
-        { label: "Reports", href: "/#reports" },
+        { label: "Reports", href: "/#product" },
         { label: "About Zypact", href: "/about" },
       ],
     },
     {
       heading: "Method",
       links: [
-        { label: "Evidence", href: "/#evidence" },
-        { label: "Outcome statuses", href: "/#outcomes" },
-        { label: "Scope and limits", href: "/#scope" },
+        { label: "Evidence", href: "/#methodology" },
+        { label: "Outcome statuses", href: "/#use-cases" },
+        { label: "Scope and limits", href: "/#beta" },
       ],
     },
     {
       heading: "Contact",
       links: [
         { label: "Request demo", href: "#request-form" },
-        { label: "Contact us", href: "/#contact" },
+        { label: "Contact us", href: "mailto:contact@zypact.com" },
         { label: "FAQ", href: "/#faq" },
       ],
     },
   ],
   bottomLine:
     "Perplexity Sonar V1 · Launched by Zypact after approval · No guaranteed outcome",
-  copyright: "© 2026 Zypact",
+  copyright: "© 2026 Zypact, Inc. All rights reserved.",
 } as const;
+
+/** Match the sections on the new Reflex homepage, not the retired one. */
+const REFLEX_NAV = [
+  { label: "Product", href: "/#product" },
+  { label: "How it works", href: "/#how-it-works" },
+  { label: "Use cases", href: "/#use-cases" },
+  { label: "Methodology", href: "/#methodology" },
+  { label: "Founding pilots", href: "/#beta" },
+] as const;
 
 /** `--i` orders the CSS load choreography (`lx-intro` in base.css). */
 const order = (index: number) => ({ "--i": index }) as CSSProperties;
@@ -137,12 +146,12 @@ export default function ScanPage() {
     // The landing's `.lx` scope, so every CTA arrives on the same design. The
     // form itself uses only the CSS-only `lx-intro` entrance — never
     // data-reveal — so it is visible before hydration and without JavaScript.
-    <ThemeRoot theme="light" className="lx">
+    <ThemeRoot theme="light" className="lx scan-reflex">
       <LandingMotion />
       <AtmosphereCanvas />
       <div className="lx-grain" aria-hidden="true" />
 
-      <SiteHeader cta={{ label: "Request demo", href: "#request-form" }} />
+      <SiteHeader cta={{ label: "Request demo", href: "#request-form" }} links={REFLEX_NAV} />
 
       <main className="relative z-[1]">
         {/* -------------------------------------------------------------- Hero */}

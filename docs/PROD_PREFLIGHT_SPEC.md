@@ -85,7 +85,7 @@ echo "exit $?"
 | P6.1 | PASS | No protocol job is `claimed` or `running`. |
 | P6.2 | info | Other sessions with a transaction open over 60 seconds. |
 | P6.3 | PASS | No protocol job is `queued`. Until step 5a applies `20261109170000`, the deployed pre-D-052 worker would take any queued job through the global claim on any start, and the worker redeploy needs an empty queue (WORKER_DEPLOY_RUNBOOK §6). If a job is queued, for example the self-test retest, stop and let the founder decide whether to run it on the old worker or cancel it before going on. **Kept as it is for this baseline (D-060):** step 1 runs before that migration. After it, a queued job without a pending run request is inert; once the founder confirms D-060 item 5 *(engineer)*, the runbook's rule becomes "no job holds a live lease and no run request is pending", and a preflight re-baselined after the migration would check that instead. |
-| P6.4 | PASS | No protocol attempt is `reserved` or `in_progress`; `20261109180000`'s precondition refuses to apply while one is. P6.1 and P6.3 do not see an attempt left open under a job held for review. |
+| P6.4 | info | The number of protocol attempts `reserved` or `in_progress`. **Informational at step 1 since 2026-11-18** (it was must-pass): production holds one such attempt from 23 September, under a job abandoned that day, which concerns only `20261109180000`. Step 5b's own before-check requires it to be 0, and that migration's precondition refuses to apply otherwise. P6.1 and P6.3 do not see an attempt left open under a job held for review. |
 | P7.1 | PASS | Every protocol names a provider `20261109180000` accepts: `perplexity`, `perplexity_sonar`, `perplexity_agent` or `openai_chatgpt` (its precondition's list; PF-29a ties them). |
 | P7.2 | PASS | Every probe run of a protocol attempt is `perplexity`, so existing results keep their replay hashes when `20261109180000` takes the platform from the run. |
 
@@ -182,6 +182,10 @@ P1, P2, E1 and Q4 follow later, behind the D-045 gates. P1's `expected_prev` is 
 - That a data row is correct. It reads catalog metadata, the ledger and counts of jobs, attempts, probe runs, protocols and sessions.
 
 ## History
+
+- **2026-11-18, first production run of this baseline** (at `main` `2ae02e1`, in the Supabase SQL editor version, run by the founder; the founder accepted that run's identifier reading as the record, option 2): `PREFLIGHT: FAIL (2)`. P1.1 PASS; every check PASS except two:
+  - **P3.3** observed `57322a0b…`. A read-only comparison showed the same code as 0069's file: the body without whitespace and the definition without whitespace both equal the disposable copy's (`d195cffb…`, `48d5039f…`), with the same attributes; production's body carries Windows line endings (5,853 bytes against 5,668), from the 2026-09-16 SQL-editor apply. Since then P3.1, P3.3 and P3.5 hash each definition with carriage returns removed (PF-30); the pins are unchanged. Proven on a disposable copy: the same code with Windows line endings fails the old check and passes the new one, and a real code change still fails.
+  - **P6.4** observed 1: a `retest` attempt `in_progress` since 2026-09-23 under a job `abandoned_exhausted` the same day (Perplexity Sonar, 0.04 USD reserved). It concerns only step 5b; P6.4 is now informational at step 1. Closing that attempt is its own founder-approved step before step 5b.
 
 - **2026-11-09:** first version, baseline 0001–0081 with tail `20260924023646` and 81 rows; it pinned 0083's pre-state, `baaf43cc…`. It ran against production at 17:12 PST at `main` `60720a2`: all 15 must-pass checks PASS (CURRENT_STATUS §25). It then failed by design once 0083 was applied.
 - **2026-11-17:** re-baselined to the post-S1 state, with P2.6, P4.4, P4.5, P4.6 and P6.3 added, and the pilot migrations renumbered under D-058.

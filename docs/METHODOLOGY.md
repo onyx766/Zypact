@@ -1,12 +1,13 @@
 # Zypact V1 Methodology
 
 - **Status:** Canonical V1 methodology
-- **Version:** 1.2
+- **Version:** 1.3
 - **Method date:** 2026-08-16
 - **Version 1.1 date:** 2026-08-19 (see D-014 in `DECISIONS.md`)
 - **Version 1.2 date:** 2026-10-31 (see D-039 in `DECISIONS.md`)
-- **Default protocol methodology version:** 1.1. This is the current default value a new protocol records; existing protocols keep whatever value they recorded. Document version 1.2 adds planning guidance only and does not change that default.
-- **Initial live surface:** Perplexity Sonar
+- **Version 1.3 date:** 2026-11-18 (see D-061 in `DECISIONS.md`)
+- **Default protocol methodology version:** 1.1. This is the current default value a new protocol records; existing protocols keep whatever value they recorded. Document version 1.2 adds planning guidance only and does not change that default, and neither does document version 1.3.
+- **Live surfaces:** Perplexity Sonar; and ChatGPT (controlled OpenAI Responses API responses with web search) once its worker switch is turned on under its own authorisation (D-053, D-061). Each is its own directional measurement.
 - **Authority:** Governs evidence, sampling, observations, uncertainty, retest comparisons, and client-facing methodological language
 
 ## Version history
@@ -38,6 +39,27 @@
   default for new protocols remains 1.1 until a separately authorised
   change, existing reports are unchanged, and results computed before
   and after this version are not made more or less comparable by this documentation update; comparability still depends on the recorded measurement conditions.
+- **1.3** (2026-11-18): Adds ChatGPT as the second V1 surface, tied to
+  D-061 (and D-050, D-053, D-056). §4 names both surfaces, keeps
+  the Perplexity sentence word for word, and adds ChatGPT's required
+  sentence word for word from its adapter-validity note. §12.1 names
+  the source rule of each provider. Each surface is reported separately,
+  with its own denominator and uncertainty; results are never pooled or
+  combined into a score, and a ChatGPT result is not comparable with a
+  Perplexity one. This is a documentation version. The default protocol
+  methodology version stays 1.1, and no sampling, observation,
+  uncertainty or comparison rule changes; the per-engine total's inclusion
+  changes only as listed below.
+
+  The pilot report's language changes with it (D-061):
+  - each engine's "How it was measured" section names the rule its sources were read under, which is the one line added to a Perplexity-only report;
+  - for ChatGPT, that section also gives the setting version, the service tier and the web-search mode;
+  - a measurement without a readable answer is described in words, never as "0 of 0";
+- a measurement a review ended reads "Ended after review", never "Finished", and is left out of its engine's total and named there *(engineer, for founder confirmation)*;
+- a question retired with two measurements says one could not finish and how far each got;
+- an engine whose questions are all retired reads "no live question is measured on it".
+
+  Existing protocols and stored evidence are unchanged. A stored report revision keeps its payload and the words it was built with: re-rendered, its page says what its stored Markdown says (`builtBeforeD061`).
 
 ## 1. Purpose
 
@@ -49,7 +71,7 @@ It exists to prevent five failures:
 2. mixing evidence from different questions or conditions;
 3. allowing model summaries to override stored facts;
 4. presenting an observed before/after difference as proven causation; and
-5. presenting one provider surface as the experience of every AI buyer.
+5. presenting one provider surface, or several together, as the experience of every AI buyer.
 
 ## 2. Unit of observation
 
@@ -79,9 +101,18 @@ Interpretation cannot overwrite raw or deterministic evidence.
 
 ## 4. Surface validity
 
-### Current V1 surface
+### Current V1 surfaces
 
-Perplexity Sonar is the current live V1 surface because an existing path has produced auditable responses and citations at a manageable cost.
+Perplexity Sonar is a live V1 surface because an existing path has produced auditable responses and citations at a manageable cost.
+
+ChatGPT (`openai_chatgpt`) is the second V1 surface (D-053). It measures controlled OpenAI Responses API responses with web search under the one approved setting, `openai-responses-websearch-v4:auto:gpt-5.4-2026-03-05` (D-050). It is not an observation of what users of the ChatGPT app see. Its adapter-validity note is [`ADAPTER_VALIDITY_CHATGPT.md`](ADAPTER_VALIDITY_CHATGPT.md). It is live only once its worker switch is turned on under its own authorisation (D-061).
+
+Results are never pooled across surfaces:
+
+- each surface keeps its own denominator and uncertainty;
+- one appears beside another only as a separate, labelled result;
+- no score is combined across them;
+- together they do not represent every AI tool or buyer.
 
 Every external result must identify:
 
@@ -95,9 +126,15 @@ Every external result must identify:
 
 ### Required limitation
 
-Every Perplexity-only client artifact must state:
+Every client artifact that includes Perplexity Sonar must state:
 
 > This is a directional measurement of Perplexity Sonar under the recorded conditions. It does not represent what every buyer sees across ChatGPT, Gemini, Copilot, Claude, or all AI systems.
+
+Every client artifact that includes ChatGPT must state:
+
+> This is a directional measurement of controlled OpenAI API responses with web search (shown as "ChatGPT") under the recorded conditions. It is not what users of the ChatGPT app see, and it does not represent every AI system.
+
+An artifact that includes both surfaces states each sentence with its own surface's results. It also says that its results show what these engines answered and do not represent every AI tool or every buyer (the pilot report's wording, D-055 item 8).
 
 ### Adding another surface
 
@@ -360,7 +397,17 @@ Every intervention brief must state:
 
 Sources shown to a customer are read by fixed, versioned rules from each run's stored provider response, after it re-hashes to its recorded SHA-256. They are not taken from the analysis model's reading of the answer.
 
-- **Cited:** the answer points at the source with a numbered reference.
+**Rules by provider** (version 1.3), chosen by the protocol's provider and never guessed from the body:
+
+- **`provider-sources/1`:** Perplexity (D-044).
+- **`openai-responses-sources/1`:** ChatGPT (D-056 item 7, approved by D-059 item 6).
+  - Only a completed response is read.
+  - A source is cited when the answer links to it (a URL citation), and retrieved only when the engine's web search returned it and the answer does not link to it.
+  - Two URLs are compared after removing OpenAI's `utm_source=openai` tag, and nothing else.
+
+The report names the rule each question's sources were read under.
+
+- **Cited:** the answer points at the source, with a numbered reference (Perplexity) or a link (ChatGPT).
 - **Retrieved only:** the provider returned the source and the answer does not point at it.
 - A reference that matches no returned source is reported, never turned into a source.
 - A run without a verified source list is shown as unavailable and is never counted as "not cited".

@@ -51,7 +51,7 @@ Use the dated decisions to resolve old assumptions and terminology. If a require
 1. A fixed three-run sample is not an external client measurement.
 2. Sampling is configurable by approved protocol and bounded by hard run/spend limits.
 3. `won`, `partial`, and `lost` are not active client verdicts.
-4. Perplexity Sonar is a directional V1 surface, not “all AI.”
+4. Perplexity Sonar and ChatGPT (from its authorised switch-on, D-061) are each a directional V1 surface, reported separately and never combined, not “all AI.”
 5. Every paid call requires approval, admission, and reservation before execution.
 6. Dashboard, short report, full report, export, and Outcome Card use one canonical evidence contract.
 7. Prompt-scoped claims require prompt-scoped supporting run IDs.
@@ -63,7 +63,7 @@ Use the dated decisions to resolve old assumptions and terminology. If a require
 
 ## 3.1 Existing foundations you must assess before estimating
 
-Current `main` already contains a manual scan engine, a Perplexity adapter, snapshot request and founder approval routes, **54 migrations (`0001` through `0054`)**, report delivery fencing, a database-backed worker with claim, lease, fencing, idempotency and recovery logic, and the M1-M5 technical tranches merged by PR #12.
+Current `main` already contains a manual scan engine, a Perplexity adapter, snapshot request and founder approval routes, **54 migrations (`0001` through `0054`)** when this was written (95 on the ChatGPT phase B branch on 2026-11-18, [`CURRENT_STATUS.md`](CURRENT_STATUS.md) §37), report delivery fencing, a database-backed worker with claim, lease, fencing, idempotency and recovery logic, and the M1-M5 technical tranches merged by PR #12.
 
 **The presence of the M1-M5 tranches is not acceptance of milestones M1-M5.** Those tranches deliver SQL/RPC/adapter foundations with schema and runtime contracts. They do not establish a running M5 worker process, provider execution through that worker, alert dispatch or supervised deployment, and no milestone is complete until each of its acceptance criteria in [`ENGINEERING_PLAN.md`](ENGINEERING_PLAN.md) section 4 has been audited individually. Audit them; do not presume them. See [`CURRENT_STATUS.md` section 13](CURRENT_STATUS.md#13-post-pr-12-canonical-repository-status).
 

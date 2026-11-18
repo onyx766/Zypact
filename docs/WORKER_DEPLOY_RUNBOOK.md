@@ -23,7 +23,9 @@ declares. Nothing in the repository compared those two before now.
 It does **not** grant new authorisation. `WORKER_EXECUTION_MODE = "live"` was
 authorised by D-034 and is already committed; the bounds were set by D-036 and
 are already committed. A deploy only makes the deployed machine match what `main`
-already says.
+already says. (2026-11-18: D-061 adds the lease, readiness and ChatGPT-timeout
+values and raises the runtime ceiling, as the founder approved under D-059. The
+ChatGPT switch stays `"false"`; turning it on is §6a, under its own authorisation.)
 
 It does not, by itself, spend. Spending requires a *started* machine that finds a
 claimable job. `WORKER_EXIT_AFTER_CLAIMED_JOB = "true"` with `[[restart]] policy =
@@ -107,7 +109,8 @@ npm run test:m0-worker-hosting-contract
 
 The contract must pass. Note what it proves: it is a **static check of the
 committed files** against the inert template. It passed on `main` at `4440ddc`
-with 141/141, static half only. It says nothing about any deployed machine — that
+with 141/141, static half only (170/170, static half only, on the ChatGPT phase B
+branch on 2026-11-18). It says nothing about any deployed machine — that
 is the gap §6 step 5 closes.
 
 Secrets are expected to be set already. The Supabase URL and project ref, the
@@ -203,10 +206,16 @@ Four things to check in step 5, in order:
 | a | Machine ID is unchanged from step 2 | Go to §7 |
 | b | State is `stopped` | `flyctl machine stop <ID> -a zypact-protocol-worker`, then record the observation in §3 |
 | c | In the machine's env: `WORKER_MAX_SLOTS_PER_CLAIM` is `7`, `WORKER_MAX_RUNTIME_SECONDS` is `2400`, `WORKER_LEASE_SECONDS` is `330`, `WORKER_READY_STALE_MS` is `240000` and `WORKER_CHATGPT_TIMEOUT_MS` is `290000` (D-036, D-061) | The deploy did not land. Do not start the machine. `1` slot cannot complete a 5-run plan (D-036), and a machine without the D-061 values must not have its ChatGPT switch turned on |
-| d | `WORKER_CHATGPT_ENABLED` is exactly `false` in the machine's env (D-056), until the separate step that turns it on through its own pull request and deploy (D-061) | Stop. Do not start the machine; redeploy from the release commit. With anything but `"true"` the engine is off, but a value other than `false` means the config is not the committed one |
+| d | `WORKER_CHATGPT_ENABLED` is exactly `false` in the machine's env (D-056), until the separate step that turns it on through its own pull request and deploy (D-061, §6a) | Stop. Do not start the machine; redeploy from the release commit. With anything but `"true"` the engine is off, but a value other than `false` means the config is not the committed one |
 
 Check (c) is the only direct evidence that D-036 and D-061 took effect. Record the
 values you observed, not the values you expected.
+
+**2026-11-18 *(engineer)*:** `flyctl machine status --json` lists the `[env]`
+values, not secrets. Confirm with `flyctl secrets list -a zypact-protocol-worker`,
+which prints names only, that none of the names in checks (c) and (d) is also
+set as a secret. A same-named secret could put a different value in force than
+the one check (c) reads.
 
 **Provenance (PR-2).** Record the commit passed in step 4b and the digest
 `npm run verify:worker-provenance -- <sha>` prints for it. The image reports
@@ -225,6 +234,113 @@ independent and **mandatory before production activation**. A live worker
 refuses to start (`worker_provenance_refused`, exit 78) unless provenance is
 `recorded`, so live execution is only possible from an image built with
 `GIT_SHA`; it cannot run from a plain checkout.
+
+## 6a. Turning ChatGPT on (D-061)
+
+This runbook does not authorise it. Each step below is its own production step
+([`PILOT_PRODUCTION_PLAN.md`](PILOT_PRODUCTION_PLAN.md) Part C). They come after
+a §6 deploy has shipped D-061's values with the switch `"false"`.
+
+**Before the switch-on deploy:**
+
+- migration `20261109180000` (ChatGPT measurement) is applied. Without it the
+  worker refuses to start with the switch on (below);
+- check (c) of the last §6 deploy recorded D-061's values;
+- `OPENAI_PROBE_API_KEY` is set as a worker secret (§5), and is not on the web
+  host;
+- `WORKER_CHATGPT_ENABLED = "true"` is in the Fly file through its own merged
+  pull request, and the deploy names that commit;
+- the queue rule of §3 holds. Until the founder confirms D-060 item 5, that is
+  an empty queue; once confirmed, no live lease and no pending run request (§6
+  step 3). Pilot jobs are queued by then, and a queued job stays queued until
+  it is run, so an empty queue means running or closing every queued job first.
+
+**Deploy** as §6 steps 1 to 5. Check (d) then expects `true`, not `false`;
+everything else in step 5 is unchanged.
+
+**What the worker refuses at startup with the switch on.** Each refusal comes
+before any claim, reservation or provider call. It logs one closed line and
+exits 78 (`EX_CONFIG`), like every other startup refusal.
+
+| Event | When |
+|---|---|
+| `worker_configuration_rejected` | `OPENAI_PROBE_API_KEY` or `WORKER_CHATGPT_TIMEOUT_MS` is missing; the ChatGPT timeout plus the grace is not below the lease; one slot, or the whole claim (slots × (max(provider timeout, ChatGPT timeout) + provider timeout) + grace), is not below the runtime; or the readiness window is not above lease / 3. The committed values pass: 2,355 s < 2,400 s, 300 s < 330 s, 240 s > 110 s. The line names variables, never values |
+| `worker_chatgpt_schema_refused` | The connected database cannot record a ChatGPT attempt. `reason` is `capabilities_unreadable` when `protocol_worker_capabilities()` is missing or its read failed (a database without `20261109180000`), or `capability_missing` when its reply does not list `live_openai_chatgpt`. Nothing is claimed. Apply the migration, or set the switch back to `"false"` |
+| `worker_provenance_refused` | As for every live start (§6, provenance) |
+
+So a deploy-time start (§3) either refuses at once or, with no run request
+pending, claims nothing (D-052).
+
+**Then the web host's gate.** Set `ZYPACT_PILOT_CHATGPT_ENABLED` to `true` only
+after check (d) shows `true` on the machine. It goes on the web host and never
+on the worker, and the web app is then redeployed, as for the other web-host
+values (PILOT_PRODUCTION_PLAN step 8).
+
+Until it is on, the pilot console shows ChatGPT as "Not connected", and Add,
+Run and Retry on ChatGPT refuse (409) before anything is read, reserved or
+started. Resolving a held measurement and retiring a question stay available
+either way, but Retire refuses a question whose ChatGPT measurement has a run that has not finished; and while no measurement of the question has stopped for good, it is refused anyway (one that could be retried says ChatGPT must be turned back on first) (see *Turning ChatGPT off*).
+
+**Turning ChatGPT off, in this order** (the same steps as migration
+`20261109180000`'s header):
+
+1. Run the read-only query below; each count should be 0. A run in flight
+   finishes on its own. Finish an unfinished ChatGPT run first, with Run: a
+   Retry approved but not yet run, or a run whose worker stopped part-way. With
+   ChatGPT off it can be neither run nor retired, and it holds the pilot's
+   report build. A run held for review can be resolved at any time, ChatGPT on
+   or off.
+2. Unset `ZYPACT_PILOT_CHATGPT_ENABLED` on the web host and redeploy the web
+   app. No ChatGPT Run, Retry or add can be pressed after that.
+3. Run the query again until `chatgpt_runs_pending` and
+   `chatgpt_runs_in_flight` are both 0. A Run pressed just before step 2 is
+   claimed and finishes under the worker that is still on.
+4. Only then set the switch back to `"false"` through a pull request and
+   redeploy the worker under §6, with check (d) `false`. To stop at once, stop
+   the machine (§8); a ChatGPT run it was making is then left unfinished until
+   ChatGPT is on again.
+
+```sql
+select
+  (select count(*)
+     from public.protocol_job_run_requests r
+     join public.protocol_execution_jobs j on j.id = r.job_id
+     join public.protocols p on p.id = j.protocol_id
+    where p.provider = 'openai_chatgpt'
+      and r.status = 'pending' and r.expires_at > now()) as chatgpt_runs_pending,
+  (select count(*)
+     from public.protocol_execution_jobs j
+     join public.protocols p on p.id = j.protocol_id
+    where p.provider = 'openai_chatgpt'
+      and j.status in ('claimed', 'running')
+      and j.lease_expires_at > now()) as chatgpt_runs_in_flight,
+  (select count(*)
+     from public.protocol_execution_jobs j
+     join public.protocols p on p.id = j.protocol_id
+    where p.provider = 'openai_chatgpt'
+      and j.status <> 'needs_review'
+      and not coalesce(j.status in ('claimed', 'running') and j.lease_expires_at > now(), false)
+      and (j.status in ('claimed', 'running')
+           or exists (select 1 from public.protocol_attempts a
+                       where a.protocol_id = p.id
+                         and a.status in ('reserved', 'in_progress')))) as chatgpt_runs_unfinished;
+```
+
+The gate goes off first *(engineer)*. A Run that reaches a worker whose switch
+is off closes a ChatGPT job that has no attempt yet as failed
+(`PROVIDER_ADAPTER_NOT_ENABLED`, in `lib/protocol-worker/worker.ts`), and Retry
+does not take that failure, so that measurement is lost for good. With the
+switch off, the worker refuses a ChatGPT protocol before admission, so nothing
+is reserved or sent.
+
+With ChatGPT off, a ChatGPT measurement that stopped for good (abandoned, or
+failed in a way Retry does not take) is retired with its question, and one held
+for review can still be resolved. One that is only waiting for Run, or that
+failed at the provider and could still be retried, can be neither run nor
+retried until ChatGPT is on again, and does not by itself let its question be retired: Retire then refuses it (for one that could be retried or has an unfinished run, it says ChatGPT must be turned back on first). Once another measurement of the question has stopped for good, the question can be retired, and a ChatGPT measurement still queued then stays queued.
+
+Migration `20261109180000` stays applied. Once a ChatGPT row exists, its
+recovery is forward only (its header, D-061).
 
 ## 7. If the machine ID changed
 
@@ -264,6 +380,6 @@ Either is sufficient, and neither requires more than it says:
 Append one row per production deploy. An unrecorded deploy leaves the next reader
 unable to tell what the running machine carries.
 
-| Date | Commit | Machine ID before → after | State after | Slots / runtime observed | Notes |
+| Date | Commit | Machine ID before → after | State after | Values observed, checks (c) and (d) | Notes |
 |------|--------|---------------------------|-------------|--------------------------|-------|
-| _(none yet)_ | | | | | D-036 not yet in effect |
+| _(none yet)_ | | | | | D-036 and D-061 not yet in effect |

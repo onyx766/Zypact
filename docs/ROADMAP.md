@@ -40,7 +40,7 @@ Zypact must run three separate lanes without treating one lane's progress as pro
 - active documents use one product definition and terminology;
 - fixed three-run client measurement is removed;
 - causal/revenue guarantees are removed;
-- Perplexity is labeled as a directional surface;
+- Perplexity is labeled as a directional surface (2026-11-18, D-061: ChatGPT, the second pilot engine, is labeled the same way, and no score is combined across engines);
 - automatic delivery, review, and blocked states agree;
 - future roadmap phases are clearly non-binding;
 - no code, migrations, secrets, images, or prospect outputs appear in the pull request.
@@ -210,7 +210,7 @@ Do not add broad model coverage, CRM integrations, autonomous publishing, predic
 
 If the method, customers, and economics validate:
 
-- multi-surface adapters with surface-specific validity;
+- multi-surface adapters with surface-specific validity (2026-11-18: a second surface, ChatGPT, is built for the paid pilot under its own validity note and switch, D-050, D-053 and D-061; coverage beyond the two pilot engines stays here);
 - treatment/control planning tools;
 - privacy-safe CRM/call question intake;
 - partner verification workflows;

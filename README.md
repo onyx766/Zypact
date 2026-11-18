@@ -34,7 +34,7 @@ Every engineer starts with [`docs/ENGINEER_START_HERE.md`](docs/ENGINEER_START_H
 
 ## Current V1 boundary
 
-- Initial live surface: **Perplexity Sonar**, labeled as a directional proxy.
+- Live surfaces: **Perplexity Sonar**, and **ChatGPT** (the OpenAI Responses API with web search) only once its worker switch is turned on under its own authorisation (D-053, D-061). Each is labeled as its own directional proxy; nothing is combined across them.
 - External sampling: approved, configurable, and bounded; no fixed three-run client score.
 - Paid calls: explicit question/protocol approval, admission control, and reservation before each attempt.
 - Evidence: exact provider request/response plus audit metadata, hashes, and database-enforced immutability.

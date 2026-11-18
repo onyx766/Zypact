@@ -340,6 +340,16 @@ a.zpa-nav-item:hover {
   text-transform: uppercase;
 }
 
+/* The public site's global h1/h2 rules (app/globals.css) set a dark ink
+   colour, a large size and a max width for the light landing page. Inside
+   the console they made every heading near-invisible on the dark theme, so
+   headings take the console's own text colour and no width cap here.
+   The customer report preview (.zpr-root) keeps its own heading rules. */
+.zpa-root :is(h1, h2, h3):not(.zpr-root *) {
+  max-width: none;
+  color: var(--zpa-text);
+}
+
 .zpa-title {
   margin: 0;
   font-size: clamp(21px, 3vh, 34px);
@@ -557,6 +567,40 @@ a.zpa-nav-item:hover {
   overflow: auto;
   scrollbar-width: thin;
   scrollbar-color: #2e3238 transparent;
+}
+
+/* "flow" pages (AdminShell layout="flow"): the page scrolls as a whole, and
+   every section keeps its natural height. Without this the stacked cards
+   shrank to fit one screen, and the questions table (which carries the Run
+   buttons) collapsed to a thin line. A wide table still scrolls sideways. */
+.zpa-content-flow > * {
+  flex: 0 0 auto;
+}
+
+.zpa-content-flow .zpa-card {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+/* Text sections get breathing room; the questions table card keeps its
+   edge-to-edge rows. */
+.zpa-content-flow .zpa-card:not(.zpa-table-scroll) {
+  gap: 10px;
+  padding: var(--zpa-pad-y) var(--zpa-pad-x);
+  overflow: visible;
+}
+
+.zpa-content-flow .zpa-card:not(.zpa-table-scroll) .zpa-title {
+  font-size: clamp(17px, 2.2vh, 22px);
+}
+
+.zpa-content-flow .zpa-card p {
+  margin: 0;
+}
+
+.zpa-content-flow .zpa-table-scroll {
+  overflow-x: auto;
+  overflow-y: visible;
 }
 
 .zpa-table-scroll::-webkit-scrollbar {

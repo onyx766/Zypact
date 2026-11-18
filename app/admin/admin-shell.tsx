@@ -84,11 +84,19 @@ export function AdminShell({
   email,
   active,
   health,
+  layout = "fill",
   children,
 }: {
   email: string | null;
   active: AdminNavKey;
   health: AdminHealth;
+  /**
+   * "fill" (the default): one table fills the screen and scrolls inside
+   * itself, as on the list pages. "flow": a long page of stacked sections
+   * that scrolls as a whole, so no section is squeezed to fit the screen
+   * (the pilot pages).
+   */
+  layout?: "fill" | "flow";
   children: ReactNode;
 }) {
   return (
@@ -152,7 +160,7 @@ export function AdminShell({
           </a>
         </header>
 
-        <div className="zpa-content">{children}</div>
+        <div className={layout === "flow" ? "zpa-content zpa-content-flow" : "zpa-content"}>{children}</div>
       </div>
     </div>
   );

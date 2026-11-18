@@ -241,6 +241,9 @@ export function mapRpcError(
 
   const exact = RPC_ERROR_MAP[message];
   if (exact) return { ...exact, error: message };
+  // D-062 — a generic M7 call on a pilot question meets the pilot retest's guards.
+  const guard = Object.hasOwn(PILOT_GUARD_RPC_ERRORS, message) ? PILOT_GUARD_RPC_ERRORS[message] : undefined;
+  if (guard) return { ...guard, error: message };
 
   for (const [prefix, entry] of PREFIX_MAP) {
     if (message.startsWith(prefix)) {
@@ -366,4 +369,95 @@ function formatDay(iso: string): string {
     year: "numeric",
     timeZone: "UTC",
   });
+}
+
+// ---------------------------------------------------------------------------
+// D-062 — the pilot retest's guards (20261109190000)
+// ---------------------------------------------------------------------------
+
+/**
+ * The messages 20261109190000 raises from its guards, and the step failures
+ * of its group functions. Kept apart from RPC_ERROR_MAP on purpose: that map
+ * is proved complete and not stale against 0071-0078 only
+ * (scripts/test-intervention-rpc-errors.ts), and these come from a later
+ * migration. scripts/test-intervention-rpc-errors.ts proves this one against
+ * 20261109190000 in both directions.
+ *
+ * The first five can reach a founder through the generic M7 screens (an
+ * intervention of a pilot question is managed on its pilot page); the rest
+ * through a pilot retest step. None is ever a 500: each is a rule.
+ */
+export const PILOT_GUARD_RPC_ERRORS: Readonly<Record<string, Entry>> = {
+  pilot_intervention_outside_retest: {
+    status: 409,
+    message: "This intervention belongs to a pilot question's registered change. Manage it on its pilot page.",
+  },
+  pilot_early_retest_not_allowed: {
+    status: 409,
+    message: "A pilot retest never starts before its waiting period ends.",
+  },
+  pilot_deviation_not_allowed: {
+    status: 409,
+    message: "A pilot retest records no deviation. Log a departure from the registered change as a note on the pilot page.",
+  },
+  pilot_retest_outside_group: {
+    status: 409,
+    message: "A retest of a pilot question is prepared only from its pilot page, once its waiting period has ended.",
+  },
+  pilot_outcome_card_lives_in_the_pilot_report: {
+    status: 409,
+    message: "A pilot question's Outcome Card lives in the pilot report. It is never built, saved or sent on its own.",
+  },
+  pilot_retest_slot_inconsistent: {
+    status: 409,
+    message: "A retest slot did not match its registered change, so nothing was changed. Tell the engineer.",
+  },
+  pilot_retests_are_append_only: {
+    status: 409,
+    message: "A registered change is never deleted.",
+  },
+  pilot_retest_rows_are_append_only: {
+    status: 409,
+    message: "A registered change's members, notes and steps are never changed or deleted.",
+  },
+  pilot_retest_registration_is_immutable: {
+    status: 409,
+    message: "What was registered for a change never changes.",
+  },
+  pilot_retest_lifecycle_is_immutable: {
+    status: 409,
+    message: "A change's go-live, preparation and withdrawal are each recorded once and never changed.",
+  },
+};
+
+/**
+ * A group step whose wrapped M7 call gave an unexpected answer raises
+ * `pilot_retest_<step>_failed[:code]` and rolls back whole. The code after
+ * the colon is never echoed.
+ */
+export const PILOT_RETEST_STEP_FAILED = /^pilot_retest_(register|confirm|prepare|abandon|requeue)_failed(:[a-z_]+)?$/;
+const PILOT_RETEST_STEP_FAILED_ENTRY: MappedRpcFailure = {
+  status: 500,
+  error: "pilot_retest_step_failed",
+  message: "The step could not finish and nothing was changed. Try again; if it repeats, tell the engineer.",
+};
+
+/**
+ * Map an error a pilot retest step (or a generic M7 call on a pilot
+ * question) raised. A guard is a 409 in words, a step failure a 500 with no
+ * detail, malformed input (22023) a 400, and anything else the generic
+ * M7 mapping (which never echoes the database message).
+ */
+export function mapPilotGuardError(
+  err: RpcErrorLike,
+  onUnmapped?: (detail: { code: string | null; message: string | null }) => void
+): MappedRpcFailure {
+  const message = err.message?.trim() ?? "";
+  const exact = Object.hasOwn(PILOT_GUARD_RPC_ERRORS, message) ? PILOT_GUARD_RPC_ERRORS[message] : undefined;
+  if (exact) return { ...exact, error: message };
+  if (PILOT_RETEST_STEP_FAILED.test(message)) return { ...PILOT_RETEST_STEP_FAILED_ENTRY };
+  if (err.code === "22023" && /^invalid_[a-z_]+_args$/.test(message)) {
+    return { status: 400, error: message, message: "The request was incomplete. Reload the page and try again." };
+  }
+  return mapRpcError(err, onUnmapped);
 }

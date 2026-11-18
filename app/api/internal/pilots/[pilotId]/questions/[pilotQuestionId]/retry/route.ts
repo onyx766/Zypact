@@ -4,7 +4,8 @@ import { requireFounderForRoute } from "@/lib/auth/founder";
 import { getDb } from "@/lib/db";
 import type { RetryFailedProtocolJobOutcome } from "@/lib/db/types";
 import { pilotEngineLabel, pilotEngineNotOnQuestionText } from "@/lib/pilots/copy";
-import { pilotChatGptEnabled, pilotEngineFromBody } from "@/lib/pilots/engines";
+import { pilotChatGptEnabled, pilotEngineFromBody, pilotPhaseFromBody, pilotRetestEnabled } from "@/lib/pilots/engines";
+import { PILOT_RETEST_NOT_ENABLED, RETEST_SLOT_MISSING_TEXT } from "@/lib/pilots/retest-copy";
 import { pilotIsOver, pilotNotStarted, resolvePilotQuestionTarget } from "@/lib/pilots/reads";
 import { todayUtc, UUID_PATTERN } from "@/lib/pilots/validate";
 import { getReportServiceClient } from "@/lib/reports/service-client";
@@ -51,6 +52,11 @@ const REFUSAL_TEXT: Record<Exclude<RetryFailedProtocolJobOutcome, "APPROVED">, s
  * before). An engine outside the closed set is refused, and a ChatGPT retry
  * is refused unless the web host's gate (ZYPACT_PILOT_CHATGPT_ENABLED) is
  * exactly "true", before anything is read or reserved.
+ *
+ * D-062 — the body may name the phase (`phase`, absent: the baseline). A
+ * retest Retry is refused unless the retest gate (ZYPACT_PILOT_RETEST_ENABLED)
+ * is exactly "true", before anything is read or reserved, and then reserves
+ * one retry of that question's retest on that engine.
  */
 export async function POST(
   request: Request,
@@ -92,9 +98,18 @@ export async function POST(
     return NextResponse.json({ ok: false, error: choice.error }, { status: choice.status });
   }
   const engine = choice.engine;
+  const phaseChoice = pilotPhaseFromBody(body, {
+    retestEnabled: pilotRetestEnabled(),
+    gated: true,
+    notEnabledText: PILOT_RETEST_NOT_ENABLED,
+  });
+  if (!phaseChoice.ok) {
+    return NextResponse.json({ ok: false, error: phaseChoice.error }, { status: phaseChoice.status });
+  }
+  const phase = phaseChoice.phase;
 
   const client = getReportServiceClient();
-  const target = await resolvePilotQuestionTarget(client, pilotId, pilotQuestionId, engine);
+  const target = await resolvePilotQuestionTarget(client, pilotId, pilotQuestionId, engine, phase);
   if (!target) {
     return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
   }
@@ -110,9 +125,12 @@ export async function POST(
       { status: 409 }
     );
   }
-  // D-061 — the question has no measurement on the engine asked for.
+  // D-061 — the question has no measurement on the engine asked for (D-062: or no retest).
   if (target.protocolId === null) {
-    return NextResponse.json({ ok: false, error: pilotEngineNotOnQuestionText(engine) }, { status: 409 });
+    return NextResponse.json(
+      { ok: false, error: phase === "retest" ? RETEST_SLOT_MISSING_TEXT : pilotEngineNotOnQuestionText(engine) },
+      { status: 409 }
+    );
   }
   const job = target.job;
   if (!job) {
@@ -149,6 +167,7 @@ export async function POST(
       pilotId,
       pilotQuestionId,
       engine,
+      phase,
       jobId: job.id,
       outcome: result.outcome,
       denialCode: result.denialCode,

@@ -9,7 +9,10 @@
  * an equal-weight aggregate shown beside every per-question result, never in
  * place of them, and never combined across engines.
  */
+import type { OutcomeStatus } from "@/lib/reports/compare-protocols";
+import { NON_CAUSALITY_FOOTER } from "@/lib/reports/outcome-card-types";
 import type { ProtocolReportPayload } from "@/lib/reports/protocol-report-types";
+import type { OutcomeCardSourceComparison } from "@/lib/source-insights/build-source-insights";
 import type { SourceCategory } from "@/lib/source-insights/source-types";
 
 export const PILOT_REPORT_VERSION = 1 as const;
@@ -98,6 +101,12 @@ export interface PilotReportQuestion {
   retiredOn: string | null;
   /** One entry per engine with a protocol; an engine without one is listed in `engines` as not measured. */
   measurements: PilotReportQuestionEngine[];
+  /**
+   * D-062 (M17) — the registered changes that went live before some of this
+   * question's baseline answers were collected: those answers describe the
+   * engines after the change. Absent on revisions built before D-062.
+   */
+  collectedAfterChange?: { registeredOn: string; liveOn: string }[];
 }
 
 export interface PilotReportEngineSummary {
@@ -236,6 +245,8 @@ export interface PilotEvidenceEntry {
   protocolId: string;
   status: string;
   rawResponseSha256: string | null;
+  /** D-062 — "retest" for an attempt of a retest slot; absent for a baseline attempt. */
+  phase?: "baseline" | "retest";
 }
 
 /**
@@ -300,6 +311,183 @@ export interface PilotReportPayload {
    * before D-057, which had none.
    */
   actions?: PilotReportAction[];
+  /**
+   * D-062 — every registered change of the pilot (abandoned ones included),
+   * as stored. Absent on revisions built before D-062.
+   */
+  retests?: PilotReportRetest[];
+  /**
+   * D-062 — one Outcome Card per member whose retest is final with at least
+   * one answer (M1). Absent on revisions built before D-062.
+   */
+  outcomeCards?: PilotOutcomeCard[];
+}
+
+/* ---------------------------------------------------------------- D-062: the retest */
+
+/** A member's state (lib/pilots/retest-rules.ts RETEST_MEMBER_STATES). */
+export type PilotRetestMemberState =
+  | "retest_awaiting_change"
+  | "retest_window_open"
+  | "retest_awaiting_preparation"
+  | "retest_not_run"
+  | "retest_collecting"
+  | "retest_held_for_review"
+  | "retest_stopped_retryable"
+  | "retest_could_not_run"
+  | "retest_measured"
+  | "retest_withdrawn";
+
+export type PilotRetestText = Record<
+  | "changeTitle"
+  | "changeDescription"
+  | "changeTarget"
+  | "changeOwner"
+  | "hypothesis"
+  | "expectedMechanism"
+  | "alternativeExplanations"
+  | "openQuestions"
+  | "decisionThreshold"
+  | "confoundersToMonitor",
+  string
+>;
+
+export interface PilotReportRetestMember {
+  memberId: string;
+  interventionId: string;
+  pilotQuestionId: string;
+  ordinal: number;
+  engine: PilotEngineKey;
+  baselineProtocolId: string;
+  retestProtocolId: string | null;
+  state: PilotRetestMemberState;
+  counts: PilotAttemptCounts | null;
+  execution: PilotExecutionWindow | null;
+}
+
+export interface PilotReportRetestNote {
+  id: string;
+  notedOn: string;
+  kind: string;
+  /** The stored text, or PILOT_RETEST_WITHHELD_TEXT when `withheld`. */
+  text: string;
+  withheld: boolean;
+  correctsNoteId: string | null;
+  writtenAt: string;
+}
+
+/**
+ * One registered change (a pilot_retests row), exactly as stored: the save
+ * compares every field below with the stored group (20261109190000, check 6).
+ * The customer's approval reference is never here (M10).
+ */
+export interface PilotReportRetest {
+  retestId: string;
+  sequence: number;
+  state: "registered" | "implemented" | "prepared" | "abandoned";
+  registeredOn: string;
+  customerApprovedOn: string;
+  /** Each value as stored, or PILOT_RETEST_WITHHELD_TEXT for a field in `withheldFields` (M4). */
+  text: PilotRetestText;
+  withheldFields: string[];
+  actionType: string;
+  thresholdBelowLimit: boolean;
+  outcomeRule: string;
+  observationDays: number;
+  implementBy: string;
+  sourceActions: { versionId: string; title: string | null; withdrawn: boolean }[];
+  /**
+   * D-062 (engineer) — values above kept exactly as stored, because the save
+   * compares them, but left out of the page and the Markdown: the build's
+   * lint found wording this report may not use in the evidence link or in a
+   * source action's title (each also a needs-review reason). The save does
+   * not read this key. Absent means nothing is left out.
+   */
+  notShown?: { evidenceUrl: boolean; sourceActionVersionIds: string[] };
+  implementation: {
+    recordedAt: string;
+    wentLiveOn: string;
+    evidenceUrl: string | null;
+    artifactSha256: string | null;
+    implementedAsRegistered: boolean;
+  } | null;
+  windowOpensAt: string | null;
+  windowClosesAt: string | null;
+  prepared: boolean;
+  abandoned: { abandonedOn: string; wasLive: boolean } | null;
+  notes: PilotReportRetestNote[];
+  members: PilotReportRetestMember[];
+}
+
+/** One phase of a pilot Outcome Card. */
+export interface PilotOutcomeCardPhase {
+  protocolId: string;
+  numerator: number;
+  denominator: number;
+  planned: number;
+  interval: { low: number; high: number } | null;
+  counts: PilotAttemptCounts;
+  execution: PilotExecutionWindow;
+  /** Each completed answer with a stored response: its run number and the first 12 of its SHA-256. */
+  answers: { number: number; sha12: string }[];
+}
+
+/**
+ * D-062 — one question on one engine, before and after one registered
+ * change. Built only from a final retest with at least one answer (M1). It
+ * carries no free text from the comparison, only reason codes (M15), and
+ * nothing in it is ever added to another card (METHODOLOGY §10).
+ */
+export interface PilotOutcomeCard {
+  memberId: string;
+  interventionId: string;
+  retestId: string;
+  pilotQuestionId: string;
+  ordinal: number;
+  engine: PilotEngineKey;
+  baselineProtocolId: string;
+  retestProtocolId: string;
+  status: OutcomeStatus;
+  footer: typeof NON_CAUSALITY_FOOTER;
+  question: { versionNumber: number; hash: string };
+  baseline: PilotOutcomeCardPhase;
+  retest: PilotOutcomeCardPhase;
+  comparison: {
+    delta: number | null;
+    intervalLow: number | null;
+    intervalHigh: number | null;
+    minimumUsefulChange: number;
+    /**
+     * From the two phases' actual readable answers (M5). Null when the rule
+     * can give this card no status from them (engineer): a phase below the
+     * readable-answer floor, or a comparison that stopped early (another
+     * question or setup, not measured the same way). The card then says it
+     * cannot show any change.
+     */
+    smallestDetectableChange: number | null;
+    /** Each reason's prefix before ": ", never the text after it (M15). */
+    reasonCodes: string[];
+  };
+  detectableChangeAtPlan: number | null;
+  /** Fewer readable retest answers than planned (M3). */
+  shortRetest: boolean;
+  measurement: {
+    verdict: "compatible" | "incompatible" | "unverifiable";
+    sameAsBaseline: boolean;
+    /** A closed set of fingerprint field names (measurement-fingerprint.ts), put into words on the page. */
+    differences: string[];
+  };
+  conditions: {
+    provider: string;
+    surface: string;
+    model: string;
+    answerModes: string[];
+    methodologyVersion: string;
+    analyzerVersion: string | null;
+  };
+  sourceComparison: OutcomeCardSourceComparison | null;
+  /** Notes of the group written at or after this retest's first answer (M14). */
+  noteIdsAfterFirstAnswer: string[];
 }
 
 /** What the database checks the payload against before saving it. */
@@ -308,7 +496,17 @@ export interface PilotReportManifest {
   attempts: { id: string; protocolId: string; rawResponseSha256: string | null }[];
   /** D-057 — the action versions the payload shows; the database checks each is its action's latest reviewed one. */
   actionVersions: string[];
+  /** D-062 — every group of the pilot, with its state and members (20261109190000). Absent before D-062. */
+  retests?: { id: string; state: "registered" | "implemented" | "prepared" | "abandoned"; memberIds: string[] }[];
+  /** D-062 — every note id of the pilot's groups. */
+  retestNotes?: string[];
+  /** D-062 — the job of every retest slot, as read. */
+  retestJobs?: { jobId: string; protocolId: string; status: string; reviewResolution: string | null }[];
+  /** D-062 — the cards the payload shows, with every attempt of each retest. */
+  retestCards?: { memberId: string; status: OutcomeStatus; retestAttemptIds: string[] }[];
 }
+
+const OUTCOME_STATUSES: readonly string[] = ["increase_observed", "decrease_observed", "no_clear_change", "inconclusive"];
 
 export function isPilotReportPayload(value: unknown): value is PilotReportPayload {
   if (typeof value !== "object" || value === null) return false;
@@ -320,6 +518,17 @@ export function isPilotReportPayload(value: unknown): value is PilotReportPayloa
   }
   if (typeof c.dependenceNote !== "string" || typeof c.causalLimit !== "string") return false;
   if (c.actions !== undefined && !Array.isArray(c.actions)) return false;
+  // D-062 — absent on revisions built before it; when present, lists, and
+  // every card carries the footer constant and one of the four statuses (M15).
+  if (c.retests !== undefined && !Array.isArray(c.retests)) return false;
+  if (c.outcomeCards !== undefined) {
+    if (!Array.isArray(c.outcomeCards)) return false;
+    for (const card of c.outcomeCards as unknown[]) {
+      if (typeof card !== "object" || card === null) return false;
+      const k = card as Record<string, unknown>;
+      if (k.footer !== NON_CAUSALITY_FOOTER || typeof k.status !== "string" || !OUTCOME_STATUSES.includes(k.status)) return false;
+    }
+  }
   return ["engines", "conditions", "questions", "brand", "competitors", "sources", "evidenceIndex", "limitations", "methodNotes"].every(
     (key) => Array.isArray(c[key])
   );

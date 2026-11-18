@@ -379,7 +379,8 @@ const aDone = (async () => {
   const iButton = pv.indexOf("<SharePilotReportButton");
   const iElse = iButton < 0 ? -1 : pv.indexOf(") : (", iButton);
   const STATUS_CALL =
-    "{previewStatusWords({ sharedAt: revision.sharedAt, replaced: revision.replaced, integrityStatus: revision.integrityStatus, isLatest: revision.isLatest, stale, })}";
+    // D-062 — the preview also says when it is a retest, not an action, that made the revision out of date.
+    "{previewStatusWords({ sharedAt: revision.sharedAt, replaced: revision.replaced, integrityStatus: revision.integrityStatus, isLatest: revision.isLatest, stale, staleWords: actionsStale ? undefined : RETEST_OUT_OF_DATE_WORDS, })}";
   const iStatus = pv.indexOf(STATUS_CALL);
   check("A8 the preview's status line: a replaced revision says its link no longer opens, a shared one that its link is on the pilot page; blocked, older and out-of-date ones say why they cannot be shared; it is empty exactly when Share is offered; the preview shows it, with the revision's own fields, where Share is not offered",
     previewStatusWords({ ...BASE, sharedAt: "s", replaced: true, isLatest: false }) === REPLACED_REVISION_PREVIEW_WORDS &&
@@ -388,6 +389,7 @@ const aDone = (async () => {
     previewStatusWords({ ...BASE, integrityStatus: "blocked" }) === BLOCKED_REVISION_PREVIEW_WORDS &&
     previewStatusWords({ ...BASE, isLatest: false }) === NOT_LATEST_REVISION_PREVIEW_WORDS &&
     previewStatusWords({ ...BASE, stale: true }) === STALE_REVISION_WORDS &&
+    previewStatusWords({ ...BASE, stale: true, staleWords: "x" }) === "x" &&
     agree.length === 48 && agree.every(Boolean) &&
     /no longer opens/.test(REPLACED_REVISION_PREVIEW_WORDS) && !/no longer opens/.test(SHARED_REVISION_PREVIEW_WORDS) &&
     iShare > 0 && iButton > iShare && iElse > iButton && iStatus > iElse &&

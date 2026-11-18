@@ -176,6 +176,23 @@ export async function processOutcomeCard(
   // this function decides. This early return only avoids doing the rest of
   // the work (reading both phases' full evidence) for a card that could
   // never be saved anyway.
+  // D-062 — a pilot member's Outcome Card lives in the pilot report: never
+  // built, saved or sent here (20261109190000 refuses the card row anyway).
+  const { data: memberRows, error: memberError } = await deps.client
+    .from("pilot_retest_members")
+    .select("intervention_id")
+    .eq("intervention_id", interventionId);
+  if (memberError) throw memberError;
+  if (((memberRows ?? []) as unknown[]).length > 0) {
+    return {
+      ...base,
+      outcome: "intervention_not_ready",
+      integrityStatus: "blocked",
+      integrityReasons: ["This intervention belongs to a pilot question's registered change; its Outcome Card lives in the pilot report."],
+      detail: "A pilot member's Outcome Card lives in the pilot report.",
+    };
+  }
+
   if (interventionRow.status !== "implemented") {
     return {
       ...base,
@@ -608,7 +625,16 @@ export async function findDeliverableInterventions(
 
   if (interventionsError) throw interventionsError;
 
-  const rows = (interventions ?? []) as Array<{ id: string; protocol_id: string }>;
+  const all = (interventions ?? []) as Array<{ id: string; protocol_id: string }>;
+  if (all.length === 0) return [];
+  // D-062 — a pilot member is never delivered here: its card lives in the pilot report.
+  const { data: memberRows, error: membersError } = await client
+    .from("pilot_retest_members")
+    .select("intervention_id")
+    .in("intervention_id", all.map((r) => r.id));
+  if (membersError) throw membersError;
+  const members = new Set(((memberRows ?? []) as Array<Record<string, unknown>>).map((m) => String(m.intervention_id)));
+  const rows = all.filter((r) => !members.has(r.id));
   if (rows.length === 0) return [];
 
   const baselineIds = rows.map((r) => r.protocol_id);

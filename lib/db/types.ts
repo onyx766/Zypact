@@ -1973,6 +1973,265 @@ export interface AddPilotQuestionEngineResult {
   jobId: string | null;
 }
 
+/*
+ * D-062 — the pilot retest (20261109190000): one registered customer change
+ * across 1-5 live pilot questions, each retested on both engines. Six group
+ * steps, each one transaction under the pilot row lock. A refusal is an
+ * outcome; malformed input raises 22023 (`invalid_<function>_args`); an
+ * unexpected answer from a wrapped M7 call raises P0001
+ * `pilot_retest_<step>_failed[:code]` and the whole step rolls back. Nothing
+ * here runs, reserves or spends.
+ */
+
+/** 0071's interventions.action_type values (lib/interventions/types.ts ACTION_TYPES). */
+export type PilotRetestActionType =
+  | "content_published"
+  | "content_updated"
+  | "page_created"
+  | "structured_data_added"
+  | "third_party_listing"
+  | "documentation_updated"
+  | "other";
+
+/** pilot_retest_notes.kind (lib/pilots/retest-rules.ts RETEST_NOTE_KINDS). */
+export type PilotRetestNoteKind =
+  | "engine_change"
+  | "measurement_change"
+  | "competitor_activity"
+  | "customer_change"
+  | "source_change"
+  | "news_or_market_event"
+  | "implementation_issue"
+  | "other_change";
+
+/** D-062 — register_pilot_retest. Every text is trimmed and inside its bounds (pilot_retests CHECKs). */
+export interface RegisterPilotRetestInput {
+  pilotId: string;
+  /** The signed-in founder's user id. */
+  registeredBy: string;
+  /** 1-5 distinct live questions of this pilot. */
+  pilotQuestionIds: string[];
+  changeTitle: string;
+  changeDescription: string;
+  changeTarget: string;
+  changeOwner: string;
+  actionType: PilotRetestActionType;
+  hypothesis: string;
+  expectedMechanism: string;
+  alternativeExplanations: string;
+  openQuestions: string;
+  /** The customer's own words for what would change their next decision (M2). */
+  decisionThreshold: string;
+  /** Whether that change is smaller than the 60 points a retest can show (M2). */
+  thresholdBelowLimit: boolean;
+  confoundersToMonitor: string;
+  /** 7-60 days. */
+  observationDays: number;
+  /** Where the customer's written approval is kept; never shown in a report (M10). */
+  customerApprovalRef: string;
+  /** YYYY-MM-DD, not in the future. */
+  customerApprovedOn: string;
+  /** 0-5 distinct reviewed, current action versions of this pilot. */
+  sourceActionVersionIds: string[];
+  confirmed: boolean;
+  idempotencyKey: string;
+}
+
+export type RegisterPilotRetestOutcome =
+  | "REGISTERED"
+  | "ALREADY_REGISTERED"
+  | "IDEMPOTENCY_KEY_CONFLICT"
+  | "PILOT_NOT_FOUND"
+  | "CONFIRMATION_REQUIRED"
+  | "PILOT_CLOSED"
+  /** A group that is not abandoned exists. */
+  | "RETEST_ALREADY_REGISTERED"
+  /** Two groups exist. */
+  | "RETEST_LIMIT_REACHED"
+  /** Today is after implement_by (the pilot's end, less 7 days, less the waiting period). */
+  | "WINDOW_PAST_PILOT_END"
+  /** Not this pilot's question, or retired. */
+  | "QUESTION_NOT_LIVE"
+  /** A member of an earlier group that went live (M6a). */
+  | "QUESTION_IN_EARLIER_LIVE_CHANGE"
+  | "BASELINE_MISSING"
+  | "BASELINE_PLAN_NOT_FIVE_RUNS"
+  | "BASELINE_NOT_FINISHED"
+  | "BASELINE_NOT_FIVE_READABLE"
+  /** An attempt of the baseline was reserved before an earlier change went live (M6b). */
+  | "BASELINE_BEFORE_EARLIER_CHANGE"
+  /** A proposed, approved or implemented intervention already holds the baseline. */
+  | "BASELINE_ALREADY_REGISTERED"
+  | "SOURCE_ACTION_NOT_CURRENT";
+
+export interface RegisterPilotRetestResult {
+  outcome: RegisterPilotRetestOutcome;
+  /** Set for REGISTERED and ALREADY_REGISTERED. */
+  pilotRetestId: string | null;
+  /** The question a per-question refusal is about. */
+  pilotQuestionId: string | null;
+  /** The engine a per-baseline refusal is about. */
+  engine: PilotQuestionEngine | null;
+}
+
+/** D-062 — confirm_pilot_retest_implementation: every member implemented at once, one window. */
+export interface ConfirmPilotRetestImplementationInput {
+  pilotId: string;
+  pilotRetestId: string;
+  /** The signed-in founder's user id. */
+  confirmedBy: string;
+  /** YYYY-MM-DD the customer reports, not in the future, not before registration. */
+  wentLiveOn: string;
+  /** At least one of the URL (http(s), 10-2048 characters) and the 64-hex fingerprint (M9). */
+  evidenceUrl: string | null;
+  artifactSha256: string | null;
+  /** Internal note, 10-2000 characters. */
+  note: string;
+  implementedAsRegistered: boolean;
+  /** Required exactly when not implemented as registered; logged as an implementation_issue note. */
+  deviationNote: string | null;
+  confirmed: boolean;
+}
+
+export type ConfirmPilotRetestImplementationOutcome =
+  | "IMPLEMENTED"
+  /** A replay: the stored window is returned. */
+  | "ALREADY_IMPLEMENTED"
+  | "PILOT_NOT_FOUND"
+  | "RETEST_NOT_FOUND"
+  | "RETEST_ABANDONED"
+  | "CONFIRMATION_REQUIRED"
+  | "PILOT_CLOSED"
+  | "WENT_LIVE_BEFORE_REGISTRATION"
+  | "WINDOW_PAST_PILOT_END"
+  | "NOTE_LIMIT_REACHED";
+
+export interface ConfirmPilotRetestImplementationResult {
+  outcome: ConfirmPilotRetestImplementationOutcome;
+  /** ISO instant; set for IMPLEMENTED and ALREADY_IMPLEMENTED. */
+  windowClosesAt: string | null;
+}
+
+/** D-062 — prepare_pilot_retests: per member an approved retest protocol, a queued job and a retest slot. */
+export interface PreparePilotRetestsInput {
+  pilotId: string;
+  pilotRetestId: string;
+  /** The signed-in founder's user id. */
+  preparedBy: string;
+}
+
+export type PreparePilotRetestsOutcome =
+  | "PREPARED"
+  /** A replay: the slot count is returned. */
+  | "ALREADY_PREPARED"
+  | "PILOT_NOT_FOUND"
+  | "RETEST_NOT_FOUND"
+  | "RETEST_ABANDONED"
+  | "NOT_IMPLEMENTED"
+  | "PILOT_CLOSED"
+  | "WINDOW_OPEN"
+  /** Some member's retest_eligibility is not (true, WINDOW_ELAPSED). */
+  | "MEMBER_NOT_ELIGIBLE";
+
+export interface PreparePilotRetestsResult {
+  outcome: PreparePilotRetestsOutcome;
+  /** Set for PREPARED and ALREADY_PREPARED: the retest slots (2 per question). */
+  prepared: number | null;
+  /** ISO instant; set for PREPARED, ALREADY_PREPARED, WINDOW_OPEN and MEMBER_NOT_ELIGIBLE. */
+  windowClosesAt: string | null;
+}
+
+/** D-062 — abandon_pilot_retest: every member together, until the first retest answer. */
+export interface AbandonPilotRetestInput {
+  pilotId: string;
+  pilotRetestId: string;
+  /** The signed-in founder's user id. */
+  abandonedBy: string;
+  /** 10-2000 characters, trimmed. */
+  reason: string;
+  confirmed: boolean;
+}
+
+export type AbandonPilotRetestOutcome =
+  | "ABANDONED"
+  | "ALREADY_ABANDONED"
+  | "PILOT_NOT_FOUND"
+  | "RETEST_NOT_FOUND"
+  | "CONFIRMATION_REQUIRED"
+  /** A retest job is locked by a Run, a Retry or the worker right now. */
+  | "RETEST_JOB_BUSY"
+  /** A retest has an attempt, or its job is claimed or running. */
+  | "RETEST_STARTED"
+  /** A Run of a retest is pending. */
+  | "RETEST_RUN_PENDING";
+
+/** D-062 — requeue_pilot_retest_job: a retest that stopped before any answer, queued again. */
+export interface RequeuePilotRetestJobInput {
+  pilotId: string;
+  pilotRetestId: string;
+  pilotQuestionId: string;
+  engine: PilotQuestionEngine;
+  /** The signed-in founder's user id. */
+  requeuedBy: string;
+  /** 10-2000 characters, trimmed. */
+  reason: string;
+}
+
+export type RequeuePilotRetestJobOutcome =
+  | "REQUEUED"
+  | "ALREADY_QUEUED"
+  | "PILOT_NOT_FOUND"
+  | "RETEST_NOT_FOUND"
+  | "RETEST_ABANDONED"
+  | "NOT_PREPARED"
+  | "MEMBER_NOT_FOUND"
+  /** Closed or outside its dates. */
+  | "PILOT_CLOSED"
+  | "RETEST_JOB_BUSY"
+  /** Not failed, or it has an attempt, a review resolution, a current attempt or a pending Run. */
+  | "JOB_NOT_STOPPED_BEFORE_ANSWERS"
+  | "REQUEUE_LIMIT_REACHED";
+
+export interface RequeuePilotRetestJobResult {
+  outcome: RequeuePilotRetestJobOutcome;
+  /** Set for REQUEUED and ALREADY_QUEUED. */
+  jobId: string | null;
+}
+
+/** D-062 — add_pilot_retest_note: the log of other changes, append-only. */
+export interface AddPilotRetestNoteInput {
+  pilotId: string;
+  pilotRetestId: string;
+  /** The signed-in founder's user id. */
+  writtenBy: string;
+  /** YYYY-MM-DD, not in the future, not before the pilot started. */
+  notedOn: string;
+  kind: PilotRetestNoteKind;
+  /** 10-2000 characters, trimmed. */
+  text: string;
+  /** A note of the same group this one corrects. */
+  correctsNoteId: string | null;
+  idempotencyKey: string;
+}
+
+export type AddPilotRetestNoteOutcome =
+  | "ADDED"
+  | "ALREADY_ADDED"
+  | "IDEMPOTENCY_KEY_CONFLICT"
+  | "PILOT_NOT_FOUND"
+  | "RETEST_NOT_FOUND"
+  | "RETEST_ABANDONED"
+  | "NOTED_BEFORE_PILOT"
+  | "CORRECTED_NOTE_NOT_FOUND"
+  /** 20 notes per group. */
+  | "NOTE_LIMIT_REACHED";
+
+export interface AddPilotRetestNoteResult {
+  outcome: AddPilotRetestNoteOutcome;
+  /** Set for ADDED and ALREADY_ADDED. */
+  noteId: string | null;
+}
+
 /** D-052 — closes an approved request whose job ended in failure. */
 export interface CloseFailedSnapshotRequestInput {
   requestId: string;
@@ -3042,6 +3301,20 @@ export interface DbAdapter {
   closePilot(input: ClosePilotInput): Promise<ClosePilotOutcome>;
   /** D-054, D-061 — retires a pilot question whose measurement can no longer finish, with every slot. */
   retirePilotQuestion(input: RetirePilotQuestionInput): Promise<RetirePilotQuestionOutcome>;
+  /** D-062 — registers a customer change: one approved M7 intervention per question and engine. */
+  registerPilotRetest(input: RegisterPilotRetestInput): Promise<RegisterPilotRetestResult>;
+  /** D-062 — records the change as live: every member implemented at once, one window. */
+  confirmPilotRetestImplementation(
+    input: ConfirmPilotRetestImplementationInput
+  ): Promise<ConfirmPilotRetestImplementationResult>;
+  /** D-062 — once the window has closed, queues one retest per member (never runs it). */
+  preparePilotRetests(input: PreparePilotRetestsInput): Promise<PreparePilotRetestsResult>;
+  /** D-062 — abandons every member of a change, until the first retest answer. */
+  abandonPilotRetest(input: AbandonPilotRetestInput): Promise<AbandonPilotRetestOutcome>;
+  /** D-062 — queues again a retest that stopped before any answer (at most 3 times). */
+  requeuePilotRetestJob(input: RequeuePilotRetestJobInput): Promise<RequeuePilotRetestJobResult>;
+  /** D-062 — logs another change during a retest. */
+  addPilotRetestNote(input: AddPilotRetestNoteInput): Promise<AddPilotRetestNoteResult>;
   /**
    * D-061 — what the connected schema lets the protocol worker record
    * (protocol_worker_capabilities, 20261109180000): `live_openai_chatgpt`

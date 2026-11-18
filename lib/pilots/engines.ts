@@ -65,3 +65,41 @@ export function pilotEngineFromBody(
   }
   return { ok: true, engine: raw };
 }
+
+/* ---------------------------------------------------------------- D-062: the retest phase */
+
+/** The phase of a pilot question's slot (pilot_question_protocols_phase_check, 20261109190000). */
+export type PilotSlotPhase = "baseline" | "retest";
+export const PILOT_SLOT_PHASES: readonly PilotSlotPhase[] = ["baseline", "retest"];
+
+/**
+ * D-062 (engineer) — the web host's retest gate, ZYPACT_PILOT_RETEST_ENABLED,
+ * on only when it is exactly "true", read at request time. It ships unset
+ * (dark) until the founder confirms D-062. It gates every retest step that
+ * can lead to spending: register, record as live, prepare, queue again, and
+ * Run and Retry of a retest. Withdrawing a change, logging another change
+ * and resolving a retest held for review spend nothing, so they stay open
+ * with the gate off (forward recovery), as B leaves review resolution open.
+ */
+export function pilotRetestEnabled(env: Readonly<Record<string, string | undefined>> = process.env): boolean {
+  return env.ZYPACT_PILOT_RETEST_ENABLED === "true";
+}
+
+export type PilotPhaseChoice = { ok: true; phase: PilotSlotPhase } | { ok: false; status: 400 | 409; error: string };
+
+/**
+ * The phase a Run, Retry or review body names: absent or null is the
+ * baseline, as before D-062; anything outside the closed set is refused
+ * (400 `invalid_phase`); a retest on a `gated` route while the retest gate is
+ * off is refused (409) in words, before anything is read or started.
+ */
+export function pilotPhaseFromBody(
+  body: unknown,
+  opts: { retestEnabled: boolean; gated: boolean; notEnabledText: string }
+): PilotPhaseChoice {
+  const raw = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>).phase : undefined;
+  if (raw === undefined || raw === null) return { ok: true, phase: "baseline" };
+  if (raw !== "baseline" && raw !== "retest") return { ok: false, status: 400, error: "invalid_phase" };
+  if (raw === "retest" && opts.gated && !opts.retestEnabled) return { ok: false, status: 409, error: opts.notEnabledText };
+  return { ok: true, phase: raw };
+}

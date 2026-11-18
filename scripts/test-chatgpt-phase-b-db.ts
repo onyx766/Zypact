@@ -48,6 +48,22 @@
  * also close leftover attempts, change a CHECK, an index, a provider or a
  * probe run's platform, and every one of them is rolled back (G12).
  *
+ * Since the pilot retest (20261109190000, D-062):
+ *   - a retest of a pilot slot's protocol is created only by its group's
+ *     preparation (trigger protocols_pilot_retest_guard, which refuses even
+ *     the owner). I5, R6 and O8 plant such a retest as test setup, so each
+ *     is inserted in one admin transaction with `set local
+ *     session_replication_role = replica` (a declared owner bypass of that
+ *     one insert); its approval and queueing still go through the real
+ *     functions. T5's retest is of a protocol that is not a slot, and needs
+ *     no bypass;
+ *   - a retest slot passes the phase CHECK and 20261109180000's trigger, and
+ *     is refused by 20261109190000's slot trigger when it names no member
+ *     (T7: pilot_retest_slot_inconsistent);
+ *   - G restores the state before 20261109180000 by running
+ *     20261109190000's own first recovery (built from its header,
+ *     scripts/lib/pilot-retest-recovery.ts) before this migration's.
+ *
  * Runs against a DISPOSABLE Supabase Postgres with every migration applied
  * (scripts/run-p2-workspace-db-local.sh). Opt-in: SKIP (exit 2) without
  * ZYPACT_P2_DB_CONTAINER. No network, no provider.
@@ -57,6 +73,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
+import { pilotRetestRecovery } from "./lib/pilot-retest-recovery";
 import { db, lit, makeChecker, requireContainer, row } from "./lib/workspace-db";
 
 const CONTAINER = requireContainer();
@@ -230,9 +247,14 @@ function abandon(jobId: string, projectId: string): string {
   return requestRun(jobId, projectId)[0];
 }
 
-/** Test setup: a draft protocol a founder could write (protocols has no CHECK on the provider), copied from another with overrides. */
-function draftLike(protocolId: string, over: { provider?: string; versionId?: string; baselineOf?: string } = {}): string {
-  return admin(`insert into public.protocols (project_id, buyer_question_version_id, baseline_protocol_id, provider, surface, model_config, planned_baseline_runs, planned_retest_runs, paraphrase_plan, unit_of_analysis, primary_metric, minimum_useful_change, sample_planning_method, sample_planning_assumptions, run_cap, spend_cap_usd, time_window_seconds, rate_limit_per_hour, concurrency_limit, retry_cap, observation_window_rule, analyzer_version, entity_resolution_version, methodology_version) select project_id, ${over.versionId ? `${lit(over.versionId)}::uuid` : "buyer_question_version_id"}, ${over.baselineOf ? `${lit(over.baselineOf)}::uuid` : "null"}, ${over.provider ? lit(over.provider) : "provider"}, surface, model_config, planned_baseline_runs, planned_retest_runs, paraphrase_plan, unit_of_analysis, primary_metric, minimum_useful_change, sample_planning_method, sample_planning_assumptions, run_cap, spend_cap_usd, time_window_seconds, rate_limit_per_hour, concurrency_limit, retry_cap, observation_window_rule, analyzer_version, entity_resolution_version, methodology_version from public.protocols where id = ${lit(protocolId)}::uuid returning id;`);
+/**
+ * Test setup: a draft protocol a founder could write (protocols has no CHECK on the provider), copied from another with overrides.
+ * `bypass` inserts it past 20261109190000's protocols_pilot_retest_guard (a retest of a pilot slot's protocol), in its own
+ * admin transaction under `set local session_replication_role = replica` (the declared owner bypass, D-062).
+ */
+function draftLike(protocolId: string, over: { provider?: string; versionId?: string; baselineOf?: string; bypass?: boolean } = {}): string {
+  const [open, close] = over.bypass ? ["begin;\nset local session_replication_role = replica;\n", "\ncommit;"] : ["", ""];
+  return admin(`${open}insert into public.protocols (project_id, buyer_question_version_id, baseline_protocol_id, provider, surface, model_config, planned_baseline_runs, planned_retest_runs, paraphrase_plan, unit_of_analysis, primary_metric, minimum_useful_change, sample_planning_method, sample_planning_assumptions, run_cap, spend_cap_usd, time_window_seconds, rate_limit_per_hour, concurrency_limit, retry_cap, observation_window_rule, analyzer_version, entity_resolution_version, methodology_version) select project_id, ${over.versionId ? `${lit(over.versionId)}::uuid` : "buyer_question_version_id"}, ${over.baselineOf ? `${lit(over.baselineOf)}::uuid` : "null"}, ${over.provider ? lit(over.provider) : "provider"}, surface, model_config, planned_baseline_runs, planned_retest_runs, paraphrase_plan, unit_of_analysis, primary_metric, minimum_useful_change, sample_planning_method, sample_planning_assumptions, run_cap, spend_cap_usd, time_window_seconds, rate_limit_per_hour, concurrency_limit, retry_cap, observation_window_rule, analyzer_version, entity_resolution_version, methodology_version from public.protocols where id = ${lit(protocolId)}::uuid returning id;${close}`);
 }
 const approve = (protocolId: string, projectId: string) =>
   psql(`select status from public.approve_protocol(${lit(protocolId)}::uuid, ${lit(projectId)}::uuid, ${lit(FOUNDER)}::uuid);`);
@@ -279,11 +301,15 @@ function span(src: string, start: string, end: string): string {
  * 20261109180000 while no ChatGPT row exists.
  */
 function headerRecovery(): string {
+  // D-062: the state before 20261109190000 first (no group exists yet in
+  // this container), by that migration's own header recovery.
+  const s190 = pilotRetestRecovery();
   const s140 = fileText("20261109140000_pilot_questions.sql");
   const s0054 = fileText("0054_m5_worker_probe_result_and_alert_outbox.sql");
   const s0073 = fileText("0073_m7_retest_protocol_creation.sql");
   const s0013 = fileText(readdirSync(path.join(process.cwd(), "supabase/migrations")).find((f) => f.startsWith("0013_"))!);
   return [
+    s190,
     "drop function if exists public.protocol_worker_capabilities();",
     span(s140, "create or replace function public.retire_pilot_question(", "\n$$;\n"),
     span(s140, "revoke all on function public.retire_pilot_question(uuid, uuid, uuid, text) from public;",
@@ -521,7 +547,7 @@ ${platform === null ? "" : `  perform 1 from public.create_probe_run_and_start_a
   check("I4 Perplexity beside ChatGPT on one version is allowed (both are live)",
     admin(`select string_agg(provider, ',' order by provider) from public.protocols where buyer_question_version_id = ${lit(versionA)}::uuid and status in ('approved', 'active') and baseline_protocol_id is null;`)
       === "openai_chatgpt,perplexity_sonar");
-  const retestOfCg = draftLike(cgA, { baselineOf: cgA });
+  const retestOfCg = draftLike(cgA, { baselineOf: cgA, bypass: true });
   check("I5 a retest is not a baseline: a ChatGPT retest on the same version is approved beside both baselines",
     approve(retestOfCg, projectA) === "APPROVED");
   check("I6 a refused approval leaves the draft a draft",
@@ -609,8 +635,8 @@ ${platform === null ? "" : `  perform 1 from public.create_probe_run_and_start_a
     (slotInsert(pqT, projectA, "openai_chatgpt", "baseline", retestOnT) ?? "").includes("pilot_slot_baseline_protocol_is_a_retest"));
   const geminiOnT = draftLike(pxA, { versionId: versionT, provider: "gemini" });
   check("T6 an engine outside the two is refused by the engine CHECK", (slotInsert(pqT, projectA, "gemini", "baseline", geminiOnT) ?? "").includes("pilot_question_protocols_engine_check"));
-  check("T7 a retest slot waits for the pilot retest step: the phase CHECK refuses it",
-    (slotInsert(pqT, projectA, "openai_chatgpt", "retest", retestOnT) ?? "").includes("pilot_question_protocols_phase_check"));
+  check("T7 a retest slot outside a group's preparation is refused: it passes the phase CHECK (D-062) and this trigger, and 20261109190000's slot trigger refuses a slot with no member",
+    (slotInsert(pqT, projectA, "openai_chatgpt", "retest", retestOnT) ?? "").includes("pilot_retest_slot_inconsistent"));
   check("T8 none of the refused slots was written", admin(`select count(*) from public.pilot_question_protocols where pilot_question_id = ${lit(pqT)}::uuid;`) === "1");
 
   /* R: retire_pilot_question with two slots ------------------------------ */
@@ -631,7 +657,7 @@ ${platform === null ? "" : `  perform 1 from public.create_probe_run_and_start_a
   check("R5 a pending Run on the Perplexity slot blocks retirement", pxReq === "REQUESTED" && retire(pilotR, pqR) === "QUESTION_JOB_ACTIVE");
   cancelRun(pxReqId);
   // A retest of the ChatGPT slot, approved and queued by the real functions (test setup: the draft create_retest_protocol would write).
-  const retestR = draftLike(cgR, { baselineOf: cgR });
+  const retestR = draftLike(cgR, { baselineOf: cgR, bypass: true });
   const retestQueued = approve(retestR, projectR) === "APPROVED"
     && psql(`select status from public.enqueue_protocol_execution_job(${lit(retestR)}::uuid, ${lit(projectR)}::uuid);`) === "QUEUED";
   const retestJob = admin(`select id from public.protocol_execution_jobs where protocol_id = ${lit(retestR)}::uuid;`);
@@ -775,7 +801,7 @@ ${platform === null ? "" : `  perform 1 from public.create_probe_run_and_start_a
   quiesce();
   const pxOcDone = completeJob(jobPxOc, projectO);
   quiesce();
-  const retestOc = draftLike(cgOc, { baselineOf: cgOc });
+  const retestOc = draftLike(cgOc, { baselineOf: cgOc, bypass: true });
   const retestOcQueued = approve(retestOc, projectO) === "APPROVED"
     && psql(`select status from public.enqueue_protocol_execution_job(${lit(retestOc)}::uuid, ${lit(projectO)}::uuid);`) === "QUEUED";
   const retestOcJob = admin(`select id from public.protocol_execution_jobs where protocol_id = ${lit(retestOc)}::uuid;`);

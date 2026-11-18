@@ -15,7 +15,7 @@
 >
 > Sections 1-12 are preserved historical snapshots, taken on 2026-08-16 and 2026-08-21. They are deliberately not rewritten, and several of their figures are now superseded. For any statement about the *current* repository, section 15 prevails, then section 13.
 >
-> **2026-11-18:** sections 16 to 37 were added after this notice. Each is dated and records one branch or step. For the repository inventory (migrations, `scripts/test-*.ts` files and registered commands), the latest measured figures are section 37's, and [`CLAUDE.md`](../CLAUDE.md) points there.
+> **2026-11-18:** sections 16 to 39 were added after this notice. Each is dated and records one branch or step. For the repository inventory (migrations, `scripts/test-*.ts` files and registered commands), the latest measured figures are section 39's, and [`CLAUDE.md`](../CLAUDE.md) points there.
 
 ## 1. Reading rule
 
@@ -2478,6 +2478,82 @@ The last three rows ran before the review fixes. The fixes changed only the migr
 - **Founder decision, 2026-11-18** (relayed: "I agree."): this plan.
 - **Next:** run the adjusted check again at the new R; then step 2 needs its own approval.
 - **Note for PR C:** its status section becomes §39.
+- **2026-11-18, later (recorded with PR C): steps 1 to 5a done on production.**
+  - **Step 1:** the adjusted check, run again at `main` `e2acca3` (after #132): `PREFLIGHT: PASS`.
+  - **Steps 2, 3, 4, 5 and 5a** (`20261109130000` to `20261109170000`): applied in order through the named-file procedure, run by the operator with psql in Docker. The read-only check afterwards: tail `20261109170000`, 90 ledger rows; both unscoped claims revoked from `service_role`; `read_shared_pilot_report` md5 `7b90ce86…`, the rehearsal's pin (PILOT_PRODUCTION_PLAN step 5a); RLS on; 0 jobs.
+  - **Not done:** closing the 2026-09-23 attempt and step 5b, both put to the founder for approval. Nothing from step 5b onwards has been done; the worker and the web app are not redeployed.
+  - From step 2 onwards the preflight fails on production by design (PROD_PREFLIGHT_SPEC, *This preflight is valid only before step 1*); it is not run there again.
+
+## 39. Pilot retest and Outcome Cards (D-062) — branch `feat/pilot-retest`, not applied anywhere, not deployed, retest gate unset
+
+- **Base:** D-061's branch at `f672be1` (merged to `main` as #131). The code is commit `8d07d73`; `main` at `e2acca3` (#132, the preflight's line endings) is merged in at `b0964fe`; this section's documents and the two code reviews' fixes (*Review fixes* below) are on top.
+- **What it adds (D-062):**
+  - **Migration** `20261109190000_pilot_retest.sql`, numbered inside D-058's window, applied after `20261109180000` (`expected_prev=20261109180000`, plan step 5c). It:
+    - lets a pilot slot be a `retest` slot that names its member;
+    - adds four tables: the group, its members (one M7 intervention per question and engine), its log of other changes and the writer record;
+    - adds six group steps (register, record as live, prepare, withdraw, queue again, add a note), each one transaction wrapping the M7 functions and checking every result, and the helper `pilot_retest_job_is_final`;
+    - adds six trigger functions and eight triggers that keep pilot members out of every generic M7 path and out of `outcome_card_artifacts`;
+    - redefines `save_pilot_report_artifact` and `share_pilot_report_artifact`: `20261109160000`'s bodies plus one marked block each, which re-check every embedded card and every retest against the database.
+
+    It writes no row, calls no provider and redefines no 0071–0079 or M5 function.
+  - **The pilot console:** a **Retest** card. **Register a change to measure again** (1 to 5 questions, both baselines finished with 5 readable answers each, the customer's dated written approval, the 60-point limit and the four status rules shown); **Record the change as live**; **Prepare the retests** once the waiting period is over; **Withdraw the change** until the first retest answer; a members table with Run, Retry and review per engine, `phase: "retest"`, and **Queue again** for a retest that stopped before any answer; **Log another change**. Six new founder routes under `/api/internal/pilots/[pilotId]/retests`, behind `SNAPSHOT_APPROVAL_ENABLED` and the founder guard; register, record as live, prepare and requeue, and Run and Retry of a retest, also behind the web host's gate `ZYPACT_PILOT_RETEST_ENABLED` (exactly `"true"`, read at request time, unset).
+  - **The pilot report:** a Retest section after the suggested actions. Each group's registered text, dates and log; each final retest's **Outcome Card**, with its status in words, the four status sentences, before and after with failed and excluded attempts, the difference (after minus before) and its 95% range, the 60-point limit and the smallest change this retest could show (or, when the rule can give the card no status from its answers, that it cannot show any change, and why), the customer's threshold, how it was measured, the sources, the notes with their flags, "no control questions", the evidence references and the footer from its constant. Nothing is combined across cards or engines. Any retest makes the revision need review.
+  - **The generic M7 exclusions** (D-062, *The generic M7 path*).
+  - **Preflight:** `20261109190000` in both P2.4 lists; the four tables and 13 functions pending (P4.1 now 24, P4.2 now 54); no new pin.
+  - **Documents:** D-062; this section and the dated note in §38; `CLAUDE.md`'s inventory; PILOT_RUNBOOK §10 and §12–§16; METHODOLOGY document version 1.4 (§13–§15; the default protocol methodology version stays 1.1); PILOT_PRODUCTION_PLAN (step 5c, the retest gate as Part D, and the dated production record); PROD_PREFLIGHT_SPEC.
+- **For the founder:** the departures from the design brief, every *(engineer)* value and wording, including the review fixes' customer words. The list is in D-062, *For the founder to review*. (The method note's "(D-038)" is gone after the review.)
+- **Inventory on this branch** (`b0964fe` plus this section's documents, which add no file), counted on 2026-11-18:
+  - 96 migrations: 82 four-digit (`0001`–`0081` and `0083`) and 14 timestamped, the last `20261113120000`;
+  - 232 files matching `scripts/test-*.ts`;
+  - 137 `test:*` and 4 `verify:*` commands.
+
+  On `main` at `e2acca3`: 95 migrations, 229 files and 135 plus 4 commands. The branch adds `20261109190000_pilot_retest.sql`, `test-pilot-retest.ts`, `test-pilot-retest-schema.ts` and `test-pilot-retest-db.ts`, and registers `test:pilot-retest` and `test:pilot-retest-schema`.
+- **Commands and local results** (2026-11-18, on the merged tree):
+
+| Command | Result |
+|---|---|
+| `npm run typecheck`, `npm run build:verify` | exit 0 each |
+| `npm run test:pilot-retest`, `test:pilot-retest-schema` (new) | 111/111, 50/50 |
+| `npm run test:pilot-report`, `test:pilot-actions`, `test:pilot-questions`, `test:pilot-step1`, `test:pilot-links-claims` | 133/133, 109/109, 243/243, 75/75, 38/38 |
+| `npm run test:paid-execution-guards`, `test:prod-preflight` (after merging #132), `test:chatgpt-worker`, `test:chatgpt-phase-b-schema` | 145/145, 77/77, 141/141, 74/74 (the last before merging #132; see below) |
+| `npm run test:outcome-card`, `test:intervention-rpc-errors`, `test:intervention-routes`, `test:retest-actions` | 40/40, 120/120, 46/46, 32/32 |
+| `npm run test:outcome-card-delivery`, `test:intervention-admin-ui`, `test:outcome-card-build`, `test:outcome-card-integrity`, `test:outcome-card-view`, `test:compare-protocols` | 51/51, 50/50, 58/58, 21/21, 40/40, 66/66 |
+| `test:m7-0071-schema`, `test:m7-0073-schema` | fail with the same lines as on `main` (§30, already failing); `test:pilot-retest-schema` runs each m7 guard against the new file alone and it adds none |
+| `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db` | 96 migrations applied, all green: P1 45/45, P2 71/71, E1 74/74, Q4 52/52, pilot step 1 60/60, pilot questions 70/70, pilot report 39/39, pilot actions 53/53, pilot links and claims 28/28, ChatGPT phase B 81/81, pilot retest 112/112 (new) |
+| Preflight rehearsal: a fresh disposable `supabase/postgres:17.6.1.167` at the recorded state (85 rows, tail S1, `-v expected_sysid` set to that cluster's own identifier), this branch's preflight | every must-pass check PASS, `PREFLIGHT: PASS`, exit 0. Negative controls: one new table present → P4.1 only, `FAIL (1)`, exit 3; one new function present → P4.2 only, `FAIL (1)`, exit 3 |
+| On the same database, through the named-file procedure | `20261109190000` with the tail at S1, and again at `20261109170000`: refused, exit 3, ledger unchanged (the second also by its own precondition with `expected_prev` set to the real tail). `20261109130000`–`20261109170000` in order, then `20261109180000`, then `20261109190000` (`expected_prev=20261109180000`): exit 0 each; 92 rows, tail `20261109190000`. The preflight then fails by design: P2.3, P2.4, P2.5, P3.3, P3.4, P3.5, P4.1, P4.2, `FAIL (8)`, exit 3 |
+| md5 at tail `20261109180000` (the migration's precondition 4) | save `prosrc` `e66f4dd316ff2f2cb250442b5fc119f2`, share `prosrc` `dc8b5f430f0d4ebd630e6793e64e669e` |
+| md5 of `pg_get_functiondef` after the apply | save `46738a76be0bf9176278db6ccb6832b4`, share `7763dadf4df6c9d7aa5cf86f2d6a9a7f` (superseded by the review fixes below: share `d53b169fb8b649bc67272b4fde87fcb5`); the 13 new functions are listed in PILOT_PRODUCTION_PLAN step 5c |
+
+| After this section's documents: `npm run typecheck` | exit 0 |
+| After the documents: `test:prod-preflight` (reads PROD_PREFLIGHT_SPEC), `test:pilot-retest-schema`, `test:pilot-retest` | 77/77, 50/50, 111/111 |
+| After the documents: `test:pilot-actions` (reads DECISIONS, this file and PILOT_RUNBOOK), `test:pilot-links-claims` (reads DECISIONS, this file, WORKER_DEPLOY_RUNBOOK and PILOT_PRODUCTION_PLAN), `test:pilot-report`, `test:pilot-questions` | 109/109, 38/38, 133/133, 243/243 |
+| After the documents: the 0051 to 0054 schema contracts (read DECISIONS); `test:chatgpt-worker`, `test:chatgpt-adapter` | 117/117, 67/67, 74/74, 150/150; 141/141, 195/195 |
+| After the documents: `test:chatgpt-phase-b-schema` | 73/74: S46 fails, and fails identically on `main` at `e2acca3`. #132 made P3.5 hash the definition with carriage returns removed, and S46's pattern still expects the earlier `md5(pg_get_functiondef(oid))` text. Not caused by this branch |
+| After the documents: `test:bqi-wording`; `test:q2p1-scope`, `test:q2p2-scope` | 109/110, its P-04 change-scope check; 3 and 4 failures, no scope base set. The same as on `main` (§30, §37) |
+| `git diff --check` | clean |
+
+- **Review fixes** (2026-11-18, after two independent code reviews; uncommitted on top of `b0964fe`). Every new rule is marked *(engineer)* in D-062:
+  - **Database** (the migration is not applied anywhere, so it was changed in place; save and share stay `20261109160000`'s bodies outside the marked blocks):
+    - the share re-checks M1: a revision whose cards are no longer exactly the final retests with an attempt is `RETESTS_STALE` (a retest that could be retried at the save and is final once the pilot ends or closes);
+    - the precondition and postcondition pins hash `prosrc` with carriage returns removed (as PF-30); the pins are unchanged;
+    - preparation reads back each retest's run, retry and spend caps against its baseline's;
+    - tests: P4 asserts ChatGPT 7/2/4 and Perplexity 7/2/2; P6 (a retest under other caps is refused); S5 now beside a withdrawal step, which writes its step row; K5 (after one group's confirm step, a generic abandon on its member and a generic confirm on another group's member are each refused); G9–G11 (precondition 2's index, `add_pilot_question_engine` and consistency function, precondition 3's other six signatures, precondition 6's Outcome Card branch); V15 (the share's M1 re-check).
+  - **Application:** a card shows the smallest change it could show only when the rule could give it a status from its answers, otherwise "This retest cannot show any change: …" (5 vs 2 no longer prints 80 points); "Difference (after minus before)" and "difference" in the rule sentences and method note; no "(D-038)" in customer text; "No departure" only for a change made as registered; the evidence link and source-action titles linted at build (kept in the payload, left out of the page and Markdown, needs review); the register body limit 64 KB and the three request-shape codes in words; the M17 line says "may have been collected".
+  - **Also:** `test:chatgpt-phase-b-schema` S46 follows P3.5's carriage-return form (74/74 again); `.env.example` documents `ZYPACT_PILOT_RETEST_ENABLED` in comments only.
+  - **Rehearsal re-run** (same procedure as above, fresh disposable database): preflight PASS at the recorded state, both negative controls `FAIL (1)`, the out-of-order applies refused, steps 2 to 5c exit 0 (92 rows); precondition pins at tail `20261109180000` `e66f4dd3…`/`dc8b5f43…`, the same with and without carriage returns removed. After the apply only two definitions changed: `share_pilot_report_artifact` `d53b169fb8b649bc67272b4fde87fcb5` and `prepare_pilot_retests` `dfdee5f0d3ecf336102808e14538be4f` (PILOT_PRODUCTION_PLAN step 5c); every value is the same with and without carriage returns removed. The preflight then fails by design, `FAIL (8)`.
+  - **Results after the fixes:** `typecheck` and `build:verify` exit 0; `test:pilot-retest` 118/118, `test:pilot-retest-schema` 51/51, `test:pilot-report` 133/133, `test:pilot-actions` 109/109, `test:pilot-questions` 243/243, `test:pilot-step1` 75/75, `test:pilot-links-claims` 38/38, `test:chatgpt-phase-b-schema` 74/74, `test:prod-preflight` 77/77, `test:paid-execution-guards` 145/145, `test:m5-b3-max-runtime` 189/189; the intervention and Outcome Card suites unchanged and green; `ZYPACT_P2_DB_LOCAL=1 npm run test:p2-workspace-db`: 96 migrations, every suite green, pilot retest 118/118; `ZYPACT_LEVEL2_LOCAL=1 npm run test:snapshot-worker-postgres-level2`: `LEVEL2_RESULT=PASS` (the runner exits 1 from its known cleanup trap).
+  - **Mutations:** 3 for the card's smallest change and 2 for the share's M1 re-check, plus 1 for the caps readback, each caught (R13/R14, V15 and P7b, P6), every file restored and its sha256 checked.
+- **Mutation trials:** 8 by the application's builder (for example a held retest counted as final, a card from a final retest with no attempt, the footer taken from the payload, register or a retest Run outside the gate, no withholding at build, a member's generic transition allowed, a guard message falling to the generic 500) and 5 by the database's builder; each was caught, and every file was restored with its sha256 checked.
+- **Not established:**
+  - no live retest has been run;
+  - no browser walk-through of the console or the report;
+  - the application's payload has never gone through the real `save_pilot_report_artifact`: the DB suite builds its payloads in SQL;
+  - nothing is applied to any hosted database; the md5 values above come from the disposable rehearsal only and have never been observed on production.
+- **Open:**
+  - the founder's review of D-062;
+  - `test:chatgpt-phase-b-schema` S46 has failed on `main` since #132 (above); fixed on this branch by the review fixes, so it stays failing on `main` until this branch merges;
+  - the questions D-061 left open, unchanged.
 
 ## 40. Production record, 2026-11-18, and the ChatGPT switch (Part C, step C2)
 
@@ -2512,4 +2588,4 @@ Recorded from the operator's checks on 2026-11-18. Each step had the founder's w
     2. merge this pull request (R′) and redeploy the worker from it under WORKER_DEPLOY_RUNBOOK §6 and §6a, with check (d) expecting `true`;
     3. C3, the web gate;
     4. C4 keeps the 10 USD ceiling for the first supervised ChatGPT day.
-  - R′ carries no unapplied migration below `20261110120000`. PR #133's `20261109190000` must not merge before this deploy, or the R rule would require step 5c first.
+  - **R rule (updated after PR #133 merged as `0f5b0da` on 2026-11-18):** R′ now carries `20261109190000` (the pilot retest, §39), which is below `20261110120000` and not applied. So **step 5c is applied before the C2 worker deploy**, under its own approval, with the step 5c checks and fingerprints in PILOT_PRODUCTION_PLAN. The retest gate `ZYPACT_PILOT_RETEST_ENABLED` stays unset (Part D).

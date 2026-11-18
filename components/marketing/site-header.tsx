@@ -26,11 +26,13 @@ export interface SiteHeaderProps {
    * itself passes an in-page anchor so the button does not reload the page.
    */
   cta?: { label: string; href: string };
+  /** Optional marketing links for /scan; existing site navigation stays the default. */
+  links?: readonly { label: string; href: string; spy?: string }[];
 }
 
 const DEFAULT_CTA = { label: "Request demo", href: "/scan" } as const;
 
-export function SiteHeader({ cta = DEFAULT_CTA }: SiteHeaderProps = {}) {
+export function SiteHeader({ cta = DEFAULT_CTA, links = navLinks }: SiteHeaderProps = {}) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -48,7 +50,7 @@ export function SiteHeader({ cta = DEFAULT_CTA }: SiteHeaderProps = {}) {
             aria-label="Primary"
             className="hidden items-center gap-6 lg:flex lg:gap-8"
           >
-            {navLinks.map((link) => (
+            {links.map((link) => (
               <a
                 key={link.href}
                 href={link.href}
@@ -101,7 +103,7 @@ export function SiteHeader({ cta = DEFAULT_CTA }: SiteHeaderProps = {}) {
         className="border-t border-border bg-background lg:hidden"
       >
         <nav aria-label="Primary (mobile)" className="shell flex flex-col py-2">
-          {navLinks.map((link) => (
+          {links.map((link) => (
             <a
               key={link.href}
               href={link.href}

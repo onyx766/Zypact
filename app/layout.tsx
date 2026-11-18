@@ -24,6 +24,8 @@ import "@/components/landing/styles/evidence.css";
 import "@/components/landing/styles/outcomes.css";
 import "@/components/landing/styles/chrome.css";
 import "@/components/landing/styles/request.css";
+// Scoped to /scan only; leaves customer console and existing landing tests intact.
+import "@/components/landing/styles/reflex-scan.css";
 
 import { Newsreader } from "next/font/google";
 

@@ -1,0 +1,213 @@
+/*
+ * Reflex V3 styling for the existing /scan Next.js page.
+ * PURELY PRESENTATIONAL: form validation, email verification, approval gating,
+ * API endpoints and the rest of the MVP remain unchanged.
+ *
+ * Intentionally scoped to .lx.scan-reflex. The public homepage uses an
+ * independent static design, and none of the console/project/report routes
+ * should inherit these rules.
+ */
+
+.lx.scan-reflex {
+  --background: 150 35% 99%;
+  --foreground: 159 53% 12%;
+  --card: 0 0% 100%;
+  --card-foreground: 159 53% 12%;
+  --primary: 156 76% 19%;
+  --primary-foreground: 0 0% 100%;
+  --border: 153 23% 86%;
+  --input: 153 23% 86%;
+  --ring: 156 70% 30%;
+  --muted: 148 28% 95%;
+  --muted-foreground: 155 12% 42%;
+  --panel: 158 70% 15%;
+  --panel-foreground: 0 0% 100%;
+  --panel-muted: 149 35% 83%;
+  --lx-font-display: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #fcfefd;
+  color: #12352b;
+}
+
+/* Same clean navigation and verified Zypact mark, with restrained emphasis. */
+.lx.scan-reflex .lx-header {
+  background: rgba(252, 254, 253, .95);
+  border-color: #e4ede8;
+  box-shadow: none;
+}
+.lx.scan-reflex .lx-header__link { font-weight: 500; font-size: 13px; }
+.lx.scan-reflex .lx-header__cta {
+  background: #005b3b;
+  border-radius: 999px;
+  color: #fff;
+  min-height: 39px;
+  padding-inline: 17px;
+  font-weight: 600;
+}
+.lx.scan-reflex .lx-header__cta:hover { background: #00784c; }
+
+/* Balance the two hero columns just like the Reflex landing. */
+.lx.scan-reflex .lx-request-hero {
+  padding-top: clamp(42px, 5vw, 88px);
+  padding-bottom: clamp(70px, 7vw, 124px);
+  background:
+    radial-gradient(ellipse 520px 440px at 96% 37%, rgba(82, 220, 141, .17), transparent 78%),
+    radial-gradient(ellipse 630px 450px at -10% 94%, rgba(195, 236, 212, .25), transparent 75%);
+}
+.lx.scan-reflex .lx-request-hero::before { display: none; }
+.lx.scan-reflex .lx-request-hero > .shell {
+  max-width: 1210px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: clamp(36px, 5vw, 82px);
+}
+.lx.scan-reflex .lx-request-hero .max-w-xl { max-width: 590px; }
+.lx.scan-reflex .lx-eyebrow {
+  color: #0a6b49;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .09em;
+  line-height: 1.45;
+}
+.lx.scan-reflex .lx-eyebrow--rule::before { background: #0b8b57; opacity: .68; }
+.lx.scan-reflex #request-title {
+  max-width: 540px;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: clamp(39px, 4.0vw, 58px);
+  line-height: 1.105;
+  font-weight: 400;
+  letter-spacing: -.057em;
+  color: #142e29;
+  text-wrap: balance;
+}
+.lx.scan-reflex .lx-request-hero .lx-lede {
+  max-width: 545px;
+  font-family: inherit;
+  font-size: clamp(15px, 1.3vw, 17px);
+  line-height: 1.73;
+  color: #65756d;
+  font-weight: 400;
+}
+.lx.scan-reflex .lx-request-point {
+  font-size: 14px;
+  line-height: 1.65;
+  color: #294d3d;
+}
+.lx.scan-reflex .lx-request-coin {
+  background: #d9f9e6;
+  color: #00643e;
+}
+.lx.scan-reflex .lx-request-note {
+  background: #eff9f3;
+  box-shadow: inset 0 0 0 1px #d9ede0;
+  color: #295442;
+  border-radius: 15px;
+  font-weight: 550;
+}
+.lx.scan-reflex .lx-request-summary {
+  gap: 16px;
+  border-color: #e2ebe5;
+}
+.lx.scan-reflex .lx-request-summary__title { color: #15392c; font-size: 14px; font-weight: 650; }
+.lx.scan-reflex .lx-request-summary__desc { color: #67786c; font-size: 13px; line-height: 1.65; }
+
+/* The real server-rendered ScanForm stays in place and keeps all validation. */
+.lx.scan-reflex .lx-request-card {
+  position: relative;
+  overflow: visible;
+  padding: clamp(25px, 3.3vw, 43px);
+  background: #fff;
+  border: 1px solid #dfede4;
+  border-radius: 28px;
+  box-shadow: 0 28px 70px -38px rgba(0, 75, 45, .33), 0 1px 2px rgba(6, 72, 40, .05);
+}
+.lx.scan-reflex .lx-request-card::before {
+  inset: 0 32px auto;
+  height: 4px;
+  border-radius: 0 0 4px 4px;
+  background: linear-gradient(90deg,#a7efc1,#006f47);
+}
+.lx.scan-reflex .lx-request-card__title {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: clamp(27px, 2.4vw, 34px);
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: -.045em;
+  color: #17372c;
+}
+.lx.scan-reflex .lx-request-label {
+  font-family: inherit;
+  font-size: 13px;
+  color: #224838;
+  font-weight: 650;
+}
+.lx.scan-reflex .lx-request-input {
+  background: #fcfffd;
+  color: #153b2d;
+  border-color: #dbe9de;
+  border-radius: 12px;
+  box-shadow: none;
+}
+.lx.scan-reflex .lx-request-input:focus-visible {
+  border-color: #009664;
+  outline-color: #009664;
+  background: #fff;
+}
+.lx.scan-reflex .lx-request-question {
+  background: #f1fbf5;
+  border-radius: 16px;
+  box-shadow: inset 0 0 0 1px #dcefe3;
+}
+.lx.scan-reflex .lx-request-card .lx-btn--primary {
+  min-height: 50px;
+  border-radius: 12px;
+  color: #fff;
+  background: #00633e;
+  box-shadow: 0 10px 24px -14px rgba(0, 99, 62, .7);
+}
+.lx.scan-reflex .lx-request-card .lx-btn--primary:hover { background: #007e50; }
+.lx.scan-reflex .lx-request-card .lx-btn--ghost { border-radius: 12px; }
+
+/* Existing three-step explainer and footer get the same typographic rhythm. */
+.lx.scan-reflex .lx-how-title,
+.lx.scan-reflex .lx-how h2 {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 400;
+  letter-spacing: -.045em;
+  line-height: 1.16;
+  font-size: clamp(30px, 3vw, 46px);
+}
+.lx.scan-reflex .lx-how-step__title { font-size: 17px; font-weight: 600; letter-spacing: -.025em; }
+.lx.scan-reflex .lx-how-step__copy { font-size: 14px; line-height: 1.7; }
+.lx.scan-reflex .lx-request-statuses {
+  background: #f2fbf5;
+  color: #244d3d;
+  border-radius: 22px;
+  box-shadow: inset 0 0 0 1px #dceee2;
+}
+.lx.scan-reflex .lx-request-statuses p { color: #52675a; font-size: 14px; line-height: 1.72; }
+.lx.scan-reflex .lx-footer { background: #053b2a; }
+.lx.scan-reflex .lx-footer__link { font-size: 13px; }
+
+/* Work on every device; cards never collide or overflow. */
+@media (min-width:1024px) {
+  .lx.scan-reflex .lx-request-hero > .shell {
+    grid-template-columns: minmax(0, 1.02fr) minmax(0, .98fr);
+    align-items: start;
+    gap: clamp(34px, 5vw, 86px);
+  }
+  .lx.scan-reflex #request-title { max-width: 550px; }
+}
+@media (max-width: 767px) {
+  .lx.scan-reflex .lx-request-hero { padding-top: 34px; padding-bottom: 62px; }
+  .lx.scan-reflex #request-title { font-size: clamp(37px, 8.7vw, 46px); letter-spacing: -.052em; }
+  .lx.scan-reflex .lx-request-hero .lx-lede { font-size: 15px; line-height: 1.7; }
+  .lx.scan-reflex .lx-request-card { border-radius: 23px; padding: 22px 19px 25px; }
+  .lx.scan-reflex .lx-request-point { font-size: 13.5px; }
+  .lx.scan-reflex .lx-request-summary { gap: 15px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lx.scan-reflex *, .lx.scan-reflex *::before, .lx.scan-reflex *::after {
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+  }
+}

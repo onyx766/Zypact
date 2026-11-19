@@ -89,41 +89,37 @@ const STAGES = [
   },
 ] as const;
 
-/**
- * Root-relative, because the landing's own footer links are same-page anchors
- * that would point nowhere from /scan.
- */
+/** Footer uses only live links on the latest Reflex V3 homepage. */
 const FOOTER = {
-  tagline:
-    "Record, preserve and retest how Perplexity answers one buyer question.",
+  tagline: "AI answer measurement for B2B SaaS.",
   columns: [
     {
-      heading: "Product",
+      heading: "Explore",
       links: [
+        { label: "Product", href: "/#product" },
         { label: "How it works", href: "/#how-it-works" },
-        { label: "Reports", href: "/#product" },
-        { label: "About Zypact", href: "/about" },
+        { label: "Use cases", href: "/#use-cases" },
       ],
     },
     {
-      heading: "Method",
+      heading: "Learn",
       links: [
-        { label: "Evidence", href: "/#methodology" },
-        { label: "Outcome statuses", href: "/#use-cases" },
-        { label: "Scope and limits", href: "/#beta" },
-      ],
-    },
-    {
-      heading: "Contact",
-      links: [
-        { label: "Request demo", href: "#request-form" },
-        { label: "Contact us", href: "mailto:contact@zypact.com" },
+        { label: "Methodology", href: "/#methodology" },
+        { label: "Founding pilots", href: "/#beta" },
         { label: "FAQ", href: "/#faq" },
+      ],
+    },
+    {
+      heading: "Get in touch",
+      links: [
+        { label: "Request a walkthrough", href: "#request-form" },
+        { label: "contact@zypact.com", href: "mailto:contact@zypact.com" },
+        { label: "Back to homepage", href: "/" },
       ],
     },
   ],
   bottomLine:
-    "Perplexity Sonar V1 · Launched by Zypact after approval · No guaranteed outcome",
+    "Directional API observations · Launched by Zypact after approval · No guaranteed outcome",
   copyright: "© 2026 Zypact, Inc. All rights reserved.",
 } as const;
 
@@ -256,28 +252,49 @@ export default function ScanPage() {
           layout="three"
         />
 
-        {/* -------------------------------------------------- Retest statuses */}
-        {/*
-          The approved design closes this page with client logos and a named
-          testimonial. Both are left out until there are real ones to show — a
-          pre-pilot product cannot borrow credibility it has not earned. The
-          scope boundary does that work honestly instead.
-        */}
-        <section className="py-16 sm:py-20">
+        {/* Reflex V3 trust / limits: no legacy dark status band or dead links. */}
+        <section
+          className="lx-scan-clarity py-16 sm:py-20"
+          aria-labelledby="scan-clarity-heading"
+        >
           <div className="shell">
-            <div className="lx-card lx-card--soft lx-request-statuses" data-reveal>
-              <span
-                className="lx-request-summary__icon is-teal"
-                aria-hidden="true"
-              >
-                <Repeat strokeWidth={1.9} />
-              </span>
-              <p className="text-pretty text-[14px] leading-relaxed text-muted-foreground">
-                Every retest ends in one of four statuses — increase observed,
-                decrease observed, no clear change, or inconclusive. Zypact
-                guarantees the agreed process and evidence contract, not a
-                favorable model response.
-              </p>
+            <div className="lx-scan-clarity-layout">
+              <div className="lx-scan-clarity-copy">
+                <span className="lx-scan-clarity-eyebrow">CLEAR BY DESIGN</span>
+                <h2 id="scan-clarity-heading">
+                  Know what the evidence can—and cannot—tell you.
+                </h2>
+                <p>
+                  Your pilot starts with an agreed buyer question and documented
+                  measurement conditions. We explain competitor observations and
+                  cited sources alongside the uncertainty, instead of promising
+                  a universal visibility score.
+                </p>
+                <a href="mailto:contact@zypact.com" className="lx-scan-clarity-contact">
+                  Questions? Contact our team
+                </a>
+              </div>
+              <div className="lx-scan-clarity-card">
+                <p className="lx-scan-clarity-card__eyebrow">MEASUREMENT LIMITS</p>
+                <h3>Evidence, not a guaranteed outcome.</h3>
+                <p>
+                  Every retest ends in one of four statuses — increase observed,
+                  decrease observed, no clear change, or inconclusive. Zypact
+                  guarantees the agreed process and evidence contract, not a
+                  favorable model response.
+                </p>
+                <div className="lx-scan-clarity-rule" />
+                <p>
+                  OpenAI API responses with web search can differ from what
+                  people see in the ChatGPT app. Pilot engine availability,
+                  question count, duration and retesting are confirmed with
+                  Zypact before any measurement.
+                </p>
+                <p className="lx-scan-clarity-footnote">
+                  A form submission is only a request. No paid AI call starts
+                  until the question and protocol are approved.
+                </p>
+              </div>
             </div>
           </div>
         </section>

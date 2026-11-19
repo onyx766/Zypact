@@ -27,7 +27,7 @@ assert(page.includes("<ScanForm enabled={enabled} />"));
 assert(page.includes('process.env.SNAPSHOT_PUBLIC_FORM_ENABLED === "true"'));
 assert(page.includes("Submitting this form does not start an AI call"));
 assert(page.includes("V1 surface: Perplexity Sonar only"));
-for(const anchor of ["product","how-it-works","use-cases","methodology","beta"]){
+for(const anchor of ["product","how-it-works","use-cases","methodology","beta","faq"]){
  assert(page.includes('href: "/#'+anchor+'"'),"missing live homepage anchor "+anchor);
  assert(home.includes('id="'+anchor+'"'),"missing homepage anchor "+anchor);
 }
@@ -42,4 +42,21 @@ assert(post.includes('"/api/snapshot-requests"'));
 assert(post.includes('status: "pending_verification"'));
 assert(post.includes('nextStep: "check_email"'));
 assert(!page.includes('import "./scan-form.css"'));
-console.log("PASS: marketing typography / scan design, all five links, original gated form and request API");
+assert(page.includes('id="scan-clarity-heading"'));
+assert(page.includes('className="lx-scan-clarity-card"'));
+assert(!page.includes('className="lx-card lx-card--soft lx-request-statuses"'));
+assert(!page.includes('href: "/about"')); // retired URL, returns 410
+assert(!page.includes('href: "/#reports"')); // retired homepage anchor
+assert(page.includes('© 2026 Zypact, Inc. All rights reserved.'));
+assert(page.includes('OpenAI API responses with web search can differ'));
+assert(css.includes('Reflex V3 below fold'));
+assert(css.includes('.lx.scan-reflex .lx-how {'));
+assert(css.includes('.lx.scan-reflex .lx-footer {'));
+assert(css.includes('background: #f7fbf8;'));
+assert(page.includes('steps={STAGES}') && page.includes('layout="three"'));
+const route = read("app/api/snapshot-requests/route.ts");
+assert(route.includes('process.env.SNAPSHOT_REQUESTS_ENABLED'));
+assert(route.includes('SNAPSHOT_EMAIL_VERIFICATION_ENABLED'));
+assert(route.includes('sendSnapshotVerificationEmail('));
+assert(route.includes('status: 201'));
+console.log("PASS: marketing typography / scan design, all six footer anchors, consistent below-fold, gated request/email flow");

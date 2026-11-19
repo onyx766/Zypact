@@ -130,11 +130,11 @@ export function ScanForm({ enabled }: ScanFormProps) {
     return (
       <div>
         <p className="lx-eyebrow">
-          V1 demo request
+          Guided walkthrough request
         </p>
 
         <h2 className="lx-request-card__title mt-4 text-[28px] sm:text-[32px]">
-          Demo requests are not open yet.
+          Walkthrough requests are not open yet.
         </h2>
 
         <p className="mt-4 text-[14px] leading-relaxed text-muted-foreground">
@@ -165,10 +165,10 @@ export function ScanForm({ enabled }: ScanFormProps) {
         </h2>
 
         <p className="mt-4 text-[14px] leading-relaxed text-muted-foreground">
-          We&rsquo;ve received your buyer question. No AI call has started. We
-          sent a private verification link to confirm your email — once
-          confirmed, we&rsquo;ll review the question and protocol before the
-          baseline is approved.
+          We&rsquo;ve received your walkthrough request. No AI call has started.
+          We sent a private verification link to confirm your email. After
+          confirmation, our team reviews your question and discusses the
+          available pilot scope and protocol before any execution.
         </p>
 
         <p className="mt-3 text-[12.5px] leading-relaxed text-muted-foreground">
@@ -185,8 +185,8 @@ export function ScanForm({ enabled }: ScanFormProps) {
               "Confirm your email",
               "Question review",
               "Protocol approval",
-              "Controlled baseline",
-              "Evidence report",
+              "Pilot scope discussion",
+              "Agreed next steps",
             ].map((stage, index) => (
               <li key={stage} className="flex items-center gap-2.5">
                 <span className="lx-request-next">
@@ -208,12 +208,12 @@ export function ScanForm({ enabled }: ScanFormProps) {
   return (
     <>
       <h2 className="lx-request-card__title text-[28px] sm:text-[32px]">
-        Request your demo
+        Request a walkthrough
       </h2>
 
       <p className="mt-2.5 text-[14px] leading-relaxed text-muted-foreground">
-        Tell us a bit about yourself and your question. We&rsquo;ll review it
-        and be in touch.
+        Start with one buyer question. We&rsquo;ll review it with you,
+        confirm the available engines and agree on pilot scope before execution.
       </p>
 
       <form className="mt-7 grid gap-5" onSubmit={handleSubmit} noValidate>
@@ -389,7 +389,7 @@ export function ScanForm({ enabled }: ScanFormProps) {
           className="lx-btn lx-btn--primary w-full"
           disabled={submitting}
         >
-          {submitting ? "Submitting…" : "Request demo"}
+          {submitting ? "Submitting…" : "Request walkthrough"}
           {submitting ? null : (
             <ArrowRight
               className="lx-btn__arrow"

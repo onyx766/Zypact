@@ -59,13 +59,13 @@ function main(): void {
   // ------------------------------------------------------------ Metadata
   const { metadata } = require("@/app/scan/page");
   check(
-    "title is unchanged, and absolute so the root template does not add Zypact twice",
-    (metadata.title as { absolute?: string } | undefined)?.absolute === "Request a Zypact V1 demo"
+    "title describes the demo and remains absolute",
+    (metadata.title as { absolute?: string } | undefined)?.absolute === "Zypact — Request a Demo"
   );
   check(
-    "description is unchanged",
+    "description describes Zypact capabilities without pricing",
     metadata.description ===
-      "Request access to Zypact's controlled, automated buyer-question diagnostic and registered retest on Perplexity Sonar."
+      "Request a Zypact demo to explore AI Answer Measurement & Intelligence for B2B SaaS: brand visibility, competitors, cited sources, potential marketing actions, and documented follow-up observations. Pilot availability is confirmed with the team."
   );
   check("canonical stays /scan", metadata.alternates?.canonical === "/scan");
   check(
@@ -86,7 +86,7 @@ function main(): void {
   check("landing footer renders", open.includes("lx-footer"));
   check(
     "footer keeps the execution line",
-    flatOpen.includes("Launched by Zypact after approval")
+    flatOpen.includes("Provider availability confirmed by Zypact")
   );
   check("footer links are not same-page landing anchors", !/href="#(how-it-works|reports|evidence|outcomes|scope|contact|faq)"/.test(open));
   check("steps band renders three steps", (open.match(/class="lx-how-step(?: |")/g) ?? []).length === 3);

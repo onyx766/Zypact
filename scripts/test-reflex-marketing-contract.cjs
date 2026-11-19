@@ -18,6 +18,7 @@ const nav = read("components/marketing/site-header.tsx");
 const css = read("components/landing/styles/reflex-scan.css");
 
 assert(home.includes("Reflex V3 refined type hierarchy"));
+assert(home.includes("AI ANSWER MEASUREMENT FOR B2B SAAS"));
 assert.equal((home.match(/href="\/scan"/g)||[]).length,4);
 assert.equal((home.match(/<h1\b/g)||[]).length,1);
 assert(home.includes("Synthetic example"));
@@ -26,7 +27,18 @@ assert(page.includes('<ThemeRoot theme="light" className="lx scan-reflex">'));
 assert(page.includes("<ScanForm enabled={enabled} />"));
 assert(page.includes('process.env.SNAPSHOT_PUBLIC_FORM_ENABLED === "true"'));
 assert(page.includes("Submitting this form does not start an AI call"));
-assert(page.includes("V1 surface: Perplexity Sonar only"));
+assert(page.includes("API-based observations under recorded conditions."));
+assert(page.includes("Brand & competitor intelligence"));
+assert(page.includes("Source analysis"));
+assert(page.includes("Actions & follow-up"));
+assert(form.includes("Example buyer question"));
+assert(form.includes("This simply helps us understand your use case"));
+assert(form.includes("Request demo"));
+assert(!/\bpricing\b/i.test(page));
+assert(!/\bpricing\b/i.test(form));
+assert(form.includes("submitSnapshotRequest(values)"));
+assert(page.includes("OpenAI API responses with web search may differ"));
+assert(!page.includes("V1 surface: Perplexity Sonar only"));
 for(const anchor of ["product","how-it-works","use-cases","methodology","beta","faq"]){
  assert(page.includes('href: "/#'+anchor+'"'),"missing live homepage anchor "+anchor);
  assert(home.includes('id="'+anchor+'"'),"missing homepage anchor "+anchor);

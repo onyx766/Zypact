@@ -24,9 +24,9 @@ import { ScanForm } from "./scan-form";
 export const metadata: Metadata = {
   // Absolute: the title already names Zypact, so the root "%s — Zypact"
   // template must not add it a second time.
-  title: { absolute: "Request a Zypact V1 demo" },
+  title: { absolute: "Zypact — Request a Demo" },
   description:
-    "Request access to Zypact's controlled, automated buyer-question diagnostic and registered retest on Perplexity Sonar.",
+    "Request a Zypact demo to explore AI Answer Measurement & Intelligence for B2B SaaS: brand visibility, competitors, cited sources, potential marketing actions, and documented follow-up observations. Pilot availability is confirmed with the team.",
   alternates: {
     canonical: "/scan",
   },
@@ -34,58 +34,52 @@ export const metadata: Metadata = {
 
 /** What the engagement delivers. Process commitments, never outcomes. */
 const HIGHLIGHTS = [
-  "One commercially important buyer question, agreed before anything runs",
-  "Exact provider evidence, preserved insert-only and inspectable",
-  "A registered retest of the same question after one recorded change",
-  "An auditable report where every number links to its supporting evidence",
+  "See how Zypact examines brand mentions in sampled AI answers",
+  "Understand which competitors appear in relevant buyer questions",
+  "Explore cited sources and evidence-informed marketing opportunities",
+  "See how documented follow-up measurement can inform decisions",
 ] as const;
 
 const SUMMARY = [
   {
-    title: "One buyer question",
-    desc: "Focus on one commercially meaningful question.",
+    title: "Brand & competitor intelligence",
+    desc: "Investigate how AI answers describe your product and its alternatives.",
     icon: FileSearch,
     tone: "is-teal",
   },
   {
-    title: "Reviewed before any AI call",
-    desc: "We review your question and protocol first.",
+    title: "Source analysis",
+    desc: "Examine cited websites and the evidence behind sampled answers.",
     icon: ShieldCheck,
     tone: "is-amber",
   },
   {
-    title: "Evidence-backed result",
-    desc: "A controlled run with exact evidence and integrity checks.",
+    title: "Actions & follow-up",
+    desc: "Investigate opportunities and understand what a documented retest can show.",
     icon: Database,
     tone: "is-slate",
   },
 ] as const;
 
 /**
- * The three stages between a request and a result, drawn with the landing's
- * How it works band.
- *
- * The approved design shows a product preview beside this with a cross-platform
- * comparison and a single "overall visibility" percentage. Neither is built:
- * Perplexity Sonar is the only live V1 surface, and a universal visibility
- * number is exactly the claim the methodology forbids. These stages describe
- * what actually happens instead.
+ * The three steps explain the demo-request process, not the full product
+ * workflow. No AI measurement is started by submitting the form.
  */
 const STAGES = [
   {
-    title: "Submit a buyer question",
+    title: "Tell us about your company",
     icon: ClipboardList,
-    copy: "Share one real question a prospective customer might ask when comparing products like yours.",
+    copy: "Share your website and one example buyer question so we can understand what matters to your team.",
   },
   {
-    title: "Run a controlled baseline",
+    title: "Explore Zypact",
     icon: Search,
-    copy: "After the question and protocol are approved, Zypact launches the bounded Perplexity Sonar baseline.",
+    copy: "Review how measurements, competitor observations, cited sources, and potential actions fit your use case.",
   },
   {
-    title: "Review evidence and results",
+    title: "Discuss next steps",
     icon: BarChart3,
-    copy: "Read the prompt-scoped observations with the exact provider evidence behind every one of them.",
+    copy: "Ask about current capabilities and, if relevant, a scoped founding paid pilot with the Zypact team.",
   },
 ] as const;
 
@@ -119,7 +113,7 @@ const FOOTER = {
     },
   ],
   bottomLine:
-    "Directional API observations · Launched by Zypact after approval · No guaranteed outcome",
+    "Directional API observations · Provider availability confirmed by Zypact · No guaranteed outcomes",
   copyright: "© 2026 Zypact, Inc. All rights reserved.",
 } as const;
 
@@ -147,7 +141,7 @@ export default function ScanPage() {
       <AtmosphereCanvas />
       <div className="lx-grain" aria-hidden="true" />
 
-      <SiteHeader cta={{ label: "Request demo", href: "#request-form" }} links={REFLEX_NAV} />
+      <SiteHeader cta={{ label: "Request a walkthrough", href: "#request-form" }} links={REFLEX_NAV} />
 
       <main className="relative z-[1]">
         {/* -------------------------------------------------------------- Hero */}
@@ -159,7 +153,7 @@ export default function ScanPage() {
             {/* ------------------------------------------------ Left column */}
             <div className="max-w-xl">
               <p className="lx-eyebrow lx-eyebrow--rule lx-intro" style={order(0)}>
-                Zypact V1 · Controlled execution
+                Zypact · AI Answer Measurement & Intelligence
               </p>
 
               <h1
@@ -171,11 +165,13 @@ export default function ScanPage() {
               </h1>
 
               <p className="lx-lede lx-intro mt-6" style={order(2)}>
-                See how your company appears in an AI buyer answer. Bring one
-                commercially important buyer question. Zypact reviews the
-                question and protocol first. After approval, the controlled
-                Perplexity Sonar baseline is launched by Zypact and preserves the
-                evidence.
+                Zypact is developing an AI Answer Measurement & Intelligence
+                platform for B2B SaaS teams. Explore how it examines AI
+                answers about your brand, which competitors appear, and
+                what external sources are cited. See how these observations
+                can inform marketing actions and documented follow-up
+                measurements. The demo is a conversation about the
+                product and its current capabilities.
               </p>
 
               <ul className="lx-request-points lx-intro mt-8" style={order(3)}>
@@ -222,8 +218,9 @@ export default function ScanPage() {
                 className="lx-intro mt-8 border-t border-border pt-5 text-[11px] font-medium uppercase leading-[1.75] tracking-[0.14em] text-muted-foreground"
                 style={order(6)}
               >
-                V1 surface: Perplexity Sonar only. No market-wide score,
-                causal promise, or revenue attribution.
+                API-based observations under recorded conditions. OpenAI API
+                responses may differ from the consumer ChatGPT app. No
+                market-wide score, causal promise, or revenue attribution.
               </p>
             </div>
 
@@ -246,8 +243,8 @@ export default function ScanPage() {
         <HowItWorks
           id="request-steps"
           eyebrow="How it works"
-          title="From question to insights in three steps"
-          lede="Nothing runs until the question and protocol are approved. After that, Zypact launches the controlled baseline."
+          title="From demo request to a clearer picture"
+          lede="Tell us about your company, explore the measurement workflow with our team, and discuss the next steps that make sense for your goals."
           steps={STAGES}
           layout="three"
         />
@@ -265,10 +262,10 @@ export default function ScanPage() {
                   Know what the evidence can—and cannot—tell you.
                 </h2>
                 <p>
-                  Your pilot starts with an agreed buyer question and documented
-                  measurement conditions. We explain competitor observations and
-                  cited sources alongside the uncertainty, instead of promising
-                  a universal visibility score.
+                  Zypact is designed to connect buyer questions with sampled AI
+                  answers, competitor observations, and cited sources.
+                  These can guide marketing investigations, but do not
+                  represent all buyers or all AI systems.
                 </p>
                 <a href="mailto:contact@zypact.com" className="lx-scan-clarity-contact">
                   Questions? Contact our team
@@ -278,17 +275,17 @@ export default function ScanPage() {
                 <p className="lx-scan-clarity-card__eyebrow">MEASUREMENT LIMITS</p>
                 <h3>Evidence, not a guaranteed outcome.</h3>
                 <p>
-                  Every retest ends in one of four statuses — increase observed,
-                  decrease observed, no clear change, or inconclusive. Zypact
-                  guarantees the agreed process and evidence contract, not a
-                  favorable model response.
+                  When a documented retest is part of an approved engagement,
+                  results may show an increase, a decrease, no clear change,
+                  or an inconclusive result. A difference in AI answers does
+                  not prove that a marketing action caused it.
                 </p>
                 <div className="lx-scan-clarity-rule" />
                 <p>
-                  OpenAI API responses with web search can differ from what
-                  people see in the ChatGPT app. Pilot engine availability,
-                  question count, duration and retesting are confirmed with
-                  Zypact before any measurement.
+                  OpenAI API responses with web search may differ from answers
+                  people see in the ChatGPT app. Zypact V1 remains in
+                  development, and the team confirms which measurements
+                  and features are available for each engagement.
                 </p>
                 <p className="lx-scan-clarity-footnote">
                   A form submission is only a request. No paid AI call starts

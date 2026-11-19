@@ -24,9 +24,9 @@ import { ScanForm } from "./scan-form";
 export const metadata: Metadata = {
   // Absolute: the title already names Zypact, so the root "%s — Zypact"
   // template must not add it a second time.
-  title: { absolute: "Request a Zypact V1 demo" },
+  title: { absolute: "Request a Zypact walkthrough" },
   description:
-    "Request access to Zypact's controlled, automated buyer-question diagnostic and registered retest on Perplexity Sonar.",
+    "Discuss a guided Zypact measurement pilot for B2B SaaS buyer questions, competitor observations, and cited-source evidence. Scope is confirmed before execution.",
   alternates: {
     canonical: "/scan",
   },
@@ -34,58 +34,53 @@ export const metadata: Metadata = {
 
 /** What the engagement delivers. Process commitments, never outcomes. */
 const HIGHLIGHTS = [
-  "One commercially important buyer question, agreed before anything runs",
-  "Exact provider evidence, preserved insert-only and inspectable",
-  "A registered retest of the same question after one recorded change",
-  "An auditable report where every number links to its supporting evidence",
+  "Start with one real buyer question; discuss the wider pilot scope",
+  "Review recorded AI answers, competitor observations, and cited-source evidence",
+  "Agree on engines, sampling, and deliverables before execution",
+  "Discuss follow-up measurements when included in the agreed pilot",
 ] as const;
 
 const SUMMARY = [
   {
-    title: "One buyer question",
-    desc: "Focus on one commercially meaningful question.",
+    title: "Start with one buyer question",
+    desc: "Tell us what a potential customer might ask.",
     icon: FileSearch,
     tone: "is-teal",
   },
   {
-    title: "Reviewed before any AI call",
-    desc: "We review your question and protocol first.",
+    title: "Scope confirmed first",
+    desc: "Our team confirms available engines and the measurement protocol.",
     icon: ShieldCheck,
     tone: "is-amber",
   },
   {
-    title: "Evidence-backed result",
-    desc: "A controlled run with exact evidence and integrity checks.",
+    title: "Evidence with limitations",
+    desc: "Understand what was observed and what remains uncertain.",
     icon: Database,
     tone: "is-slate",
   },
 ] as const;
 
 /**
- * The three stages between a request and a result, drawn with the landing's
- * How it works band.
- *
- * The approved design shows a product preview beside this with a cross-platform
- * comparison and a single "overall visibility" percentage. Neither is built:
- * Perplexity Sonar is the only live V1 surface, and a universal visibility
- * number is exactly the claim the methodology forbids. These stages describe
- * what actually happens instead.
+ * Three stages of a walkthrough request, not the product's full five-step
+ * measurement workflow. Provider availability and paid-pilot scope are always
+ * confirmed by the team before execution. Never imply a market-wide score.
  */
 const STAGES = [
   {
-    title: "Submit a buyer question",
+    title: "Share a buyer question",
     icon: ClipboardList,
     copy: "Share one real question a prospective customer might ask when comparing products like yours.",
   },
   {
-    title: "Run a controlled baseline",
+    title: "Agree on pilot scope",
     icon: Search,
-    copy: "After the question and protocol are approved, Zypact launches the bounded Perplexity Sonar baseline.",
+    copy: "We review the question and confirm the available engines, sampling conditions, and any follow-up measurement.",
   },
   {
-    title: "Review evidence and results",
+    title: "Examine findings together",
     icon: BarChart3,
-    copy: "Read the prompt-scoped observations with the exact provider evidence behind every one of them.",
+    copy: "When a pilot is approved and completed, review recorded answers, competitor appearances, cited sources, and limitations.",
   },
 ] as const;
 
@@ -147,7 +142,7 @@ export default function ScanPage() {
       <AtmosphereCanvas />
       <div className="lx-grain" aria-hidden="true" />
 
-      <SiteHeader cta={{ label: "Request demo", href: "#request-form" }} links={REFLEX_NAV} />
+      <SiteHeader cta={{ label: "Request a walkthrough", href: "#request-form" }} links={REFLEX_NAV} />
 
       <main className="relative z-[1]">
         {/* -------------------------------------------------------------- Hero */}
@@ -159,7 +154,7 @@ export default function ScanPage() {
             {/* ------------------------------------------------ Left column */}
             <div className="max-w-xl">
               <p className="lx-eyebrow lx-eyebrow--rule lx-intro" style={order(0)}>
-                Zypact V1 · Controlled execution
+                Zypact · Guided founding pilots
               </p>
 
               <h1
@@ -167,15 +162,15 @@ export default function ScanPage() {
                 className="lx-display lx-intro mt-5 text-[40px] sm:mt-6 sm:text-[52px] lg:text-[58px]"
                 style={order(1)}
               >
-                Request a Zypact demo
+                Request a Zypact walkthrough
               </h1>
 
               <p className="lx-lede lx-intro mt-6" style={order(2)}>
-                See how your company appears in an AI buyer answer. Bring one
-                commercially important buyer question. Zypact reviews the
-                question and protocol first. After approval, the controlled
-                Perplexity Sonar baseline is launched by Zypact and preserves the
-                evidence.
+                Explore how Zypact examines AI answers about your brand,
+                competitors, and cited sources. Start with one commercially
+                important buyer question. Our team confirms which API engines,
+                measurement conditions, and deliverables are available for your
+                guided pilot before any execution.
               </p>
 
               <ul className="lx-request-points lx-intro mt-8" style={order(3)}>
@@ -222,8 +217,9 @@ export default function ScanPage() {
                 className="lx-intro mt-8 border-t border-border pt-5 text-[11px] font-medium uppercase leading-[1.75] tracking-[0.14em] text-muted-foreground"
                 style={order(6)}
               >
-                V1 surface: Perplexity Sonar only. No market-wide score,
-                causal promise, or revenue attribution.
+                API-based observations under recorded conditions. OpenAI API
+                responses may differ from the consumer ChatGPT app. No
+                market-wide score, causal promise, or revenue attribution.
               </p>
             </div>
 
@@ -246,8 +242,8 @@ export default function ScanPage() {
         <HowItWorks
           id="request-steps"
           eyebrow="How it works"
-          title="From question to insights in three steps"
-          lede="Nothing runs until the question and protocol are approved. After that, Zypact launches the controlled baseline."
+          title="From walkthrough request to reviewed evidence"
+          lede="Start with a buyer question. We confirm the pilot scope and protocol first; any measurements and retests take place only after approval."
           steps={STAGES}
           layout="three"
         />
@@ -265,10 +261,10 @@ export default function ScanPage() {
                   Know what the evidence can—and cannot—tell you.
                 </h2>
                 <p>
-                  Your pilot starts with an agreed buyer question and documented
-                  measurement conditions. We explain competitor observations and
-                  cited sources alongside the uncertainty, instead of promising
-                  a universal visibility score.
+                  An agreed pilot uses approved buyer questions and documented
+                  measurement conditions. We review brand and competitor
+                  observations and available citations alongside uncertainty,
+                  instead of promising a universal visibility score.
                 </p>
                 <a href="mailto:contact@zypact.com" className="lx-scan-clarity-contact">
                   Questions? Contact our team
@@ -278,10 +274,10 @@ export default function ScanPage() {
                 <p className="lx-scan-clarity-card__eyebrow">MEASUREMENT LIMITS</p>
                 <h3>Evidence, not a guaranteed outcome.</h3>
                 <p>
-                  Every retest ends in one of four statuses — increase observed,
-                  decrease observed, no clear change, or inconclusive. Zypact
-                  guarantees the agreed process and evidence contract, not a
-                  favorable model response.
+                  When a documented retest is included in the agreed scope,
+                  it may show an increase, a decrease, no clear change, or an
+                  inconclusive result. Zypact commits to the agreed process and
+                  evidence, not a favorable model response.
                 </p>
                 <div className="lx-scan-clarity-rule" />
                 <p>

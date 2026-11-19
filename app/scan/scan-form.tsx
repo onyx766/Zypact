@@ -130,11 +130,11 @@ export function ScanForm({ enabled }: ScanFormProps) {
     return (
       <div>
         <p className="lx-eyebrow">
-          Guided walkthrough request
+          Founding paid pilot inquiry
         </p>
 
         <h2 className="lx-request-card__title mt-4 text-[28px] sm:text-[32px]">
-          Walkthrough requests are not open yet.
+          Founding paid pilot inquiries are not open yet.
         </h2>
 
         <p className="mt-4 text-[14px] leading-relaxed text-muted-foreground">
@@ -165,10 +165,10 @@ export function ScanForm({ enabled }: ScanFormProps) {
         </h2>
 
         <p className="mt-4 text-[14px] leading-relaxed text-muted-foreground">
-          We&rsquo;ve received your walkthrough request. No AI call has started.
+          We&rsquo;ve received your founding paid pilot inquiry. No AI call has started.
           We sent a private verification link to confirm your email. After
-          confirmation, our team reviews your question and discusses the
-          available pilot scope and protocol before any execution.
+          confirmation, our team will discuss the buyer questions, pricing,
+          available API engines, and agreed deliverables before any execution.
         </p>
 
         <p className="mt-3 text-[12.5px] leading-relaxed text-muted-foreground">
@@ -183,9 +183,9 @@ export function ScanForm({ enabled }: ScanFormProps) {
           <ol className="mt-3 grid gap-1.5 text-[13.5px] leading-relaxed text-muted-foreground">
             {[
               "Confirm your email",
-              "Question review",
-              "Protocol approval",
-              "Pilot scope discussion",
+              "Paid pilot discussion",
+              "Agree on questions and pricing",
+              "Approve measurement protocol",
               "Agreed next steps",
             ].map((stage, index) => (
               <li key={stage} className="flex items-center gap-2.5">
@@ -208,12 +208,13 @@ export function ScanForm({ enabled }: ScanFormProps) {
   return (
     <>
       <h2 className="lx-request-card__title text-[28px] sm:text-[32px]">
-        Request a walkthrough
+        Discuss a founding paid pilot
       </h2>
 
       <p className="mt-2.5 text-[14px] leading-relaxed text-muted-foreground">
-        Start with one buyer question. We&rsquo;ll review it with you,
-        confirm the available engines and agree on pilot scope before execution.
+        Tell us about your company and share one example buyer question.
+        This starts a conversation about a proposed three-question paid pilot;
+        the final scope and price are agreed before any work begins.
       </p>
 
       <form className="mt-7 grid gap-5" onSubmit={handleSubmit} noValidate>
@@ -331,7 +332,7 @@ export function ScanForm({ enabled }: ScanFormProps) {
         <div className="lx-request-question">
           <Field
             htmlFor="buyerCategory"
-            label="One buyer question"
+            label="Example buyer question"
             error={fieldErrors.buyerCategory?.[0]}
             errorId="buyerCategory-error"
             footer={
@@ -340,11 +341,10 @@ export function ScanForm({ enabled }: ScanFormProps) {
                   id="buyerCategory-help"
                   className="text-[12.5px] leading-relaxed text-muted-foreground"
                 >
-                  Enter one commercially important question a buyer might ask
-                  when comparing products like yours — for example,
-                  &ldquo;Which SOC 2 automation platforms are best for a
-                  50-person B2B SaaS company?&rdquo;, not &ldquo;SOC 2
-                  software&rdquo;.
+                  Enter one question a buyer might ask when comparing software,
+                  for example, &ldquo;Which SOC 2 automation platforms are best
+                  for a 50-person B2B SaaS company?&rdquo;. This is only a
+                  starting point, not a one-question limit for the paid pilot.
                 </p>
 
                 <p
@@ -389,7 +389,7 @@ export function ScanForm({ enabled }: ScanFormProps) {
           className="lx-btn lx-btn--primary w-full"
           disabled={submitting}
         >
-          {submitting ? "Submitting…" : "Request walkthrough"}
+          {submitting ? "Submitting…" : "Discuss a paid pilot"}
           {submitting ? null : (
             <ArrowRight
               className="lx-btn__arrow"

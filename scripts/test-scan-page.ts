@@ -59,13 +59,13 @@ function main(): void {
   // ------------------------------------------------------------ Metadata
   const { metadata } = require("@/app/scan/page");
   check(
-    "title describes the paid pilot and remains absolute",
-    (metadata.title as { absolute?: string } | undefined)?.absolute === "Zypact Founding Paid Pilots — Request a Walkthrough"
+    "title describes the demo and remains absolute",
+    (metadata.title as { absolute?: string } | undefined)?.absolute === "Zypact — Request a Demo"
   );
   check(
-    "description describes guided scope without claiming a guaranteed pilot",
+    "description describes Zypact capabilities without pricing",
     metadata.description ===
-      "Discuss a scoped founding paid pilot for Zypact's AI Answer Measurement & Intelligence platform. Review buyer questions, repeated measurements on supported APIs, competitors, citations, and possible marketing actions. Scope and pricing are agreed directly."
+      "Request a Zypact demo to explore AI Answer Measurement & Intelligence for B2B SaaS: brand visibility, competitors, cited sources, potential marketing actions, and documented follow-up observations. Pilot availability is confirmed with the team."
   );
   check("canonical stays /scan", metadata.alternates?.canonical === "/scan");
   check(
@@ -79,14 +79,14 @@ function main(): void {
   check("renders inside the Tailwind root", open.includes('class="v2-root"'));
   check("renders the landing .lx scope", /class="[^"]*\blx\b[^"]*"/.test(open));
   check("exactly one h1", (open.match(/<h1\b/g) ?? []).length === 1);
-  check("h1 is the request headline", flatOpen.includes("Explore a founding paid pilot"));
+  check("h1 is the request headline", flatOpen.includes("Request a Zypact demo"));
   check("landing header renders", open.includes("data-lx-header"));
   check("header CTA jumps to the form on this page", /href="#request-form"/.test(open));
   check("form anchor exists", open.includes('id="request-form"'));
   check("landing footer renders", open.includes("lx-footer"));
   check(
     "footer keeps the execution line",
-    flatOpen.includes("Launched by Zypact after approval")
+    flatOpen.includes("Provider availability confirmed by Zypact")
   );
   check("footer links are not same-page landing anchors", !/href="#(how-it-works|reports|evidence|outcomes|scope|contact|faq)"/.test(open));
   check("steps band renders three steps", (open.match(/class="lx-how-step(?: |")/g) ?? []).length === 3);
@@ -97,7 +97,7 @@ function main(): void {
     check(`field ${name} keeps its label`, open.includes(`for="${name}"`));
   }
   check("form keeps noValidate", /<form[^>]*novalidate/i.test(open));
-  check("submit button is a real submit", /<button[^>]*type="submit"/.test(open) && flatOpen.includes("Discuss a paid pilot"));
+  check("submit button is a real submit", /<button[^>]*type="submit"/.test(open) && flatOpen.includes("Request demo"));
   check("buyer question keeps its help text", open.includes('id="buyerCategory-help"'));
   check("process disclosure renders", flatOpen.includes("Submitting this form does not start an AI call."));
   check("request-only disclosure renders", flatOpen.includes("Request only. No AI call starts until the question and protocol are approved."));
@@ -105,7 +105,7 @@ function main(): void {
   // ---------------------------------------------------- Rendered: closed
   const closed = render(false);
   const flatClosed = flatten(closed);
-  check("closed state says requests are not open", flatClosed.includes("Founding paid pilot inquiries are not open yet."));
+  check("closed state says requests are not open", flatClosed.includes("Demo requests are not open yet."));
   check("closed state renders no form", !/<form\b/.test(closed));
   check("closed state keeps the return link", /href="\/"[^>]*>\s*Return to Zypact/.test(closed));
 

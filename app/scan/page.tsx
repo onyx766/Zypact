@@ -264,7 +264,7 @@ export default function ScanPage() {
                   An agreed pilot uses approved buyer questions and documented
                   measurement conditions. We review brand and competitor
                   observations and available citations alongside uncertainty,
-                  instead of promising a universal visibility score.
+                  instead of promising a universal visibility metric.
                 </p>
                 <a href="mailto:contact@zypact.com" className="lx-scan-clarity-contact">
                   Questions? Contact our team

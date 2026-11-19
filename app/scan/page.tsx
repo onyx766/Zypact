@@ -24,9 +24,9 @@ import { ScanForm } from "./scan-form";
 export const metadata: Metadata = {
   // Absolute: the title already names Zypact, so the root "%s — Zypact"
   // template must not add it a second time.
-  title: { absolute: "Zypact Founding Paid Pilots — Request a Walkthrough" },
+  title: { absolute: "Zypact — Request a Demo" },
   description:
-    "Discuss a scoped founding paid pilot for Zypact's AI Answer Measurement & Intelligence platform. Review buyer questions, repeated measurements on supported APIs, competitors, citations, and possible marketing actions. Scope and pricing are agreed directly.",
+    "Request a Zypact demo to explore AI Answer Measurement & Intelligence for B2B SaaS: brand visibility, competitors, cited sources, potential marketing actions, and documented follow-up observations. Pilot availability is confirmed with the team.",
   alternates: {
     canonical: "/scan",
   },
@@ -34,53 +34,52 @@ export const metadata: Metadata = {
 
 /** What the engagement delivers. Process commitments, never outcomes. */
 const HIGHLIGHTS = [
-  "Discuss a focused paid pilot around buyer questions agreed with your team",
-  "Examine repeated API answers, competitor appearances, and cited sources",
-  "Receive an evidence-based report and discuss findings with our team",
-  "Confirm pricing, scope, and any retest before the pilot begins",
+  "See how Zypact examines brand mentions in sampled AI answers",
+  "Understand which competitors appear in relevant buyer questions",
+  "Explore cited sources and evidence-informed marketing opportunities",
+  "See how documented follow-up measurement can inform decisions",
 ] as const;
 
 const SUMMARY = [
   {
-    title: "A scoped paid pilot",
-    desc: "Buyer questions and deliverables agreed with your team.",
+    title: "Brand & competitor intelligence",
+    desc: "Investigate how AI answers describe your product and its alternatives.",
     icon: FileSearch,
     tone: "is-teal",
   },
   {
-    title: "Clear deliverables",
-    desc: "We agree on engines, sampling, report, and pricing before work starts.",
+    title: "Source analysis",
+    desc: "Examine cited websites and the evidence behind sampled answers.",
     icon: ShieldCheck,
     tone: "is-amber",
   },
   {
-    title: "Decisions grounded in evidence",
-    desc: "Review brand, competitor, and source observations with clear limits.",
+    title: "Actions & follow-up",
+    desc: "Investigate opportunities and understand what a documented retest can show.",
     icon: Database,
     tone: "is-slate",
   },
 ] as const;
 
 /**
- * Three stages of a walkthrough request, not the product's full five-step
- * measurement workflow. Provider availability and paid-pilot scope are always
- * confirmed by the team before execution. Never imply a market-wide score.
+ * The three steps explain the demo-request process, not the full product
+ * workflow. No AI measurement is started by submitting the form.
  */
 const STAGES = [
   {
-    title: "Tell us about your brand",
+    title: "Tell us about your company",
     icon: ClipboardList,
-    copy: "Share your website and one example question. It helps start the discussion; it does not limit the paid pilot to one question.",
+    copy: "Share your website and one example buyer question so we can understand what matters to your team.",
   },
   {
-    title: "Confirm paid pilot scope",
+    title: "Explore Zypact",
     icon: Search,
-    copy: "Agree on buyer questions, supported AI APIs, pricing, sampling, reporting, and any documented retest.",
+    copy: "Review how measurements, competitor observations, cited sources, and potential actions fit your use case.",
   },
   {
-    title: "Review findings together",
+    title: "Discuss next steps",
     icon: BarChart3,
-    copy: "Review recorded AI answers, competitors, cited sources, and limitations to decide what deserves further investigation.",
+    copy: "Ask about current capabilities and, if relevant, a scoped founding paid pilot with the Zypact team.",
   },
 ] as const;
 
@@ -114,7 +113,7 @@ const FOOTER = {
     },
   ],
   bottomLine:
-    "Directional API observations · Launched by Zypact after approval · No guaranteed outcome",
+    "Directional API observations · Provider availability confirmed by Zypact · No guaranteed outcomes",
   copyright: "© 2026 Zypact, Inc. All rights reserved.",
 } as const;
 
@@ -154,7 +153,7 @@ export default function ScanPage() {
             {/* ------------------------------------------------ Left column */}
             <div className="max-w-xl">
               <p className="lx-eyebrow lx-eyebrow--rule lx-intro" style={order(0)}>
-                Zypact · Founding paid pilots
+                Zypact · AI Answer Measurement & Intelligence
               </p>
 
               <h1
@@ -162,17 +161,17 @@ export default function ScanPage() {
                 className="lx-display lx-intro mt-5 text-[40px] sm:mt-6 sm:text-[52px] lg:text-[58px]"
                 style={order(1)}
               >
-                Explore a founding paid pilot
+                Request a Zypact demo
               </h1>
 
               <p className="lx-lede lx-intro mt-6" style={order(2)}>
                 Zypact is developing an AI Answer Measurement & Intelligence
-                platform for B2B SaaS marketing teams. Founding paid pilots
-                are designed to examine how AI answers represent your brand,
-                which competitors appear, and what sources are cited—then
-                discuss marketing opportunities worth investigating. The
-                buyer questions, available API engines, sampling, report,
-                price, and any retest are agreed before work begins.
+                platform for B2B SaaS teams. Explore how it examines AI
+                answers about your brand, which competitors appear, and
+                what external sources are cited. See how these observations
+                can inform marketing actions and documented follow-up
+                measurements. The demo is a conversation about the
+                product and its current capabilities.
               </p>
 
               <ul className="lx-request-points lx-intro mt-8" style={order(3)}>
@@ -244,8 +243,8 @@ export default function ScanPage() {
         <HowItWorks
           id="request-steps"
           eyebrow="How it works"
-          title="From paid pilot inquiry to useful evidence"
-          lede="Start with a pilot conversation. We agree on buyer questions, pricing, measurement protocol, and deliverables before any work begins."
+          title="From demo request to a clearer picture"
+          lede="Tell us about your company, explore the measurement workflow with our team, and discuss the next steps that make sense for your goals."
           steps={STAGES}
           layout="three"
         />
@@ -263,10 +262,10 @@ export default function ScanPage() {
                   Know what the evidence can—and cannot—tell you.
                 </h2>
                 <p>
-                  An agreed pilot uses approved buyer questions and documented
-                  measurement conditions. We review brand mentions,
-                  competitors, and available citations, then discuss possible
-                  marketing actions and uncertainty—not universal scores.
+                  Zypact is designed to connect buyer questions with sampled AI
+                  answers, competitor observations, and cited sources.
+                  These can guide marketing investigations, but do not
+                  represent all buyers or all AI systems.
                 </p>
                 <a href="mailto:contact@zypact.com" className="lx-scan-clarity-contact">
                   Questions? Contact our team
@@ -276,17 +275,17 @@ export default function ScanPage() {
                 <p className="lx-scan-clarity-card__eyebrow">MEASUREMENT LIMITS</p>
                 <h3>Evidence, not a guaranteed outcome.</h3>
                 <p>
-                  When a documented retest is included in the agreed scope,
-                  it may show an increase, a decrease, no clear change, or an
-                  inconclusive result. Zypact commits to the agreed process and
-                  evidence, not a favorable model response.
+                  When a documented retest is part of an approved engagement,
+                  results may show an increase, a decrease, no clear change,
+                  or an inconclusive result. A difference in AI answers does
+                  not prove that a marketing action caused it.
                 </p>
                 <div className="lx-scan-clarity-rule" />
                 <p>
-                  OpenAI API responses with web search can differ from what
-                  people see in the ChatGPT app. Pilot engine availability,
-                  question count, duration and retesting are confirmed with
-                  Zypact before any measurement.
+                  OpenAI API responses with web search may differ from answers
+                  people see in the ChatGPT app. Zypact V1 remains in
+                  development, and the team confirms which measurements
+                  and features are available for each engagement.
                 </p>
                 <p className="lx-scan-clarity-footnote">
                   A form submission is only a request. No paid AI call starts

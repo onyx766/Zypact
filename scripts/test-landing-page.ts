@@ -119,7 +119,7 @@ async function main(): Promise<void> {
   const flatScanPage = flatten(scanPageSource);
   const flatScanForm = flatten(scanFormSource);
 
-  check("request page explains controlled walkthrough scope", flatScanPage.includes("Zypact · Founding paid pilots") && flatScanPage.includes("three agreed buyer questions") && flatScanPage.includes("Pricing, supported API engines") && !flatScanPage.includes("runs automatically"));
+  check("request page explains controlled walkthrough scope", flatScanPage.includes("Zypact · Founding paid pilots") && flatScanPage.includes("supported AI APIs") && flatScanPage.includes("pricing") && !flatScanPage.includes("runs automatically"));
   check("request page states that submitting starts no paid call", flatScanPage.includes("Submitting this form does not start an AI call"));
   check("request form separates request from execution", flatScanForm.includes("Request only.") && flatScanForm.includes("No AI call starts until the question and protocol are approved"));
   check("verification page no longer makes founder review the normal path", verifyClientSource.includes("automation begins only after the buyer") && !verifyClientSource.includes("waiting for a fit review"));

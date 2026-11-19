@@ -211,3 +211,257 @@
     animation-duration: .01ms !important;
   }
 }
+
+
+/* ===================================================== Reflex V3 below fold
+ * Override legacy dark "How it works" & footer only inside /scan. Keeping the
+ * existing HowItWorks and SiteFooter React components preserves the native
+ * three-step journey, all accessibility labels, and legacy route contracts;
+ * this section changes only their presentation, never the MVP or form.
+ */
+.lx.scan-reflex .lx-how {
+  background: linear-gradient(180deg, #f8fcfa 0%, #f0f8f3 100%) !important;
+  color: #14382b;
+  padding-top: clamp(64px, 6vw, 96px);
+  padding-bottom: clamp(70px, 7vw, 108px);
+}
+.lx.scan-reflex .lx-how .lx-how__depth,
+.lx.scan-reflex .lx-how .lx-how__contours,
+.lx.scan-reflex .lx-how .lx-how-wire,
+.lx.scan-reflex .lx-how .lx-how-node__orbit,
+.lx.scan-reflex .lx-how .lx-how-node__glow,
+.lx.scan-reflex .lx-how .lx-how-step__body::before { display: none; }
+.lx.scan-reflex .lx-how > .shell {
+  max-width: 1210px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 36px;
+}
+.lx.scan-reflex .lx-how .lx-eyebrow {
+  font-size: 11px;
+  letter-spacing: .11em;
+  font-weight: 700;
+  color: #0c7048;
+}
+.lx.scan-reflex .lx-how .lx-display,
+.lx.scan-reflex .lx-how h2 {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #17392b;
+  font-size: clamp(32px, 3.5vw, 49px);
+  font-weight: 400;
+  letter-spacing: -.052em;
+  line-height: 1.12;
+  max-width: 850px;
+  text-wrap: balance;
+}
+.lx.scan-reflex .lx-how .lx-lede {
+  max-width: 660px;
+  color: #63766a;
+  font-size: clamp(15px, 1.35vw, 17px);
+  line-height: 1.7;
+}
+.lx.scan-reflex .lx-how-steps.lx-how-steps--three {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+}
+.lx.scan-reflex .lx-how-steps .lx-how-step,
+.lx.scan-reflex .lx-how-steps .lx-how-step:nth-child(4) {
+  grid-column: auto;
+  padding: 0;
+  min-width: 0;
+}
+.lx.scan-reflex .lx-how-step .lx-how-step__body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  min-height: 230px;
+  text-align: left;
+  background: #fff;
+  border: 1px solid #dcebe1;
+  border-radius: 24px;
+  box-shadow: 0 15px 40px -27px rgba(0,66,38,.2);
+  padding: 26px 25px 27px;
+}
+.lx.scan-reflex .lx-how-step .lx-how-node {
+  display: block;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 15px;
+  flex: none;
+}
+.lx.scan-reflex .lx-how-step .lx-how-node__core,
+.lx.scan-reflex .lx-how-step--last .lx-how-node__core {
+  color: #006c43;
+  background: #ddf7e7;
+  border: 1px solid #c8ebd7;
+  box-shadow: none;
+}
+.lx.scan-reflex .lx-how-step .lx-how-step__num {
+  grid-column: auto;
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: .13em;
+  color: #2c8f65;
+}
+.lx.scan-reflex .lx-how-step .lx-how-step__title {
+  grid-column: auto;
+  margin: 0 0 8px;
+  color: #17392e;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 650;
+  font-size: 18px;
+  line-height: 1.32;
+  letter-spacing: -.025em;
+}
+.lx.scan-reflex .lx-how-step .lx-how-step__copy {
+  grid-column: auto;
+  margin: 0;
+  color: #68796f;
+  font-size: 14px;
+  line-height: 1.7;
+  max-width: none;
+}
+.lx.scan-reflex .lx-how-step:hover .lx-how-step__title { color: #005f3c; }
+.lx.scan-reflex .lx-how-step:hover .lx-how-step__copy { color: #536b5c; }
+
+@media (min-width: 768px) {
+  .lx.scan-reflex .lx-how-steps.lx-how-steps--three {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 18px;
+  }
+}
+@media (max-width: 767px) {
+  .lx.scan-reflex .lx-how > .shell { gap: 28px; }
+  .lx.scan-reflex .lx-how-step .lx-how-step__body {
+    min-height: 0;
+    padding: 23px 22px;
+  }
+  .lx.scan-reflex .lx-how .lx-display,
+  .lx.scan-reflex .lx-how h2 { font-size: clamp(30px, 7.2vw, 38px); }
+}
+
+/* A concise, non-promissory trust explanation in the same typography. */
+.lx.scan-reflex .lx-scan-clarity { background: #fff; }
+.lx.scan-reflex .lx-scan-clarity-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: clamp(26px, 5vw, 80px);
+  align-items: center;
+  max-width: 1150px;
+  margin: 0 auto;
+}
+.lx.scan-reflex .lx-scan-clarity-eyebrow,
+.lx.scan-reflex .lx-scan-clarity-card__eyebrow {
+  display: block;
+  margin-bottom: 16px;
+  font-size: 11px;
+  font-weight: 750;
+  color: #0b8052;
+  letter-spacing: .13em;
+}
+.lx.scan-reflex .lx-scan-clarity-copy h2 {
+  font-size: clamp(33px, 3.5vw, 50px);
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: -.051em;
+  line-height: 1.14;
+  font-weight: 400;
+  color: #173d2d;
+  text-wrap: balance;
+}
+.lx.scan-reflex .lx-scan-clarity-copy p {
+  max-width: 510px;
+  margin-top: 22px;
+  font-size: 15px;
+  line-height: 1.75;
+  color: #62756a;
+}
+.lx.scan-reflex .lx-scan-clarity-contact {
+  display: inline-flex;
+  margin-top: 26px;
+  color: #006c43;
+  text-decoration: underline;
+  text-underline-offset: 5px;
+  font-size: 14px;
+  font-weight: 650;
+}
+.lx.scan-reflex .lx-scan-clarity-contact:hover { color: #0a9c63; }
+.lx.scan-reflex .lx-scan-clarity-card {
+  background: linear-gradient(140deg, #f1fbf5, #e4f9ed);
+  border: 1px solid #d5eadb;
+  border-radius: 27px;
+  padding: clamp(25px, 3.5vw, 42px);
+  box-shadow: 0 25px 55px -43px rgba(4, 79, 43, .3);
+}
+.lx.scan-reflex .lx-scan-clarity-card h3 {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 22px;
+  line-height: 1.26;
+  font-weight: 580;
+  letter-spacing: -.035em;
+  color: #17382a;
+}
+.lx.scan-reflex .lx-scan-clarity-card p {
+  margin-top: 15px;
+  color: #536b5d;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.lx.scan-reflex .lx-scan-clarity-rule {
+  border-top: 1px solid #c8e6d1;
+  margin-top: 23px;
+}
+.lx.scan-reflex .lx-scan-clarity-card .lx-scan-clarity-footnote {
+  font-size: 12px;
+  font-weight: 600;
+  color: #2e6047;
+}
+@media (min-width: 880px) {
+  .lx.scan-reflex .lx-scan-clarity-layout {
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr);
+  }
+}
+
+/* Replace the legacy navy footer by the light Reflex V3 footer treatment.
+   These overrides are scoped; site-wide footer stays untouched. */
+.lx.scan-reflex .lx-footer {
+  --heading: #18382c;
+  background: #f7fbf8;
+  color: #204934;
+  border-top: 1px solid #e2eee7;
+}
+.lx.scan-reflex .lx-footer .lx-footer__brand a { color: #0b5036; }
+.lx.scan-reflex .lx-footer .lx-footer__brand a:hover { color: #00754c; }
+.lx.scan-reflex .lx-footer .lx-footer__brand p {
+  color: #637669;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.lx.scan-reflex .lx-footer nav > p {
+  color: #1f4934;
+  font-size: 13px;
+  letter-spacing: -.01em;
+  font-weight: 700;
+}
+.lx.scan-reflex .lx-footer .lx-footer__link {
+  color: #61786a;
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+.lx.scan-reflex .lx-footer .lx-footer__link:hover,
+.lx.scan-reflex .lx-footer .lx-footer__link:focus-visible {
+  color: #006f45;
+}
+.lx.scan-reflex .lx-footer .lx-footer__rule {
+  border-top-color: #dcebe1;
+  color: #61786a;
+}
+.lx.scan-reflex .lx-footer .lx-footer__brand {
+  border-color: #dcebe1;
+}
+.lx.scan-reflex .lx-footer .lx-footer__rule .shell {
+  font-size: 12px;
+  line-height: 1.7;
+}

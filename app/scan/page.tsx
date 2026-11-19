@@ -24,9 +24,9 @@ import { ScanForm } from "./scan-form";
 export const metadata: Metadata = {
   // Absolute: the title already names Zypact, so the root "%s — Zypact"
   // template must not add it a second time.
-  title: { absolute: "Zypact Founding Paid Pilot — Request a Walkthrough" },
+  title: { absolute: "Zypact Founding Paid Pilots — Request a Walkthrough" },
   description:
-    "Explore a founding paid pilot for B2B SaaS marketing teams: approved buyer questions, repeated API measurements, competitor and source evidence, and a guided findings review. Final scope and pricing are agreed directly.",
+    "Discuss a scoped founding paid pilot for Zypact's AI Answer Measurement & Intelligence platform. Review buyer questions, repeated measurements on supported APIs, competitors, citations, and possible marketing actions. Scope and pricing are agreed directly.",
   alternates: {
     canonical: "/scan",
   },
@@ -34,7 +34,7 @@ export const metadata: Metadata = {
 
 /** What the engagement delivers. Process commitments, never outcomes. */
 const HIGHLIGHTS = [
-  "Plan a focused paid pilot around three agreed buyer questions",
+  "Discuss a focused paid pilot around buyer questions agreed with your team",
   "Examine repeated API answers, competitor appearances, and cited sources",
   "Receive an evidence-based report and discuss findings with our team",
   "Confirm pricing, scope, and any retest before the pilot begins",
@@ -42,8 +42,8 @@ const HIGHLIGHTS = [
 
 const SUMMARY = [
   {
-    title: "A focused paid pilot",
-    desc: "Three buyer questions proposed; final scope agreed with our team.",
+    title: "A scoped paid pilot",
+    desc: "Buyer questions and deliverables agreed with your team.",
     icon: FileSearch,
     tone: "is-teal",
   },
@@ -75,7 +75,7 @@ const STAGES = [
   {
     title: "Confirm paid pilot scope",
     icon: Search,
-    copy: "Agree on the buyer questions, provider availability, price, sampling, report, and any documented retest.",
+    copy: "Agree on buyer questions, supported AI APIs, pricing, sampling, reporting, and any documented retest.",
   },
   {
     title: "Review findings together",
@@ -166,12 +166,13 @@ export default function ScanPage() {
               </h1>
 
               <p className="lx-lede lx-intro mt-6" style={order(2)}>
-                Zypact helps B2B SaaS marketing teams understand how AI
-                answers describe their brand, which competitors appear, and
-                which sources are cited. Our founding paid pilot is planned
-                around three agreed buyer questions, repeated measurements,
-                and a guided report. Pricing, supported API engines, and
-                deliverables are confirmed with our team before work begins.
+                Zypact is developing an AI Answer Measurement & Intelligence
+                platform for B2B SaaS marketing teams. Founding paid pilots
+                are designed to examine how AI answers represent your brand,
+                which competitors appear, and what sources are cited—then
+                discuss marketing opportunities worth investigating. The
+                buyer questions, available API engines, sampling, report,
+                price, and any retest are agreed before work begins.
               </p>
 
               <ul className="lx-request-points lx-intro mt-8" style={order(3)}>
@@ -263,9 +264,9 @@ export default function ScanPage() {
                 </h2>
                 <p>
                   An agreed pilot uses approved buyer questions and documented
-                  measurement conditions. We review brand and competitor
-                  observations and available citations alongside uncertainty,
-                  instead of promising a universal visibility metric.
+                  measurement conditions. We review brand mentions,
+                  competitors, and available citations, then discuss possible
+                  marketing actions and uncertainty—not universal scores.
                 </p>
                 <a href="mailto:contact@zypact.com" className="lx-scan-clarity-contact">
                   Questions? Contact our team

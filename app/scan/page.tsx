@@ -24,9 +24,9 @@ import { ScanForm } from "./scan-form";
 export const metadata: Metadata = {
   // Absolute: the title already names Zypact, so the root "%s — Zypact"
   // template must not add it a second time.
-  title: { absolute: "Request a Zypact walkthrough" },
+  title: { absolute: "Zypact Founding Paid Pilot — Request a Walkthrough" },
   description:
-    "Discuss a guided Zypact measurement pilot for B2B SaaS buyer questions, competitor observations, and cited-source evidence. Scope is confirmed before execution.",
+    "Explore a founding paid pilot for B2B SaaS marketing teams: approved buyer questions, repeated API measurements, competitor and source evidence, and a guided findings review. Final scope and pricing are agreed directly.",
   alternates: {
     canonical: "/scan",
   },
@@ -34,28 +34,28 @@ export const metadata: Metadata = {
 
 /** What the engagement delivers. Process commitments, never outcomes. */
 const HIGHLIGHTS = [
-  "Start with one real buyer question; discuss the wider pilot scope",
-  "Review recorded AI answers, competitor observations, and cited-source evidence",
-  "Agree on engines, sampling, and deliverables before execution",
-  "Discuss follow-up measurements when included in the agreed pilot",
+  "Plan a focused paid pilot around three agreed buyer questions",
+  "Examine repeated API answers, competitor appearances, and cited sources",
+  "Receive an evidence-based report and discuss findings with our team",
+  "Confirm pricing, scope, and any retest before the pilot begins",
 ] as const;
 
 const SUMMARY = [
   {
-    title: "Start with one buyer question",
-    desc: "Tell us what a potential customer might ask.",
+    title: "A focused paid pilot",
+    desc: "Three buyer questions proposed; final scope agreed with our team.",
     icon: FileSearch,
     tone: "is-teal",
   },
   {
-    title: "Scope confirmed first",
-    desc: "Our team confirms available engines and the measurement protocol.",
+    title: "Clear deliverables",
+    desc: "We agree on engines, sampling, report, and pricing before work starts.",
     icon: ShieldCheck,
     tone: "is-amber",
   },
   {
-    title: "Evidence with limitations",
-    desc: "Understand what was observed and what remains uncertain.",
+    title: "Decisions grounded in evidence",
+    desc: "Review brand, competitor, and source observations with clear limits.",
     icon: Database,
     tone: "is-slate",
   },
@@ -68,19 +68,19 @@ const SUMMARY = [
  */
 const STAGES = [
   {
-    title: "Share a buyer question",
+    title: "Tell us about your brand",
     icon: ClipboardList,
-    copy: "Share one real question a prospective customer might ask when comparing products like yours.",
+    copy: "Share your website and one example question. It helps start the discussion; it does not limit the paid pilot to one question.",
   },
   {
-    title: "Agree on pilot scope",
+    title: "Confirm paid pilot scope",
     icon: Search,
-    copy: "We review the question and confirm the available engines, sampling conditions, and any follow-up measurement.",
+    copy: "Agree on the buyer questions, provider availability, price, sampling, report, and any documented retest.",
   },
   {
-    title: "Examine findings together",
+    title: "Review findings together",
     icon: BarChart3,
-    copy: "When a pilot is approved and completed, review recorded answers, competitor appearances, cited sources, and limitations.",
+    copy: "Review recorded AI answers, competitors, cited sources, and limitations to decide what deserves further investigation.",
   },
 ] as const;
 
@@ -154,7 +154,7 @@ export default function ScanPage() {
             {/* ------------------------------------------------ Left column */}
             <div className="max-w-xl">
               <p className="lx-eyebrow lx-eyebrow--rule lx-intro" style={order(0)}>
-                Zypact · Guided founding pilots
+                Zypact · Founding paid pilots
               </p>
 
               <h1
@@ -162,15 +162,16 @@ export default function ScanPage() {
                 className="lx-display lx-intro mt-5 text-[40px] sm:mt-6 sm:text-[52px] lg:text-[58px]"
                 style={order(1)}
               >
-                Request a Zypact walkthrough
+                Explore a founding paid pilot
               </h1>
 
               <p className="lx-lede lx-intro mt-6" style={order(2)}>
-                Explore how Zypact examines AI answers about your brand,
-                competitors, and cited sources. Start with one commercially
-                important buyer question. Our team confirms which API engines,
-                measurement conditions, and deliverables are available for your
-                guided pilot before any execution.
+                Zypact helps B2B SaaS marketing teams understand how AI
+                answers describe their brand, which competitors appear, and
+                which sources are cited. Our founding paid pilot is planned
+                around three agreed buyer questions, repeated measurements,
+                and a guided report. Pricing, supported API engines, and
+                deliverables are confirmed with our team before work begins.
               </p>
 
               <ul className="lx-request-points lx-intro mt-8" style={order(3)}>
@@ -242,8 +243,8 @@ export default function ScanPage() {
         <HowItWorks
           id="request-steps"
           eyebrow="How it works"
-          title="From walkthrough request to reviewed evidence"
-          lede="Start with a buyer question. We confirm the pilot scope and protocol first; any measurements and retests take place only after approval."
+          title="From paid pilot inquiry to useful evidence"
+          lede="Start with a pilot conversation. We agree on buyer questions, pricing, measurement protocol, and deliverables before any work begins."
           steps={STAGES}
           layout="three"
         />

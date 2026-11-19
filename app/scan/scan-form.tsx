@@ -168,7 +168,7 @@ export function ScanForm({ enabled }: ScanFormProps) {
           We&rsquo;ve received your founding paid pilot inquiry. No AI call has started.
           We sent a private verification link to confirm your email. After
           confirmation, our team will discuss the buyer questions, pricing,
-          available API engines, and agreed deliverables before any execution.
+          technically supported API engines, and deliverables before execution.
         </p>
 
         <p className="mt-3 text-[12.5px] leading-relaxed text-muted-foreground">
@@ -213,8 +213,9 @@ export function ScanForm({ enabled }: ScanFormProps) {
 
       <p className="mt-2.5 text-[14px] leading-relaxed text-muted-foreground">
         Tell us about your company and share one example buyer question.
-        This starts a conversation about a proposed three-question paid pilot;
-        the final scope and price are agreed before any work begins.
+        This example starts a conversation about a scoped paid pilot, not a
+        one-question service. Question count, pricing, and deliverables
+        are agreed before any work begins.
       </p>
 
       <form className="mt-7 grid gap-5" onSubmit={handleSubmit} noValidate>

@@ -60,12 +60,12 @@ function main(): void {
   const { metadata } = require("@/app/scan/page");
   check(
     "title describes the paid pilot and remains absolute",
-    (metadata.title as { absolute?: string } | undefined)?.absolute === "Zypact Founding Paid Pilot — Request a Walkthrough"
+    (metadata.title as { absolute?: string } | undefined)?.absolute === "Zypact Founding Paid Pilots — Request a Walkthrough"
   );
   check(
     "description describes guided scope without claiming a guaranteed pilot",
     metadata.description ===
-      "Explore a founding paid pilot for B2B SaaS marketing teams: approved buyer questions, repeated API measurements, competitor and source evidence, and a guided findings review. Final scope and pricing are agreed directly."
+      "Discuss a scoped founding paid pilot for Zypact's AI Answer Measurement & Intelligence platform. Review buyer questions, repeated measurements on supported APIs, competitors, citations, and possible marketing actions. Scope and pricing are agreed directly."
   );
   check("canonical stays /scan", metadata.alternates?.canonical === "/scan");
   check(

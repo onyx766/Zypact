@@ -27,7 +27,11 @@ assert(page.includes("<ScanForm enabled={enabled} />"));
 assert(page.includes('process.env.SNAPSHOT_PUBLIC_FORM_ENABLED === "true"'));
 assert(page.includes("Submitting this form does not start an AI call"));
 assert(page.includes("API-based observations under recorded conditions."));
-assert(page.includes("Our team confirms which API engines"));
+assert(page.includes("Pricing, supported API engines"));
+assert(page.includes("three agreed buyer questions"));
+assert(form.includes("Example buyer question"));
+assert(form.includes("not a one-question limit for the paid pilot"));
+assert(form.includes("submitSnapshotRequest(values)"));
 assert(page.includes("OpenAI API responses with web search can differ"));
 assert(!page.includes("V1 surface: Perplexity Sonar only"));
 for(const anchor of ["product","how-it-works","use-cases","methodology","beta","faq"]){

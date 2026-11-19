@@ -6,7 +6,7 @@
   <link rel="canonical" href="https://www.zypact.com/" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="Zypact" />
-  <meta property="og:title" content="Zypact — AI Answer Measurement for B2B SaaS" />
+  <meta property="og:title" content="Zypact — AI Answer Measurement &amp; Intelligence for B2B SaaS" />
   <meta property="og:description" content="Explore how AI answers describe your brand, competitors, and cited sources. Discuss evidence-focused founding paid pilots for B2B SaaS teams." />
   <meta property="og:url" content="https://www.zypact.com/" />
 
@@ -438,14 +438,14 @@ h1,h2,h3 {text-wrap:balance;}
   // Intentionally prewritten, deterministic answers: no model connection or invented backend.
   function answer(question) {
     const q = question.toLowerCase();
-    if (/beta|join|apply|walkthrough|pilot|demo|customer|sign up/.test(q)) return "We're preparing to work with early B2B SaaS teams. You can request a walkthrough at www.zypact.com/scan to discuss a pilot. This concept page doesn't sign you up directly.";
+    if (/beta|join|apply|walkthrough|pilot|demo|customer|sign up/.test(q)) return "Zypact is developing its platform and discussing scoped founding paid pilots with B2B SaaS teams. Visit www.zypact.com/scan to discuss your buyer questions, evidence needs, and commercial terms. This guide cannot submit a request for you.";
     if (/question|example|prompt|buyer/.test(q)) return "Three sample buyer questions:\n1. What tools can B2B SaaS teams use to monitor brand mentions in AI answers?\n2. What alternatives to Peec or Profound should we compare?\n3. Which platforms help analyze the sources cited in AI answers?\n\nThese are examples, not evidence of search volume.";
-    if (/chatgpt|perplexity|engine|model/.test(q)) return "Zypact's pilot workflow is designed to observe sampled answers through ChatGPT and Perplexity integrations. These routes should be verified in the real production environment; the numbers on this page are illustrative.";
-    if (/cost|price|pricing|free|trial/.test(q)) return "Public pricing and self-service plans are not confirmed on this concept page. You can request a walkthrough to discuss the current pilot scope and commercial terms.";
+    if (/chatgpt|perplexity|engine|model/.test(q)) return "Zypact's intended V1 covers OpenAI and Perplexity APIs. The OpenAI API is not the consumer ChatGPT app. Supported engines and configuration for a paid pilot must be confirmed before delivery; the dashboard figures shown here are synthetic.";
+    if (/cost|price|pricing|free|trial/.test(q)) return "Founding paid pilot pricing, duration, buyer-question count, and deliverables are agreed directly with Zypact. The subscription SaaS is still in development. Visit www.zypact.com/scan to discuss a pilot.";
     if (/source|citation|competitor|compare/.test(q)) return "The intended workflow examines who appears in selected AI answers, which competitors are mentioned, and what external sources are cited. This helps identify what deserves further investigation, not guarantee higher rankings.";
     if (/retest|improve|change|outcome|measure/.test(q)) return "After establishing a baseline, a team can document an intervention, wait through an observation window, and retest the same buyer question. A change in the sampled answers is not automatic proof that the intervention caused it.";
-    if (/brand|profile|website|onboard|how|work|flow/.test(q)) return "The workflow is: 1) add your website and brand profile; 2) choose buyer questions; 3) collect sampled AI answers; 4) review competitors and cited sources; 5) document an action; 6) retest and review the Outcome Card.";
-    return "I can help explain the Zypact workflow, buyer-question examples, cited sources, retesting, or how to request a walkthrough. I'm a scripted website guide, not connected to the live measurement system.";
+    if (/brand|profile|website|onboard|how|work|flow/.test(q)) return "The intended workflow is: website and brand profile; buyer questions; repeated AI answer measurement; competitor and cited-source analysis; potential marketing actions; then a documented retest and Outcome Card where supported. V1 remains in development.";
+    return "I can explain the Zypact workflow, the founding paid pilots, cited sources, or the intended retest and Outcome Card. I'm a scripted website guide, not connected to live measurements.";
   }
   function sendQuestion(question) {
     const value = String(question || '').trim().slice(0,260);

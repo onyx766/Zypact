@@ -130,11 +130,11 @@ export function ScanForm({ enabled }: ScanFormProps) {
     return (
       <div>
         <p className="lx-eyebrow">
-          Founding paid pilot inquiry
+          Demo request
         </p>
 
         <h2 className="lx-request-card__title mt-4 text-[28px] sm:text-[32px]">
-          Founding paid pilot inquiries are not open yet.
+          Demo requests are not open yet.
         </h2>
 
         <p className="mt-4 text-[14px] leading-relaxed text-muted-foreground">
@@ -165,10 +165,10 @@ export function ScanForm({ enabled }: ScanFormProps) {
         </h2>
 
         <p className="mt-4 text-[14px] leading-relaxed text-muted-foreground">
-          We&rsquo;ve received your founding paid pilot inquiry. No AI call has started.
+          We&rsquo;ve received your demo request. No AI call has started.
           We sent a private verification link to confirm your email. After
-          confirmation, our team will discuss the buyer questions, pricing,
-          technically supported API engines, and deliverables before execution.
+          confirmation, our team can discuss Zypact&rsquo;s capabilities
+          and how the platform might support your marketing questions.
         </p>
 
         <p className="mt-3 text-[12.5px] leading-relaxed text-muted-foreground">
@@ -183,10 +183,10 @@ export function ScanForm({ enabled }: ScanFormProps) {
           <ol className="mt-3 grid gap-1.5 text-[13.5px] leading-relaxed text-muted-foreground">
             {[
               "Confirm your email",
-              "Paid pilot discussion",
-              "Agree on questions and pricing",
-              "Approve measurement protocol",
-              "Agreed next steps",
+              "Zypact team reviews your request",
+              "Explore the platform and your use case",
+              "Discuss available capabilities",
+              "Agree on next steps",
             ].map((stage, index) => (
               <li key={stage} className="flex items-center gap-2.5">
                 <span className="lx-request-next">
@@ -208,14 +208,13 @@ export function ScanForm({ enabled }: ScanFormProps) {
   return (
     <>
       <h2 className="lx-request-card__title text-[28px] sm:text-[32px]">
-        Discuss a founding paid pilot
+        Request a demo
       </h2>
 
       <p className="mt-2.5 text-[14px] leading-relaxed text-muted-foreground">
-        Tell us about your company and share one example buyer question.
-        This example starts a conversation about a scoped paid pilot, not a
-        one-question service. Question count, pricing, and deliverables
-        are agreed before any work begins.
+        Tell us about your company and share an example question your buyers
+        might ask AI. We&rsquo;ll explain how Zypact examines brand visibility,
+        competitors, cited sources, and marketing opportunities.
       </p>
 
       <form className="mt-7 grid gap-5" onSubmit={handleSubmit} noValidate>
@@ -344,8 +343,8 @@ export function ScanForm({ enabled }: ScanFormProps) {
                 >
                   Enter one question a buyer might ask when comparing software,
                   for example, &ldquo;Which SOC 2 automation platforms are best
-                  for a 50-person B2B SaaS company?&rdquo;. This is only a
-                  starting point, not a one-question limit for the paid pilot.
+                  for a 50-person B2B SaaS company?&rdquo;. This simply helps us understand your use case, not limit Zypact
+                  to one question.
                 </p>
 
                 <p
@@ -390,7 +389,7 @@ export function ScanForm({ enabled }: ScanFormProps) {
           className="lx-btn lx-btn--primary w-full"
           disabled={submitting}
         >
-          {submitting ? "Submitting…" : "Discuss a paid pilot"}
+          {submitting ? "Submitting…" : "Request demo"}
           {submitting ? null : (
             <ArrowRight
               className="lx-btn__arrow"

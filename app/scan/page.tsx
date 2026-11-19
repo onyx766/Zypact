@@ -259,7 +259,7 @@ export default function ScanPage() {
               <div className="lx-scan-clarity-copy">
                 <span className="lx-scan-clarity-eyebrow">CLEAR BY DESIGN</span>
                 <h2 id="scan-clarity-heading">
-                  Know what the evidence can—and cannot—tell you.
+                  Know what the evidence can and cannot tell you.
                 </h2>
                 <p>
                   Zypact is designed to connect buyer questions with sampled AI

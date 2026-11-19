@@ -59,13 +59,13 @@ function main(): void {
   // ------------------------------------------------------------ Metadata
   const { metadata } = require("@/app/scan/page");
   check(
-    "title is unchanged, and absolute so the root template does not add Zypact twice",
-    (metadata.title as { absolute?: string } | undefined)?.absolute === "Request a Zypact V1 demo"
+    "title matches the current walkthrough and remains absolute",
+    (metadata.title as { absolute?: string } | undefined)?.absolute === "Request a Zypact walkthrough"
   );
   check(
-    "description is unchanged",
+    "description describes guided scope without claiming a guaranteed pilot",
     metadata.description ===
-      "Request access to Zypact's controlled, automated buyer-question diagnostic and registered retest on Perplexity Sonar."
+      "Discuss a guided Zypact measurement pilot for B2B SaaS buyer questions, competitor observations, and cited-source evidence. Scope is confirmed before execution."
   );
   check("canonical stays /scan", metadata.alternates?.canonical === "/scan");
   check(
@@ -79,7 +79,7 @@ function main(): void {
   check("renders inside the Tailwind root", open.includes('class="v2-root"'));
   check("renders the landing .lx scope", /class="[^"]*\blx\b[^"]*"/.test(open));
   check("exactly one h1", (open.match(/<h1\b/g) ?? []).length === 1);
-  check("h1 is the request headline", flatOpen.includes("Request a Zypact demo"));
+  check("h1 is the request headline", flatOpen.includes("Request a Zypact walkthrough"));
   check("landing header renders", open.includes("data-lx-header"));
   check("header CTA jumps to the form on this page", /href="#request-form"/.test(open));
   check("form anchor exists", open.includes('id="request-form"'));
@@ -97,7 +97,7 @@ function main(): void {
     check(`field ${name} keeps its label`, open.includes(`for="${name}"`));
   }
   check("form keeps noValidate", /<form[^>]*novalidate/i.test(open));
-  check("submit button is a real submit", /<button[^>]*type="submit"/.test(open) && flatOpen.includes("Request demo"));
+  check("submit button is a real submit", /<button[^>]*type="submit"/.test(open) && flatOpen.includes("Request walkthrough"));
   check("buyer question keeps its help text", open.includes('id="buyerCategory-help"'));
   check("process disclosure renders", flatOpen.includes("Submitting this form does not start an AI call."));
   check("request-only disclosure renders", flatOpen.includes("Request only. No AI call starts until the question and protocol are approved."));
@@ -105,7 +105,7 @@ function main(): void {
   // ---------------------------------------------------- Rendered: closed
   const closed = render(false);
   const flatClosed = flatten(closed);
-  check("closed state says requests are not open", flatClosed.includes("Demo requests are not open yet."));
+  check("closed state says requests are not open", flatClosed.includes("Walkthrough requests are not open yet."));
   check("closed state renders no form", !/<form\b/.test(closed));
   check("closed state keeps the return link", /href="\/"[^>]*>\s*Return to Zypact/.test(closed));
 

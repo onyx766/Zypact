@@ -2590,6 +2590,44 @@ Recorded from the operator's checks on 2026-11-18. Each step had the founder's w
     4. C4 keeps the 10 USD ceiling for the first supervised ChatGPT day.
   - **R rule (updated after PR #133 merged as `0f5b0da` on 2026-11-18):** R′ now carries `20261109190000` (the pilot retest, §39), which is below `20261110120000` and not applied. So **step 5c is applied before the C2 worker deploy**, under its own approval, with the step 5c checks and fingerprints in PILOT_PRODUCTION_PLAN. The retest gate `ZYPACT_PILOT_RETEST_ENABLED` stays unset (Part D).
 
+## 40a. Production record, 2026-11-18 to 2026-11-20: step 5c, Part C, and the practice pilot
+
+Recorded from the operator's checks. Each production step had the founder's written approval, relayed by the engineer. Production identifiers are not recorded here. This extends §40.
+
+- **Step 5c:** `20261109190000` (the pilot retest, §39) was applied through the named-file procedure before the C2 worker deploy, because PR #133 merged before PR #134 and the R rule then required it. After: tail `20261109190000`, 92 rows, the 8 retest triggers present and enabled, and the retest tables in place with RLS on. The retest gate `ZYPACT_PILOT_RETEST_ENABLED` stays unset (Part D).
+- **C1:** the measurement key was set as a worker secret by the operator in their own terminal (Fly release v9). Its value was never shown in chat or recorded.
+- **C2:** the worker was redeployed from `main` `2aa3e68` (#134; Fly release v10) on the same machine, which stayed `stopped`. Check (c) was unchanged from step 6, and check (d) observed `WORKER_CHATGPT_ENABLED` `true`, with no same-named secret.
+- **C3:** `ZYPACT_PILOT_CHATGPT_ENABLED` was set to `true` on the web host's Production environment, followed by a redeploy.
+- **The first runs on the step 6/C2 worker (2026-11-18):** a practice pilot for Zypact itself, with 3 questions supplied by the founder (recorded on the pilot as supplied by the customer, since Zypact is the customer of its own practice run).
+  - The first Perplexity job succeeded, and its start event's `--digest` provenance comparison matched `2aa3e68`.
+  - The first ChatGPT job succeeded under setting `openai-responses-websearch-v4`, model `gpt-5.4-2026-03-05`, service tier flex.
+  - One ChatGPT request was refused by the flex tier (`flex_capacity_unavailable`) and was retried by hand, as D-059 item 5 provides. The refused attempt stays visible; no cost was recorded for it.
+- **C4, the daily ceiling:** the first ChatGPT day started at 10 USD.
+  - With ChatGPT queued, the gate counts each ChatGPT call at no less than 0.54 USD and adds the largest queued cap (4 USD) to the last 24 hours' spend. At 10 USD that left room for about two ChatGPT questions per day.
+  - The founder approved 20 USD (D-059 item 4). It was set on the web host first. The worker, still at 10 USD, refused four starts with `spend_ceiling_reached` and spent nothing. Its secret was then set to 20 (Fly release v11). Both hosts must carry the same value.
+- **The practice pilot's evidence (read-only check, 2026-11-20):**
+  - Perplexity, model `sonar` (`https://api.perplexity.ai/v1/sonar`): 15 attempts, 15 completed.
+  - ChatGPT (OpenAI Responses API with web search): 16 attempts, 15 completed, 1 not completed (the flex refusal).
+  - Every completed attempt, on both engines, has a provider-call receipt with a stored response SHA-256.
+  - `protocol_attempts.actual_cost_usd` is null on every attempt; the cost lives per call in `protocol_external_calls`.
+- **The practice pilot's API cost** (`protocol_external_calls`, read-only):
+
+  | Engine | Answers | Analysis model | Total |
+  |---|---|---|---|
+  | Perplexity | 0.0653 USD, measured | 0.1422 USD, estimated | 0.2075 USD |
+  | ChatGPT | 1.4431 USD, estimated | 0.1623 USD, estimated | 1.6054 USD |
+  | **Total** | | | **1.8129 USD** |
+
+  "Estimated" is the provider's reported token and search usage priced by our tables, not an invoice; it is to be compared with the providers' billing pages. 9.56 USD was reserved for this 1.81 USD: a ChatGPT answer cost about 0.10 USD against 0.54 USD reserved. The reservation keeps the paid-call guarantee; it is why the daily ceiling, not the cost, sets the pace.
+- **The first pilot report** was built and read by the founder. The founder's review (2026-11-19) led to §41 (D-063).
+- **The self-test record is closed:** SELF_TEST_PERPLEXITY_CONTENT_CHANGE.md now records the two retests that ran (§40, step 10).
+- **Open:**
+  - the working daily ceiling for a customer pilot (founder decision; see PILOT_RUNBOOK §8.1);
+  - every worker report pass re-processes the same 8 older snapshot requests and holds them (nothing is sent). To be reviewed;
+  - revoking the older Fly application token that predates the step 8 deploy token;
+  - step 5d and the web deploy for §41, each under its own approval;
+  - Part D (the retest gate) and the practice pilot's retest and Outcome Card, which the founder asked to validate separately.
+
 ## 41. Pilot report clarity (D-063) — branch `feat/pilot-report-clarity`, not applied anywhere, not deployed
 
 - **Why:** the founder's review of the practice pilot report (2026-11-19): too technical at the top, one competitor under several spellings, too many "Unclassified" sources without the websites behind them, pilot dates mixed with measurement dates, and no sign that the report was a practice run.

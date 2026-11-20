@@ -192,6 +192,11 @@ A managed pilot holds all of one customer's questions in one project, on **Pilot
 3. Press **Run** for one question on one engine at a time, after the paid-execution switch and the daily ceiling are set. A run that failed at the provider is retried from the pilot page, on its engine, then run again. A ChatGPT request that the flex tier refused for lack of capacity is such a failure: press Retry. Nothing is resent automatically (D-059 item 5).
 
    A ChatGPT Run: most answers take 30-60 seconds; a call is stopped after about 5 minutes and the measurement is then held for review (item 5). If today's spending limit has no room, Run is refused; press it again later.
+
+   **What the practice pilot showed (2026-11-18 to 2026-11-20, CURRENT_STATUS §40a):**
+   - **Flex refusals happen.** When ChatGPT stops with `flex_capacity_unavailable`, OpenAI had no spare capacity at that moment. Wait 15-30 minutes before pressing Retry: the retry cap is 2, so retrying at once can use it up.
+   - **The ceiling sets the pace, not the cost.** A ChatGPT answer cost about 0.10 USD, but the gate counts each call at no less than 0.54 USD and adds the largest queued cap (4 USD). At 10 USD that is about two ChatGPT questions a day; at 20 USD, a few more. Agree the ceiling with the founder before a customer pilot starts, and plan the measurement days to match.
+   - **Set the ceiling on both hosts.** The web host and the worker each check it. If only one is raised, the worker refuses the start with `spend_ceiling_reached` and nothing is spent.
 4. If a question's measurement stopped and cannot go on, **Retire** it from the pilot page with a reason. That covers a measurement that was abandoned, or that failed in a way Retry does not take.
    - The question and its evidence are kept.
    - It no longer counts toward the limit, and it can never be run again.

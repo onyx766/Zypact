@@ -1,7 +1,13 @@
 # Zypact-on-Zypact self-test — registered intervention record
 
-- **Status:** Observation window OPEN. Retest not yet run.
-- **Opened:** 2026-09-24 · **Window closes:** 2026-10-09
+- **Status:** CLOSED. The retest ran on 2026-10-09: it succeeded, and its
+  Outcome Card passed integrity, read `no_clear_change` and was delivered. A
+  second intervention, implemented 2026-10-10, was retested on 2026-10-25 and
+  also read `no_clear_change`; its card was not delivered. Both ran on the
+  worker deployed before the 2026-11-18 redeploy. Found read-only on
+  2026-11-18 (CURRENT_STATUS §40, step 10); the rest of this file is the
+  record as it stood while the window was open.
+- **Opened:** 2026-09-24 · **Window closed:** 2026-10-09
 - **Audited company:** Zypact (www.zypact.com) — the audited brand and the
   operator are the same party, which is itself a limitation, recorded in §6.
 - **Surface:** Perplexity Sonar, the only live V1 surface.

@@ -433,6 +433,56 @@ export function ClosePilotButton({ pilotId, warnings = [] }: { pilotId: string; 
 }
 
 /**
+ * 20261109200000 — marks a pilot as a customer pilot or an internal practice
+ * run. The next report revision carries the label; nothing is measured
+ * differently and no stored revision changes. `purpose` null: the database
+ * has no purpose yet (its migration is not applied), so nothing is offered.
+ */
+export function PilotPurposeControl({ pilotId, purpose }: { pilotId: string; purpose: "customer" | "internal_practice" | null }) {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  if (purpose === null) {
+    return <p className="zpa-muted">Purpose: not available until the database update for it is applied.</p>;
+  }
+  const next = purpose === "customer" ? "internal_practice" : "customer";
+
+  async function change() {
+    const ok = window.confirm(
+      next === "internal_practice"
+        ? "Mark this pilot as an internal practice run? Its next report revision will say “Internal practice run — not a customer report” at the top. Revisions already built keep their label."
+        : "Mark this pilot as a customer pilot? Its next report revision will carry no practice label. Revisions already built keep their label."
+    );
+    if (!ok) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const { ok: done, payload } = await post(`/api/internal/pilots/${pilotId}/purpose`, { purpose: next });
+      if (done) {
+        window.location.reload();
+        return;
+      }
+      setMessage(payload?.error ?? "The purpose could not be changed.");
+    } catch {
+      setMessage("The request did not reach the server.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="zpa-actions">
+      <p className="zpa-muted">
+        <strong>Purpose:</strong> {purpose === "customer" ? "Customer pilot" : "Internal practice run (labelled on its report)"}
+      </p>
+      <button type="button" className="zpa-btn zpa-btn-sm" onClick={change} disabled={busy}>
+        {next === "internal_practice" ? "Mark as internal practice run" : "Mark as customer pilot"}
+      </button>
+      {message ? <p className="zpa-action-note">{message}</p> : null}
+    </div>
+  );
+}
+
+/**
  * D-054 — retires a question whose measurement stopped and cannot go on.
  * The database decides: a measurement that can still be retried, or one
  * that is running, is refused with the reason shown here.

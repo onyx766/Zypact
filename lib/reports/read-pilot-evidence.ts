@@ -20,7 +20,7 @@ import type {
   PilotRetestSlotInput,
 } from "@/lib/reports/build-pilot-retests";
 import { evaluateMeasurementCompatibility, readPhaseMeasurement } from "@/lib/reports/measurement-fingerprint";
-import type { PilotEngineKey, PilotRetestText } from "@/lib/reports/pilot-report-types";
+import type { PilotEngineKey, PilotPurpose, PilotRetestText } from "@/lib/reports/pilot-report-types";
 import type { BuildProtocolReportInput } from "@/lib/reports/protocol-report-types";
 import { ProtocolEvidenceError, readPilotProtocolEvidence } from "@/lib/reports/read-protocol-evidence";
 
@@ -39,6 +39,7 @@ export async function readPilotReportInput(
   if (!pilotRow) return null;
   const p = pilotRow as Record<string, unknown>;
   const projectId = String(p.project_id);
+  const purpose = await readPilotPurpose(client, pilotId);
 
   const { data: projectRow, error: projectError } = await client
     .from("projects")
@@ -214,9 +215,23 @@ export async function readPilotReportInput(
       startsOn: String(p.starts_on),
       endsOn: String(p.ends_on),
       status: p.status === "closed" ? "closed" : "active",
+      purpose,
     },
     questions,
   };
+}
+
+/**
+ * pilots.purpose (20261109200000), read on its own so that a database
+ * without that migration still builds the report: the purpose is then null,
+ * the report says nothing about a practice run and is held for review
+ * (build-pilot-report.ts), never labelled by guess.
+ */
+export async function readPilotPurpose(client: SupabaseClient, pilotId: string): Promise<PilotPurpose | null> {
+  const { data, error } = await client.from("pilots").select("purpose").eq("id", pilotId).maybeSingle();
+  if (error || !data) return null;
+  const value = (data as Record<string, unknown>).purpose;
+  return value === "customer" || value === "internal_practice" ? value : null;
 }
 
 type Row = Record<string, unknown>;

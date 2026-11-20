@@ -443,7 +443,7 @@ const arPage = renderPage(allRetired.payload);
 check("I5c a pilot whose every question is retired never says the engine named the brand, and says what happened in words, never \"0 of 0\"",
   arEngine.measured && arEngine.questionsWithReadableAnswer === 0 && arEngine.questionsRetired === 1 &&
   arEngine.note === "no live question is measured on it; 1 retired." && !/named in \d+ of/i.test(arPage) &&
-  presentPilotReport(allRetired.payload).heroCopy[0] === "Perplexity: no live question is measured on it; 1 retired." &&
+  presentPilotReport(allRetired.payload).engines[0] === "Perplexity: no live question is measured on it; 1 retired." &&
   !/\b0 of 0\b/.test(arPage) && !/\b0 of 0\b/.test(renderPilotReportMarkdown(allRetired.payload)) &&
   allRetired.payload.brand[0].portfolio === null, arEngine.note);
 
@@ -655,7 +655,7 @@ const combined = `${pplxBrand.portfolio!.numerator + gptBrand.portfolio!.numerat
 check("X2 no figure combines engines: each total is its own engine's rows only, the two engines' sum appears nowhere, and every table section belongs to one engine",
   tp.brand.every((s) => !s.portfolio || s.portfolio.numerator === s.rows.filter((r) => s.portfolio!.includedOrdinals.includes(r.ordinal)).reduce((n, r) => n + (r.numerator ?? 0), 0)) &&
   !tPage.includes(combined) && !tMd.includes(combined) &&
-  tView.sections.every((s) => /^(brand|competitors|sources)-(perplexity_sonar|openai_chatgpt)$/.test(s.key)) &&
+  tView.sections.every((s) => /^(brand|competitors|sources|domains)-(perplexity_sonar|openai_chatgpt)$/.test(s.key)) &&
   !/combined across engines|all engines combined/.test(`${tPage}\n${tMd}`.toLowerCase()), combined);
 check("X3 each engine's section carries its own required limitation, verbatim, on the page and in the Markdown, with the dependence warning by every table and the causal footer",
   condOf(tView, "openai_chatgpt").paragraphs.join() === CHATGPT_SURFACE_LIMITATION &&

@@ -37,6 +37,10 @@ export function renderPilotReportMarkdown(payload: PilotReportPayload): string {
 
   out.push(`# ${v.eyebrow}: ${cell(v.title)}`);
   out.push("");
+  if (v.practiceNotice) {
+    out.push(`**${v.practiceNotice}**`);
+    out.push("");
+  }
   out.push(`- Website: ${v.websiteUrl}`);
   for (const chip of v.chips) out.push(`- ${chip}`);
   out.push(`- Generated: ${payload.generatedAt.slice(0, 10)}`);
@@ -44,12 +48,38 @@ export function renderPilotReportMarkdown(payload: PilotReportPayload): string {
   for (const line of v.heroCopy) out.push(line);
   out.push("");
 
-  out.push(`## ${v.enginesHeading}`);
-  out.push("");
-  for (const e of v.engines) out.push(`- ${e}`);
-  out.push("");
+  const measurement = () => {
+    out.push(`## ${v.enginesHeading}`);
+    out.push("");
+    for (const e of v.engines) out.push(`- ${e}`);
+    out.push("");
+    for (const s of v.conditions) section(out, s);
+  };
 
-  for (const s of v.conditions) section(out, s);
+  // pilot-summary/1 — the summary first; how each engine was measured moves
+  // below the results, beside the limits and the method. A revision built
+  // before it keeps its order.
+  if (v.summary) {
+    out.push(`## ${v.summary.heading}`);
+    out.push("");
+    for (const p of v.summary.intro) {
+      out.push(p);
+      out.push("");
+    }
+    for (const b of v.summary.blocks) {
+      out.push(`### ${cell(b.title)}`);
+      out.push("");
+      for (const line of b.lines) out.push(`- ${line}`);
+      out.push("");
+    }
+    out.push(`### ${v.summary.closerLookHeading}`);
+    out.push("");
+    out.push(v.summary.closerLookIntro);
+    out.push("");
+    for (const line of v.summary.closerLook) out.push(`- ${line}`);
+    out.push("");
+  }
+  if (v.layout === "classic") measurement();
   for (const s of v.sections) section(out, s);
 
   out.push(`## ${v.questionsHeading}`);
@@ -136,6 +166,8 @@ export function renderPilotReportMarkdown(payload: PilotReportPayload): string {
       out.push("");
     }
   }
+
+  if (v.layout === "summary_first") measurement();
 
   out.push(`## ${v.limitsHeading}`);
   out.push("");

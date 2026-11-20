@@ -42,6 +42,25 @@ export function PilotReportView({
 }) {
   const v = presentPilotReport(payload);
 
+  // How each engine was measured: first on a revision built before the
+  // summary, below the results (beside the limits and the method) after it.
+  const measurement = (
+    <>
+      <section className="zpr-card zpr-section">
+        <h2 className="zpr-section-title">{v.enginesHeading}</h2>
+        <ul className="zpr-list">
+          {v.engines.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      </section>
+
+      {v.conditions.map((s) => (
+        <Section key={s.key} section={s} />
+      ))}
+    </>
+  );
+
   return (
     <main className="zpr-root">
       <header className="zpr-header">
@@ -62,6 +81,11 @@ export function PilotReportView({
 
       <section className="zpr-hero">
         <div className="zpr-hero-inner">
+          {v.practiceNotice ? (
+            <p className="zpr-hero-copy" role="note">
+              <strong>{v.practiceNotice}</strong>
+            </p>
+          ) : null}
           <p className="zpr-eyebrow">{v.eyebrow}</p>
           <h1 className="zpr-title">{v.title}</h1>
           <a className="zpr-site" href={v.websiteUrl} target="_blank" rel="noopener noreferrer">
@@ -92,18 +116,37 @@ export function PilotReportView({
       </section>
 
       <div className="zpr-shell">
-        <section className="zpr-card zpr-section">
-          <h2 className="zpr-section-title">{v.enginesHeading}</h2>
-          <ul className="zpr-list">
-            {v.engines.map((line) => (
-              <li key={line}>{line}</li>
+        {v.summary ? (
+          <section className="zpr-card zpr-section">
+            <h2 className="zpr-section-title">{v.summary.heading}</h2>
+            {v.summary.intro.map((p) => (
+              <p key={p} className="zpr-section-sub">
+                {p}
+              </p>
             ))}
-          </ul>
-        </section>
+            {v.summary.blocks.map((b) => (
+              <article key={b.title} className="zpr-section">
+                <h3 className="zpr-note-title">{b.title}</h3>
+                <ul className="zpr-list">
+                  {b.lines.map((line, i) => (
+                    <li key={`${b.title}-${i}`}>{line}</li>
+                  ))}
+                </ul>
+              </article>
+            ))}
+            <article className="zpr-section">
+              <h3 className="zpr-note-title">{v.summary.closerLookHeading}</h3>
+              <p className="zpr-section-sub">{v.summary.closerLookIntro}</p>
+              <ul className="zpr-list">
+                {v.summary.closerLook.map((line, i) => (
+                  <li key={`closer-${i}`}>{line}</li>
+                ))}
+              </ul>
+            </article>
+          </section>
+        ) : null}
 
-        {v.conditions.map((s) => (
-          <Section key={s.key} section={s} />
-        ))}
+        {v.layout === "classic" ? measurement : null}
 
         {v.sections.map((s) => (
           <Section key={s.key} section={s} />
@@ -241,6 +284,8 @@ export function PilotReportView({
             ))}
           </section>
         ) : null}
+
+        {v.layout === "summary_first" ? measurement : null}
 
         <section className="zpr-card zpr-section">
           <h2 className="zpr-section-title">{v.limitsHeading}</h2>

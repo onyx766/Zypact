@@ -392,11 +392,11 @@ async function main(): Promise<void> {
   const preflight = read("scripts/sql/prod-preflight.sql");
   const pendingTables = preflight.match(/pending_tables\(name\) as \(values([\s\S]*?)\),\npending_functions/)?.[1] ?? "";
   const pendingFunctions = preflight.match(/pending_functions\(name\) as \(values([\s\S]*?)\),\n-- The only/)?.[1] ?? "";
-  check("F1 the preflight lists the version in both P2.4 lists, the four tables and the 13 functions as pending, with counts 24 and 54",
+  check("F1 the preflight lists the version in both P2.4 lists, the four tables and the 13 functions as pending, with counts 24 and 55 (54 at D-062; 20261109200000 adds set_pilot_purpose)",
     (preflight.match(/'20261109190000'/g) ?? []).length === 2
       && TABLES.every((t) => pendingTables.includes(`('${t}')`)) && NEW_FUNCTIONS.every((f) => pendingFunctions.includes(`('${f}')`))
-      && (pendingTables.match(/\('/g) ?? []).length === 24 && (pendingFunctions.match(/\('/g) ?? []).length === 54
-      && preflight.includes("none of the 24 pending tables exists") && preflight.includes("none of the 54 pending public functions exists"));
+      && (pendingTables.match(/\('/g) ?? []).length === 24 && (pendingFunctions.match(/\('/g) ?? []).length === 55
+      && preflight.includes("none of the 24 pending tables exists") && preflight.includes("none of the 55 pending public functions exists"));
   const runner = read("scripts/run-p2-workspace-db-local.sh");
   check("F2 the DB runner runs the retest suite after phase B's",
     runner.indexOf("scripts/test-chatgpt-phase-b-db.ts") > 0 && runner.indexOf("scripts/test-pilot-retest-db.ts") > runner.indexOf("scripts/test-chatgpt-phase-b-db.ts"));

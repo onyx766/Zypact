@@ -32,8 +32,10 @@ import {
   AddQuestionPanel,
   BuildPilotReportButton,
   ClosePilotButton,
+  PilotPurposeControl,
   RetireQuestionButton,
 } from "../pilot-forms";
+import { readPilotPurpose } from "@/lib/reports/read-pilot-evidence";
 import { PilotActionsPanel } from "../pilot-action-forms";
 import { PilotEngineCell } from "../pilot-engine-cell";
 import { RetestGroupPanel, RetestRegisterPanel, type RetestGroupView } from "../pilot-retest-forms";
@@ -72,6 +74,8 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
   const loaded = await loadPilot(client, pilotId);
   if (!loaded) notFound();
   const { pilot, questions } = loaded;
+  // 20261109200000 — null until that migration is applied.
+  const purpose = await readPilotPurpose(client, pilot.id);
   // D-055 — the combined report's revisions, newest first.
   const revisions = await listPilotReportRevisions(client, pilot.id);
   // D-057 — the team's suggested actions, and the questions whose answers they may link to.
@@ -188,6 +192,7 @@ export default async function PilotAdminPage({ params }: { params: Promise<{ pil
             <strong>Closed:</strong> {pilot.closeReason}
           </p>
         ) : null}
+        <PilotPurposeControl pilotId={pilot.id} purpose={purpose} />
       </div>
 
       <div className="zpa-toolbar">

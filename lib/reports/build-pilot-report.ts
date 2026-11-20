@@ -11,16 +11,28 @@
 import { buildPilotActions, type PilotReportActionInput } from "@/lib/reports/build-pilot-actions";
 import { buildPilotRetests, type PilotCardBuild, type PilotRetestsInput } from "@/lib/reports/build-pilot-retests";
 import { buildProtocolReport } from "@/lib/reports/build-protocol-report";
+import {
+  canonicalCompetitorKey,
+  COMPETITOR_ALIAS_LIST_VERSION,
+  competitorKey,
+  listedCompany,
+  mayJoinSeveralNames,
+  splitJoinedName,
+} from "@/lib/reports/competitor-aliases";
 import type { BuildProtocolReportInput, ProtocolReportPayload } from "@/lib/reports/protocol-report-types";
 import { DEPENDENCE_LIMITATION, surfaceLimitation } from "@/lib/reports/surface-limitations";
 import {
   PILOT_COMPETITOR_RULE,
   PILOT_LABEL_RULE,
   PILOT_REPORT_VERSION,
+  PILOT_SUMMARY_RULE,
+  SUMMARY_TOP,
   type PilotAttemptCounts,
   type PilotBrandRow,
   type PilotConditionValue,
+  type PilotDomainRow,
   type PilotEngineConditions,
+  type PilotEngineDomainSection,
   type PilotExecutionWindow,
   type PilotCompetitorRow,
   type PilotEngineBrandSection,
@@ -29,6 +41,7 @@ import {
   type PilotEngineSourceSection,
   type PilotEvidenceEntry,
   type PilotPortfolioLine,
+  type PilotPurpose,
   type PilotQuestionLabel,
   type PilotQuestionMeasurementState,
   type PilotReportEngineSummary,
@@ -36,7 +49,10 @@ import {
   type PilotReportPayload,
   type PilotReportQuestion,
   type PilotReportQuestionEngine,
+  type PilotReportSummary,
   type PilotSourceRow,
+  type PilotSummaryEngine,
+  type PilotSummaryFlag,
 } from "@/lib/reports/pilot-report-types";
 import { sourcesRuleVersionForProvider } from "@/lib/source-insights/extract-provider-sources";
 import { categorizeDomain, SOURCE_CATEGORY_LABEL, SOURCE_TYPE_LIST_VERSION, type SourceCategory } from "@/lib/source-insights/source-types";
@@ -50,6 +66,10 @@ export const PILOT_ENGINE_ORDER: readonly { key: PilotEngineKey; label: string }
 export const ENGINE_NOT_MEASURED_NOTE = "Not measured in this pilot yet.";
 
 export const MAX_COMPETITOR_ROWS = 30;
+
+/** The website table's rows per engine, and example pages per website. */
+export const MAX_DOMAIN_ROWS = 40;
+export const MAX_EXAMPLE_URLS = 3;
 
 /** A label needs at least this many readable answers; fewer is insufficient evidence (pilot-question-labels/1). */
 export const MIN_READABLE_FOR_LABEL = 3;
@@ -111,6 +131,13 @@ export interface PilotReportInput {
     startsOn: string;
     endsOn: string;
     status: "active" | "closed";
+    /**
+     * pilots.purpose (20261109200000). The reader always passes it: the
+     * stored value, or null when it could not be read, which holds the
+     * report for review. Absent only for a caller that reads no pilot row
+     * (offline fixtures), which is a customer pilot.
+     */
+    purpose?: PilotPurpose | null;
   };
   questions: PilotReportQuestionInput[];
   /** D-057 — each action's latest reviewed version, oldest action first. */
@@ -236,38 +263,88 @@ function readableRuns(report: ProtocolReportPayload) {
   return report.runs.filter((run) => run.status === "completed" && run.brandPresent !== null);
 }
 
-const competitorKey = (name: string) => name.trim().toLowerCase();
-
-function buildCompetitors(
+/**
+ * pilot-competitor-names/2. Spellings are grouped by the report's key (trim
+ * and lower case) or by the reviewed alias list (competitor-aliases.ts), never
+ * by similarity. A name joining several brands ("A and B") counts as each
+ * brand only when every part is listed or is named on its own in this
+ * engine's readable answers; otherwise it stays one name. An answer counts a
+ * brand once, however many of its spellings it used. Every original spelling
+ * is kept on its row.
+ */
+export function buildCompetitors(
   engine: PilotEngineKey,
   measured: { ordinal: number; report: ProtocolReportPayload }[]
 ): PilotEngineCompetitorSection {
-  const byKey = new Map<string, { name: string; appearances: Map<number, number>; readable: Map<number, number> }>();
+  // Pass 1: the names that join nothing, by grouped key, across this engine's questions.
+  const standalone = new Set<string>();
+  for (const { report } of measured) {
+    for (const run of readableRuns(report)) {
+      for (const raw of run.competitors) {
+        if (competitorKey(raw) && !mayJoinSeveralNames(raw)) standalone.add(canonicalCompetitorKey(raw));
+      }
+    }
+  }
+
+  interface Entry {
+    listedName: string | null;
+    fallbackName: string;
+    spellings: Map<string, number>;
+    joined: Set<string>;
+    appearances: Map<number, number>;
+    readable: Map<number, number>;
+  }
+  const byKey = new Map<string, Entry>();
   for (const { ordinal, report } of measured) {
     const runs = readableRuns(report);
     for (const run of runs) {
       const seen = new Set<string>();
       for (const raw of run.competitors) {
-        const key = competitorKey(raw);
-        if (!key || seen.has(key)) continue;
-        seen.add(key);
-        let e = byKey.get(key);
-        if (!e) {
-          e = { name: raw.trim(), appearances: new Map(), readable: new Map() };
-          byKey.set(key, e);
+        const original = raw.trim();
+        if (!competitorKey(original)) continue;
+        const parts = splitJoinedName(original, standalone);
+        for (const part of parts ?? [original]) {
+          const key = canonicalCompetitorKey(part);
+          let e = byKey.get(key);
+          if (!e) {
+            e = {
+              listedName: listedCompany(part)?.name ?? null,
+              fallbackName: part,
+              spellings: new Map(),
+              joined: new Set(),
+              appearances: new Map(),
+              readable: new Map(),
+            };
+            byKey.set(key, e);
+          }
+          if (parts) e.joined.add(original);
+          else e.spellings.set(original, (e.spellings.get(original) ?? 0) + 1);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          e.appearances.set(ordinal, (e.appearances.get(ordinal) ?? 0) + 1);
+          e.readable.set(ordinal, runs.length);
         }
-        e.appearances.set(ordinal, (e.appearances.get(ordinal) ?? 0) + 1);
-        e.readable.set(ordinal, runs.length);
       }
     }
   }
+  const nameOf = (e: Entry): string => {
+    if (e.listedName) return e.listedName;
+    // The spelling used most often; a tie goes to the first in alphabetical order.
+    const ranked = [...e.spellings.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    return ranked[0]?.[0] ?? e.fallbackName;
+  };
   const rows: PilotCompetitorRow[] = [...byKey.values()]
-    .map((e) => ({
-      name: e.name,
-      appearances: [...e.appearances.entries()]
-        .sort((a, b) => a[0] - b[0])
-        .map(([ordinal, runs]) => ({ ordinal, runs, readableRuns: e.readable.get(ordinal) ?? 0 })),
-    }))
+    .map((e) => {
+      const name = nameOf(e);
+      return {
+        name,
+        appearances: [...e.appearances.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([ordinal, runs]) => ({ ordinal, runs, readableRuns: e.readable.get(ordinal) ?? 0 })),
+        alsoWrittenAs: [...e.spellings.keys()].filter((s) => s !== name).sort((a, b) => a.localeCompare(b)),
+        namedWithOthersAs: [...e.joined].sort((a, b) => a.localeCompare(b)),
+      };
+    })
     .sort((a, b) => {
       const total = (r: PilotCompetitorRow) => r.appearances.reduce((s, x) => s + x.runs, 0);
       return b.appearances.length - a.appearances.length || total(b) - total(a) || a.name.localeCompare(b.name);
@@ -275,9 +352,148 @@ function buildCompetitors(
   return {
     engine,
     rule: PILOT_COMPETITOR_RULE,
+    aliasListVersion: COMPETITOR_ALIAS_LIST_VERSION,
     rows: rows.slice(0, MAX_COMPETITOR_ROWS),
     rowsNotShown: Math.max(0, rows.length - MAX_COMPETITOR_ROWS),
   };
+}
+
+/**
+ * The websites behind the source types, per engine: each domain an answer
+ * cited or returned, per question, read from each question's own stored
+ * source lists (report.sourceInsights). The category is the fixed list's
+ * (categorizeDomain), "unclassified" when the domain is not on it.
+ */
+export function buildDomains(
+  engine: PilotEngineKey,
+  measured: { ordinal: number; report: ProtocolReportPayload }[],
+  subjectDomain: string
+): PilotEngineDomainSection {
+  interface Entry {
+    cells: Map<number, { cited: number; retrieved: number }>;
+    citedUrls: Set<string>;
+    otherUrls: Set<string>;
+  }
+  const byDomain = new Map<string, Entry>();
+  const coverage: PilotEngineDomainSection["coverage"] = [];
+  for (const { ordinal, report } of measured) {
+    const insights = report.sourceInsights;
+    coverage.push({
+      ordinal,
+      readableRuns: insights ? insights.readableRuns : readableRuns(report).length,
+      runsWithSourceEvidence: insights ? insights.runsWithSourceEvidence : 0,
+    });
+    if (!insights) continue;
+    for (const run of insights.runs) {
+      if (run.status !== "ok") continue;
+      const citedDomains = new Set(run.cited.map((s) => s.domain));
+      const touched = new Set<string>();
+      for (const s of [...run.cited, ...run.retrievedOnly]) {
+        if (!s.domain) continue;
+        let e = byDomain.get(s.domain);
+        if (!e) {
+          e = { cells: new Map(), citedUrls: new Set(), otherUrls: new Set() };
+          byDomain.set(s.domain, e);
+        }
+        if (run.cited.includes(s)) e.citedUrls.add(s.url);
+        else e.otherUrls.add(s.url);
+        if (touched.has(s.domain)) continue;
+        touched.add(s.domain);
+        const cell = e.cells.get(ordinal) ?? { cited: 0, retrieved: 0 };
+        if (citedDomains.has(s.domain)) cell.cited += 1;
+        else cell.retrieved += 1;
+        e.cells.set(ordinal, cell);
+      }
+    }
+  }
+  const total = (e: Entry, k: "cited" | "retrieved") => [...e.cells.values()].reduce((s, c) => s + c[k], 0);
+  const rows: PilotDomainRow[] = [...byDomain.entries()]
+    .sort(([da, a], [db, b]) =>
+      total(b, "cited") - total(a, "cited") || total(b, "retrieved") - total(a, "retrieved") || da.localeCompare(db)
+    )
+    .map(([domain, e]) => {
+      const urls = [...e.citedUrls, ...[...e.otherUrls].filter((u) => !e.citedUrls.has(u))];
+      return {
+        domain,
+        category: categorizeDomain(domain, subjectDomain),
+        cells: [...e.cells.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([ordinal, c]) => ({ ordinal, citedInRuns: c.cited, retrievedOnlyInRuns: c.retrieved })),
+        exampleUrls: urls.slice(0, MAX_EXAMPLE_URLS),
+        urlsNotShown: Math.max(0, urls.length - MAX_EXAMPLE_URLS),
+      };
+    });
+  return {
+    engine,
+    rows: rows.slice(0, MAX_DOMAIN_ROWS),
+    rowsNotShown: Math.max(0, rows.length - MAX_DOMAIN_ROWS),
+    coverage,
+  };
+}
+
+/**
+ * pilot-summary/1 — the summary at the top of the report, read only from the
+ * sections the payload already carries. Nothing in it is a new figure: each
+ * line repeats a question's own result, the head of an engine's competitor
+ * table, or a count over that engine's domain table.
+ */
+export function buildSummary(input: {
+  questions: PilotReportQuestion[];
+  conditions: PilotEngineConditions[];
+  competitors: PilotEngineCompetitorSection[];
+  domains: PilotEngineDomainSection[];
+  engines: PilotEngineKey[];
+}): PilotReportSummary {
+  const engines: PilotSummaryEngine[] = input.engines.map((engine) => {
+    const cond = input.conditions.find((c) => c.engine === engine);
+    const comp = input.competitors.find((c) => c.engine === engine);
+    const dom = input.domains.find((d) => d.engine === engine);
+    const cited = (dom?.rows ?? [])
+      .map((r) => ({
+        domain: r.domain,
+        category: r.category,
+        questions: r.cells.filter((c) => c.citedInRuns > 0).length,
+        answers: r.cells.reduce((s, c) => s + c.citedInRuns, 0),
+      }))
+      .filter((r) => r.answers > 0)
+      .sort((a, b) => b.answers - a.answers || b.questions - a.questions || a.domain.localeCompare(b.domain));
+    return {
+      engine,
+      collectedFrom: cond?.executedFrom ?? null,
+      collectedTo: cond?.executedTo ?? null,
+      topCompetitors: (comp?.rows ?? []).slice(0, SUMMARY_TOP).map((r) => ({
+        name: r.name,
+        questions: r.appearances.length,
+        answers: r.appearances.reduce((s, a) => s + a.runs, 0),
+      })),
+      topDomains: cited.slice(0, SUMMARY_TOP),
+    };
+  });
+
+  const flags: PilotSummaryFlag[] = [];
+  const order = (e: PilotEngineKey) => PILOT_ENGINE_ORDER.findIndex((x) => x.key === e);
+  for (const q of [...input.questions].sort((a, b) => a.ordinal - b.ordinal)) {
+    if (q.retired) continue;
+    for (const m of [...q.measurements].sort((a, b) => order(a.engine) - order(b.engine))) {
+      const o = m.report.observation;
+      if (m.state !== "measured") {
+        flags.push({ kind: "not_finished", engine: m.engine, ordinal: q.ordinal, state: m.state });
+      } else if (o.denominator < MIN_READABLE_FOR_LABEL) {
+        flags.push({ kind: "few_readable_answers", engine: m.engine, ordinal: q.ordinal, readable: o.denominator, floor: MIN_READABLE_FOR_LABEL });
+      }
+      if (o.denominator > 0 && o.numerator === 0) {
+        const namingOthers = readableRuns(m.report).filter((r) => r.competitors.some((c) => competitorKey(c) !== "")).length;
+        if (namingOthers > 0) {
+          flags.push({ kind: "brand_absent_competitors_named", engine: m.engine, ordinal: q.ordinal, readable: o.denominator, answersNamingOthers: namingOthers });
+        }
+      }
+      const insights = m.report.sourceInsights;
+      if (insights && insights.runsWithSourceEvidence > 0 && insights.runsWithOwnedCitation === 0) {
+        flags.push({ kind: "own_site_not_cited", engine: m.engine, ordinal: q.ordinal, withSourceList: insights.runsWithSourceEvidence });
+      }
+    }
+  }
+  return { rule: PILOT_SUMMARY_RULE, engines, flags };
 }
 
 function buildSources(
@@ -562,6 +778,20 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
   const sources = measuredEngines.map((engine) =>
     buildSources(engine, measuredByEngine.get(engine) ?? [], pilot.normalizedDomain)
   );
+  const domains = measuredEngines.map((engine) =>
+    buildDomains(engine, measuredByEngine.get(engine) ?? [], pilot.normalizedDomain)
+  );
+  const summary = buildSummary({ questions, conditions, competitors, domains, engines: measuredEngines });
+
+  // 20261109200000 — who the pilot is for. Unreadable: said in the report's
+  // review reasons, never guessed, and the report carries no practice label.
+  const purpose: PilotPurpose | null = pilot.purpose === undefined ? "customer" : pilot.purpose;
+  if (purpose === null) {
+    structural.push({
+      status: "needs_review",
+      reason: "The pilot's purpose (a customer pilot or an internal practice run) could not be read, so the report cannot say which it is.",
+    });
+  }
 
   // D-057 — the team's reviewed suggested actions, every link re-checked
   // against the evidence this report is built from.
@@ -614,8 +844,9 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
     `Each question's figures come from its own approved protocol and its own answers. The table rows are the question sections' figures, repeated.`,
     `Labels follow rule ${PILOT_LABEL_RULE}: with at least ${MIN_READABLE_FOR_LABEL} readable answers, "named in every answer", "named in no answer" or "named in some answers"; with fewer, "not enough answers". The counts are always shown beside the label.`,
     "The total line adds up readable answers over the questions that finished, each answer counting once. Questions that are retired, not finished, or ended after review are left out of it and named. It is not a score.",
-    `Competitor names are grouped across questions by rule ${PILOT_COMPETITOR_RULE}: the same name apart from spacing and capital letters. Names were read from each answer by an analysis model, so different spellings of one company can appear separately. These are totals across questions, not results for any one question.`,
-    `Source types come from the fixed list ${SOURCE_TYPE_LIST_VERSION}. A run counts once per type, whatever the number of pages of that type it cited.`,
+    `Competitor names are grouped across questions by rule ${PILOT_COMPETITOR_RULE}: the same name apart from spacing and capital letters, or spellings listed as one company in the reviewed list ${COMPETITOR_ALIAS_LIST_VERSION}. Nothing is grouped because two names look alike. A name that joins several brands, such as "A and B", is counted as each brand only when every part is on that list or is named on its own in this engine's answers; otherwise it stays as written. An answer counts a brand once. Names were read from each answer by an analysis model, so spellings not on the list can still appear separately; every original spelling is shown beside its name. These are totals across questions, not results for any one question.`,
+    `Source types come from the fixed list ${SOURCE_TYPE_LIST_VERSION}. A run counts once per type, whatever the number of pages of that type it cited. A website not on the list is shown as unclassified; no type is guessed for it.`,
+    `The summary (rule ${PILOT_SUMMARY_RULE}) repeats figures from the sections below it and adds none: each question's own result, the first ${SUMMARY_TOP} rows of each engine's competitor table, and the ${SUMMARY_TOP} websites cited in the most answers per engine. Its points for a closer look come from fixed rules: a question where the brand was named in no readable answer while other brands were named, a question where no answer with a source list cited the company's own website, and a measurement that has not finished or has too few readable answers for a reading.`,
     "Failed and excluded answers stay in each question's own count of attempts. They are never counted as an answer that did not name the brand.",
     // D-061 (review of phase B) — retiring needs one measurement that could
     // not finish and stops the question on every engine, so another
@@ -633,6 +864,9 @@ export function buildPilotReport(input: PilotReportInput): BuiltPilotReport {
     projectId: pilot.projectId,
     subject,
     window: { startsOn: pilot.startsOn, endsOn: pilot.endsOn, status: pilot.status },
+    purpose,
+    summary,
+    domains,
     engines,
     conditions,
     questions,

@@ -96,6 +96,7 @@ pending_functions(name) as (values
   ('prepare_pilot_retests'), ('abandon_pilot_retest'), ('requeue_pilot_retest_job'), ('add_pilot_retest_note'),
   ('pilot_retests_guard'), ('pilot_retest_rows_append_only'), ('pilot_retest_slot_check'),
   ('pilot_retest_intervention_guard'), ('pilot_retest_protocol_guard'), ('pilot_retest_card_guard'),
+  ('set_pilot_purpose'),
   ('set_workspace_website'), ('take_diagnostic_rate_limit'), ('record_site_diagnostic'), ('get_site_diagnostic'),
   ('save_brand_profile'), ('get_workspace_state'),
   ('add_question_draft'), ('revise_question_draft'), ('list_question_drafts'),
@@ -149,9 +150,9 @@ checks(id, label, pass, observed) as (
   union all
   select 'P2.4', 'no held, reserved or pending version is recorded',
          not exists (select 1 from ledger where version in
-           ('0081', '0082', '0084', '0085', '20261109130000', '20261109140000', '20261109150000', '20261109160000', '20261109170000', '20261109180000', '20261109190000', '20261110120000', '20261111120000', '20261112120000', '20261113120000', '20261114120000', '20261118120000', '20261119120000', '20261120120000')),
+           ('0081', '0082', '0084', '0085', '20261109130000', '20261109140000', '20261109150000', '20261109160000', '20261109170000', '20261109180000', '20261109190000', '20261109200000', '20261110120000', '20261111120000', '20261112120000', '20261113120000', '20261114120000', '20261118120000', '20261119120000', '20261120120000')),
          (select coalesce(string_agg(version, ',' order by version), 'none') from ledger where version in
-           ('0081', '0082', '0084', '0085', '20261109130000', '20261109140000', '20261109150000', '20261109160000', '20261109170000', '20261109180000', '20261109190000', '20261110120000', '20261111120000', '20261112120000', '20261113120000', '20261114120000', '20261118120000', '20261119120000', '20261120120000'))
+           ('0081', '0082', '0084', '0085', '20261109130000', '20261109140000', '20261109150000', '20261109160000', '20261109170000', '20261109180000', '20261109190000', '20261109200000', '20261110120000', '20261111120000', '20261112120000', '20261113120000', '20261114120000', '20261118120000', '20261119120000', '20261120120000'))
   union all
   select 'P2.5', 'ledger has exactly 85 rows (no unknown version)',
          (select count(*) from ledger) = 85, (select count(*)::text from ledger)
@@ -191,7 +192,7 @@ checks(id, label, pass, observed) as (
          (select count(*) from pending_tables t where to_regclass('public.' || t.name) is not null) = 0,
          (select coalesce(string_agg(t.name, ','), 'none') from pending_tables t where to_regclass('public.' || t.name) is not null)
   union all
-  select 'P4.2', 'none of the 54 pending public functions exists, nor any _p1_, _p2_, _e1_ or _q4_ helper',
+  select 'P4.2', 'none of the 55 pending public functions exists, nor any _p1_, _p2_, _e1_ or _q4_ helper',
          (select count(*) from pg_proc p where p.pronamespace = 'public'::regnamespace
             and (p.proname in (select name from pending_functions)
                  or p.proname like '\_p1\_%' or p.proname like '\_p2\_%' or p.proname like '\_e1\_%' or p.proname like '\_q4\_%')) = 0,

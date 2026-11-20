@@ -17,6 +17,8 @@ import type {
   AddPilotQuestionEngineResult,
   ClosePilotInput,
   ClosePilotOutcome,
+  SetPilotPurposeInput,
+  SetPilotPurposeOutcome,
   RetirePilotQuestionInput,
   RetirePilotQuestionOutcome,
   RegisterPilotRetestInput,
@@ -2247,6 +2249,23 @@ export const supabaseAdapter: DbAdapter = {
       && outcome !== "PILOT_JOB_ACTIVE"
     ) {
       throw new Error("closePilot: the RPC reply did not satisfy the closed D-054 contract.");
+    }
+    return outcome;
+  },
+
+  async setPilotPurpose(input: SetPilotPurposeInput): Promise<SetPilotPurposeOutcome> {
+    // A database without 20261109200000 has no such function: PostgREST
+    // answers an error, which is thrown, so the route fails closed.
+    const { data, error } = await getClient().rpc("set_pilot_purpose", {
+      p_pilot_id: input.pilotId,
+      p_set_by: input.setBy,
+      p_purpose: input.purpose,
+    });
+    if (error) throw error;
+    const row = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | null | undefined;
+    const outcome = row?.outcome;
+    if (outcome !== "SET" && outcome !== "UNCHANGED" && outcome !== "PILOT_NOT_FOUND") {
+      throw new Error("setPilotPurpose: the RPC reply did not satisfy the 20261109200000 contract.");
     }
     return outcome;
   },

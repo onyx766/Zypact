@@ -19,6 +19,27 @@ import {
   actionEvidenceWords,
   actionReviewedWords,
   ANSWER_MODE_WORDS,
+  brandAbsentWords,
+  CLOSER_LOOK_HEADING,
+  CLOSER_LOOK_INTRO,
+  CLOSER_LOOK_NONE,
+  collectedChipWords,
+  collectedLineWords,
+  DOMAINS_INTRO,
+  examplePagesWords,
+  fewReadableWords,
+  MEASUREMENT_HEADING,
+  NOT_FINISHED_FLAG_WORDS,
+  ownSiteNotCitedWords,
+  pilotPeriodWords,
+  PRACTICE_RUN_NOTICE,
+  spellingsWords,
+  SUMMARY_HEADING,
+  SUMMARY_INTRO,
+  SUMMARY_NO_CITED_WEBSITE,
+  SUMMARY_NO_COMPETITOR,
+  summaryCompetitorsWords,
+  summaryDomainsWords,
   endedAfterReviewWords,
   engineNothingReadableWords,
   LABEL_WORDS,
@@ -169,7 +190,27 @@ export interface PilotPresentationRetests {
   withdrawn: string[];
 }
 
+/** pilot-summary/1 — the summary at the top: one block per measured engine, then the points for a closer look. */
+export interface PilotPresentationSummary {
+  heading: string;
+  intro: string[];
+  blocks: { title: string; lines: string[] }[];
+  closerLookHeading: string;
+  closerLookIntro: string;
+  closerLook: string[];
+}
+
 export interface PilotPresentation {
+  /**
+   * "summary_first" for a revision built with a summary: the summary, then
+   * the results, then the supporting sections (how each engine was measured,
+   * the limits, the method). "classic" for every revision built before it,
+   * which renders exactly as it did.
+   */
+  layout: "summary_first" | "classic";
+  /** A practice run's notice at the top; null otherwise. */
+  practiceNotice: string | null;
+  summary: PilotPresentationSummary | null;
   eyebrow: string;
   title: string;
   websiteUrl: string;
@@ -289,13 +330,19 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
     return engineNothingReadableWords(engineLabel(engine), stillMeasuring);
   };
 
-  const heroCopy = [
-    ...measured.map((e) => `${e.label}: ${e.note}`),
-    ...notMeasured.map((e) => `${e.label} has not been measured in this pilot yet.`),
-    `Every figure belongs to one question on one engine. Results show what ${
-      answered.length > 0 ? answered.map((e) => e.label).join(" and ") : "the engines"
-    } answered during the pilot; they don't represent every AI tool or every buyer.`,
-  ];
+  const summaryFirst = payload.summary !== undefined;
+  const scopeSentence = `Every figure belongs to one question on one engine. Results show what ${
+    answered.length > 0 ? answered.map((e) => e.label).join(" and ") : "the engines"
+  } answered during the pilot; they don't represent every AI tool or every buyer.`;
+  // pilot-summary/1 — the hero keeps only the scope sentence; each engine's
+  // note moves to the summary and to "How each engine was measured".
+  const heroCopy = summaryFirst
+    ? [scopeSentence]
+    : [
+        ...measured.map((e) => `${e.label}: ${e.note}`),
+        ...notMeasured.map((e) => `${e.label} has not been measured in this pilot yet.`),
+        scopeSentence,
+      ];
 
   const sections: PilotPresentationSection[] = [];
 
@@ -346,6 +393,9 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
 
   for (const section of payload.competitors) {
     const empty = nothingReadable(section.engine);
+    // pilot-competitor-names/2 — each row keeps its original spellings; a
+    // revision built under /1 has none and keeps its three columns.
+    const spellings = section.aliasListVersion !== undefined;
     sections.push({
       key: `competitors-${section.engine}`,
       heading: `${engineLabel(section.engine)}: other brands named, across questions`,
@@ -354,11 +404,17 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
         section.rows.length === 0
           ? null
           : {
-              columns: ["Brand", "Questions", "Where (answers naming it, of readable answers)"],
+              columns: [
+                "Brand",
+                "Questions",
+                "Where (answers naming it, of readable answers)",
+                ...(spellings ? ["Also written as"] : []),
+              ],
               rows: section.rows.map((r) => [
                 r.name,
                 String(r.appearances.length),
                 r.appearances.map((a) => `Q${a.ordinal}: ${a.runs} of ${a.readableRuns}`).join("; "),
+                ...(spellings ? [spellingsWords(r.alsoWrittenAs ?? [], r.namedWithOthersAs ?? [])] : []),
               ]),
             },
       notes: [
@@ -399,6 +455,35 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
                 .join(", ")}.`,
             ]
           : []),
+      ],
+    });
+  }
+
+  // The websites behind the source types; absent on revisions built before them.
+  for (const section of payload.domains ?? []) {
+    const empty = nothingReadable(section.engine);
+    const withList = new Map(section.coverage.map((c) => [c.ordinal, c.runsWithSourceEvidence]));
+    const cellWords = (ordinal: number, k: number) => `Q${ordinal}: ${k} of ${withList.get(ordinal) ?? 0}`;
+    sections.push({
+      key: `domains-${section.engine}`,
+      heading: `${engineLabel(section.engine)}: websites cited, by question`,
+      paragraphs: [DOMAINS_INTRO],
+      table:
+        section.rows.length === 0
+          ? null
+          : {
+              columns: ["Website", "Type", "Cited in", "Returned but not cited", "Example pages"],
+              rows: section.rows.map((r) => [
+                r.domain,
+                SOURCE_CATEGORY_LABEL[r.category],
+                r.cells.filter((c) => c.citedInRuns > 0).map((c) => cellWords(c.ordinal, c.citedInRuns)).join("; ") || "none",
+                r.cells.filter((c) => c.retrievedOnlyInRuns > 0).map((c) => cellWords(c.ordinal, c.retrievedOnlyInRuns)).join("; ") || "none",
+                examplePagesWords(r.exampleUrls, r.urlsNotShown),
+              ]),
+            },
+      notes: [
+        ...(section.rows.length === 0 ? [empty ?? "No readable answer had a usable source list."] : []),
+        ...(section.rowsNotShown > 0 ? [`${section.rowsNotShown} further website(s) are not listed here.`] : []),
       ],
     });
   }
@@ -478,17 +563,25 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
         };
 
   const retests = presentRetests(payload);
+  const questionsChip = `${plural(live.length, "question")}${retiredCount > 0 ? ` (and ${retiredCount} retired)` : ""}`;
 
   return {
+    layout: summaryFirst ? "summary_first" : "classic",
+    practiceNotice: payload.purpose === "internal_practice" ? PRACTICE_RUN_NOTICE : null,
+    summary: payload.summary ? presentSummary(payload) : null,
     eyebrow: PILOT_REPORT_TITLE,
     title: `${subject.companyName}: ${plural(live.length, "buyer question")}`,
     websiteUrl: subject.websiteUrl,
     heroCopy,
-    chips: [
-      `Pilot ${window.startsOn} to ${window.endsOn}`,
-      `${plural(live.length, "question")}${retiredCount > 0 ? ` (and ${retiredCount} retired)` : ""}`,
-    ],
-    enginesHeading: "Engines",
+    // pilot-summary/1 — the pilot's period and each engine's answer dates, apart.
+    chips: summaryFirst
+      ? [
+          pilotPeriodWords(window.startsOn, window.endsOn),
+          questionsChip,
+          ...(payload.summary?.engines ?? []).map((e) => collectedChipWords(engineLabel(e.engine), e.collectedFrom, e.collectedTo)),
+        ]
+      : [`Pilot ${window.startsOn} to ${window.endsOn}`, questionsChip],
+    enginesHeading: summaryFirst ? MEASUREMENT_HEADING : "Engines",
     engines: payload.engines.map((e) => `${e.label}: ${e.note}`),
     conditions: payload.conditions.map(conditionsSection),
     sections,
@@ -506,6 +599,63 @@ export function presentPilotReport(payload: PilotReportPayload): PilotPresentati
   };
 }
 
+/**
+ * pilot-summary/1 — the summary, in words. Every line repeats a figure the
+ * payload already carries (a question's own result, the head of an engine's
+ * competitor table, a count over its website table) or a rule's point.
+ */
+function presentSummary(payload: PilotReportPayload): PilotPresentationSummary {
+  const summary = payload.summary!;
+  const company = payload.subject.companyName;
+  const live = payload.questions.filter((q) => !q.retired);
+  const blocks = summary.engines.map((e) => {
+    const label = engineLabel(e.engine);
+    const lines: string[] = [collectedLineWords(e.collectedFrom, e.collectedTo)];
+    for (const q of live) {
+      const m = q.measurements.find((x) => x.engine === e.engine);
+      if (!m) {
+        lines.push(`Question ${q.ordinal}: not measured on ${label}.`);
+        continue;
+      }
+      const o = m.report.observation;
+      lines.push(
+        o.denominator === 0
+          ? `Question ${q.ordinal} (${STATE_WORDS[m.state]}): ${NO_READABLE_ANSWER_LINE[m.state]}`
+          : `Question ${q.ordinal} (${STATE_WORDS[m.state]}): ${company} named in ${o.numerator} of ${o.denominator} readable answers; likely range ${rangeWords(o.interval?.low ?? null, o.interval?.high ?? null)}.`
+      );
+    }
+    lines.push(e.topCompetitors.length > 0 ? summaryCompetitorsWords(e.topCompetitors) : SUMMARY_NO_COMPETITOR);
+    lines.push(
+      e.topDomains.length > 0
+        ? summaryDomainsWords(e.topDomains.map((d) => ({ ...d, typeLabel: SOURCE_CATEGORY_LABEL[d.category] })))
+        : SUMMARY_NO_CITED_WEBSITE
+    );
+    return { title: label, lines };
+  });
+  const notMeasured = payload.engines.filter((e) => !e.measured).map((e) => `${e.label} has not been measured in this pilot yet.`);
+  const closerLook = summary.flags.map((f) => {
+    const label = engineLabel(f.engine);
+    switch (f.kind) {
+      case "brand_absent_competitors_named":
+        return brandAbsentWords({ ordinal: f.ordinal, engineLabel: label, company, readable: f.readable, namingOthers: f.answersNamingOthers });
+      case "own_site_not_cited":
+        return ownSiteNotCitedWords({ ordinal: f.ordinal, engineLabel: label, domain: payload.subject.normalizedDomain, withSourceList: f.withSourceList });
+      case "not_finished":
+        return `Question ${f.ordinal} on ${label}: ${NOT_FINISHED_FLAG_WORDS[f.state]}`;
+      case "few_readable_answers":
+        return fewReadableWords({ ordinal: f.ordinal, engineLabel: label, readable: f.readable, floor: f.floor });
+    }
+  });
+  return {
+    heading: SUMMARY_HEADING,
+    intro: [SUMMARY_INTRO, ...notMeasured],
+    blocks,
+    closerLookHeading: CLOSER_LOOK_HEADING,
+    closerLookIntro: CLOSER_LOOK_INTRO,
+    closerLook: closerLook.length > 0 ? closerLook : [CLOSER_LOOK_NONE],
+  };
+}
+
 /** Every string the page and the Markdown show, for the integrity text scan and the wording tests. */
 export function presentationStrings(p: PilotPresentation): string[] {
   const section = (s: PilotPresentationSection) => [
@@ -515,6 +665,17 @@ export function presentationStrings(p: PilotPresentation): string[] {
     ...s.notes,
   ];
   return [
+    ...(p.practiceNotice ? [p.practiceNotice] : []),
+    ...(p.summary
+      ? [
+          p.summary.heading,
+          ...p.summary.intro,
+          ...p.summary.blocks.flatMap((b) => [b.title, ...b.lines]),
+          p.summary.closerLookHeading,
+          p.summary.closerLookIntro,
+          ...p.summary.closerLook,
+        ]
+      : []),
     p.eyebrow,
     p.title,
     p.websiteUrl,

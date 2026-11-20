@@ -363,3 +363,88 @@ export function actionEvidenceWords(e: {
   if (!e.sourceUrl) return `${base}.`;
   return `${base}; source ${e.sourceUrl}, ${e.sourceCited ? "cited in that answer" : "returned by the engine but not cited in that answer"}.`;
 }
+
+/* ---------------------------------------------------------------- pilot-summary/1 and the clearer layout */
+
+/** At the top of a report whose pilot is an internal practice run (pilots.purpose, 20261109200000). */
+export const PRACTICE_RUN_NOTICE = "Internal practice run — not a customer report.";
+
+export const SUMMARY_HEADING = "Summary";
+export const SUMMARY_INTRO =
+  "What the engines answered, in brief. Each figure is for one question on one engine, and nothing is added up across engines. The sections below give the detail, the evidence and the limits.";
+
+export const CLOSER_LOOK_HEADING = "Worth a closer look";
+export const CLOSER_LOOK_INTRO =
+  "Each point comes from a fixed rule applied to the figures below. It marks something to investigate, not a finding about why an engine answered as it did.";
+export const CLOSER_LOOK_NONE = "No question met these rules.";
+
+export const SUMMARY_NO_COMPETITOR = "Other brands named: none in a readable answer.";
+export const SUMMARY_NO_CITED_WEBSITE = "Websites cited: none in an answer with a usable source list.";
+
+/** The supporting section that now holds the engines and how each was measured. */
+export const MEASUREMENT_HEADING = "How each engine was measured";
+
+export const DOMAINS_INTRO =
+  "Each figure is answers citing a page of that website, of the question's answers with a usable source list. An answer counts once per website. The type comes from a fixed list; a website not on it is shown as Unclassified, and no type is guessed for it.";
+
+export function pilotPeriodWords(startsOn: string, endsOn: string): string {
+  return `Pilot period: ${startsOn} to ${endsOn}`;
+}
+
+export function collectedChipWords(engineLabel: string, from: string | null, to: string | null): string {
+  if (!from || !to) return `${engineLabel}: no answer collected yet`;
+  return from === to ? `${engineLabel} answers collected on ${from}` : `${engineLabel} answers collected ${from} to ${to}`;
+}
+
+export function collectedLineWords(from: string | null, to: string | null): string {
+  if (!from || !to) return "No answer has been collected yet.";
+  return from === to ? `Answers collected on ${from}.` : `Answers collected from ${from} to ${to}.`;
+}
+
+export function summaryCompetitorsWords(rows: { name: string; questions: number; answers: number }[]): string {
+  return `Other brands named most often: ${rows
+    .map((r) => `${r.name} (${r.questions} question${r.questions === 1 ? "" : "s"}, ${r.answers} answer${r.answers === 1 ? "" : "s"})`)
+    .join("; ")}.`;
+}
+
+export function summaryDomainsWords(rows: { domain: string; typeLabel: string; questions: number; answers: number }[]): string {
+  return `Websites cited most often: ${rows
+    .map((r) => `${r.domain} (${r.typeLabel}; cited in ${r.answers} answer${r.answers === 1 ? "" : "s"} to ${r.questions} question${r.questions === 1 ? "" : "s"})`)
+    .join("; ")}.`;
+}
+
+export function brandAbsentWords(f: { ordinal: number; engineLabel: string; company: string; readable: number; namingOthers: number }): string {
+  return `Question ${f.ordinal} on ${f.engineLabel}: ${f.company} was named in none of ${f.readable} readable answer${f.readable === 1 ? "" : "s"}, while ${f.namingOthers} of them named other brands.`;
+}
+
+export function ownSiteNotCitedWords(f: { ordinal: number; engineLabel: string; domain: string; withSourceList: number }): string {
+  return f.withSourceList === 1
+    ? `Question ${f.ordinal} on ${f.engineLabel}: the one answer with a usable source list did not cite a page on ${f.domain}.`
+    : `Question ${f.ordinal} on ${f.engineLabel}: none of the ${f.withSourceList} answers with a usable source list cited a page on ${f.domain}.`;
+}
+
+export const NOT_FINISHED_FLAG_WORDS: Record<PilotQuestionMeasurementState, string> = {
+  not_started: "the measurement has not started.",
+  not_finished: "the measurement has not finished, so its figures may still change.",
+  stopped: "the measurement stopped before finishing.",
+  measured: "the measurement has finished.",
+  ended_after_review: "a review ended the measurement, so it may rest on fewer answers than planned and is left out of the totals.",
+};
+
+export function fewReadableWords(f: { ordinal: number; engineLabel: string; readable: number; floor: number }): string {
+  return `Question ${f.ordinal} on ${f.engineLabel}: only ${f.readable} readable answer${f.readable === 1 ? "" : "s"}, fewer than the ${f.floor} a reading needs.`;
+}
+
+/** The competitor table's spellings cell (pilot-competitor-names/2). */
+export function spellingsWords(alsoWrittenAs: string[], namedWithOthersAs: string[]): string {
+  const parts = [
+    ...(alsoWrittenAs.length > 0 ? [alsoWrittenAs.join("; ")] : []),
+    ...(namedWithOthersAs.length > 0 ? [`named with others as ${namedWithOthersAs.map((n) => `“${n}”`).join("; ")}`] : []),
+  ];
+  return parts.length > 0 ? parts.join("; ") : "—";
+}
+
+export function examplePagesWords(urls: string[], notShown: number): string {
+  if (urls.length === 0) return "—";
+  return `${urls.join(" ")}${notShown > 0 ? ` (and ${notShown} more)` : ""}`;
+}

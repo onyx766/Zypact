@@ -17,8 +17,14 @@ import type { SourceCategory } from "@/lib/source-insights/source-types";
 
 export const PILOT_REPORT_VERSION = 1 as const;
 
-/** The rule that groups competitor names across questions (§11): trim and case only. */
-export const PILOT_COMPETITOR_RULE = "pilot-competitor-names/1" as const;
+/**
+ * The rule that groups competitor names across questions (§11).
+ * pilot-competitor-names/1: trim and case only. pilot-competitor-names/2: the
+ * same, plus spellings listed as one company in the reviewed alias list
+ * (lib/reports/competitor-aliases.ts), and a name joining several brands
+ * counted as each brand only when every part is known.
+ */
+export const PILOT_COMPETITOR_RULE = "pilot-competitor-names/2" as const;
 
 export type PilotEngineKey = "perplexity_sonar" | "openai_chatgpt";
 
@@ -210,11 +216,25 @@ export interface PilotCompetitorRow {
   name: string;
   /** Question ordinals the name appeared in, each with the readable runs naming it there. */
   appearances: { ordinal: number; runs: number; readableRuns: number }[];
+  /**
+   * pilot-competitor-names/2 — every other original spelling grouped into this
+   * row, exactly as the analysis read it. Absent on revisions built under /1.
+   */
+  alsoWrittenAs?: string[];
+  /**
+   * pilot-competitor-names/2 — original names that joined this brand with
+   * others ("A and B"), each counted here as this brand. Absent on revisions
+   * built under /1.
+   */
+  namedWithOthersAs?: string[];
 }
 
 export interface PilotEngineCompetitorSection {
   engine: PilotEngineKey;
-  rule: typeof PILOT_COMPETITOR_RULE;
+  /** The rule the rows were grouped under (a revision keeps the one it was built with). */
+  rule: string;
+  /** pilot-competitor-names/2 — the alias list version. Absent on revisions built under /1. */
+  aliasListVersion?: string;
   rows: PilotCompetitorRow[];
   rowsNotShown: number;
 }
@@ -236,6 +256,77 @@ export interface PilotEngineSourceSection {
   /** Per question: readable runs, and runs whose stored response gave no readable source list. */
   coverage: { ordinal: number; readableRuns: number; runsWithSourceEvidence: number }[];
 }
+
+/**
+ * One website cited or returned in a question's answers on one engine. The
+ * category comes only from the fixed list (source-types.ts); a domain not on
+ * it is "unclassified", never guessed.
+ */
+export interface PilotDomainRow {
+  domain: string;
+  category: SourceCategory;
+  /** Per question: answers citing a page of this domain, and answers that only returned one. */
+  cells: { ordinal: number; citedInRuns: number; retrievedOnlyInRuns: number }[];
+  /** Up to MAX_EXAMPLE_URLS of its pages, cited ones first. */
+  exampleUrls: string[];
+  /** Further distinct pages of it, not listed. */
+  urlsNotShown: number;
+}
+
+export interface PilotEngineDomainSection {
+  engine: PilotEngineKey;
+  rows: PilotDomainRow[];
+  rowsNotShown: number;
+  /** Per question: readable answers, and those with a usable source list (the denominator). */
+  coverage: { ordinal: number; readableRuns: number; runsWithSourceEvidence: number }[];
+}
+
+export const PILOT_SUMMARY_RULE = "pilot-summary/1" as const;
+
+/** At most this many competitors and websites per engine in the summary. */
+export const SUMMARY_TOP = 5;
+
+/**
+ * The summary at the top of a report: read from the sections below it, never
+ * a figure of its own. Every item is one question on one engine, or a count
+ * across one engine's questions; nothing combines engines.
+ */
+export interface PilotReportSummary {
+  rule: typeof PILOT_SUMMARY_RULE;
+  engines: PilotSummaryEngine[];
+  /** Items for a closer look, each from one fixed rule (PilotSummaryFlag). */
+  flags: PilotSummaryFlag[];
+}
+
+export interface PilotSummaryEngine {
+  engine: PilotEngineKey;
+  /** First and last day an answer on this engine was collected, across its questions; null before any. */
+  collectedFrom: string | null;
+  collectedTo: string | null;
+  /** The competitor table's first rows (its own order), with their answer totals across questions. */
+  topCompetitors: { name: string; questions: number; answers: number }[];
+  /** The websites cited in the most answers, summed over questions (a count, not a rate). */
+  topDomains: { domain: string; category: SourceCategory; questions: number; answers: number }[];
+}
+
+/**
+ * pilot-summary/1's rules, each for one live question on one engine:
+ *  - `brand_absent_competitors_named`: named in none of at least one readable
+ *    answer, while some of those answers named another brand;
+ *  - `own_site_not_cited`: answers with a usable source list, none citing a
+ *    page on the company's own domain;
+ *  - `not_finished`: the measurement is not finished (any state but finished);
+ *  - `few_readable_answers`: finished with fewer readable answers than the
+ *    label needs.
+ */
+export type PilotSummaryFlag =
+  | { kind: "brand_absent_competitors_named"; engine: PilotEngineKey; ordinal: number; readable: number; answersNamingOthers: number }
+  | { kind: "own_site_not_cited"; engine: PilotEngineKey; ordinal: number; withSourceList: number }
+  | { kind: "not_finished"; engine: PilotEngineKey; ordinal: number; state: PilotQuestionMeasurementState }
+  | { kind: "few_readable_answers"; engine: PilotEngineKey; ordinal: number; readable: number; floor: number };
+
+/** Who a pilot is for (pilots.purpose, 20261109200000). */
+export type PilotPurpose = "customer" | "internal_practice";
 
 export interface PilotEvidenceEntry {
   attemptId: string;
@@ -293,6 +384,16 @@ export interface PilotReportPayload {
   projectId: string;
   subject: PilotReportSubject;
   window: { startsOn: string; endsOn: string; status: "active" | "closed" };
+  /**
+   * Who the pilot is for (20261109200000): an internal practice run says so at
+   * the top of its report. Null when it could not be read (the report then
+   * needs review). Absent on revisions built before it.
+   */
+  purpose?: PilotPurpose | null;
+  /** pilot-summary/1 — the summary at the top. Absent on revisions built before it, which keep their layout. */
+  summary?: PilotReportSummary;
+  /** The websites behind the source types, per engine. Absent on revisions built before it. */
+  domains?: PilotEngineDomainSection[];
   engines: PilotReportEngineSummary[];
   conditions: PilotEngineConditions[];
   questions: PilotReportQuestion[];
@@ -518,6 +619,13 @@ export function isPilotReportPayload(value: unknown): value is PilotReportPayloa
   }
   if (typeof c.dependenceNote !== "string" || typeof c.causalLimit !== "string") return false;
   if (c.actions !== undefined && !Array.isArray(c.actions)) return false;
+  // Absent on revisions built before the summary; when present, well formed.
+  if (c.domains !== undefined && !Array.isArray(c.domains)) return false;
+  if (c.summary !== undefined) {
+    const s = c.summary as Record<string, unknown> | null;
+    if (typeof s !== "object" || s === null || !Array.isArray(s.engines) || !Array.isArray(s.flags)) return false;
+  }
+  if (c.purpose !== undefined && c.purpose !== null && c.purpose !== "customer" && c.purpose !== "internal_practice") return false;
   // D-062 — absent on revisions built before it; when present, lists, and
   // every card carries the footer constant and one of the four statuses (M15).
   if (c.retests !== undefined && !Array.isArray(c.retests)) return false;

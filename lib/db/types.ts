@@ -1892,6 +1892,19 @@ export interface ClosePilotInput {
   reason: string;
 }
 
+/**
+ * 20261109200000 — who a pilot is for. An internal practice run says so at
+ * the top of its report; nothing is measured differently.
+ */
+export interface SetPilotPurposeInput {
+  pilotId: string;
+  /** The signed-in founder's user id. */
+  setBy: string;
+  purpose: "customer" | "internal_practice";
+}
+
+export type SetPilotPurposeOutcome = "SET" | "UNCHANGED" | "PILOT_NOT_FOUND";
+
 export type ClosePilotOutcome =
   | "CLOSED"
   | "ALREADY_CLOSED"
@@ -3299,6 +3312,7 @@ export interface DbAdapter {
   addPilotQuestionEngine(input: AddPilotQuestionEngineInput): Promise<AddPilotQuestionEngineResult>;
   /** D-054 — closes a pilot. */
   closePilot(input: ClosePilotInput): Promise<ClosePilotOutcome>;
+  setPilotPurpose(input: SetPilotPurposeInput): Promise<SetPilotPurposeOutcome>;
   /** D-054, D-061 — retires a pilot question whose measurement can no longer finish, with every slot. */
   retirePilotQuestion(input: RetirePilotQuestionInput): Promise<RetirePilotQuestionOutcome>;
   /** D-062 — registers a customer change: one approved M7 intervention per question and engine. */

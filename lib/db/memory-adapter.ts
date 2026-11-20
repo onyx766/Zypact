@@ -13,6 +13,8 @@ import type {
   AddPilotQuestionEngineResult,
   ClosePilotInput,
   ClosePilotOutcome,
+  SetPilotPurposeInput,
+  SetPilotPurposeOutcome,
   PilotQuestionEngine,
   RetirePilotQuestionInput,
   RetirePilotQuestionOutcome,
@@ -280,6 +282,10 @@ interface MemoryPilot {
   closedBy: string | null;
   closedAt: string | null;
   closeReason: string | null;
+  /** 20261109200000 — absent reads as "customer", as the column's default. */
+  purpose?: "customer" | "internal_practice";
+  purposeSetBy?: string | null;
+  purposeSetAt?: string | null;
 }
 
 /** D-054 — mirrors pilot_questions (20261109140000). */
@@ -1570,6 +1576,19 @@ export const memoryAdapter: DbAdapter = {
     if (active) return "PILOT_JOB_ACTIVE";
     store.pilots.set(pilot.id, { ...pilot, status: "closed", closedBy: input.closedBy, closedAt: nowIso(), closeReason: reason });
     return "CLOSED";
+  },
+
+  /** 20261109200000 — mirrors set_pilot_purpose, branch for branch. */
+  async setPilotPurpose(input: SetPilotPurposeInput): Promise<SetPilotPurposeOutcome> {
+    const store = getStore();
+    if (!input.pilotId || !input.setBy || (input.purpose !== "customer" && input.purpose !== "internal_practice")) {
+      throw new Error("invalid_set_pilot_purpose_args");
+    }
+    const pilot = store.pilots.get(input.pilotId);
+    if (!pilot) return "PILOT_NOT_FOUND";
+    if ((pilot.purpose ?? "customer") === input.purpose) return "UNCHANGED";
+    store.pilots.set(pilot.id, { ...pilot, purpose: input.purpose, purposeSetBy: input.setBy, purposeSetAt: nowIso() });
+    return "SET";
   },
 
   /**

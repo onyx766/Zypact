@@ -247,6 +247,29 @@ Order rule (D-052): migrations, then the worker, then the web app. Rollback runs
   - **once a group exists:** forward only. Unset `ZYPACT_PILOT_RETEST_ENABLED` and redeploy the web app (Part D's rollback). If one of the three triggers on existing tables blocks legitimate M7 work outside the pilots, it may be dropped on its own as a separately authorised step;
   - **no web rollback below D-062 after the first preparation:** an older web build reads baseline slots only, while the save requires every slot's protocol, so every report build would be refused.
 
+### Step 5d — the pilot purpose (a customer pilot or an internal practice run)
+
+> Added 2026-11-20 with the pilot report clarity changes (founder's request of 2026-11-19, items 1–4). Steps 5b and 5c are applied in production; this step needs 5c first (its precondition requires `20261109190000`). Under the R rule it is applied before the web app built from an R that includes it is deployed.
+
+| Step | Version | `expected_prev` |
+|---|---|---|
+| 5d. Pilot purpose | `20261109200000_pilot_purpose` | `20261109190000` |
+
+- **Approval:** "Apply migration 20261109200000 (the pilot purpose column and its setter) to production."
+- **Does:** applies the migration exactly as steps 2–5c do (named file, `--single-transaction`, `-v target_sysid`).
+  - It adds `purpose` (`customer` or `internal_practice`, default `customer`), `purpose_set_by` and `purpose_set_at` to `public.pilots`, and creates one function, `set_pilot_purpose`, executable by `service_role` only.
+  - Every existing pilot reads `customer`. The practice pilot is marked afterwards from its admin page ("Mark as internal practice run"), which is a founder action, not part of this step.
+  - It redefines no function, so no pinned function changes; it writes no row, calls no provider and runs nothing.
+  - The `ALTER TABLE` takes a short ACCESS EXCLUSIVE lock on `public.pilots`; a Run takes the pilot row lock, so no Run may be pending.
+- **Before:** as steps 2–5c: the tail is `20261109190000` (93rd row absent), V is absent, no job holds a live lease, no run request is pending, and no founder action is in progress.
+- **After:**
+  - V is the tail, and the row count is 93;
+  - `select purpose, count(*) from public.pilots group by 1;` shows only `customer`;
+  - `has_function_privilege` on `public.set_pilot_purpose(uuid, uuid, text)`: `service_role` true; `anon`, `authenticated` and `public` false;
+  - `md5(replace(pg_get_functiondef('public.set_pilot_purpose(uuid, uuid, text)'::regprocedure), chr(13), ''))` is `f8af86b10b17f4ef6c48521f3ac8af13`, the value `scripts/test-pilot-purpose-db.ts` printed on the disposable stack of 2026-11-20 (`supabase/postgres:17.6.1.167`, all 97 migrations; never observed on production).
+- **Deploy order:** this migration, then the web app built from the same R. Before the migration, a web app built from that R still works: the report reader finds no `purpose` column, reads it as unknown and holds every new report revision for review with the reason "The pilot's purpose … could not be read", and the admin page offers no purpose control. The worker image is unchanged.
+- **Rollback** (a separately authorised forward step): the reverse statements in the migration's header. Before any pilot is marked as a practice run they lose nothing; after, record the marked pilots first. Stored report revisions keep the label they were built with either way.
+
 ### Step 6 — worker redeploy from R
 
 - **Approval:** "Redeploy the production worker from R with an empty queue."

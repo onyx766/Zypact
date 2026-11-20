@@ -382,4 +382,5 @@ unable to tell what the running machine carries.
 
 | Date | Commit | Machine ID before → after | State after | Values observed, checks (c) and (d) | Notes |
 |------|--------|---------------------------|-------------|--------------------------|-------|
-| _(none yet)_ | | | | | D-036 and D-061 not yet in effect |
+| 2026-11-18 | `e2acca3` (Fly release v7) | same machine (ID kept off the repository) | `stopped` | (c) 7 slots, 2,400 s, 330 s, 240,000 ms, 290,000 ms; (d) `WORKER_CHATGPT_ENABLED` `false`, no same-named secret | PILOT_PRODUCTION_PLAN step 6 (CURRENT_STATUS §40). Release v8: paid-execution and 10 USD ceiling secrets (step 9) |
+| 2026-11-18 | `2aa3e68` (Fly release v10) | same machine | `stopped` | (c) unchanged; (d) `WORKER_CHATGPT_ENABLED` `true`, no same-named secret | Part C step C2 (§40a). Release v9 before it: the measurement key secret (C1). First start's `--digest` comparison matched `2aa3e68`. Release v11 after it: the ceiling secret set to 20 (C4) |
